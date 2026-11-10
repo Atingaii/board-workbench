@@ -1,5 +1,16 @@
 import {
   AckBody,
+  AssignTaskBody,
+  BlockTaskBody,
+  CancelTaskBody,
+  ClaimReadyTaskBody,
+  ClaimTaskBody,
+  CompleteTaskBody,
+  CreateTaskBody,
+  FailTaskBody,
+  ReleaseTaskBody,
+  RenewTaskBody,
+  TasksQuery,
   DeleteBody,
   EditBody,
   EventsQuery,
@@ -37,7 +48,7 @@ import {
 import type { Method, Protocol } from '../api/protocol.ts'
 import type { ExternalAuthor } from '../contract/external.ts'
 import type { Actor } from '../contract/folds.ts'
-import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, RESERVED_LABEL_PREFIX, type Attachment, type Labels } from '../contract/schemas.ts'
 import type { SyncEvent } from '../sync/engine.ts'
 import { SYNC, type Caller, type InboxDelivery, type ProtocolMethods, type SelfCaller, type VerifiedCaller } from './backend.ts'
 import type { Board, BoardContext } from './board.ts'
@@ -55,7 +66,16 @@ import type { WatcherContext } from './watcher.ts'
 import { VERSION } from '../version.ts'
 
 /** The methods whose answer is something new. */
-const CREATED = new Set<Method>(['post', 'schedule', 'upload', 'uploadFinish'])
+const CREATED = new Set<Method>(['post', 'schedule', 'createTask', 'upload', 'uploadFinish'])
+
+/**
+ * Refuses a label write under `board.`: those keys are the board's own, which only its task writes
+ * set, so no caller's write sets or unsets one, this deployment's own code included.
+ */
+function ownLabels(set: Labels | undefined, unset: readonly string[] = []) {
+  const key = [...Object.keys(set ?? {}), ...unset].find((name) => name.startsWith(RESERVED_LABEL_PREFIX))
+  if (key !== undefined) throw new HttpError(400, 'reserved_label', `${key} is the board's own label: only its task writes set labels under ${RESERVED_LABEL_PREFIX}`)
+}
 
 /** An email, as `--mentions` names one: sync looks its platform user up. */
 const EMAIL = /^[^\s@]+@[^\s@]+$/
@@ -103,6 +123,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'posted':
     case 'synced':
     case 'cancelSchedule':
+    case 'unblockTask':
+    case 'reopenTask':
     case 'revokeGrant':
     case 'revokeToken':
     case 'attachment':
@@ -129,6 +151,28 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return CreateChannelBody.parse(await body())
     case 'schedule':
       return ScheduleBody.parse(await body())
+    case 'tasks':
+      return TasksQuery.parse(queryObject(url))
+    case 'createTask':
+      return CreateTaskBody.parse(await body())
+    case 'claimReadyTask':
+      return ClaimReadyTaskBody.parse(await body())
+    case 'claimTask':
+      return { id, ...(ClaimTaskBody.parse(await body()) ?? {}) }
+    case 'renewTask':
+      return { id, ...RenewTaskBody.parse(await body()) }
+    case 'releaseTask':
+      return { id, ...ReleaseTaskBody.parse(await body()) }
+    case 'completeTask':
+      return { id, ...CompleteTaskBody.parse(await body()) }
+    case 'failTask':
+      return { id, ...FailTaskBody.parse(await body()) }
+    case 'blockTask':
+      return { id, ...BlockTaskBody.parse(await body()) }
+    case 'assignTask':
+      return { id, ...AssignTaskBody.parse(await body()) }
+    case 'cancelTask':
+      return { id, ...CancelTaskBody.parse(await body()) }
     case 'createGrant':
       return GrantBody.parse(await body())
     case 'updateGrant':
@@ -365,7 +409,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   let middlewareBoard: Board | null = null
   /** Runs the middleware on a write, then `commit`s what it passed on: a `DroppedError` when it drops it. */
   const screen = <W extends Write, T>(write: W, author: Actor, source: WriteSource, commit: (write: W) => Promise<T>): Promise<T> =>
-    runMiddleware(middleware, { write, author, source, board: () => (middlewareBoard ??= handleOf(MIDDLEWARE, null)) }, commit)
+    runMiddleware(middleware, { write, author, source, board: () => (middlewareBoard ??= handleOf(MIDDLEWARE, null)) }, (passed) => {
+      // What the middleware made of its labels is a caller's write too.
+      if (passed.kind === 'post') ownLabels(passed.labels)
+      return commit(passed)
+    })
 
   /** Whether a lookup found what it looked for: a 404 says it didn't. */
   async function found(lookup: () => Promise<unknown>): Promise<boolean> {
@@ -506,6 +554,8 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * the platform. A retry of one that landed stands.
    */
   async function syncImport(caller: Caller, body: Protocol['syncImport']['input'], signal: AbortSignal): Promise<Protocol['syncImport']['output']> {
+    if (body.op === 'post') ownLabels(body.labels)
+    if (body.op === 'labels') ownLabels(body.set, body.unset)
     const send = (patched: Protocol['syncImport']['input']) => backend.syncImport(caller, patched, signal)
     if (middleware.length === 0 || caller.origin.via?.kind === 'middleware' || (body.op !== 'post' && body.op !== 'edit')) return send(body)
     const access = accessOf(caller)
@@ -677,7 +727,31 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     if (name === 'messages' || name === 'threads' || name === 'events') input = await withMentioned(caller, input as { mentions?: string })
     switch (name) {
       case 'post':
+        ownLabels((input as Protocol['post']['input']).labels)
         return post(caller, input as Protocol['post']['input'], signal)
+      case 'label': {
+        const { set, unset } = input as Protocol['label']['input']
+        ownLabels(set, unset)
+        return backend.label(caller, input as Protocol['label']['input'], signal)
+      }
+      case 'createTask': {
+        const body = input as Protocol['createTask']['input']
+        ownLabels(body.labels)
+        // A thread that's there becomes a task as it is: nothing is posted, so the middleware has nothing to see.
+        if (body.channel === undefined) return backend.createTask(caller, body, signal)
+        // A new one's root is a post: its emails resolve and the middleware sees it, as any post's.
+        const { channel, labels, noSync, id } = body
+        const sent = body.text!
+        const root = (text: string) => ({ channel, text, ...(labels ? { labels } : {}), ...(noSync !== undefined ? { noSync } : {}), ...(id !== undefined ? { id } : {}) }) as Protocol['post']['input']
+        const create = (text: string) =>
+          screenPost(caller, root(text), signal, (screened) => backend.createTask(caller, { ...body, text: screened.text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal))
+        const allowed = engine && mentionsEmails(sent) ? await mayPost(caller, { channel }, signal) : null
+        if (!allowed) return create(sent)
+        const text = await withEmails(sent)
+        const answer = await create(text)
+        // As for a post: one that can't read where it lands gets back what it sent.
+        return text !== sent && allowed.access !== null && !allowed.access.readable(answer.task.channel) ? { ...answer, task: { ...answer.task, text: sent } } : answer
+      }
       case 'edit': {
         // Its emails resolve once the caller may post where the message is, and read it.
         const edit = input as Protocol['edit']['input']
@@ -689,6 +763,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)
       case 'schedule': {
         const body = input as Protocol['schedule']['input']
+        ownLabels(body.labels)
         const schedule = (made: Protocol['schedule']['input']) => (backend.sendsSchedulesHere === false ? screenSchedule(caller, made, signal) : backend.schedule(caller, made, signal))
         const allowed = engine && mentionsEmails(body.text) ? await mayPost(caller, body, signal) : null
         if (!allowed) return schedule(body)
@@ -873,9 +948,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   return {
     dispatch,
     async inject(request, caller, trigger, writes) {
-      if (trigger !== null && request.method === 'POST' && new URL(request.url).pathname.endsWith('/messages')) {
+      // What it posts, a task's new thread included, gets an ID from what triggered it, so a retry posts once.
+      const pathname = new URL(request.url).pathname
+      if (trigger !== null && request.method === 'POST' && (pathname.endsWith('/messages') || pathname.endsWith('/tasks'))) {
         const body = ((await request.json()) ?? {}) as Record<string, unknown>
-        body.id ??= await derivedId('board-inbound', trigger, 'client', String(writes.made++))
+        if (pathname.endsWith('/messages') || body.channel !== undefined) body.id ??= await derivedId('board-inbound', trigger, 'client', String(writes.made++))
         request = new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) })
       }
       return dispatch(request, caller)

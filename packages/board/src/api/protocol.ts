@@ -3,7 +3,20 @@ import type { Actor } from '../contract/folds.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import type {
   AckBody,
+  AssignTaskBody,
+  BlockTaskBody,
+  CancelTaskBody,
   ChannelView,
+  ClaimReadyTaskBody,
+  ClaimTaskBody,
+  CompleteTaskBody,
+  CreateTaskBody,
+  FailTaskBody,
+  ReleaseTaskBody,
+  RenewTaskBody,
+  TaskClaim,
+  TasksPage,
+  TasksQuery,
   CreateChannelBody,
   Discovery,
   DeleteBody,
@@ -88,6 +101,26 @@ export type Protocol = {
   schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView; unknownMentions?: string[] } }
   schedules: { input: Input<typeof SchedulesQuery>; output: { schedules: ScheduleView[] } }
   cancelSchedule: { input: Id; output: { schedule: ScheduleView; canceled: boolean } }
+  /** Tasks, oldest first, each as its thread's summary. 501 `no_tasks` where the board keeps none, as every task method answers there. */
+  tasks: { input: Input<typeof TasksQuery>; output: TasksPage }
+  /** `task` is the task's root. `claim` comes with a task made with `claim`; a retry of one that landed gets the task without it. */
+  createTask: { input: Input<typeof CreateTaskBody>; output: { task: MessageView; claim?: TaskClaim; unknownMentions?: string[] } }
+  /** The oldest ready task there, claimed, or `{ task: null }` when there's none, after waiting up to `wait` seconds. */
+  claimReadyTask: { input: Input<typeof ClaimReadyTaskBody>; output: { task: MessageView; claim: TaskClaim } | { task: null } }
+  /** 409 `task_claimed` while someone holds it, and of claims that race, for all but one. */
+  claimTask: { input: Id & Input<typeof ClaimTaskBody>; output: { task: MessageView; claim: TaskClaim } }
+  /** `until` is the lease's new end. */
+  renewTask: { input: Id & Input<typeof RenewTaskBody>; output: { task: MessageView; until: string } }
+  releaseTask: { input: Id & Input<typeof ReleaseTaskBody>; output: { task: MessageView } }
+  completeTask: { input: Id & Input<typeof CompleteTaskBody>; output: { task: MessageView } }
+  failTask: { input: Id & Input<typeof FailTaskBody>; output: { task: MessageView } }
+  blockTask: { input: Id & Input<typeof BlockTaskBody>; output: { task: MessageView } }
+  /** A task that isn't blocked is left as it is. */
+  unblockTask: { input: Id; output: { task: MessageView } }
+  /** A failed task is ready again; one that's open is left as it is. */
+  reopenTask: { input: Id; output: { task: MessageView } }
+  assignTask: { input: Id & Input<typeof AssignTaskBody>; output: { task: MessageView } }
+  cancelTask: { input: Id & Input<typeof CancelTaskBody>; output: { task: MessageView } }
   /** The board's grants: needs `manage` at `*`, or a team owner. 501 `no_grants` where the board keeps none. */
   grants: { input: Nothing; output: { grants: GrantView[] } }
   /** A new grant, always: the same principals again are another. Needs `manage` at each pattern its `can` names. */

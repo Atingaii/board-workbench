@@ -10,7 +10,7 @@ import { type Backend, type BackendRoute, type BoardBinding, type Caller, type P
 import { fileName, mediaType } from '../contract/files.ts'
 import { badRequest, HttpError, json, notFound } from './errors.ts'
 import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
-import { METHODS } from './routing.ts'
+import { METHODS, TASK_METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
@@ -1564,6 +1564,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     METHODS.map((method) => [
       method,
       async () => {
+        // Tasks aren't mapped onto Vercel's API yet: a board here keeps none, and says so as any board that keeps none does.
+        if (TASK_METHODS.includes(method)) throw new HttpError(501, 'no_tasks', 'this board keeps no tasks')
         throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
       },
     ]),

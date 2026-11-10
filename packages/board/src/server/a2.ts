@@ -18,10 +18,11 @@ import { actorSeen } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
-import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
+import { badRequest, duplicateId, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
+import { createTasks } from './tasks.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
 import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
@@ -207,6 +208,7 @@ function build(options: A2Options, binding: BoardBinding) {
     registered: { state: registry.state, accessNow: (principal) => binding.accessNow(principal) },
   })
   const schedules = createSchedules({ store: log, scheduler: options.scheduler })
+  const tasks = createTasks({ store: log, scheduler: options.scheduler })
   const projection = tablesConsumer(store.tables)
 
   /** Sync's delivery in progress here: its receipts are its consumer's appends, fenced by its attempt. */
@@ -279,6 +281,7 @@ function build(options: A2Options, binding: BoardBinding) {
   // A schedule sends with what its creator may do now, which board()'s `access` says at each send. It
   // posts as its creator, through board(), so the middleware sees it.
   schedules.bind({ writes, accessNow: binding.accessNow, send: async (identity, origin, input) => sendAs(identity, origin, input) })
+  tasks.bind({ writes })
   watchers.bind({ reads })
 
   /**
@@ -347,20 +350,23 @@ function build(options: A2Options, binding: BoardBinding) {
     }
   }
 
+  /** Refuses a request's post an ID that's someone else's to post with: the board's own, another client's key, or a sync's import. */
+  function ownId(caller: Caller, principal: Granted, id: string | undefined) {
+    if (!fromRequest(caller) || id === undefined) return
+    if (DERIVED_ID.test(id)) throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
+    // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
+    // one else can post with one first and make its retry fail.
+    if (id.startsWith('key:') && !isKeyIdOf(id, principal.id)) throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
+    // Nor with one a sync's import lands with (`importId`), which anyone can work out.
+    if (id.startsWith('sync:')) throw badRequest('id: sync:… IDs are what sync imports, under the principal that imports them')
+  }
+
   /** A post as it lands: what the caller may post, with the files it may have. */
   async function postNow(caller: Caller, identity: Identity, parsed: Protocol['post']['input']): Promise<Protocol['post']['output']> {
     const { principal } = identity
     const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
     const proofs = await authorizePost(writes, principal.access, body)
-    if (fromRequest(caller) && body.id !== undefined && DERIVED_ID.test(body.id))
-      throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
-    // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
-    // one else can post with one first and make its retry fail.
-    if (fromRequest(caller) && body.id?.startsWith('key:') && !isKeyIdOf(body.id, principal.id))
-      throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
-    // Nor with one a sync's import lands with (`importId`), which anyone can work out.
-    if (fromRequest(caller) && body.id?.startsWith('sync:'))
-      throw badRequest('id: sync:… IDs are what sync imports, under the principal that imports them')
+    ownId(caller, principal, body.id)
     const attachments = await attachmentsFor(principal, body.attachments)
     const { schedule } = caller.origin
     const { unknownMentions, ...message } = await writePost(writes, {
@@ -549,6 +555,34 @@ function build(options: A2Options, binding: BoardBinding) {
       const answer = await schedules.cancel(identity, scheduleAt(id))
       return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
     },
+    tasks: async (caller, query) => tasks.list(await identityOf(caller), query),
+    async createTask(caller, body) {
+      const identity = await identityOf(caller)
+      const { principal } = identity
+      const about = { needs: body.needs, for: body.for, claim: body.claim, lease: body.lease }
+      if (body.re !== undefined) return tasks.adopt(identity, messageAt(body.re), about)
+      // A new thread, posted as any is: `post` where it lands, and `label` for the labels it carries.
+      const proofs = await authorizePost(writes, principal.access, { channel: body.channel, labels: body.labels })
+      ownId(caller, principal, body.id)
+      const made = tasks.starting(identity, { channel: body.channel!, ...about })
+      const { unknownMentions, ...task } = await writePost(writes, { identity, proofs, channel: body.channel, text: body.text!, labels: body.labels, noSync: body.noSync, id: body.id, with: made.along })
+      // A retry gets back the post that landed with its ID: one that was no task's is another write's.
+      if (!task.task) throw duplicateId()
+      const claim = await made.claimed(messageAt(task.id))
+      return { task, ...(claim ? { claim } : {}), ...(unknownMentions ? { unknownMentions } : {}) }
+    },
+    claimReadyTask: async (caller, body, signal) => tasks.claimReady(await identityOf(caller), body, signal),
+    claimTask: async (caller, { id, lease }) => tasks.claim(await identityOf(caller), messageAt(id), lease),
+    renewTask: async (caller, { id, epoch, token, lease }) => tasks.renew(await identityOf(caller), messageAt(id), { epoch, token }, lease),
+    releaseTask: async (caller, { id, epoch, token }) => tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.released' }),
+    completeTask: async (caller, { id, epoch, token, result }) => tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.completed', result: result ?? null }),
+    failTask: async (caller, { id, epoch, token, reason }) => tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.failed', reason }),
+    blockTask: async (caller, { id, reason, kind, epoch, token }) =>
+      tasks.block(await identityOf(caller), messageAt(id), { reason, kind, ...(epoch !== undefined && token !== undefined ? { proof: { epoch, token } } : {}) }),
+    unblockTask: async (caller, { id }) => tasks.unblock(await identityOf(caller), messageAt(id)),
+    reopenTask: async (caller, { id }) => tasks.reopen(await identityOf(caller), messageAt(id)),
+    assignTask: async (caller, { id, for: actor }) => tasks.assign(await identityOf(caller), messageAt(id), actor),
+    cancelTask: async (caller, { id, reason }) => tasks.cancel(await identityOf(caller), messageAt(id), reason),
     grants: async (caller) => access.grants(await identityOf(caller)),
     createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
     updateGrant: async (caller, input) => access.updateGrant(await identityOf(caller), input),
@@ -1179,7 +1213,7 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   // The inbox's second and the watchers' last, where tests and tools look for them.
-  const servers = [server, inboxServer, schedules.server, registry.server, watchers.server]
+  const servers = [server, inboxServer, schedules.server, registry.server, tasks.server, watchers.server]
   return {
     methods,
     schedules,

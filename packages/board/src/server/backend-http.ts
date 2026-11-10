@@ -224,9 +224,9 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     // board() serves no requests for a board that uses another's: only its own code calls here.
     if ('identity' in caller) throw new HttpError(404, 'not_found', `this board uses ${remote}, and answers nothing itself`)
     const client = clientOf(caller)
-    // A post board() gave an ID derived from a trigger: the remote takes it as this deployment's key,
-    // and a retry's lookup asks for the same.
-    if ((method === 'post' || method === 'posted') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
+    // A post board() gave an ID derived from a trigger, a task's new thread included: the remote
+    // takes it as this deployment's key, and a retry's lookup asks for the same.
+    if ((method === 'post' || method === 'posted' || method === 'createTask') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
       input = { ...input, id: await ownKey(input.id).catch(rethrow) }
     const response = await call(client, method, input, signal)
     return method === 'attachment' ? attachmentOf(String(input.id), response) : response.json()

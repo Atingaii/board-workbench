@@ -13,11 +13,15 @@ import {
   MessageText,
   platformAvatar,
   storable,
+  TASK_NEEDS_MAX,
+  TaskHoldKind,
+  TaskNote,
+  TaskState,
 } from '../contract/schemas.ts'
 import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
-import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
+import type { Actor, Channel, ExternalCopy, Message, Task } from '../contract/folds.ts'
 import type { AccessSummary, Can as AccessCan, Permission, WrittenCan } from '../server/access.ts'
 
 /**
@@ -173,6 +177,92 @@ export const SchedulesQuery = z.object({
   /** Include done and canceled schedules. */
   all: flag.optional(),
 })
+
+/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. */
+const ChannelOrSubtree = z.string().max(81).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
+
+/** A lease's shortest and longest, in seconds, and what a claim gets when it asks for none. */
+export const LEASE_MIN_S = 30
+export const LEASE_MAX_S = 3600
+export const LEASE_DEFAULT_S = 900
+/** How long a claim holds its task, in seconds: 30 to 3600, 900 when left out. A board gives what's asked up to its own cap, never under 300. */
+const Lease = z.number().min(LEASE_MIN_S).max(LEASE_MAX_S)
+
+/** What a claim's own writes carry: the `epoch` and `token` its claim answered. */
+const Claimed = { epoch: z.number().int().positive(), token: z.string().min(1).max(128) }
+
+/**
+ * A new thread that's a task (`channel` and `text`, with `labels`, `noSync`, and an `id` as a post
+ * takes them), or the thread `re` roots made one. `needs` are the tasks it waits for, `for` the one
+ * actor of its owner's that claims it, and `claim` claims it in the same write, for `lease` seconds.
+ */
+export const CreateTaskBody = z
+  .object({
+    channel: ChannelPath.optional(),
+    re: Ref.optional(),
+    text: z.string().max(MESSAGE_TEXT_MAX).optional(),
+    labels: Labels.optional(),
+    noSync: z.boolean().optional(),
+    needs: z.array(Ref).max(TASK_NEEDS_MAX).optional(),
+    for: ActorId.nullable().optional(),
+    claim: z.boolean().optional(),
+    lease: Lease.optional(),
+    id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
+  })
+  .refine((body) => (body.channel === undefined) !== (body.re === undefined), {
+    message: 'a task needs `channel` and `text` for a new thread, or `re` for a thread that\'s there',
+  })
+  .refine((body) => body.channel === undefined || (body.text ?? '').trim().length > 0, { message: 'message text is empty', path: ['text'] })
+  .refine((body) => body.text === undefined || storable(body.text), { message: 'message text has a NUL character or a lone surrogate', path: ['text'] })
+  .refine((body) => body.re === undefined || (body.text === undefined && body.labels === undefined && body.noSync === undefined && body.id === undefined), {
+    message: '`text`, `labels`, `noSync`, and `id` are a new thread\'s: `re` makes a task of a thread as it is',
+  })
+  .refine((body) => body.lease === undefined || body.claim === true, { message: '`lease` goes with `claim`', path: ['lease'] })
+
+/** Which tasks to list: open ones unless `state` says `all` or names one. A claim whose lease has run out counts as `ready`. */
+export const TasksQuery = z.object({
+  channel: z.string().optional(),
+  state: z.union([z.enum(['open', 'all']), TaskState]).optional(),
+  label: repeated.pipe(z.array(LabelFilter)).optional(),
+  /** Who wrote the root: a handle or an actor ID, as on `/messages`. */
+  by: z.string().optional(),
+  /** Whose task it is: a handle or a principal ID. */
+  owner: z.string().optional(),
+  /** The actor it's assigned to: a handle or an actor ID. */
+  for: z.string().optional(),
+  /** A task's ID: the tasks that wait for it. */
+  needs: Ref.optional(),
+  /** A `cursor` an earlier page reported. */
+  after: Ref.optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+})
+
+export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()
+
+/**
+ * Claims the oldest ready task in `channel` that has every label in `label`: one assigned to the
+ * caller first, then an unassigned one it owns, or whose owner `from` names by handle. `wait`
+ * holds the request up to that many seconds for one.
+ */
+export const ClaimReadyTaskBody = z.object({
+  channel: ChannelOrSubtree,
+  label: Labels.optional(),
+  from: z.array(z.string().min(1).max(256)).max(32).optional(),
+  lease: Lease.optional(),
+  wait: z.number().min(0).max(300).optional(),
+})
+
+export const RenewTaskBody = z.object({ ...Claimed, lease: Lease.optional() })
+export const ReleaseTaskBody = z.object(Claimed)
+export const CompleteTaskBody = z.object({ ...Claimed, result: TaskNote.optional() })
+export const FailTaskBody = z.object({ ...Claimed, reason: TaskNote })
+/** A hold for a person. A claimed task's comes from its claim, with the claim's `epoch` and `token`. */
+export const BlockTaskBody = z
+  .object({ reason: TaskNote, kind: TaskHoldKind.optional(), epoch: Claimed.epoch.optional(), token: Claimed.token.optional() })
+  .refine((body) => (body.epoch === undefined) === (body.token === undefined), { message: 'a claim is its `epoch` and its `token`: pass both, or neither' })
+/** The one actor of its owner's that claims the task, or null for anyone who may. */
+export const AssignTaskBody = z.object({ for: ActorId.nullable() })
+export const CancelTaskBody = z.object({ reason: TaskNote })
 
 const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
 /** What a grant or token lets do: `'all'`, a list for every channel, or a map from channel pattern to one. board() checks the patterns. */
@@ -512,6 +602,9 @@ export const LabelBody = z
     message: 'nothing to change: pass `set` or `unset`',
   })
 
+export type CreateTaskInput = z.input<typeof CreateTaskBody>
+export type TasksQueryInput = z.input<typeof TasksQuery>
+export type ClaimReadyTaskInput = z.input<typeof ClaimReadyTaskBody>
 export type FiltersInput = z.input<typeof Filters>
 export type SyncImportInput = z.input<typeof SyncImportBody>
 export type SyncReceiptInput = z.input<typeof SyncReceiptBody>
@@ -629,10 +722,24 @@ export type TokenView = {
   parent: string | null
 }
 
+/**
+ * A task, on its root: its state (the root's `board.task` label too), whose it is, what it waits
+ * for, and who holds it until when. A claim's token shows nowhere but in the answer that made it.
+ */
+export type TaskView = Omit<Task, 'needs' | 'claim'> & {
+  /** The tasks it waits for, by their IDs. */
+  needs: string[]
+  /** Who holds it. One whose `until` has passed is over: the task is claimable, and `ready` once the board says so. */
+  claim: { actor: string; session: string | null; until: string } | null
+}
+
+/** What a claim answers, once: `epoch` and `token` go on every write the claim makes, until `until`. */
+export type TaskClaim = { epoch: number; token: string; until: string }
+
 /** `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow. */
 export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'>
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
-export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version' | 'revision'> & {
+export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'task' | 'version' | 'revision'> & {
   id: string
   /** The thread's root, or null for a root. */
   re: string | null
@@ -648,21 +755,25 @@ export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'sch
   links: LinkView[]
   /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
   schedule?: { id: string; n: number }
+  /** Set on a root that's a task. */
+  task?: TaskView
   author: ActorView | null
 }
 
 /** A link in a message: a board message it names is a ref. */
 export type LinkView = Omit<Link, 'message'> & { message: string | null }
 
-/** An event's payload as clients see it: message IDs are refs. */
+/** An event's payload as clients see it: message IDs are refs, and a claim's `token` is left out. */
 type PayloadView<P> = {
-  [K in keyof P]: K extends 'id' | 're' | 'replyTo'
+  [K in keyof P as K extends 'token' ? never : K]: K extends 'id' | 're' | 'replyTo'
     ? P[K] extends number ? string : P[K] extends number | null ? string | null : P[K]
     : K extends 'links'
       ? LinkView[]
-      : K extends 'schedule'
-        ? P[K] extends undefined ? undefined : { id: string; n: number } | Exclude<P[K], object>
-        : P[K]
+      : K extends 'needs'
+        ? string[]
+        : K extends 'schedule'
+          ? P[K] extends undefined ? undefined : { id: string; n: number } | Exclude<P[K], object>
+          : P[K]
 }
 
 /** A board event as subscribers get it. Checking `type` narrows `payload` to that event's. */
@@ -813,6 +924,8 @@ export type ThreadView = {
 /** A thread at a glance: its root, how many replies it has, and the latest one (null when none). Deleted replies don't count. */
 export type ThreadSummaryView = { message: MessageView; replies: number; last: MessageView | null }
 export type ThreadsPage = { threads: ThreadSummaryView[]; cursor: string }
+/** Tasks, oldest first, each as its thread's summary: `message.task` is the task. `cursor` reads the next page, as `after`. */
+export type TasksPage = { tasks: ThreadSummaryView[]; cursor: string }
 export type EventsPage = { events: BoardEventView[]; cursor: string }
 
 /** The platform threads that now show typing: those the thread is synced to, minus any that failed. */
@@ -897,6 +1010,26 @@ export const routes = {
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
   /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
+  /** Tasks, oldest first: open ones unless `state` says otherwise. */
+  tasks: { method: 'GET', path: '/tasks', query: TasksQuery },
+  /** Starts a thread as a task (`post` there, and `label` for its labels), or makes the thread `re` roots one (`label` there). */
+  createTask: { method: 'POST', path: '/tasks', body: CreateTaskBody },
+  /** Claims the oldest ready task in a channel or subtree: `label` where it is. Answers `{ task: null }` when none is. */
+  claimReadyTask: { method: 'POST', path: '/tasks/claim', body: ClaimReadyTaskBody },
+  /** Claims a task: `label` in its channel. Its answer's `claim` goes on what the claim does next. */
+  claimTask: { method: 'POST', path: '/tasks/:id/claim', body: ClaimTaskBody },
+  /** What a claim does, with its `epoch` and `token`: 409 `claim_lost` once it's over. */
+  renewTask: { method: 'POST', path: '/tasks/:id/renew', body: RenewTaskBody },
+  releaseTask: { method: 'POST', path: '/tasks/:id/release', body: ReleaseTaskBody },
+  completeTask: { method: 'POST', path: '/tasks/:id/complete', body: CompleteTaskBody },
+  failTask: { method: 'POST', path: '/tasks/:id/fail', body: FailTaskBody },
+  /** Holds a task for a person: its claim while it's claimed, its owner or `manage` in its channel otherwise. */
+  blockTask: { method: 'POST', path: '/tasks/:id/block', body: BlockTaskBody },
+  /** What a task's owner does, or `manage` in its channel. */
+  unblockTask: { method: 'POST', path: '/tasks/:id/unblock' },
+  reopenTask: { method: 'POST', path: '/tasks/:id/reopen' },
+  assignTask: { method: 'POST', path: '/tasks/:id/assign', body: AssignTaskBody },
+  cancelTask: { method: 'POST', path: '/tasks/:id/cancel', body: CancelTaskBody },
   /** Listing grants needs manage at `*`; changing one, manage at each pattern its `can` names. Team owners always may. */
   grants: { method: 'GET', path: '/grants' },
   createGrant: { method: 'POST', path: '/grants', body: GrantBody },

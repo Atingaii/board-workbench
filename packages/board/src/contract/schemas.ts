@@ -6,6 +6,14 @@ export const MESSAGE_TEXT_MAX = 10_000
 export const CAN_MAX = 4000
 export { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, IMPORT_BYTES_MAX } from './files.ts'
 export const ATTACHMENTS_PER_MESSAGE_MAX = 10
+/** The label namespace the board writes itself: `board.task`, a task's state. No caller's write sets or unsets a key under it. */
+export const RESERVED_LABEL_PREFIX = 'board.'
+/** The label a task's root wears, with its state as the value. */
+export const TASK_LABEL = 'board.task'
+/** How many tasks one task may wait for. */
+export const TASK_NEEDS_MAX = 32
+/** The longest result or reason a task keeps: a line or two, with the detail in its thread. */
+export const TASK_NOTE_MAX = 1000
 
 const segment = '[a-z0-9][a-z0-9_-]*'
 
@@ -103,6 +111,22 @@ export const Attachment = z.object({
   type: z.string().min(1).max(255),
   size: z.number().int().nonnegative(),
 })
+
+/** What a task is doing: its root's `board.task` label. */
+export const TaskState = z.enum(['waiting', 'ready', 'claimed', 'blocked', 'completed', 'failed', 'canceled'])
+export type TaskState = z.infer<typeof TaskState>
+/** The states a task can still leave by being worked: `GET /tasks` lists these by default. */
+export const OPEN_TASK_STATES = ['waiting', 'ready', 'claimed', 'blocked'] as const satisfies readonly TaskState[]
+
+/** A task's result or reason: a line or two. */
+export const TaskNote = z
+  .string()
+  .max(TASK_NOTE_MAX)
+  .refine((text) => text.trim().length > 0, 'it is empty')
+  .refine(storable, 'it has a NUL character or a lone surrogate')
+
+/** Why a task is held, as whoever held it names it: `needs_input`, `awaiting_approval`. `edited` is the board's own. */
+export const TaskHoldKind = z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,63}$/, 'a kind is up to 64 lowercase letters, numbers, and _.-')
 
 export type ChannelPath = z.infer<typeof ChannelPath>
 export type MessageId = z.infer<typeof MessageId>

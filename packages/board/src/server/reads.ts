@@ -122,6 +122,11 @@ export function createReads(tables: MessageTables, session: BoardSession, projec
       if (filter.channels?.length === 0) return { threads: [], position: await tables.position() }
       return tables.threads(filter, page)
     },
+    async roots(filter: MessageFilter, page: Page) {
+      catchUp()
+      if (filter.channels?.length === 0) return { threads: [], position: await tables.position() }
+      return tables.roots(filter, page)
+    },
   }
 }
 

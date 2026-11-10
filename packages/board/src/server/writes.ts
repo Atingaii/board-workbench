@@ -2,7 +2,7 @@ import { derivedId } from '../client/ids.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
-import { foldMessages, type Actor, type ActorsState, type Channel, type Message } from '../contract/folds.ts'
+import { foldMessages, type Actor, type ActorsState, type Channel, type Message, type MessagesState } from '../contract/folds.ts'
 import { own } from '../contract/own.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
@@ -46,7 +46,7 @@ export type WriteContext = {
  * whose identity doesn't keep it (`records: false`) leaves it as it is. A host's principal and its
  * profiles are recorded as the host's, which sync never writes as.
  */
-function seenFor(identity: Identity, actors: ActorsState) {
+export function seenFor(identity: Identity, actors: ActorsState) {
   if (identity.records === false) return null
   return actorSeen(identity.actor, actors, identity.principal.facts?.issuer === 'host')
 }
@@ -183,7 +183,19 @@ export type PostInput = WriteOrigin & {
   importedBy?: string | undefined
   /** A reply's precondition: the message in its thread that must still be the newest. */
   after?: number | undefined
+  /** More to write with a new thread's root, in the same append: what makes it a task. */
+  with?: Along | undefined
 }
+
+/** A batch of board events, as an append takes it. */
+export type Events = Parameters<BoardSession['append']>
+
+/**
+ * More events for a root's own append, about the message it posts: it reads the tables, throws what
+ * refuses the write, and returns the index its reads reflect with what to append for the root, given
+ * the ID and thread key it will have. The whole batch lands only while that index is the log's last.
+ */
+export type Along = () => Promise<{ position: number; events: (root: { id: number; thread: string }) => Events }>
 
 /**
  * A post as it landed. `unknownMentions` lists the handles in it that matched
@@ -214,6 +226,7 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
     if (input.after !== undefined) throw badRequest('`after` is for replies', 'invalid_after')
     thread = id!
   }
+  if (input.with && re !== null) throw new Error('only a new thread is posted with more: a reply has no task to be')
   spend(input.proofs.post, 'post', { channel })
   if (hasLabels(input.labels)) spend(input.proofs.label, 'label', { channel })
   if (input.sync?.length) spend(input.proofs.sync, 'sync', { channel })
@@ -306,7 +319,7 @@ async function commitPost(
       payload: { thread, target, kind, cause, by: identity.author },
     })),
   )
-  const events: Parameters<BoardSession['append']> = [
+  const events: Events = [
     ...(seen ? [seen] : []),
     ...named,
     {
@@ -335,16 +348,28 @@ async function commitPost(
   ]
   let rows: Awaited<ReturnType<BoardSession['append']>>
   try {
-    rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendWhile(ctx, nothingAfter(ctx, re, input.after), events)
+    if (input.with) {
+      const along = input.with
+      // The batch lands right after the index it read at, so the root's ID is known before it's written.
+      const before = events.findIndex((event) => event.type === 'message.posted')
+      rows = await appendFrom(ctx, async () => {
+        const { position, events: more } = await along()
+        return { position, events: [...events, ...more({ id: position + 1 + before, thread })] }
+      })
+    } else rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendWhile(ctx, nothingAfter(ctx, re, input.after), events)
   } catch (error) {
-    // The same request sent twice at once: what came after `after` may be the other one.
-    const replayed = error instanceof HttpError && error.code === 'newer_message' ? await replayOf(ctx, input, { channel, re, replyTo }, sent) : null
+    // The same request sent twice at once: what came after `after`, or took its ID, may be the other one.
+    const twice = (error instanceof HttpError && error.code === 'newer_message') || (input.with !== undefined && duplicateEvent(error))
+    const replayed = twice ? await replayOf(ctx, input, { channel, re, replyTo }, sent) : null
     if (replayed) return replayed
     throw error
   }
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
   await untilApplied(ctx, rows)
-  const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
+  // Every event of the batch that's about the message: its post, and what came along with it.
+  const folded: MessagesState = { byId: {}, replies: {} }
+  for (const row of [...rows].sort((a, b) => a.index - b.index)) foldMessages(folded, row as BoardEvent)
+  const message = folded.byId[posted.index]!
   const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: identity.actor } } : actors
   return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent, unknown)
 }
@@ -389,7 +414,8 @@ async function unclaimed(ctx: WriteContext, target: SyncTarget, thread: string, 
  * it waits for the tables' consumer. The write landed either way: if the tables are
  * slow or stuck, it still succeeds.
  */
-async function untilApplied(ctx: WriteContext, rows: readonly { index: number }[]) {
+export async function untilApplied(ctx: WriteContext, rows: readonly { index: number }[]) {
+  if (rows.length === 0) return
   const events = ([...rows] as unknown as BoardEvent[]).sort((a, b) => a.index - b.index)
   const last = events.at(-1)!.index
   try {
@@ -413,12 +439,32 @@ const LANDED_WAIT_MS = 10_000
  * holds only while that index is still the log's last, so anything that lands in between,
  * anywhere on the board, moves it, and it looks again from there.
  */
-async function appendWhile(ctx: WriteContext, holds: () => Promise<number>, events: Parameters<BoardSession['append']>) {
+async function appendWhile(ctx: WriteContext, holds: () => Promise<number>, events: Events) {
+  return appendFrom(ctx, async () => ({ position: await holds(), events }))
+}
+
+/**
+ * As `appendWhile`, for a write whose events depend on what it finds: `look` reads the tables,
+ * throws what refuses the write, and returns what to append with the index its reads reflect. It
+ * looks again, and decides again, each time the board moves on first. Nothing to append appends
+ * nothing.
+ */
+export async function appendFrom(ctx: WriteContext, look: () => Promise<{ position: number; events: Events }>): Promise<Awaited<ReturnType<BoardSession['append']>>> {
   return whileHeadMoves(async () => {
     await ctx.reads.ensure()
-    return appendIfLast(ctx.session, await holds(), events)
+    const { position, events } = await look()
+    return events.length === 0 ? [] : appendIfLast(ctx.session, position, events)
   })
 }
+
+/**
+ * What a look throws when its reads don't all reflect one index: the board moved on under it, so
+ * `whileHeadMoves` has it look again.
+ */
+export const movedOn = () => Object.assign(new Error('the board moved on while a write read it'), { code: 'LAST_INDEX_MISMATCH' })
+
+/** An append that holds an event ID already in the log. */
+const duplicateEvent = (error: unknown) => ['PARTIAL_DUPLICATE_BATCH', 'DUPLICATE_EVENT_ID'].includes((error as { code?: string } | null)?.code ?? '')
 
 /**
  * Runs `attempt`, a look and a conditional append, again each time the board moves on in
@@ -487,7 +533,7 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
     input.from != null,
     input.identity.principal.access.readsAll,
   )
-  const events: Parameters<BoardSession['append']> = [...(seen ? [seen] : []), ...named, {
+  const events: Events = [...(seen ? [seen] : []), ...named, {
     type: 'message.edited',
     payload: {
       id: message.id,
@@ -498,7 +544,18 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
       from: input.from ?? null,
     },
   }]
-  const rows = input.revision === undefined ? await ctx.session.append(...events) : await appendWhile(ctx, revisionIs(ctx, message.id, input.revision), events)
+  const { revision } = input
+  const rows =
+    message.re === null
+      ? // A root may be a task, as of the index the edit lands after: one its owner didn't make holds it.
+        await appendFrom(ctx, async () => {
+          const { position, found } = await asOfNow(ctx, message.id)
+          if (revision !== undefined) atRevision(found, message.id, revision)
+          return { position, events: [...events, ...heldByEdit(found, input.identity)] }
+        })
+      : revision === undefined
+        ? await ctx.session.append(...events)
+        : await appendWhile(ctx, revisionIs(ctx, message.id, revision), events)
   await untilApplied(ctx, rows)
   // As on a post: which handles matched no one is only for a caller that reads the channel.
   return unknown.length && input.identity.principal.access.readable(message.channel) ? { unknownMentions: unknown } : {}
@@ -529,20 +586,65 @@ export async function writeDelete(
     if (input.revision !== undefined && input.revision !== (message.revision ?? message.id)) throw new HttpError(409, 'revision_conflict', `#${message.id} was deleted since revision ${input.revision}`)
     return
   }
-  const deleted: Parameters<BoardSession['append']> = [{
+  const deleted: Events = [{
     type: 'message.deleted',
     payload: { id: message.id, thread: message.thread, by: input.identity.author, from: input.from ?? null },
   }]
-  await untilApplied(ctx, input.revision === undefined ? await ctx.session.append(...deleted) : await appendWhile(ctx, revisionIs(ctx, message.id, input.revision), deleted))
+  const { revision } = input
+  const rows =
+    message.re === null
+      ? // A root may be a task, as of the index the delete lands after: it's canceled in the same append.
+        await appendFrom(ctx, async () => {
+          const { position, found } = await asOfNow(ctx, message.id)
+          if (revision !== undefined) atRevision(found, message.id, revision)
+          // Deleted in between: there's nothing left to delete, or to cancel.
+          return { position, events: found?.deleted ? [] : [...canceledByDelete(found, input.identity), ...deleted] }
+        })
+      : revision === undefined
+        ? await ctx.session.append(...deleted)
+        : await appendWhile(ctx, revisionIs(ctx, message.id, revision), deleted)
+  await untilApplied(ctx, rows)
+}
+
+/** A message as the tables have it now, and the index that read reflects. */
+async function asOfNow(ctx: WriteContext, id: number): Promise<{ position: number; found: Message | undefined }> {
+  const position = await ctx.reads.tables.position()
+  return { position, found: (await ctx.reads.tables.messagesAt([id], position)).get(id) }
+}
+
+/** Refuses an edit or a delete at `revision` when the message has been edited or deleted since. */
+function atRevision(message: Message | undefined, id: number, revision: number) {
+  const now = message ? (message.revision ?? message.id) : null
+  if (now !== revision) throw new HttpError(409, 'revision_conflict', message?.deleted ? `#${id} was deleted since revision ${revision}` : `#${id} was edited since revision ${revision}: it's at ${now}`)
 }
 
 /** An edit's or a delete's `revision`: no edit or delete since, as of the index the read reflects. */
 const revisionIs = (ctx: WriteContext, id: number, revision: number) => async () => {
-  const position = await ctx.reads.tables.position()
-  const message = (await ctx.reads.tables.messagesAt([id], position)).get(id)
-  const now = message ? (message.revision ?? message.id) : null
-  if (now !== revision) throw new HttpError(409, 'revision_conflict', message?.deleted ? `#${id} was deleted since revision ${revision}` : `#${id} was edited since revision ${revision}: it's at ${now}`)
+  const { position, found } = await asOfNow(ctx, id)
+  atRevision(found, id, revision)
   return position
+}
+
+/** Why a task is held once its root was edited by someone who doesn't own it. */
+const EDITED = 'its text was edited by someone who does not own the task'
+
+/**
+ * The hold an edit of a task's root brings, by anyone but the task's owner: the thread's author when
+ * someone else made it a task, or a platform's edit. The task says what its owner read, so it waits
+ * for them to read it again, and whoever held it has lost it. One that's held or finished stays as it is.
+ */
+function heldByEdit(root: Message | undefined, editor: Identity): Events {
+  const task = root?.task
+  if (!root || root.deleted || !task || task.owner === editor.principal.id) return []
+  if (task.state !== 'waiting' && task.state !== 'ready' && task.state !== 'claimed') return []
+  return [{ type: 'task.blocked', payload: { id: root.id, thread: root.thread, kind: 'edited', reason: EDITED, by: editor.author } }]
+}
+
+/** The cancel a delete of a task's root brings, unless the task has completed or been canceled: before the delete, while the root still wears its labels. */
+function canceledByDelete(root: Message | undefined, deleter: Identity): Events {
+  const task = root?.task
+  if (!root || !task || task.state === 'completed' || task.state === 'canceled') return []
+  return [{ type: 'task.canceled', payload: { id: root.id, thread: root.thread, reason: 'deleted', by: deleter.author } }]
 }
 
 export async function writeReaction(
@@ -580,7 +682,7 @@ export async function writeLabels(
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = seenFor(input.identity, actors)
-  const events: Parameters<BoardSession['append']> = [
+  const events: Events = [
     ...(seen ? [seen] : []),
     {
       type: 'labels.changed',
@@ -643,7 +745,7 @@ export async function writeChannel(ctx: WriteContext, input: { identity: Identit
   authorize(access, 'read', input.path)
   authorize(access, 'post', input.path)
   const seen = seenFor(input.identity, (await ctx.session.state(actorsReducer)).state)
-  const events: Parameters<BoardSession['append']> = [
+  const events: Events = [
     ...(seen ? [seen] : []),
     { type: 'channel.created', payload: { channel: input.path, by: input.identity.author } },
   ]

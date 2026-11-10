@@ -1,12 +1,12 @@
 import type { z } from 'zod'
-import type { ActorView, Filters, LinkView, MessageView, BoardEventView } from '../api/routes.ts'
+import type { ActorView, Filters, LinkView, MessageView, BoardEventView, TaskView } from '../api/routes.ts'
 import type { ParsedFilters } from '../api/routes.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import { FULL_ACCESS, type Access } from './access.ts'
 import { hasCriteria } from './watch-spec.ts'
 import { channelsReducer } from '../contract/reducers.ts'
-import { foldActors, foldMessages, iso, type ActorsState, type Message, type MessagesState } from '../contract/folds.ts'
+import { foldActors, foldMessages, iso, type ActorsState, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { own } from '../contract/own.ts'
 import { concernedMessageId } from '../store/project.ts'
 import type { MessageFilter } from '../store/types.ts'
@@ -15,8 +15,8 @@ import type { BoardReads } from './reads.ts'
 
 export { concernedMessageId }
 
-/** Bookkeeping events, shown only with `all`: who's who, and delivery receipts. */
-const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])
+/** Bookkeeping events, shown only with `all`: who's who, delivery receipts, and a claim's renewals. */
+const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced', 'task.renewed'])
 
 export function actorView(actors: ActorsState, id: string): ActorView | null {
   const author = own(actors.byId, id)
@@ -87,11 +87,23 @@ export const scheduleRef = (index: number): string => `s${index}`
 /** The log index a ref names on this board, or null for a string that names nothing here. */
 export const indexOf = (value: string): number | null => (/^(0|[1-9]\d{0,15})$/.test(value) ? Number(value) : null)
 
-/** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
-export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
-  const { blind, version, revision, schedule, ...shown } = message
+/** A task as every reader sees it: the tasks it waits for as refs, and its claim without the token, hashed or not. */
+export function taskView(task: Task): TaskView {
+  const { needs, claim, ...shown } = task
   return {
     ...shown,
+    needs: needs.map(ref),
+    claim: claim && { actor: claim.actor, session: claim.session, until: claim.until },
+    blocked: task.blocked && { ...task.blocked },
+  }
+}
+
+/** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
+export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
+  const { blind, version, revision, schedule, task, ...shown } = message
+  return {
+    ...shown,
+    ...(task ? { task: taskView(task) } : {}),
     ...(blind ? { blind } : {}),
     id: ref(message.id),
     re: message.re === null ? null : ref(message.re),
@@ -282,10 +294,12 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
   } as BoardEventView
 }
 
-/** An event's payload as clients see it: the message IDs in it are refs. */
+/** An event's payload as clients see it: the message IDs in it are refs, and a claim's token is left out. */
 function payloadView(payload: Record<string, unknown>, links: LinkView[] | undefined): Record<string, unknown> {
-  const shown: Record<string, unknown> = { ...payload }
+  // Only `task.claimed` carries a `token`: its hash is the board's to check claims against, and no reader's.
+  const { token: _token, ...shown }: Record<string, unknown> = payload
   for (const key of ['id', 're', 'replyTo'] as const) if (typeof shown[key] === 'number') shown[key] = ref(shown[key])
+  if (Array.isArray(shown.needs)) shown.needs = (shown.needs as number[]).map(ref)
   const schedule = shown.schedule as { id: number; n: number } | undefined
   if (schedule) shown.schedule = { id: scheduleRef(schedule.id), n: schedule.n }
   if (links) shown.links = links
