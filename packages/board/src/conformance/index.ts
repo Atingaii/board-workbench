@@ -1374,7 +1374,7 @@ const CHECKS: Check[] = [
   },
   {
     group: 'sync',
-    name: "keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced",
+    name: "keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced",
     run: async (ctx) => {
       const key = SYNC_KEY
       const thread = `${key}:${ctx.labels.conformance}:1`
@@ -1400,7 +1400,12 @@ const CHECKS: Check[] = [
       isRef(id, "an import's message")
       try {
         const message = (await ctx.board.thread(id!)).message
-        same(message.by.actor, author.id, "the import's author")
+        // A sync elsewhere's word: the platform user as a profile of its principal, shown through it.
+        same(message.by.actor, `${ctx.me.principal}+${author.id}`, "the import's author")
+        same(message.by.principal, ctx.me.principal, "the import's principal")
+        same(message.by.profile, author.id, "the import's profile")
+        same(message.author?.name, author.name, "the import's author's name")
+        check(message.author?.via !== undefined, `the import's author should say who it's via, got ${show(message.author)}`)
         same(message.from, key, "the import's from")
         same(message.origin?.thread, thread, "the import's origin")
         const found = await ctx.board.syncFind({ thread, message: '1' })

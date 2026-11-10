@@ -444,7 +444,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       const wanted = query.state ?? 'open'
       // A claim whose lease ran out still wears `claimed`: what's ready is looked for among both.
       const states: readonly TaskState[] | null = wanted === 'all' ? null : wanted === 'open' ? OPEN_TASK_STATES : wanted === 'ready' ? ['ready', 'claimed'] : [wanted]
-      const base = toMessageFilter({ ...(query.channel !== undefined ? { channel: query.channel } : {}), ...(query.by !== undefined ? { by: query.by } : {}), ...(query.label ? { label: query.label } : {}) }, { me: actor.id, actors })
+      const base = toMessageFilter({ ...(query.channel !== undefined ? { channel: query.channel } : {}), ...(query.by !== undefined ? { by: query.by } : {}), ...(query.label ? { label: query.label } : {}) }, { me: { id: actor.id, handle: actor.handle }, actors, access: principal.access })
       const { filter, through } = await within({ ...base, labels: [...(base.labels ?? []), { key: TASK_LABEL, values: states }] }, principal.access, 'read')
       const owners = query.owner === undefined ? null : await named(query.owner)
       const assignees = query.for === undefined ? null : await named(query.for)

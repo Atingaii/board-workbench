@@ -91,13 +91,12 @@ The board's HTTP handler, on any backend: what a route exports as `GET` and
 ### post
 
 ```ts
-post(channel: string, input: string | PostOptions): Promise<Written<MessageView>>
+post(channel: string, input: string | PostOptions): Promise<MessageView>
 ```
 
-Starts a thread. The channel is created by its first post. A handle in the text
-that matches no one stays plain text; the message you get back lists those in
-`unknownMentions` (`['tk']`), and leaves it out when there are none, or when
-you can't read the channel. `reply`, `edit`, and `schedule` do the same.
+Starts a thread. The channel is created by its first post. Its text is what
+you wrote, mentions included: each sync resolves them when it posts there
+([Mentions](../01-board/03-identity.md#mentions)), so none fails the write.
 
 ```ts
 // anywhere in Node:
@@ -135,7 +134,7 @@ profile's post with the same `id` is another post.
 ### reply
 
 ```ts
-reply(id: string, input: string | ReplyOptions): Promise<Written<MessageView>>
+reply(id: string, input: string | ReplyOptions): Promise<MessageView>
 ```
 
 Replies in a thread. `id` may be any message in it: the board stores the root
@@ -153,7 +152,7 @@ await team.reply(msg.id, 'rolled back to d4e5f6')
 ### edit and delete
 
 ```ts
-edit(id: string, text: string, opts?: { revision?: number }): Promise<{ ok: true; unknownMentions?: string[] }>
+edit(id: string, text: string, opts?: { revision?: number }): Promise<{ ok: true }>
 delete(id: string, opts?: { revision?: number }): Promise<{ ok: true }>
 ```
 
@@ -275,7 +274,7 @@ the sync it runs, so the CLI's handle shows it on the board it links. It needs
 ### schedule
 
 ```ts
-schedule(target: string | { re: string }, input: ScheduleOptions): Promise<Written<ScheduleView>>
+schedule(target: string | { re: string }, input: ScheduleOptions): Promise<ScheduleView>
 schedules(query?: { re?: string; channel?: string; by?: string; all?: boolean }): Promise<ScheduleView[]>
 cancelSchedule(id: string): Promise<{ schedule: ScheduleView; canceled: boolean }>
 ```
@@ -302,8 +301,8 @@ with 501 `no_scheduler`. See
 ### tasks
 
 ```ts
-tasks.create(channel: string, input: string | NewTaskOptions): Promise<Written<{ task: MessageView; claim?: ClaimedTask }>>
-tasks.create(thread: { re: string }, input?: TaskOptions): Promise<Written<{ task: MessageView; claim?: ClaimedTask }>>
+tasks.create(channel: string, input: string | NewTaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
+tasks.create(thread: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
 tasks.list(query?: { channel?: string; state?: string; label?: Record<string, string> | string[]; by?: string; owner?: string; for?: string; needs?: string; after?: string; limit?: number }): Promise<{ tasks: ThreadSummaryView[]; cursor: string }>
 tasks.claim(id: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
 tasks.claim(ready: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
@@ -450,7 +449,7 @@ const page = await team.messages({ channel: 'errors-www', label: { status: 'open
 | `channel` | a channel, or a subtree with a trailing slash: `'www/'` |
 | `re` | the thread rooted at that ID |
 | `by` | an actor, by handle or actor ID |
-| `mentions` | `'me'`, a handle, or an actor ID |
+| `mentions` | `'me'`, a handle, an actor ID, or an email, as the text mentions them |
 | `label` | `{ status: 'open' }`, or `['status=open', 'pr']`; a value may be `a\|b`. Matches the message or its root |
 | `from` | a sync key (`'slack'`), or `'board'` |
 | `text` | a case-insensitive substring |

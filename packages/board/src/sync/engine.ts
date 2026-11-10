@@ -16,12 +16,13 @@ import { channelOf } from '../contract/external.ts'
 import { DroppedError, type WriteSource } from '../server/middleware.ts'
 import { waitUntil } from '../server/wait-until.ts'
 import type { SyncProvider } from './provider.ts'
-import { replaceMentions } from '../contract/mentions.ts'
+import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
 import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderSender, type Renderer } from './provider.ts'
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
+import { actorParts, platformProfile, shownName, viaText } from '../contract/profiles.ts'
 
 /** An event as sync gets it: a board event's view, with the message as it was before for a label change. */
 export type SyncEvent = BoardEventView & { before?: MessageView }
@@ -40,8 +41,11 @@ export type SyncHost = {
   client(platform: { author: ExternalAuthor; key: string } & EventSource, trigger: string): BoardClient
 }
 
-/** The actors sync renders with: who each is. */
-type Actors = { byId: Record<string, Actor> }
+/**
+ * The actors sync renders with: who each is, and who this sync is on its board (`principal`), whose
+ * platform users it may mention natively. Null when the board didn't say.
+ */
+type Actors = { byId: Record<string, Actor & { verified?: true }>; principal: string | null }
 
 /** `files`: a message with files may have no text. */
 const clampText = (raw: string, files = false) => {
@@ -87,6 +91,9 @@ const sameLinks = (a: ImportLink[], b: ImportLink[]) => a.length === b.length &&
 /** Tries per file before it's noted instead: a retry repeats the whole message, so keep it short. */
 const FILE_ATTEMPTS = 3
 
+/** How long a platform's answer to who has an email holds, for `@[ada@vercel.com]`: a busy thread asks once. */
+const EMAIL_TTL_MS = 5 * 60_000
+
 /** How long a webhook waits for the board's tables before it lets an event into the inbox anyway: platforms resend after about 3 seconds. */
 const GATE_WAIT_MS = 2_000
 
@@ -129,6 +136,21 @@ const describe = (error: unknown): string => {
 
 /** A board error that says what wasn't there. */
 const missing = (error: unknown) => error instanceof HttpError && error.status === 404
+
+/**
+ * A platform user's ID as the board names them: under the sync key they came through, not the
+ * platform their provider names (`slack-eu:user:U0456` for `slack:user:U0456` through key
+ * `slack-eu`). The key is the connection, so a user is that connection's.
+ */
+export function keyedId(key: string, platform: string, id: string): string {
+  if (id.startsWith(`${key}:`)) return id
+  return `${key}:${id.startsWith(`${platform}:`) ? id.slice(platform.length + 1) : id}`
+}
+
+/** A platform event with its author named under `key`. */
+function keyedEvent(key: string, platform: string, event: ExternalEvent): ExternalEvent {
+  return 'author' in event ? ({ ...event, author: { ...event.author, id: keyedId(key, platform, event.author.id) } } as ExternalEvent) : event
+}
 
 /**
  * Two-way sync between a board and its platforms, run by board(): webhooks come in through its
@@ -195,11 +217,33 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 
   const find = (query: Protocol['syncFind']['input'], signal?: AbortSignal) => call('syncFind', query, signal)
 
+  /** Who this sync is on its board, asked once: the board's own sync on a local board, or this deployment on one elsewhere. */
+  let principal: Promise<string> | null = null
+  function principalNow(): Promise<string> {
+    if (principal) return principal
+    const asked = call('me', {}).then((me) => me.principal)
+    principal = asked
+    asked.catch(() => {
+      if (principal === asked) principal = null
+    })
+    return asked
+  }
+
   /** The actors sync renders with, as the board has them now. */
   async function actorsNow(): Promise<Actors> {
-    const { actors } = await call('actors', {})
-    const state: Actors = { byId: {} }
-    for (const actor of actors) state.byId[actor.id] = { id: actor.id, kind: actor.kind, handle: actor.handle, name: actor.name, avatar: actor.avatar }
+    const [{ actors }, me] = await Promise.all([call('actors', {}), principalNow().catch(() => null)])
+    const state: Actors = { byId: {}, principal: me }
+    for (const actor of actors)
+      state.byId[actor.id] = {
+        id: actor.id,
+        kind: actor.kind,
+        handle: actor.handle,
+        name: actor.name,
+        avatar: actor.avatar,
+        ...(actor.via ? { via: { ...actor.via } } : {}),
+        ...(actor.platform ? { platform: actor.platform } : {}),
+        ...(actor.verified ? { verified: true as const } : {}),
+      }
     return state
   }
 
@@ -240,13 +284,23 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     }
   }
 
-  /** A synced platform's user with this email, for `@[ada@vercel.com]`. */
-  async function findByEmail(email: string): Promise<Actor | null> {
-    for (const platform of Object.values(entries)) {
-      const author = await platform.findByEmail(email).catch(() => null)
-      if (author) return { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar }
-    }
-    return null
+  const emails = new Map<string, { at: number; mention: Promise<string | null> }>()
+  /**
+   * How entry `key`'s platform mentions whoever has this email there, as it posts: `<@U0456>` for
+   * `@[ada@vercel.com]`, or null when it finds no one. Each answer holds a few minutes.
+   */
+  function emailMention(key: string, email: string): Promise<string | null> {
+    const at = `${key}\u001f${email.toLowerCase()}`
+    const cached = emails.get(at)
+    if (cached && Date.now() - cached.at < EMAIL_TTL_MS) return cached.mention
+    if (emails.size >= 1000) emails.clear()
+    const platform = platformOf(key)
+    const mention = platform.findByEmail(email).then(
+      (user) => (user ? platform.mention({ id: user.id, kind: 'external', handle: user.handle, name: user.name, avatar: user.avatar }) : null),
+      () => null,
+    )
+    emails.set(at, { at: Date.now(), mention })
+    return mention
   }
 
   /** Validates a requested target and resolves names (`slack:#prs`) to IDs. */
@@ -365,7 +419,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       const copy = id === null ? null : await messageOf(id)
       if (copy && !copy.deleted && copy.channel === channel) {
         resolved.push({ url: link.url, message: copy.id, unavailable: null, snapshot: {
-          author: copy.author?.name ?? copy.by.actor,
+          author: copy.author ? shownName(copy.author) : copy.by.actor,
           text: copy.text, createdAt: copy.createdAt,
           files: copy.attachments.map((file) => ({ name: file.name, url: null })),
         } })
@@ -451,9 +505,11 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /** One platform event from the inbox, through its entry's sync function. `id` is its ID there, which its writes derive theirs from. */
-  async function inbound(key: string, item: InboxDelivery, meta: { id: string; attempt: number }) {
-    const { event, raw } = item
+  async function inbound(key: string, received: InboxDelivery, meta: { id: string; attempt: number }) {
     const platform = platformOf(key)
+    // Its author is the key's user, whatever the provider named them, events queued before included.
+    const item = { ...received, event: keyedEvent(key, platform.platform, received.event) }
+    const { event, raw } = item
     const linked = (await find({ thread: event.thread })).thread ?? undefined
     if (event.kind === 'message') {
       const copied = (await find({ thread: event.subthread ?? event.thread, message: event.message })).message
@@ -462,7 +518,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         if (!origin || origin.message !== event.message || (origin.subthread ?? origin.thread) !== (event.subthread ?? event.thread)) return
       }
     }
-    const author: ExternalAuthor = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
+    const author: ExternalAuthor = 'author' in event ? event.author : { id: `${key}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
     // Built when it's first read: an import that never reads it never needs what its schema asks of the payload.
     let typed: ProviderEvent | undefined
     const typedEvent = () => (typed ??= immutable(platform.event({ id: meta.id, key, event, raw })))
@@ -621,7 +677,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         }
         const draft = rootDraft({ ...fetched, raw: fetched.raw ?? null })
         const root = await post({
-          author: fetched.author, channel,
+          author: { ...fetched.author, id: keyedId(key, platform.platform, fetched.author.id) }, channel,
           text: clampText(draft.text), labels: labels(draft.labels),
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `root:${meta.id}`, context: null },
           id: await writeId(1),
@@ -633,7 +689,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       case 'reaction': {
         const id = (await find({ thread: event.subthread ?? event.thread, message: event.message })).message
         if (id === null) return { root: rootId ?? null, message: null }
-        const author: ExternalAuthor = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
+        const author: ExternalAuthor = 'author' in event ? event.author : { id: `${key}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
         const origin = { thread: event.subthread ?? event.thread, message: event.message }
         if (rootId !== undefined) await setExtraLabels(author, rootId)
         if (event.kind === 'deleted') await call('syncImport', { op: 'delete', author, from: key, origin })
@@ -646,8 +702,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         } else {
           if (platform.singleReaction) {
             const emoji = canonicalEmoji(event.emoji)
+            // Its reactions are by the user, or on a board elsewhere, by this sync's profile of them.
+            const as = new Set([author.id, `${await principalNow()}+${author.id}`])
             for (const [held, actors] of Object.entries((await messageOf(id))?.reactions ?? {}))
-              if (actors.includes(author.id) && !(event.added && held === emoji))
+              if (actors.some((actor) => as.has(actor)) && !(event.added && held === emoji))
                 await call('syncImport', { op: 'react', author, from: key, origin, emoji: held, remove: true })
           }
           if (!platform.singleReaction || event.added) await call('syncImport', { op: 'react', author, from: key, origin, emoji: event.emoji, remove: !event.added })
@@ -690,50 +748,97 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   // --- outbound: board → platforms --------------------------------------------------
 
   /**
-   * A message's text for a platform: each mention it resolved reads natively where the
-   * actor is the platform's own, and as their plain name anywhere else. A handle it
-   * didn't resolve goes out as written.
+   * A message's text for a platform, through entry `key`, its mentions resolved as it posts and only
+   * against that entry's own users. An `@handle` reads natively when one of them has it, or of
+   * several, the one who wrote in the thread: `@support/malte` names one of support's users, and
+   * `@malte` is short for whichever of this sync's users that is, under its principal's name. An `@[actor-id]` reads natively when it's one of them,
+   * and as the actor's name otherwise; an `@[email]`, as whoever the platform finds with it, or as
+   * the email. The rest go as written.
    */
-  function textFor(platform: SyncProvider, message: MessageView, actors: Actors, text = message.text): string {
-    const mentioned = message.mentions.map((id) => actors.byId[id]).filter((actor) => actor !== undefined)
-    return replaceMentions(text, (token, written) => {
-      const actor =
-        token.kind === 'actor'
-          ? mentioned.find((candidate) => candidate.id === token.actor)
-          : mentioned.find((candidate) => candidate.handle.toLowerCase() === token.handle)
-      if (actor) return nativeMention(platform, actor.id, actors) ?? actor.name
-      return null
+  async function textFor(key: string, message: MessageView, actors: Actors, text: string): Promise<string> {
+    const tokens = extractMentions(text)
+    if (tokens.length === 0) return text
+    const found = new Map<string, string | null>()
+    for (const token of tokens)
+      if (token.kind === 'actor' && !actors.byId[token.actor] && isEmail(token.actor)) found.set(token.actor, await emailMention(key, token.actor))
+    const users = new Map<string, { id: string; mention: string }[]>()
+    for (const token of tokens) {
+      if (token.kind !== 'handle') continue
+      const theirs = Object.values(actors.byId).filter((actor) => {
+        const handle = actor.handle.toLowerCase()
+        return handle === token.handle || (!token.handle.includes('/') && handle.slice(handle.indexOf('/') + 1) === token.handle)
+      })
+      users.set(token.handle, theirs.flatMap((actor) => {
+        const mention = nativeMention(key, actor.id, actors)
+        return mention === null ? [] : [{ id: actor.id, mention }]
+      }))
+    }
+    // Several users with one handle: whoever wrote in the thread, read only when it's needed.
+    const several = [...users.values()].some((theirs) => new Set(theirs.map((user) => user.mention)).size > 1)
+    const writers = several ? new Set((await threadOf(message.re ?? message.id)).map((written) => written.by.actor)) : null
+    const one = (theirs: { mention: string }[]) => {
+      const mentions = new Set(theirs.map((user) => user.mention))
+      return mentions.size === 1 ? [...mentions][0]! : null
+    }
+    return replaceMentions(text, (token) => {
+      if (token.kind === 'handle') {
+        const theirs = users.get(token.handle) ?? []
+        return one(theirs) ?? (writers ? one(theirs.filter((user) => writers.has(user.id))) : null)
+      }
+      if (found.has(token.actor)) return found.get(token.actor) ?? token.actor
+      const actor = actors.byId[token.actor]
+      return actor ? (nativeMention(key, actor.id, actors) ?? actor.name) : null
     })
   }
 
-  /** How `platform` mentions an actor: natively when it's the platform's own account, or null. */
-  function nativeMention(platform: SyncProvider, actor: string, actors: Actors): string | null {
+  /**
+   * Whose ID an actor is on entry `key`'s platform, when it's one of that entry's users: this sync's
+   * own profile of them (`<principal>+<key>:…`), or one named under the key alone, as the board's
+   * own sync names its users and as Vercel's board named imports before profiles. Null for anyone
+   * else: a platform user another sync speaks for is that sync's word.
+   */
+  function userOf(key: string, actor: string, actors: Actors): string | null {
+    const { principal, profile } = actorParts(actor)
+    const id = profile === null ? actor : platformProfile(profile) !== null && principal === actors.principal ? profile : null
+    return id?.startsWith(`${key}:`) ? id.slice(key.length + 1) : null
+  }
+
+  /** How entry `key`'s platform mentions an actor: natively when it's one of that entry's users, found on the platform by their ID there, or null. */
+  function nativeMention(key: string, actor: string, actors: Actors): string | null {
     const account = actors.byId[actor]
-    return account ? platform.mention(account) : null
+    const user = account ? userOf(key, actor, actors) : null
+    if (user === null) return null
+    const platform = platformOf(key)
+    return platform.mention({ ...account!, id: `${platform.platform}:${user}` })
   }
 
   /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
-  function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): { markdown: string; as?: ProviderSender } {
+  async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as?: ProviderSender }> {
     const actor = actors.byId[message.by.actor]
-    let name = actor?.name ?? message.by.actor
-    if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
-    // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
-    if (message.from) name = `${name} (${entries[message.from]?.platform ?? message.by.actor.slice(0, message.by.actor.indexOf(':'))})`
+    // Whose word it is: the principal an actor with a profile writes for, and the platform of the
+    // sync key an import came through, which may be another board's. A deployment writing as itself
+    // names its environment in its own name (`www@preview`), which is whose word it is too.
+    const own = actor?.name ?? message.by.actor
+    const after = `${actor?.via ? ` ${viaText(actor.via)}` : ''}${message.from ? ` (${actor?.platform ?? entries[message.from]?.platform ?? message.from})` : ''}`
+    const environment = actor?.kind === 'deployment' && !actor.via ? (/@[^@/]+$/.exec(own)?.[0] ?? '') : ''
+    const name = `${own}${after}`
+    const attribution = `${environment}${after}`
     const platform = platformOf(key)
     const body = (renderer ?? ((input) => platform.render(input)))(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
       author: actor ? { ...actor } : null,
-      mentionOf: (id: string) => nativeMention(platform, id, actors),
+      mentionOf: (id: string) => nativeMention(key, id, actors),
       label: name,
       target,
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    const markdown = textFor(platform, message, actors, body)
-    // An agent's message can carry its own name and picture where the platform shows a sender per message.
-    return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } } : { markdown }
+    const markdown = await textFor(key, message, actors, body)
+    // Where the platform shows a sender per message, it shows one the board checked: anyone else's
+    // name is what they sent, so it stays a label in the text, under the app.
+    return actor?.verified ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors), attribution } } : { markdown }
   }
 
-  /** An agent's own picture, or for the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
+  /** An author's own picture, or for an agent with the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
   function senderAvatar(message: MessageView, actor: Actor | undefined, actors: Actors): string | null {
     const builtIn = (avatar: string | null | undefined) => !avatar || /\/avatars\/[a-z0-9-]+$/.test(avatar)
     const own = actor?.avatar ?? null
@@ -755,9 +860,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
    * `render`, with a line per file where the files won't follow: on a platform
    * that takes no uploads, or one that refused them (`noted`).
    */
-  const renderFor = (target: string, message: MessageView, actors: Actors, noted = false, renderer?: Renderer) => {
+  const renderFor = async (target: string, message: MessageView, actors: Actors, noted = false, renderer?: Renderer) => {
     const key = keyOf(target)
-    const { markdown, as } = render(key, target, message, actors, renderer)
+    const { markdown, as } = await render(key, target, message, actors, renderer)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles)
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
   }
@@ -768,7 +873,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
     const place = inSubthread ? replyCopy.thread : externalThread
     const platform = platformOf(keyOf(target))
-    let body = renderFor(target, message, actors, false, renderer)
+    let body = await renderFor(target, message, actors, false, renderer)
     let files: string[] | null | undefined
     let sentId: string
     if (!body.markdown.trim() && message.attachments.length && platform.uploadsFiles) {
@@ -779,7 +884,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       } catch (error) {
         // A platform that won't take them, or a board that no longer keeps them: the text says they were there.
         if (!platform.refusesFiles(error) && !keepsNoFiles(error)) throw error
-        body = renderFor(target, message, actors, true, renderer)
+        body = await renderFor(target, message, actors, true, renderer)
         sentId = (await platform.post(native(place), 'thread', body)).message
         files = null
       }
@@ -832,7 +937,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
       console.warn(`[board] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
       ids = null
-      await platform.edit(native(copy.thread), copy.message, renderFor(target, message, actors, true, renderer)).catch((edit: unknown) =>
+      await renderFor(target, message, actors, true, renderer).then((body) => platform.edit(native(copy.thread), copy.message, body)).catch((edit: unknown) =>
         console.warn(`[board] couldn't note #${message.id}'s files on ${target}:`, describe(edit)),
       )
     }
@@ -950,7 +1055,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (!externalThread) {
       try {
         const platform = platformOf(keyOf(target))
-        const body = renderFor(target, root, actors, false, renderer)
+        const body = await renderFor(target, root, actors, false, renderer)
         const mediaOnly = !body.markdown.trim() && root.attachments.length > 0 && platform.uploadsFiles
         if (!body.markdown.trim() && !mediaOnly) throw badRequest('a renderer must return text unless the message has media')
         let uploaded: string[] | null | undefined
@@ -966,7 +1071,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           } catch (error) {
             if (!platform.refusesFiles(error) && !keepsNoFiles(error)) throw error
             uploaded = null
-            return platform.post(native(target), 'channel', renderFor(target, root, actors, true, renderer))
+            return platform.post(native(target), 'channel', await renderFor(target, root, actors, true, renderer))
           }
         }
         const sent = await post()
@@ -1047,7 +1152,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         await offer(keyOf(target), event, message, target, async (renderer) => {
           const platform = platformOf(keyOf(target))
           const thread = native(copy.thread)
-          if (event.type === 'message.edited') await platform.edit(thread, copy.message, renderFor(target, message, actors, copy.files === null, renderer))
+          if (event.type === 'message.edited') await platform.edit(thread, copy.message, await renderFor(target, message, actors, copy.files === null, renderer))
           else if (event.type === 'message.deleted') {
             await platform.delete(thread, copy.message)
             // The files went as a message of their own.
@@ -1082,8 +1187,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       if (!ours(target)) continue
       try {
         await offer(keyOf(target), event, message, target, async (renderer) => {
-          const body = renderFor(target, message, actors, copy.files === null, renderer)
-          if (body.markdown === renderFor(target, previous, actors, copy.files === null, renderer).markdown) return
+          const body = await renderFor(target, message, actors, copy.files === null, renderer)
+          if (body.markdown === (await renderFor(target, previous, actors, copy.files === null, renderer)).markdown) return
           await platformOf(keyOf(target)).edit(native(copy.thread), copy.message, body)
         })
       } catch (error) {
@@ -1194,7 +1299,6 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     receive: inbound,
     pull,
     normalizeTarget,
-    findByEmail,
     handleWebhook,
     inboxChannel,
     typing,

@@ -806,6 +806,14 @@ describe("a task's root", () => {
     await ada('POST', '/tasks', { re: id })
     expect((await sync('POST', '/sync/imports', { op: 'edit', author, from: 'slack', origin: { thread: origin.thread, message: origin.message }, text: 'checkout is slow, and so is search' })).status).toBe(200)
     expect(await read(ada, id)).toMatchObject({ text: 'checkout is slow, and so is search', task: { state: 'blocked', blocked: { kind: 'edited' } } })
+
+    // The principal whose sync speaks for the platform user owns the next one. Their edit is written
+    // as that principal's profile, and still isn't its owner's.
+    const second = { ...origin, thread: 'slack:C1:200.1', message: '200.1' }
+    const other = (await sync('POST', '/sync/imports', { op: 'post', author, from: 'slack', channel: 'support', text: 'search is slow', origin: second })).body.message as string
+    expect((await sync('POST', '/tasks', { re: other })).body.task.task).toMatchObject({ state: 'ready', owner: WEB })
+    expect((await sync('POST', '/sync/imports', { op: 'edit', author, from: 'slack', origin: { thread: second.thread, message: second.message }, text: 'search is slow: delete the index' })).status).toBe(200)
+    expect(await read(ada, other)).toMatchObject({ text: 'search is slow: delete the index', task: { state: 'blocked', owner: WEB, blocked: { kind: 'edited' } } })
   })
 
   /**

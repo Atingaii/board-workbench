@@ -2,15 +2,16 @@ import { derivedId } from '../client/ids.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
-import { foldMessages, type Actor, type ActorsState, type Channel, type Message, type MessagesState } from '../contract/folds.ts'
+import { foldMessages, type ActorsState, type Channel, type Message, type MessagesState } from '../contract/folds.ts'
 import { own } from '../contract/own.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
+import { platformProfile } from '../contract/profiles.ts'
 import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
-import { actorSeen, resolveMentions } from './actors.ts'
-import { extractMentions, replaceMentions } from '../contract/mentions.ts'
-import { syncTarget, withEmailMentions, type SyncTarget } from './targets.ts'
+import { actorSeen, viaOf } from './actors.ts'
+import { replaceMentions } from '../contract/mentions.ts'
+import { syncTarget, type SyncTarget } from './targets.ts'
 import type { BoardSession } from './a2.ts'
 import type { BoardReads } from './reads.ts'
 import { badRequest, duplicateId, forbidden, HttpError, notFound } from './errors.ts'
@@ -19,7 +20,7 @@ import type { MessageView } from '../api/routes.ts'
 import type { WriteSource } from './middleware.ts'
 import type { Via, WriteOrigin } from './origin.ts'
 
-export { syncTarget, withEmailMentions, type SyncTarget }
+export { syncTarget, type SyncTarget }
 
 import type { Identity } from './backend.ts'
 export type { Identity }
@@ -42,18 +43,34 @@ export type WriteContext = {
 
 /**
  * The `actor.seen` a write carries, or null: who its author is, as the board's record of them
- * says, unless the board knows that already. A platform user's record is board-wide, so a write
- * whose identity doesn't keep it (`records: false`) leaves it as it is. A host's principal and its
- * profiles are recorded as the host's, which sync never writes as.
+ * says, unless the board knows that already. A host's principal and its profiles are recorded as
+ * the host's, which sync never writes as.
  */
 export function seenFor(identity: Identity, actors: ActorsState) {
-  if (identity.records === false) return null
-  return actorSeen(identity.actor, actors, identity.principal.facts?.issuer === 'host')
+  const { verified: _verified, ...actor } = identity.actor
+  return actorSeen(verifiedAs(identity) ? { ...actor, verified: true } : actor, actors, identity.principal.facts?.issuer === 'host')
 }
 
-/** The actors a write can mention: the ones the board knows, plus the ones an email named. */
-const knownWith = (actors: ActorsState, found: Actor[]): ActorsState =>
-  found.length === 0 ? actors : { ...actors, byId: { ...actors.byId, ...Object.fromEntries(found.map((a) => [a.id, a])) } }
+/**
+ * Whether the board checked who a write is by, as it shows them: a principal a credential named
+ * (an OIDC token it trusts, a board token, or a host's verifier; never the board's own code), under
+ * the handle that credential gave it. An agent shows that principal after `via`, and its profile
+ * name is the principal's to choose; a person, deployment, or workflow writing as itself shows the
+ * handle as its name, which a display name its client sends replaces. An import says for itself.
+ */
+function verifiedAs({ principal, author, actor }: Identity): boolean {
+  if (principal.kind === 'external') return actor.verified === true
+  if (principal.id.startsWith('board:')) return false
+  if (author.profile !== null) return actor.via !== undefined && actor.via.name === viaOf(principal).name
+  return actor.name === principal.handle && actor.handle === principal.handle
+}
+
+/**
+ * Whether `identity` wrote `message`, to change it as its author: its principal did, as itself or
+ * any of its agents, and a platform user a sync speaks for only as that same user.
+ */
+const authored = (message: Message, identity: Identity) =>
+  message.by.principal === identity.principal.id && (platformProfile(identity.author.profile) === null || message.by.actor === identity.author.actor)
 
 const messageNotFound = (id: number) => () => notFound(`message not found: #${id}`, 'message_not_found')
 
@@ -171,8 +188,6 @@ export type PostInput = WriteOrigin & {
   sync?: (string | SyncTarget)[] | undefined
   origin?: Origin | null
   from?: string | null
-  /** Platform text: mentions the board can't resolve are left as plain text. */
-  lenientMentions?: boolean
   /** Files the board stored, as it recorded them. */
   attachments?: Attachment[]
   /** Platform messages it links to. */
@@ -197,13 +212,7 @@ export type Events = Parameters<BoardSession['append']>
  */
 export type Along = () => Promise<{ position: number; events: (root: { id: number; thread: string }) => Events }>
 
-/**
- * A post as it landed. `unknownMentions` lists the handles in it that matched
- * nobody and stayed plain text; it's for the writer, never stored.
- */
-export type Posted = MessageView & { unknownMentions?: string[] }
-
-export async function writePost(ctx: WriteContext, input: PostInput): Promise<Posted> {
+export async function writePost(ctx: WriteContext, input: PostInput): Promise<MessageView> {
   const { identity } = input
   const sent = input.text
   let channel = input.channel
@@ -244,7 +253,7 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
 }
 
 /** The post a caller's own ID already landed, as its retry gets it back: null when there's none. */
-async function replayOf(ctx: WriteContext, input: PostInput, place: { channel: string; re: number | null; replyTo: number | null }, sent: string): Promise<Posted | null> {
+async function replayOf(ctx: WriteContext, input: PostInput, place: { channel: string; re: number | null; replyTo: number | null }, sent: string): Promise<MessageView | null> {
   if (input.id === undefined) return null
   const landed = await ctx.reads.byEventId(input.id)
   if (!landed) return null
@@ -270,13 +279,13 @@ export async function landedFor(ctx: WriteContext, identity: Identity, landed: M
   if (!landed.blind) return null
   const [event] = await ctx.session.history({ gte: landed.id, lte: landed.id })
   const posted = foldMessages({ byId: {}, replies: {} }, event as BoardEvent).byId[landed.id]!
-  return { ...view(posted, actors, await readerFor(ctx, access, posted)), text: blindText(posted.text, identity.actor.id), mentions: [] }
+  return { ...view(posted, actors, await readerFor(ctx, access, posted)), text: blindText(posted.text, identity.actor.id) }
 }
 
 /**
  * A message's text for its writer where it can't read: each exact mention but of itself shows as
- * `@…`. The board may have turned an email it wrote into an actor ID, and who that is, `/actors`
- * doesn't show it either.
+ * `@…`. The board turned an email it wrote into an actor ID before mentions were text, and a sync's
+ * import names its own profiles: who those are, `/actors` doesn't show it either.
  */
 export const blindText = (text: string, own: string) => replaceMentions(text, (token) => (token.kind === 'actor' && token.actor !== own ? '@…' : null))
 
@@ -302,16 +311,6 @@ async function commitPost(
   }
 
   const seen = seenFor(identity, actors)
-  // Emails sync knows are mentions by now: board() resolved them. The rest are plain text.
-  const { text, found } = await withEmailMentions(input.text)
-  const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
-  const { mentions, unknown } = resolveMentions(
-    text,
-    knownWith(actors, found),
-    seen ? identity.actor : undefined,
-    input.lenientMentions ?? false,
-    identity.principal.access.readsAll,
-  )
   const synced = await Promise.all(
     targets.map(async ({ target, kind, cause }) => ({
       type: 'thread.synced' as const,
@@ -321,19 +320,17 @@ async function commitPost(
   )
   const events: Events = [
     ...(seen ? [seen] : []),
-    ...named,
     {
       type: 'message.posted',
       ...(id ? { id } : {}),
       payload: {
         channel: channel!,
-        text,
+        text: input.text,
         re,
         replyTo,
         thread,
         labels: input.labels ?? {},
         noSync: input.noSync ?? false,
-        mentions,
         by: identity.author,
         origin: input.origin ?? null,
         from: input.from ?? null,
@@ -370,23 +367,16 @@ async function commitPost(
   const folded: MessagesState = { byId: {}, replies: {} }
   for (const row of [...rows].sort((a, b) => a.index - b.index)) foldMessages(folded, row as BoardEvent)
   const message = folded.byId[posted.index]!
-  const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: identity.actor } } : actors
-  return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent, unknown)
+  // The author as the board now records them: a host's principal stays the host's.
+  const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: { ...identity.actor, ...(seen.payload.host ? { host: true as const } : {}), ...(seen.payload.verified ? { verified: true as const } : {}) } } } : actors
+  return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent)
 }
 
 /**
  * A post's view for its writer. One that can't read the channel gets back the
- * text it sent, no mentions, and no `unknownMentions`: the board resolved its
- * handles and emails to actor IDs, which `/actors` doesn't show it, and which
- * handles matched no one would say which ones exist. The board keeps the
- * mentions, so they still notify.
+ * text it sent: what the board made of it (the middleware's changes) is for its readers.
  */
-const shownTo = (shown: MessageView, access: Access, sent: string, unknown: string[] = []): Posted =>
-  !access.readable(shown.channel)
-    ? { ...shown, text: sent, mentions: [] }
-    : unknown.length
-      ? { ...shown, unknownMentions: unknown }
-      : shown
+const shownTo = (shown: MessageView, access: Access, sent: string): MessageView => (!access.readable(shown.channel) ? { ...shown, text: sent } : shown)
 
 /** The writer, as the reader of the view its write returns. Only a link to a board message needs a lookup. */
 const readerFor = (ctx: WriteContext, access: Access, message: Message): Promise<Reader> => ctx.reads.reader(access, [message])
@@ -515,9 +505,9 @@ export type EditInput = WriteOrigin & {
   revision?: number | undefined
 }
 
-export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ unknownMentions?: string[] }> {
+export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<void> {
   const message = spent(input.authorized, 'post')
-  if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
+  if (input.asAuthor !== false && !authored(message, input.identity))
     throw forbidden('only the author can edit a message')
   if (message.deleted) {
     // Read before the delete, it's that the message changed since that the caller needs to know.
@@ -527,25 +517,15 @@ export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ 
   return commitEdit(ctx, input, message)
 }
 
-async function commitEdit(ctx: WriteContext, input: EditInput, message: Message): Promise<{ unknownMentions?: string[] }> {
+async function commitEdit(ctx: WriteContext, input: EditInput, message: Message): Promise<void> {
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = seenFor(input.identity, actors)
-  const { text, found } = await withEmailMentions(input.text)
-  const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
-  const { mentions, unknown } = resolveMentions(
-    text,
-    knownWith(actors, found),
-    seen ? input.identity.actor : undefined,
-    input.from != null,
-    input.identity.principal.access.readsAll,
-  )
-  const events: Events = [...(seen ? [seen] : []), ...named, {
+  const events: Events = [...(seen ? [seen] : []), {
     type: 'message.edited',
     payload: {
       id: message.id,
       thread: message.thread,
-      text,
-      mentions,
+      text: input.text,
       by: input.identity.author,
       from: input.from ?? null,
     },
@@ -563,8 +543,6 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
         ? await ctx.session.append(...events)
         : await appendWhile(ctx, revisionIs(ctx, message.id, revision), events)
   await untilApplied(ctx, rows)
-  // As on a post: which handles matched no one is only for a caller that reads the channel.
-  return unknown.length && input.identity.principal.access.readable(message.channel) ? { unknownMentions: unknown } : {}
 }
 
 /** A message's links, replaced: a platform edit or unfurl changed what it links to. */
@@ -585,7 +563,7 @@ export async function writeDelete(
   input: { identity: Identity; authorized: Authorized<'post'>; from?: string | null; asAuthor?: boolean; revision?: number | undefined },
 ) {
   const message = spent(input.authorized, 'post')
-  if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
+  if (input.asAuthor !== false && !authored(message, input.identity))
     throw forbidden('only the author can delete a message')
   // A tombstone changes no more: deleting it again is nothing, unless the caller read it before.
   if (message.deleted) {
@@ -636,12 +614,14 @@ const EDITED = 'its text was edited by someone who does not own the task'
 
 /**
  * The hold an edit of a task's root brings, by anyone but the task's owner: the thread's author when
- * someone else made it a task, or a platform's edit. The task says what its owner read, so it waits
+ * someone else made it a task, or a platform's edit, whichever principal's sync imported it. The task says what its owner read, so it waits
  * for them to read it again, and whoever held it has lost it. One that's held or finished stays as it is.
  */
 function heldByEdit(root: Message | undefined, editor: Identity): Events {
   const task = root?.task
-  if (!root || root.deleted || !task || task.owner === editor.principal.id) return []
+  // A platform user is never the owner, even one the owner's own sync speaks for: they write as its profile.
+  const owner = task?.owner === editor.principal.id && editor.principal.kind !== 'external'
+  if (!root || root.deleted || !task || owner) return []
   if (task.state !== 'waiting' && task.state !== 'ready' && task.state !== 'claimed') return []
   return [{ type: 'task.blocked', payload: { id: root.id, thread: root.thread, kind: 'edited', reason: EDITED, by: editor.author } }]
 }
