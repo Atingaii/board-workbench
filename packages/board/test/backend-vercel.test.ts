@@ -1309,7 +1309,7 @@ describe('vercel()', () => {
       [
         'ship it',
         { actor: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack-eu:user:U_MALTE', session: null },
-        { id: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' }, platform: 'slack' },
+        { id: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', kind: 'external', handle: 'pong/malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' }, platform: 'slack' },
       ],
       ['on the board', { actor: 'vercel:user:u_jb', principal: 'vercel:user:u_jb', profile: null, session: null }, expect.not.objectContaining({ via: expect.anything() })],
     ])
@@ -1333,6 +1333,21 @@ describe('vercel()', () => {
     await vi.waitFor(async () => expect((await julian.messages({ channel: 'general' })).messages).toHaveLength(1))
     const [message] = (await julian.messages({ channel: 'general' })).messages
     expect([message!.by.actor, message!.from, message!.author?.platform]).toEqual(['vercel:project:prj_pong:production+slack-eu:user:U_ADA', 'slack-eu', 'slack'])
+  })
+
+  it("puts an import's handle under its project's name, typable, from an API that names them as their platform does", async () => {
+    const api = fakeMessageboard({ platformHandles: true })
+    // The second project's name isn't one the API knows.
+    for (const [principal, key] of [['project:prj_pong:preview', 'slack'], ['project:prj_unnamed:production', 'slack-eu']] as const) {
+      const project = handleOn(api, principal)
+      await project.register({ url: null, watch: {}, sync: [{ key, platform: 'slack' }] })
+      const author = { id: `${key}:user:U_MALTE`, handle: 'Malte Ubl', name: 'Malte Ubl', avatar: null, isBot: false }
+      await project.syncImport({ op: 'post', author, from: key, channel: 'general', text: 'hi' })
+    }
+    const julian = handleOn(api)
+    const handles = (await julian.messages({ channel: 'general' })).messages.map((message) => message.author?.handle)
+    expect(handles).toEqual(['pong/malte-ubl', 'prj_unnamed/malte-ubl'])
+    expect((await julian.actors()).filter((actor) => actor.id.includes('+slack')).map((actor) => actor.handle).sort()).toEqual(['pong/malte-ubl', 'prj_unnamed/malte-ubl'])
   })
 
   it('shows an import as the platform user alone, as before, from an API that names them so', async () => {
@@ -1403,13 +1418,13 @@ describe('vercel()', () => {
     await webhook(web, WEB_URL, 'webchat', { threadId: 'slack:C9:400', id: '400', text: 'hej', user: 'U_M2', name: 'malte' })
     const julian = handleOn(api)
     await vi.waitFor(async () => expect((await julian.messages({ channel: 'general' })).messages).toHaveLength(2))
-    await julian.post('general', { text: '@malte have a look, cc @[ada@vercel.com]' })
+    await julian.post('general', { text: '@malte have a look, @pong/malte and @web/malte, cc @[ada@vercel.com]' })
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await web.fetch(new Request(`${WEB_URL}/wake`, { method: 'POST' }))
     const posted = (platform: typeof pongSlack) => platform.channelPosts.map((post) => JSON.parse(post.text).markdown).filter((text: string) => text.includes('have a look'))
     await vi.waitFor(() => expect([posted(pongSlack), posted(webSlack)]).toEqual([
-      ['**Julián Benegas**: <@U_M1> have a look, cc <@U_ADA>'],
-      ['**Julián Benegas**: <@U_M2> have a look, cc ada@vercel.com'],
+      ['**Julián Benegas**: <@U_M1> have a look, <@U_M1> and @web/malte, cc <@U_ADA>'],
+      ['**Julián Benegas**: <@U_M2> have a look, @pong/malte and <@U_M2>, cc ada@vercel.com'],
     ]))
   })
 

@@ -243,7 +243,13 @@ Handles are display hints, not reservations:
 - **A profile's** is `<person>/<profile>`: `julian/claude`.
 - **A deployment's** is its project name, plus `@<env>` outside production.
 - **A workflow's** is `owner/repo`.
-- **A platform user's** is their login or display name there.
+- **A platform user's** is their login or display name there, for the
+  board's own sync. One a sync elsewhere imports is under that project's name,
+  in every environment: support's Malte is `support/malte`, and www's
+  `www/malte`. The part after `/` is made typable: lowercased, every run of
+  anything but letters, digits, `.`, `_`, and `-` as one `-`, and the ends
+  trimmed, so "Malte Ubl" is `support/malte-ubl` (their ID on the platform when
+  nothing is left).
 
 `vb actors` lists them.
 
@@ -264,9 +270,10 @@ vb reply 812 "@ada can you look? cc @julian/claude"
 - **Mentions in inline code or code blocks don't count.**
 - **Each sync resolves them when it posts,** and only against its own users:
   the platform users it brought in under the key it posts through. On Slack:
-  - `@ada` becomes `<@U0456>` when exactly one of its users goes by `ada`. Of
-    several, it's the one who wrote in the thread, if exactly one did.
-    Otherwise it stays `@ada`.
+  - `@ada` becomes `<@U0456>` when exactly one of its users goes by `ada`, or
+    by `<its project>/ada`: `@support/ada` reaches only support's Ada, and
+    `@ada` is the shorthand each sync reads as its own. Of several, it's the
+    one who wrote in the thread, if exactly one did. Otherwise it stays `@ada`.
   - `@[actor-id]` becomes `<@U0456>` when it's one of its users, and their
     name for anyone else, a board person included.
   - `@[ada@vercel.com]` is looked up as it posts (it needs `users:read.email`):
@@ -276,8 +283,10 @@ vb reply 812 "@ada can you look? cc @julian/claude"
   bring in a Malte nor a sync allowed only one channel makes it fail anywhere.
   GitHub mentions its users as `@login`.
 - **Filters read the text.** `--mentions @ada` finds `@ada`, and
-  `@[<actor id>]` for anyone who goes by `ada`. A person's covers their agents
-  (`@julian/claude`), and `--mentions` alone is your handle and ID. A caller
+  `@[<actor id>]` for anyone who goes by `ada`. A name covers what's under it:
+  a person's agents (`@julian/claude`), and a project's imports
+  (`--mentions support` finds `@support/malte`). `--mentions` alone is your
+  handle and ID. A caller
   that can't read every channel gets what it names as written, and its agents,
   since who goes by what is for readers of every channel. See
   [Reading](./05-reading.md#filters).
