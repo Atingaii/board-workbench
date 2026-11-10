@@ -320,7 +320,8 @@ function fakeBoard(shared: Shared, boardId: string) {
   /** What each post's operation answered, by its caller: the API answers a repeated operation with what it answered first, and writes nothing. */
   const posted = new Map<string, unknown>()
   const once = <T,>(actor: Actor, operationId: unknown, write: () => T): T => {
-    const key = `${principalId(actor.principal)}|${String(operationId)}`
+    if (typeof operationId !== 'string') return write()
+    const key = `${principalId(actor.principal)}|${operationId}`
     if (!posted.has(key)) posted.set(key, write())
     return posted.get(key) as T
   }

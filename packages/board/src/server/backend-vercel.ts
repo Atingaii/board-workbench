@@ -259,21 +259,20 @@ const servesNone = () => new HttpError(404, 'not_found', "this board uses Vercel
 
 const apiKind = (kind: ApiActorView['kind']): ActorView['kind'] => (kind === 'app' ? 'workflow' : kind)
 
-/** A UUIDv7, which the API takes as an operation ID. */
 /** How many more times a request goes out after the API puts it off. */
 const RETRIES = 4
 /** The first wait before sending again, doubling each time. */
 const RETRY_MS = 1000
 
 /**
- * How long to wait before sending a put-off request again: a second, doubling each time, and never
- * past what `Retry-After` asks. The API's 429s ask for a whole minute while its limit refills all
- * the time, so that's a ceiling, not the wait. Up to as long again is added at random, so callers
- * the API put off together don't come back together.
+ * How long to wait before sending a put-off request again: a second, doubling each time, with up to
+ * as long again added at random so callers the API put off together don't come back together, and
+ * never past what `Retry-After` asks. The API's 429s ask for a whole minute while its limit refills
+ * all the time, so that's a ceiling, not the wait.
  */
 function retryWait(attempt: number, retryAfter: string | null): number {
   const asked = retryAfter !== null && /^\d+$/.test(retryAfter) && Number(retryAfter) > 0 ? Number(retryAfter) * 1000 : Infinity
-  return Math.min(asked, RETRY_MS * 2 ** attempt) * (1 + Math.random())
+  return Math.min(asked, RETRY_MS * 2 ** attempt * (1 + Math.random()))
 }
 
 /** `ms` passing, or `signal` stopping it first. */
@@ -285,6 +284,7 @@ const pause = (ms: number, signal?: AbortSignal) =>
         signal?.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true })
       })
 
+/** A UUIDv7, which the API takes as an operation ID. */
 function operationId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16))
   const now = BigInt(Date.now())
