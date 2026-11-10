@@ -79,12 +79,16 @@ const USERNAME_MAX = 80
  * is. Null when that alone doesn't fit, for the message to go as the app with its label.
  */
 export function slackUsername({ name, attribution = '' }: Pick<ProviderSender, 'name' | 'attribution'>): string | null {
-  const chars = Array.from(name)
-  if (chars.length <= USERNAME_MAX) return name
-  const kept = Array.from(attribution)
-  const room = USERNAME_MAX - kept.length - 1
+  if (Array.from(name).length <= USERNAME_MAX) return name
+  const room = USERNAME_MAX - Array.from(attribution).length - 1
   if (room < 1) return null
-  return `${chars.slice(0, chars.length - kept.length).slice(0, room).join('').trimEnd()}…${attribution}`
+  // Cut on whole characters as people see them, so a flag or a family emoji isn't left half there.
+  let cut = ''
+  for (const { segment } of new Intl.Segmenter().segment(name.slice(0, name.length - attribution.length))) {
+    if (Array.from(cut + segment).length > room) break
+    cut += segment
+  }
+  return `${cut.trimEnd()}…${attribution}`
 }
 
 /** The `**name**: ` a message's text opens with, taken out when Slack shows the name as the sender. */

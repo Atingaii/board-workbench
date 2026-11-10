@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createSlackAdapter } from '@chat-adapter/slack'
-import { slack, slackIcon, withoutLabel, type SlackClient } from '../src/sync/slack.ts'
+import { slack, slackIcon, slackUsername, withoutLabel, type SlackClient } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { caller, deploymentToken, personToken, testBoard } from './harness.ts'
@@ -221,6 +221,13 @@ describe('what board copies to Slack', () => {
 })
 
 describe('Slack sender details', () => {
+  it('cuts a long name on whole characters, never through an emoji, and keeps whose word it is', () => {
+    const attribution = ' via support (preview) (slack)'
+    const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}'
+    expect(slackUsername({ name: `${'x'.repeat(46)}${family}${'y'.repeat(40)}${attribution}`, attribution })).toBe(`${'x'.repeat(46)}…${attribution}`)
+    expect(slackUsername({ name: `Malte${attribution}`, attribution })).toBe(`Malte${attribution}`)
+  })
+
   it('takes out just the label it opens with', () => {
     expect(withoutLabel(markdown, as.name)).toBe('on it')
     expect(withoutLabel(`hi\n${markdown}`, as.name)).toBe(`hi\n${markdown}`)
