@@ -100,7 +100,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex?, messages?, threads? }`, sorted by path. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is. A key it doesn't know is 400, so `private` makes nothing |
-| GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
+| GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar, via?, platform?, verified? }`, sorted by handle. `verified: true` is for one the board checked rather than took their name from what they sent: shown under the handle a credential it checked gave them (an OIDC token, a board token, a host's verifier), as itself or after `via` |
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
 | GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
 | GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
@@ -500,7 +500,7 @@ the thread key:
 | `message.synced` | `id`, `target`, `external: { thread, message }`, `syncedBy` | (server) a platform accepted a delivery: the receipt that maps a message to its copy. `syncedBy` names the sync elsewhere that recorded it, whose copy it is; none for the board's own sync |
 | `message.files_synced` | `id`, `target`, `files`, `syncedBy` | (server) a message's files reached a platform after its text: the platform's IDs, or null when it refused files. Only the sync whose copy it is sets them |
 | `message.sync_failed` | `id`, `target`, `error` | (server) a delivery gave up after its retries |
-| `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar`, `host` | an actor writes for the first time or changes its display details. `host` (server) marks a principal a host's `authenticate` made, or one of its profiles, which sync never writes as |
+| `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar`, `host`, `verified` | an actor writes for the first time or changes its display details. `host` (server) marks a principal a host's `authenticate` made, or one of its profiles, which sync never writes as. `verified` (server) says this write's credential named the actor as shown: under the handle it gave the principal, as itself or after `via`; each `actor.seen` says it anew, and its absence clears it |
 
 - **`by`** is `{ actor, principal, profile, session }`: the actor ID
   (`vercel:user:u_abc123+claude`), the verified principal, the profile, and

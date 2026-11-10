@@ -22,7 +22,7 @@ import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableErr
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
-import { actorParts, platformProfile, shownName } from '../contract/profiles.ts'
+import { actorParts, platformProfile, shownName, viaText } from '../contract/profiles.ts'
 
 /** An event as sync gets it: a board event's view, with the message as it was before for a label change. */
 export type SyncEvent = BoardEventView & { before?: MessageView }
@@ -45,7 +45,7 @@ export type SyncHost = {
  * The actors sync renders with: who each is, and who this sync is on its board (`principal`), whose
  * platform users it may mention natively. Null when the board didn't say.
  */
-type Actors = { byId: Record<string, Actor>; principal: string | null }
+type Actors = { byId: Record<string, Actor & { verified?: true }>; principal: string | null }
 
 /** `files`: a message with files may have no text. */
 const clampText = (raw: string, files = false) => {
@@ -242,6 +242,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         avatar: actor.avatar,
         ...(actor.via ? { via: { ...actor.via } } : {}),
         ...(actor.platform ? { platform: actor.platform } : {}),
+        ...(actor.verified ? { verified: true as const } : {}),
       }
     return state
   }
@@ -814,9 +815,14 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
   async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as?: ProviderSender }> {
     const actor = actors.byId[message.by.actor]
-    let name = actor ? shownName(actor) : message.by.actor
-    // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
-    if (message.from) name = `${name} (${actor?.platform ?? entries[message.from]?.platform ?? message.from})`
+    // Whose word it is: the principal an actor with a profile writes for, and the platform of the
+    // sync key an import came through, which may be another board's. A deployment writing as itself
+    // names its environment in its own name (`www@preview`), which is whose word it is too.
+    const own = actor?.name ?? message.by.actor
+    const after = `${actor?.via ? ` ${viaText(actor.via)}` : ''}${message.from ? ` (${actor?.platform ?? entries[message.from]?.platform ?? message.from})` : ''}`
+    const environment = actor?.kind === 'deployment' && !actor.via ? (/@[^@/]+$/.exec(own)?.[0] ?? '') : ''
+    const name = `${own}${after}`
+    const attribution = `${environment}${after}`
     const platform = platformOf(key)
     const body = (renderer ?? ((input) => platform.render(input)))(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
@@ -827,11 +833,12 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     const markdown = await textFor(key, message, actors, body)
-    // An agent's message can carry its own name and picture where the platform shows a sender per message.
-    return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } } : { markdown }
+    // Where the platform shows a sender per message, it shows one the board checked: anyone else's
+    // name is what they sent, so it stays a label in the text, under the app.
+    return actor?.verified ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors), attribution } } : { markdown }
   }
 
-  /** An agent's own picture, or for the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
+  /** An author's own picture, or for an agent with the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
   function senderAvatar(message: MessageView, actor: Actor | undefined, actors: Actors): string | null {
     const builtIn = (avatar: string | null | undefined) => !avatar || /\/avatars\/[a-z0-9-]+$/.test(avatar)
     const own = actor?.avatar ?? null

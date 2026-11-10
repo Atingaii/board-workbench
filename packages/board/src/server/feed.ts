@@ -20,11 +20,22 @@ export { concernedMessageId }
 /** Bookkeeping events, shown only with `all`: who's who, and delivery receipts. */
 const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])
 
+/** Whether the board checked who an actor is, as people see them, at their last write (`actor.seen`'s `verified`). */
+export const verifiedRecord = (actor: Pick<Actor, 'verified'>): boolean => actor.verified === true
+
 export function actorView(actors: ActorsState, id: string): ActorView | null {
   const author = own(actors.byId, id)
   if (!author) return null
   const via = viaOfRecord(author)
-  return { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(via ? { via } : {}), ...(author.platform ? { platform: author.platform } : {}) }
+  return {
+    kind: author.kind,
+    handle: author.handle,
+    name: author.name,
+    avatar: author.avatar,
+    ...(via ? { via } : {}),
+    ...(author.platform ? { platform: author.platform } : {}),
+    ...(verifiedRecord(author) ? { verified: true as const } : {}),
+  }
 }
 
 /**

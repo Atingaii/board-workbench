@@ -1309,7 +1309,7 @@ describe('vercel()', () => {
       [
         'ship it',
         { actor: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack-eu:user:U_MALTE', session: null },
-        { id: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', kind: 'external', handle: 'pong/malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' }, platform: 'slack' },
+        { id: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', kind: 'external', handle: 'pong/malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' }, platform: 'slack', verified: true },
       ],
       ['on the board', { actor: 'vercel:user:u_jb', principal: 'vercel:user:u_jb', profile: null, session: null }, expect.not.objectContaining({ via: expect.anything() })],
     ])
@@ -1370,7 +1370,7 @@ describe('vercel()', () => {
     const [message] = (await handleOn(api).messages({ channel: 'general' })).messages
     expect([message!.by, message!.author]).toEqual([
       { actor: 'slack:user:U_MALTE', principal: 'slack:user:U_MALTE', profile: null, session: null },
-      { id: 'slack:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null },
+      { id: 'slack:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null, verified: true },
     ])
   })
 
@@ -1407,6 +1407,35 @@ describe('vercel()', () => {
     await vi.waitFor(() =>
       expect(s.channelPosts.map((post) => JSON.parse(post.text).markdown).sort()).toEqual(['**Julián Benegas**: not yours', 'yours · <@U_ADA>']),
     )
+  })
+
+  it("posts to Slack under the names the API gives, which it checked: a person as themselves", async () => {
+    const api = fakeMessageboard()
+    const posted: Record<string, unknown>[] = []
+    const client = {
+      conversations: { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}), replies: async () => ({ messages: [] }) },
+      chat: { postMessage: async (args: Record<string, unknown>) => (posted.push(args), { ts: '1700000000.000200' }) },
+      auth: { test: async () => ({ response_metadata: { scopes: ['chat:write.customize'] } }) },
+      users: { info: async () => ({}) },
+    }
+    const s = fakePlatform('slack', (adapter) => {
+      withSlackClient(client, false)(adapter)
+      Object.assign(adapter, {
+        formatConverter: { toSlackPayload: (message: { markdown: string }) => ({ markdown_text: message.markdown }) },
+        decodeThreadId: (id: string) => ({ channel: id.split(':')[1], threadTs: id.split(':')[2] ?? '' }),
+      })
+    })
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: s.adapter, client: async () => client as never }, channels({ C1: 'general' })) },
+    })
+    // Its first request registers its sync, which sees what's posted after.
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await handleOn(api).post('general', { text: 'the deploy is red' })
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await vi.waitFor(() => expect(posted.map(({ username, markdown_text }) => [username, markdown_text])).toEqual([['Julián Benegas', 'the deploy is red']]))
   })
 
   it("resolves mentions as each project's sync posts, against its own users: two syncs' Maltes, and an email its Slack knows", async () => {
