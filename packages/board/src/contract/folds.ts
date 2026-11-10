@@ -195,7 +195,7 @@ export type Actor = {
   platform?: string
   /** A host's principal, or one of its profiles: once it's seen as one, it stays one. Views leave it out. */
   host?: true
-  /** Its last `actor.seen` was by a write whose verifier named it as shown. Each write says it anew. */
+  /** Its last `actor.seen` was by a write whose credential named it as shown. Each write says it anew. */
   verified?: true
 }
 

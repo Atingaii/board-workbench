@@ -147,9 +147,9 @@ export const boardEvents = {
        */
       host: z.literal(true).optional(),
       /**
-       * (server) Whether this write's verifier named the actor as shown, rather than taking it from what
-       * the caller sent: a host's principal under the handle it named, or one of its profiles. Unlike
-       * `host`, each `actor.seen` says it anew. Others, and events from before, have none.
+       * (server) Whether this write's credential named the actor as shown, rather than taking it from what
+       * the caller sent: under the handle it gave the principal, as itself or after `via`. Unlike `host`,
+       * each `actor.seen` says it anew. Others, and events from before, have none.
        */
       verified: z.literal(true).optional(),
     }),

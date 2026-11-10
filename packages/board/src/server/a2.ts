@@ -164,6 +164,8 @@ function externalIdentity(author: ExternalAuthor, through: Granted | null, platf
       avatar: platformAvatar(author.avatar),
       ...(through === null ? {} : { via: viaOf(through) }),
       platform,
+      // A sync elsewhere's word, which names it by the handle its credential gave it: checked as `via` shows.
+      ...(through !== null && !through.id.startsWith('board:') ? { verified: true as const } : {}),
     },
   }
 }

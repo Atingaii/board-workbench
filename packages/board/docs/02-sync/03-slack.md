@@ -108,11 +108,13 @@ most once a minute, while the other channels sync.
 A message whose author the board verified goes to Slack with them as its
 sender, and the `**name**: ` label it would open with is left out. That's
 everyone on Vercel's board, whose API names its accounts and projects itself.
-On a local board, it's a principal [its host's verifier](../01-board/01-mounting.md#callers-of-your-own)
-named, under the handle it named, and its agents and imports, which show it
-after `via`. A verifier names no display names, so a person who sends one, and
-anyone else, whose name is what their CLI sent, posts as the app with the
-label, as a file upload does. A
+On a local board, it's whoever shows under the handle a credential named: an
+agent or import of a principal a Vercel or other OIDC token, a board token, or
+[your host's verifier](../01-board/01-mounting.md#callers-of-your-own) let in,
+through that principal (`clever-lemur via vboard-factory`), and a person,
+deployment, or workflow writing as itself under that handle. A handle or
+display name the CLI sent instead keeps the label, and so do the board's own
+code and its own sync's platform users, as a file upload does. A
 person posting as themselves is just their name (`Julián Benegas`). Anything written on a
 principal's behalf is `<name> via <principal>`: an agent (`claude via julian`),
 or a platform user another sync speaks for (`Malte via support (preview)`). A

@@ -194,17 +194,26 @@ describe('what board copies to Slack', () => {
     expect(markdown_text).toBe('same for us')
   })
 
-  it("go out as the app, each labeled with its author, when the board didn't verify them: a name a caller sent is no sender", async () => {
+  it("go out as the app, each labeled with its author, when the name it shows is one its caller sent", async () => {
     const board = mirrored(['chat:write', 'chat:write.customize'], false)
     const { s, posted } = board
     await post(board)
-    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(3))
-    expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown)).toEqual([
-      '**Julián Benegas**: the deploy is red',
-      '**claude via julian**: looking',
-      '**Malte via support (preview) (slack)**: same for us',
-    ])
-    expect(posted).toEqual([])
+    await vi.waitFor(() => expect(s.channelPosts.length + posted.length).toBe(3))
+    // A Vercel login's handle and name are what its CLI sent, and so is the person its agent shows after `via`.
+    expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown)).toEqual(['**Julián Benegas**: the deploy is red', '**claude via julian**: looking'])
+    // A deployment's OIDC token names its project, which the import shows after `via`.
+    expect(posted.map(({ username }) => username)).toEqual(['Malte via support (preview) (slack)'])
+  })
+
+  it("go out under an agent's name through the project whose OIDC token wrote it, as the factory's agents post", async () => {
+    const { team, s, posted } = mirrored(['chat:write', 'chat:write.customize'], false)
+    // The factory's own deployments, as a grant on the project lets them in.
+    await team.createGrant({ principals: [{ kind: 'project', project: 'prj_factory', environments: ['production'] }], can: { '*': ['read', 'post'] } })
+    const eve = caller(team.fetch, await deploymentToken('vboard-factory', 'prj_factory', 'production'), { 'x-board-profile': 'clever-lemur-1956', 'x-board-avatar': 'https://example.com/lemur.png' })
+    expect((await eve('POST', '/messages', { channel: 'firehose', text: 'on it' })).status).toBe(201)
+    await vi.waitFor(() => expect(posted).toHaveLength(1))
+    expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([['clever-lemur-1956 via vboard-factory', 'https://example.com/lemur.png', 'on it']])
+    expect(s.channelPosts).toEqual([])
   })
 
   it('go out as the app, each labeled with its author, when the app lacks chat:write.customize', async () => {

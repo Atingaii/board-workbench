@@ -108,7 +108,7 @@ function isAvatarUrl(value: string): boolean {
 /**
  * An `actor.seen` event, or null when the board already knows these details. `host`: the actor is
  * a host's principal or one of its profiles, which the board records once. `seen.verified`: this
- * write's verifier named it as shown, which each write says anew.
+ * write's credential named it as shown, which each write says anew.
  */
 export function actorSeen(seen: Actor, known: ActorsState, host = false) {
   const existing = own(known.byId, seen.id)
