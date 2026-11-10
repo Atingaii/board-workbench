@@ -342,13 +342,14 @@ function principalFrom(actor: string): ApiPrincipal | null {
 }
 
 /**
- * Who an actor with a profile acts through, as board shows it: a project by the name the API's view
- * gives it, or its ID, in its environment; a person by their username, which the API puts before an
- * agent's name in its handle (`julian/claude`); anyone else by a short form of their ID.
+ * Who an actor with a profile acts through, as board shows it: a project by its name (`project`, as the
+ * actors list names it), or the one the API's view gives it, or its ID, in its environment; a person by
+ * their username, which the API puts before an agent's name in its handle (`julian/claude`); anyone
+ * else by a short form of their ID.
  */
-function viaFor(principal: ApiPrincipal, view?: Pick<ApiActorView, 'handle' | 'via'>): Via {
+function viaFor(principal: ApiPrincipal, view?: Pick<ApiActorView, 'handle' | 'via'>, project?: string): Via {
   const named = view?.via?.name ?? null
-  if (principal.type === 'project') return { name: named ?? principal.projectId, environment: view?.via?.environment ?? principal.environment }
+  if (principal.type === 'project') return { name: project ?? named ?? principal.projectId, environment: view?.via?.environment ?? principal.environment }
   if (principal.type === 'external') return { name: named ?? principal.id, environment: null }
   const slash = view?.handle.indexOf('/') ?? -1
   const username = principal.type === 'user' && slash > 0 ? view!.handle.slice(0, slash) : null
@@ -359,8 +360,45 @@ function viaFor(principal: ApiPrincipal, view?: Pick<ApiActorView, 'handle' | 'v
  * A platform user's handle as a project's sync imported them, `support/malte-ubl`: as the API names
  * them, or from an API that names them as their platform does, under their project's name.
  */
-const importedHandleOf = (handle: string, principal: ApiPrincipal, view: Pick<ApiActorView, 'handle' | 'via'> | undefined, userId: string) =>
-  handle.includes('/') ? handle : importedHandle(viaFor(principal, view).name, handle, userId)
+const importedHandleOf = (handle: string, principal: ApiPrincipal, view: Pick<ApiActorView, 'handle' | 'via'> | undefined, userId: string, project?: string) =>
+  handle.includes('/') ? handle : importedHandle(viaFor(principal, view, project).name, handle, userId)
+
+/**
+ * A deployment as board shows it: by its project's name (`project`) in every environment, and named
+ * with its environment outside production (`support (preview)`); or, where that isn't known, by its
+ * project's ID, and outside production with its environment (`prj_support@preview`).
+ */
+function deploymentNamed(principal: Extract<ApiPrincipal, { type: 'project' }>, project: string | undefined): { handle: string; name: string } {
+  const production = principal.environment === 'production'
+  if (project === undefined) {
+    const id = production ? principal.projectId : `${principal.projectId}@${principal.environment}`
+    return { handle: id, name: id }
+  }
+  return { handle: project, name: production ? project : `${project} (${principal.environment})` }
+}
+
+/**
+ * Projects' names by ID, from what the actors list says: a deployment's handle, which the API makes its project's
+ * name, then what comes before the `/` in one of its profiles' (`support/sync`, its sync's; `support/malte`, a user it
+ * imported), then the name the API gives a project on its users (their `via`). An API that names a deployment by its
+ * ID (`project:prj_…:production`, `project:prj_…:production/sync`) names its project only there.
+ */
+function projectNamesOf(views: Iterable<readonly [string, Pick<ApiActorView, 'handle' | 'via'>]>): Map<string, string> {
+  const byHandle = new Map<string, string>()
+  const byProfile = new Map<string, string>()
+  const byVia = new Map<string, string>()
+  for (const [id, found] of views) {
+    const principal = principalFrom(id)
+    if (principal?.type !== 'project') continue
+    const profiled = actorParts(id).profile !== null
+    if (profiled && found.via?.name) byVia.set(principal.projectId, found.via.name)
+    if (found.handle.startsWith('project:')) continue
+    const slash = found.handle.indexOf('/')
+    if (!profiled) byHandle.set(principal.projectId, found.handle)
+    else if (slash > 0) byProfile.set(principal.projectId, found.handle.slice(0, slash))
+  }
+  return new Map([...byVia, ...byProfile, ...byHandle])
+}
 
 /** A short name for a person or an app the API doesn't name: the start of their ID. */
 const shortName = (principal: Extract<ApiPrincipal, { type: 'user' | 'app' }>) =>
@@ -378,26 +416,22 @@ const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule'
 
 /**
  * An actor where the API doesn't name them: its handle is its profile, or a short form of its
- * principal, and one with a profile acts through its principal, as `view` names it if there's one.
+ * principal (a deployment by `project`, its project's name, where it's known), and one with a profile
+ * acts through its principal, as `view` names it if there's one.
  */
-function actorView(actor: ApiActor, view?: ApiActorView): ActorView & { id: string } {
+function actorView(actor: ApiActor, view?: ApiActorView, project?: string): ActorView & { id: string } {
   const { principal, profile } = actor
   // A platform user a sync imported, by their ID on the platform until the API names them.
   if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null }
   if (profile?.platform) {
     const { userId, platform, key } = profile.platform
-    const handle = importedHandleOf(view?.handle ?? userId.slice(userId.lastIndexOf(':') + 1), principal, view, userId)
-    return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view), platform: view?.platform ?? platform ?? key }
+    const handle = importedHandleOf(view?.handle ?? userId.slice(userId.lastIndexOf(':') + 1), principal, view, userId, project)
+    return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view, project), platform: view?.platform ?? platform ?? key }
   }
-  const base =
-    principal.type === 'user' || principal.type === 'app'
-      ? shortName(principal)
-      : principal.environment === 'production'
-        ? principal.projectId
-        : `${principal.projectId}@${principal.environment}`
-  const handle = profile?.name ?? base
-  const kind = profile ? 'agent' : principal.type === 'user' ? 'person' : principal.type === 'project' ? 'deployment' : 'workflow'
-  return { id: actor.id, kind, handle, name: handle, avatar: profile?.avatar ?? null, ...(profile ? { via: viaFor(principal, view) } : {}) }
+  if (profile) return { id: actor.id, kind: 'agent', handle: profile.name, name: profile.name, avatar: profile.avatar ?? null, via: viaFor(principal, view, project) }
+  if (principal.type === 'project') return { id: actor.id, kind: 'deployment', ...deploymentNamed(principal, project), avatar: null }
+  const handle = shortName(principal)
+  return { id: actor.id, kind: principal.type === 'user' ? 'person' : 'workflow', handle, name: handle, avatar: null }
 }
 
 /** A message's labels just before a change, from what they are after it and what it changed. */
@@ -730,47 +764,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (!found && (await again.views.then(() => true, () => false))) unlisted.add(actor.id)
     }
     const kind = found && apiKind(found.kind)
-    // The API names a project or an app by its ID, and an agent under one after it: board's names say more.
-    if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor, found)
-    const via = actor.profile && actor.principal.type !== 'external' ? { via: viaFor(actor.principal, found) } : {}
+    // A project, its deployments and their agents alike, by its name as the actors list names it.
+    const project = actor.principal.type === 'project' ? await namedProject(who, actor.principal.projectId) : undefined
+    // board names a project, an app, and an agent under one its own way, from what the API says of them.
+    if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor, found, project)
+    const via = actor.profile && actor.principal.type !== 'external' ? { via: viaFor(actor.principal, found, project) } : {}
     const platform = found.platform ?? actor.profile?.platform?.platform
     const user = actor.profile?.platform
-    const handle = user && actor.principal.type !== 'external' ? importedHandleOf(found.handle, actor.principal, found, user.userId) : found.handle
+    const handle = user && actor.principal.type !== 'external' ? importedHandleOf(found.handle, actor.principal, found, user.userId, project) : found.handle
     return { id: actor.id, kind, handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via, ...(platform ? { platform } : {}) }
   }
 
-  /**
-   * Projects' names by ID, from what a read of the actors says: a deployment's handle, which the API makes its
-   * project's name, then what comes before the `/` in one of its profiles' (`support/sync`, its sync's; `support/malte`,
-   * a user it imported), then the name the API gives a project on its users (their `via`). An API that names a
-   * deployment by its ID (`project:prj_…:production`, `project:prj_…:production/sync`) names its project only there.
-   */
+  /** Projects' names by ID, as `projectNamesOf` reads them from a read of the actors list. */
   const namesRead = new WeakMap<object, Promise<Map<string, string>>>()
   function namesIn(read: { views: Promise<Map<string, ApiActorView>> }): Promise<Map<string, string>> {
     let names = namesRead.get(read)
-    if (!names)
-      namesRead.set(
-        read,
-        (names = read.views.then(
-          (views) => {
-            const byHandle = new Map<string, string>()
-            const byProfile = new Map<string, string>()
-            const byVia = new Map<string, string>()
-            for (const [id, found] of views) {
-              const principal = principalFrom(id)
-              if (principal?.type !== 'project') continue
-              const profiled = actorParts(id).profile !== null
-              if (profiled && found.via?.name) byVia.set(principal.projectId, found.via.name)
-              if (found.handle.startsWith('project:')) continue
-              const slash = found.handle.indexOf('/')
-              if (!profiled) byHandle.set(principal.projectId, found.handle)
-              else if (slash > 0) byProfile.set(principal.projectId, found.handle.slice(0, slash))
-            }
-            return new Map([...byVia, ...byProfile, ...byHandle])
-          },
-          () => new Map<string, string>(),
-        )),
-      )
+    if (!names) namesRead.set(read, (names = read.views.then(projectNamesOf, () => new Map<string, string>())))
     return names
   }
   /** What a fresh read of the actors still didn't name: it isn't read again for them until names are read anyway. */
@@ -790,8 +799,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     return names
   }
-  /** A project's name, as `projectNames` finds it, or its ID. */
-  const projectName = async (who: Who, project: string) => (await projectNames(who, { key: project, found: (names) => names.has(project) })).get(project) ?? project
+  /** A project's name, as `projectNames` finds it: undefined where nothing names it. */
+  const namedProject = async (who: Who, project: string) => (await projectNames(who, { key: project, found: (names) => names.has(project) })).get(project)
+  /** A project's name, or its ID. */
+  const projectName = async (who: Who, project: string) => (await namedProject(who, project)) ?? project
 
   /** The project these credentials are, whose sync keys a caller names bare: null for a person's or an app's. */
   const ownProject = async (who: Who) => {
@@ -1837,9 +1848,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // Its board's: what the board's grants leave these credentials, as a board's own me says.
       const found = await api<ApiMe>(who, 'GET', await onBoard(who, '/me'))
       const { view: named } = found
-      // The API names you by your account: your username, and an agent's profile under it.
-      const shown = named ? { kind: apiKind(named.kind), handle: named.handle, name: named.name ?? named.handle, avatar: named.avatar ?? null } : actorView(found.actor)
-      const via = found.actor.profile && found.actor.principal.type !== 'external' ? { via: viaFor(found.actor.principal, named) } : {}
+      const { principal } = found.actor
+      // A deployment's own view names its project, as the actors list does once it has written.
+      const project = principal.type === 'project' ? (named ? projectNamesOf([[found.actor.id, named]]).get(principal.projectId) : undefined) ?? (await namedProject(who, principal.projectId)) : undefined
+      // The API names you by your account: your username, and an agent's profile under it. A deployment is its project's.
+      const shown =
+        principal.type === 'project' && !found.actor.profile
+          ? { kind: 'deployment' as const, ...deploymentNamed(principal, project), avatar: named?.avatar ?? null }
+          : named
+            ? { kind: apiKind(named.kind), handle: named.handle, name: named.name ?? named.handle, avatar: named.avatar ?? null }
+            : actorView(found.actor, undefined, project)
+      const via = found.actor.profile && principal.type !== 'external' ? { via: viaFor(principal, named, project) } : {}
       // What these credentials may do, and until when, as the API says; without a word, what any it lets in may.
       return {
         actor: found.actor.id,
@@ -1869,17 +1888,23 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async actors(caller, _input, signal) {
       const who = whoOf(caller)
-      const listed = (await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors', {}, signal)).map((actor) => {
+      const views = await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors', {}, signal)
+      const names = projectNamesOf(views.map((view) => [view.id, view] as const))
+      const listed = views.map((actor) => {
         const { profile } = actorParts(actor.id)
-        const principal = profile === null ? null : principalFrom(actor.id)
+        const owner = principalFrom(actor.id)
+        const project = owner?.type === 'project' ? names.get(owner.projectId) : undefined
+        const principal = profile === null ? null : owner
         const user = platformProfile(profile)
+        // A deployment is its project's, by its name where the list says it.
+        const deployment = profile === null && owner?.type === 'project' ? deploymentNamed(owner, project) : null
         return {
           id: actor.id,
           kind: apiKind(actor.kind),
-          handle: principal && user ? importedHandleOf(actor.handle, principal, actor, user.user) : actor.handle,
-          name: actor.name ?? actor.handle,
+          handle: deployment?.handle ?? (principal && user ? importedHandleOf(actor.handle, principal, actor, user.user, project) : actor.handle),
+          name: deployment?.name ?? actor.name ?? actor.handle,
           avatar: actor.avatar ?? null,
-          ...(principal ? { via: viaFor(principal, actor) } : {}),
+          ...(principal ? { via: viaFor(principal, actor, project) } : {}),
           ...(actor.platform ? { platform: actor.platform } : {}),
         }
       })

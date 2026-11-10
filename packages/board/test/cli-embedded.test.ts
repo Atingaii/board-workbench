@@ -346,6 +346,38 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it('shows a deployment by its project, with its environment outside production, or by its ID where the API names it by that', async () => {
+    for (const [projectIdHandles, production, preview] of [
+      [false, 'www', 'www (preview)'],
+      [true, 'prj_www', 'prj_www@preview'],
+    ] as const) {
+      const home = await isolated()
+      const api = fakeMessageboard({ slug: 'acme', projects: { prj_www: 'www' }, projectIdHandles })
+      const www = (environment: string) => board({ backend: vercel({ team: 'team_test', api: 'http://localhost', fetch: as(api, `project:prj_www:${environment}`) }) })
+      const root = await www('production').post('general', { text: 'deployed' })
+      await www('preview').reply(root.id, { text: 'deployed a preview' })
+      const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+      const cwd = process.cwd()
+      process.chdir(home)
+      try {
+        vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+        const app = createApp({ appName: 'vercel board' })
+        const read = await capture(() => app.run(['read', root.id, '--scope', 'acme']))
+        expect(read.stdout.split('\n').filter((line) => line.includes(' · ')).map((line) => line.replace(/^.*?_\d+  /, '').replace(/ · .*$/, ''))).toEqual([production, preview])
+        // In every environment, a deployment goes by its project's name.
+        const handle = projectIdHandles ? 'prj_www@preview' : 'www'
+        expect(await capture(() => app.run(['actors', '--scope', 'acme']))).toMatchObject({
+          code: 0,
+          stdout: `@${handle}  ${preview}  vercel:project:prj_www:preview\n@${production}  ${production}  vercel:project:prj_www:production\n`,
+        })
+      } finally {
+        fetching.mockRestore()
+        process.chdir(cwd)
+        await rm(home, { recursive: true, force: true })
+      }
+    }
+  })
+
   it("says you're not signed in when there's no Vercel login to reach the team's board with", async () => {
     const home = await isolated()
     const fetching = vi.spyOn(globalThis, 'fetch')

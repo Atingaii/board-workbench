@@ -217,20 +217,32 @@ describe('vercel()', () => {
     }
   })
 
-  it('writes as the project a deployment is, per environment, and as an agent with its profile', async () => {
-    const api = fakeMessageboard()
-    const pong = handleOn(api, 'project:prj_pong:production')
-    const { id } = await pong.post('pings', { text: 'ping' })
-    const reply = await pong.as('claude').reply(id, { text: 'pong', labels: { kind: 'task' } })
-    const { message, replies } = await pong.thread(id)
-    expect(message).toMatchObject({ channel: 'pings', by: { principal: 'vercel:project:prj_pong:production', profile: null }, author: { kind: 'deployment', handle: 'prj_pong' } })
-    expect(replies).toMatchObject([{ id: reply.id, re: id, labels: { kind: 'task' }, by: { actor: 'vercel:project:prj_pong:production+claude', profile: 'claude' }, author: { kind: 'agent', handle: 'claude' } }])
-    // `me` is who the handle writes as, its profile included.
-    expect((await pong.as('claude').messages({ channel: 'pings', by: 'me' })).messages.map((m) => m.id)).toEqual([reply.id])
-    expect((await pong.messages({ channel: 'pings', by: 'me' })).messages.map((m) => m.id)).toEqual([id])
-    // A preview is someone else.
-    const preview = handleOn(api, 'project:prj_pong:preview')
-    expect((await preview.me()).principal).toBe('vercel:project:prj_pong:preview')
+  it("writes as the project a deployment is, per environment, and as an agent with its profile, each shown by the project's name or its ID", async () => {
+    for (const [projectIdHandles, production, preview] of [
+      [false, { handle: 'pong', name: 'pong' }, { handle: 'pong', name: 'pong (preview)' }],
+      // An API that names a deployment by its ID names pong nowhere.
+      [true, { handle: 'prj_pong', name: 'prj_pong' }, { handle: 'prj_pong@preview', name: 'prj_pong@preview' }],
+    ] as const) {
+      const api = fakeMessageboard({ projectIdHandles })
+      const pong = handleOn(api, 'project:prj_pong:production')
+      const { id } = await pong.post('pings', { text: 'ping' })
+      const reply = await pong.as('claude').reply(id, { text: 'pong', labels: { kind: 'task' } })
+      // A preview is someone else, of the same project.
+      const previewed = handleOn(api, 'project:prj_pong:preview')
+      expect(await previewed.me()).toMatchObject({ principal: 'vercel:project:prj_pong:preview', kind: 'deployment', ...preview })
+      await previewed.reply(id, { text: 'from a preview' })
+      const { message, replies } = await handleOn(api).thread(id)
+      expect(message).toMatchObject({ channel: 'pings', by: { principal: 'vercel:project:prj_pong:production', profile: null }, author: { kind: 'deployment', ...production } })
+      expect(replies).toMatchObject([
+        { id: reply.id, re: id, labels: { kind: 'task' }, by: { actor: 'vercel:project:prj_pong:production+claude', profile: 'claude' }, author: { kind: 'agent', handle: 'claude', via: { name: production.handle, environment: 'production' } } },
+        { text: 'from a preview', author: { kind: 'deployment', ...preview } },
+      ])
+      const actors = await handleOn(api).actors()
+      expect(['vercel:project:prj_pong:production', 'vercel:project:prj_pong:preview'].map((at) => actors.find((actor) => actor.id === at))).toMatchObject([production, preview])
+      // `me` is who the handle writes as, its profile included.
+      expect((await pong.as('claude').messages({ channel: 'pings', by: 'me' })).messages.map((m) => m.id)).toEqual([reply.id])
+      expect((await pong.messages({ channel: 'pings', by: 'me' })).messages.map((m) => m.id)).toEqual([id])
+    }
   })
 
   it('reads and lists schedules by a handle as the board shows it, a person covering their agents', async () => {
@@ -1792,7 +1804,8 @@ describe("each project's sync keys on Vercel's API", () => {
     const from = async (team: { thread(id: string): Promise<{ replies: { from: string | null }[] }> }) => (await team.thread(root.id)).replies.map((reply) => reply.from)
     expect([await from(www.team), await from(support.team), await from(julian)]).toEqual([['slack'], ['www/slack'], ['www/slack']])
     // Only its own sync, which has the app, links its copies.
-    const targets = async (team: typeof julian) => (await team.sync(root.id)).targets.map(({ key, target, url }) => [key, target, url])
+    // Each binds its target as it starts the thread, so they come in whichever order the two did.
+    const targets = async (team: typeof julian) => (await team.sync(root.id)).targets.map(({ key, target, url }) => [key, target, url]).sort(([a], [b]) => a!.localeCompare(b!))
     expect(await targets(support.team)).toEqual([
       ['slack', 'slack:C_SUP', `https://acme.slack.com/archives/C_SUP/p${supportSlack.channelPosts[0]!.id}`],
       ['www/slack', 'www/slack:C_WWW', null],
