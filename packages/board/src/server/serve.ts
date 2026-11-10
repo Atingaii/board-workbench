@@ -508,8 +508,10 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     if ((body.origin === undefined) === (body.message === undefined)) return send(body)
     const found = await importTarget(caller, body, signal)
     const author = externalActor(body.author, (await whoIs(caller, signal)).principal)
-    // Only an edit that would land reaches the middleware: the author's own, when it's named by board ID.
-    if (!found || found.deleted || (access && !access.can('sync', found.channel)) || (body.message !== undefined && found.by.actor !== author.id)) return send(body)
+    // Only an edit that would land reaches the middleware: the author's own, when it's named by board ID. A
+    // backend that names imports by the platform user alone (Vercel's, before profiles) stored them so.
+    const own = found !== null && (found.by.actor === author.id || found.by.actor === body.author.id)
+    if (!found || found.deleted || (access && !access.can('sync', found.channel)) || (body.message !== undefined && !own)) return send(body)
     const source = await importSource(caller, body, found, signal)
     if (!source) return send(body)
     return dropped(async () =>

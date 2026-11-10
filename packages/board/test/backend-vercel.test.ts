@@ -1213,6 +1213,25 @@ describe('vercel()', () => {
     expect((await pong.thread(id)).message.text).toBe('EDITED')
   })
 
+  it("screens a sync's edit by board ID of its user's own message, from an API that names imports by the platform user alone", async () => {
+    const api = fakeMessageboard({ externalImports: true })
+    const screened: string[] = []
+    const pong = pongBoard(api, [
+      async ({ write, next }) => {
+        screened.push(`${write.kind} ${write.text}`)
+        await next({ text: write.text.toUpperCase() })
+      },
+    ])
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
+    const origin = { thread: 'slack:C1:1', subthread: null, message: '1', context: null }
+    const { message } = await pong.syncImport({ op: 'post', author: ada, from: 'slack', channel: 'general', text: 'from slack', origin })
+    expect((await pong.thread(message!)).message.by.actor).toBe('slack:user:U_ADA')
+    await pong.syncImport({ op: 'edit', author: ada, from: null, message: message!, text: 'edited by the sync, as Ada' })
+    expect(screened).toEqual(['post from slack', 'edit edited by the sync, as Ada'])
+    expect((await pong.thread(message!)).message.text).toBe('EDITED BY THE SYNC, AS ADA')
+  })
+
   it("screens a schedule's message through board()'s middleware when it's made, since Vercel's API posts its sends", async () => {
     const api = fakeMessageboard()
     const screened: string[] = []
