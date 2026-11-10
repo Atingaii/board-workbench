@@ -20,6 +20,7 @@ import {
   UpdateGrantBody,
   ExplainQuery,
   TokenBody,
+  SchemaBody,
   SchedulesQuery,
   SourceJoinBody,
   SourceReadQuery,
@@ -98,6 +99,7 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'watchers':
     case 'grants':
     case 'tokens':
+    case 'schemas':
       return {}
     case 'message':
     case 'posted':
@@ -105,6 +107,7 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'cancelSchedule':
     case 'revokeGrant':
     case 'revokeToken':
+    case 'schema':
     case 'attachment':
     case 'uploadFinish':
       return { id }
@@ -137,6 +140,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return ExplainQuery.parse(queryObject(url))
     case 'createToken':
       return TokenBody.parse(await body())
+    case 'createSchema':
+      return SchemaBody.parse(await body())
     case 'register':
       return RegisterBody.parse(await body())
     case 'edit':

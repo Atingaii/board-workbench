@@ -1228,6 +1228,94 @@ type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
 /** Everything, in the protocol's order: what `GET /me` says an owner, member, or developer may do. */
 const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
 
+/** A schema version, as the API shows it: a built-in's `createdAt` is 0, and it has no `createdBy`. */
+type SchemaRow = { id: string; name: string; version: number; description?: string; schema: Record<string, unknown>; builtIn: boolean; createdAt: number; createdBy?: Omit<Actor, 'token'> }
+
+const SCHEMA_KEYWORDS = new Set([
+  '$schema', 'type', 'title', 'description', 'properties', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'minLength', 'maxLength',
+  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'enum', 'const', 'oneOf', 'anyOf', 'allOf', 'not', 'format',
+])
+
+/** Whether every schema in `value` uses the API's structural keywords only: `properties` maps names to schemas, and `enum` and `const` hold data. */
+function structural(value: unknown, properties = false): boolean {
+  if (typeof value !== 'object' || value === null) return true
+  if (Array.isArray(value)) return value.every((item) => structural(item))
+  return Object.entries(value).every(([key, child]) => (properties ? structural(child) : SCHEMA_KEYWORDS.has(key) && (key === 'enum' || key === 'const' || structural(child, key === 'properties'))))
+}
+
+/** `value` as JSON with its keys in order, as the API compares two definitions. */
+const sortedJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, child) => (child && typeof child === 'object' && !Array.isArray(child) ? Object.fromEntries(Object.entries(child).sort(([a], [b]) => (a < b ? -1 : 1))) : child))
+
+const sha = { type: 'string', pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$', description: 'Full lowercase commit SHA' }
+const BUILT_IN_SCHEMAS: SchemaRow[] = [
+  {
+    id: 'git-commit@1',
+    name: 'git-commit',
+    version: 1,
+    description: 'A Git commit, by its full SHA and the first line of its message.',
+    schema: { type: 'object', additionalProperties: false, required: ['sha', 'title'], properties: { sha, title: { type: 'string', minLength: 1, maxLength: 1024 } } },
+    builtIn: true,
+    createdAt: 0,
+  },
+  {
+    id: 'vercel-deployment@1',
+    name: 'vercel-deployment',
+    version: 1,
+    description: 'A Vercel deployment, by its URL and optionally the commit it was built from.',
+    schema: { type: 'object', additionalProperties: false, required: ['url'], properties: { url: { type: 'string', format: 'uri', pattern: '^https://', maxLength: 2048 }, gitSha: sha } },
+    builtIn: true,
+    createdAt: 0,
+  },
+]
+
+/**
+ * The team's data schemas, as Vercel's API keeps them, one registry for every board on the team: its
+ * built-ins first, then the team's own by their IDs as text. A version registers once: the same
+ * definition again answers it, without saying it made nothing, and another is 409. People and apps
+ * register, but for a viewer; a project's token reaches none of it, reads included.
+ */
+function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, Role> }) {
+  const kept = new Map<string, SchemaRow>()
+  const ID = /^([a-z][a-z0-9._-]{0,79})@([1-9][0-9]{0,4})$/
+  return {
+    /** Every version the team registered, by its ID. */
+    kept,
+    /** What `/schemas…` answers, or undefined for another route. */
+    route(method: string, path: string, body: Record<string, any>, actor: Actor): unknown {
+      if (path !== '/schemas' && !path.startsWith('/schemas/')) return undefined
+      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
+      if (method === 'GET' && path === '/schemas') return { schemas: [...BUILT_IN_SCHEMAS, ...[...kept.values()].sort((a, b) => (a.id < b.id ? -1 : 1))], cursor: null }
+      if (method === 'GET') {
+        const id = decodeURIComponent(path.slice('/schemas/'.length))
+        if (!ID.test(id)) throw new Refused(400, 'invalid_schema_id', 'Name a schema as name@version, such as git-commit@1.')
+        const schema = BUILT_IN_SCHEMAS.find((found) => found.id === id) ?? kept.get(id)
+        if (!schema) throw new Refused(404, 'schema_not_found', `Schema ${id} isn't registered for this team.`)
+        return { schema }
+      }
+      if (method !== 'POST' || path !== '/schemas') return undefined
+      if (actor.principal.type === 'user' && (roles[actor.principal.userId] ?? 'member') === 'viewer') throw new Refused(403, 'forbidden')
+      const { operationId: _operationId, name, version, description, schema, ...unknown } = body
+      if (Object.keys(unknown).length > 0) throw new Refused(400, 'bad_request', `Unknown property ${Object.keys(unknown)[0]}.`)
+      const id = `${name}@${version}`
+      if (typeof name !== 'string' || !ID.test(id)) throw new Refused(400, 'invalid_schema_id', 'Schema names use lowercase letters, numbers, ".", "_" and "-", starting with a letter.')
+      if (BUILT_IN_SCHEMAS.some((found) => found.name === name)) throw new Refused(409, 'reserved_schema', `${name} is a built-in schema and can't be registered.`)
+      if (typeof schema !== 'object' || schema === null || schema.type !== 'object') throw new Refused(400, 'invalid_schema', 'A schema must describe a JSON object ("type": "object").')
+      if (!structural(schema)) throw new Refused(400, 'invalid_schema', "Schemas don't support that keyword. References, patterns, uniqueItems, and custom keywords aren't allowed.")
+      const existing = kept.get(id)
+      if (existing) {
+        if (sortedJson(existing.schema) !== sortedJson(schema) || existing.description !== description)
+          throw new Refused(409, 'schema_immutable', `${id} is already registered with a different definition. Register a new version instead.`)
+        return { schema: existing }
+      }
+      const { token: _token, ...createdBy } = actor
+      const row: SchemaRow = { id, name, version, ...(description !== undefined ? { description } : {}), schema, builtIn: false, createdAt: now(), createdBy }
+      kept.set(id, row)
+      return { schema: row }
+    },
+  }
+}
+
 /**
  * The team's API: its default board, `General` (`brd_test`, or none with `boardId: null` until a
  * person makes it), and `boards`, each with the projects granted it as `prj_x:production`. A person
@@ -1278,6 +1366,7 @@ export function fakeMessageboard(
   const shared: Shared = { teamId, accounts, directory, now, stored }
 
   const tokens = fakeTokens({ now })
+  const schemas = fakeSchemas({ now, roles })
 
   const kept = (id: string, name: string, granted: Kept['granted'], members: Kept['members'] = null): Kept => ({ id, name, granted, members, data: fakeBoard(shared, id) })
   // The default board is kept from the start, so what a test reads of it holds once a person makes it.
@@ -1311,7 +1400,7 @@ export function fakeMessageboard(
     const method = request.method
     requests.push(`${method} ${path}`)
     // A board token is its board's: the team's routes aren't.
-    if (actor.token && (path === '/boards' || path.startsWith('/boards/default') || path.startsWith('/boards/ensure')))
+    if (actor.token && (path === '/boards' || path.startsWith('/boards/default') || path.startsWith('/boards/ensure') || path === '/schemas' || path.startsWith('/schemas/')))
       throw new Refused(403, 'board_token_scope', "A board token can't use the team's routes.")
     // Completing an upload takes no body.
     const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
@@ -1361,6 +1450,8 @@ export function fakeMessageboard(
       ensured.set(`${principalId(actor.principal)}|${body.operationId}`, board)
       return { board: show(board), created: true }
     }
+    const registry = schemas.route(method, path, body, actor)
+    if (registry !== undefined) return registry
     const onBoard = /^\/boards\/([^/]+)(\/.*)?$/.exec(path)
     const board = onBoard ? boards().find((candidate) => candidate.id === decodeURIComponent(onBoard[1]!)) : undefined
     // A board token is one board's: any other is none to it.
@@ -1385,6 +1476,8 @@ export function fakeMessageboard(
     grants: general.data.grants,
     /** Every board token, by ID, as the API keeps them. */
     tokens: tokens.minted,
+    /** Every schema version the team registered, by ID, as the API keeps them. */
+    schemas: schemas.kept,
     /** The watchers each principal registered on the default board, as the API keeps them. */
     registrations,
     /** Every schedule on the default board, by ID, as the API keeps them. */

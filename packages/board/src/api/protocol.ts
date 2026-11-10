@@ -36,6 +36,8 @@ import type {
   ScheduleBody,
   SchedulesQuery,
   ScheduleView,
+  SchemaBody,
+  SchemaView,
   SourceJoin,
   SourceJoinBody,
   SourceRead,
@@ -104,6 +106,16 @@ export type Protocol = {
   createToken: { input: Input<typeof TokenBody>; output: { token: TokenView; secret: string } }
   /** It and every token minted with it stop. `revoked` is false when it was already gone. */
   revokeToken: { input: Id; output: { revoked: boolean } }
+  /** Every schema: the built-ins, then the board's own, by name and version. 501 `no_schemas` where the board keeps none. */
+  schemas: { input: Nothing; output: { schemas: SchemaView[] } }
+  /** One schema version, by `name@version`: 400 `invalid_schema_id` for anything else, 404 `schema_not_found` for one that isn't there. */
+  schema: { input: Id; output: { schema: SchemaView } }
+  /**
+   * Registers a version, for good: needs `manage` at `*`. `created` is false for one that's there
+   * with the same definition, and another definition is 409 `schema_immutable`. A built-in's name is
+   * 409 `reserved_schema`, and a definition the board won't keep 400 `invalid_schema`.
+   */
+  createSchema: { input: Input<typeof SchemaBody>; output: { schema: SchemaView; created: boolean } }
   upload: { input: { data: Uint8Array; name: string | null; type: string | null }; output: { attachment: Attachment } }
   attachment: { input: Id; output: { attachment: Attachment; data: Uint8Array | ReadableStream<Uint8Array> } }
   /** A direct upload's ticket: where to `PUT` a file too big for `upload`. 501 `no_direct_uploads` when the blob store can't sign one. */

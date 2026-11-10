@@ -85,7 +85,7 @@ uses the target's own.
 | `react` | `POST /messages/:id/reactions` |
 | `label` | `POST /messages/:id/labels`, and a post or schedule with `labels` |
 | `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |
-| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read`, `POST /sources/:key/join`, every registration in `GET /watchers`, `/grants`, and everyone's `/tokens` |
+| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read`, `POST /sources/:key/join`, every registration in `GET /watchers`, `/grants`, and everyone's `/tokens`; at `*`, `POST /schemas` |
 
 `react`, `label`, and `sync` imply `read`, and `manage` implies everything. A
 message, schedule, or file the caller can't read answers 404 on every route;
@@ -127,6 +127,9 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `can` is what it may do now. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
 | POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`, false for one that's gone, never was, or isn't yours, alike |
+| GET | `/schemas` | `{ schemas }`: the built-in ones, then the board's own by name and version. Each one's `id`, `name`, `version`, `description`, `schema`, `builtIn`, `by`, and `at`. Anyone the board lets in. See [Schemas](#schemas) |
+| GET | `/schemas/:id` | `{ schema }`: one version, by `name@version` |
+| POST | `/schemas` | `{ name, version, description?, schema }`: register a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
 | POST | `/watchers` | `{ watch, sync? }` or `{ path, branch?, watch, sync? }`: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it, replacing its last registration. Without a `path` the caller pulls its matches. A `url` answers 501 `no_wake_by_url` on a `local()` board, which wakes nothing, and 400 on Vercel's board. On a board whose discovery says `wake_by_path`, a `path` on the caller's own Vercel project, which the board finds from the caller's token and wakes through its Deployment Protection: production's best domain, or with `branch`, a preview's latest ready deployment of that branch (403 `not_a_project` for a caller that isn't a Vercel project, 501 `no_wake_by_path` on a board that can't). Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url: null, watch, sync, hash }`, or `{ owner, url: null, path, branch?, watch, sync, hash }`. On a deployment's board on Vercel's, it takes no token and registers that board's own watchers with Vercel's API |
 | GET | `/watchers` | `{ watchers }`: the caller's registration, or every one for `manage` in every channel |
@@ -154,7 +157,7 @@ sync `board()` runs beside it. A board with no backend answers only wake-ups
 and webhooks. There are no
 optional groups, so a client never asks a board what it does. A board that
 keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
-no grants or issues no tokens answers 501 `no_grants` or `no_tokens`.
+no grants or schemas, or issues no tokens, answers 501 `no_grants`, `no_schemas`, or `no_tokens`.
 [Conformance](./05-conformance.md) checks a board against all of it, and
 reports those checks as skipped on such a board.
 
@@ -402,6 +405,56 @@ written as that profile. See
 [Grants](../01-board/09-access.md#grants) and
 [Tokens](../01-board/09-access.md#tokens).
 
+### Schemas
+
+```json
+{ "name": "sandbox", "version": 1, "description": "What a sandbox did.", "schema": { "type": "object", "required": ["id", "action"], "properties": { "id": { "type": "string" }, "action": { "enum": ["started", "stopped"] } } } }
+```
+
+A schema says what a piece of structured data holds: a JSON Schema for an
+object, under a name and a version. `name` is up to 80 lowercase letters,
+numbers, and `._-`, starting with a letter, and `version` is a whole number
+from 1 to 99,999. Together they're its ID, `sandbox@1`. `description` is up to
+2,000 characters.
+
+A version never changes, and is never removed. `POST /schemas` for one that's
+there with the same definition (its `schema`, whatever order its keys come in,
+and its `description`) answers it with `created: false`. Another definition is
+409 `schema_immutable`, so a change is the next version, which you name. The
+body is strict: a key the board doesn't know is 400 `invalid_request`.
+
+Every board has `git-commit@1` and `vercel-deployment@1` built in. They list
+first, with `builtIn: true` and no `by` or `at`, and their names are reserved:
+a version of one is 409 `reserved_schema`.
+
+A definition describes an object, so its root has `"type": "object"`, and uses
+structural keywords only:
+
+| Keywords | |
+| --- | --- |
+| `type`, `properties`, `required`, `additionalProperties` | objects. `type` is one type or a list of them |
+| `items`, `minItems`, `maxItems` | arrays. `items` is one schema for every item |
+| `minLength`, `maxLength`, `format` | strings. `format` is `date-time`, `date`, `time`, `email`, `uri`, `uuid`, `hostname`, `ipv4`, or `ipv6` |
+| `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` | numbers |
+| `enum`, `const` | fixed values |
+| `oneOf`, `anyOf`, `allOf`, `not` | unions and combinations |
+| `title`, `description`, `$schema` | notes |
+
+Anything else is 400 `invalid_schema`, and the message names the keyword and
+where it is: no `$ref`, no `pattern`, no `uniqueItems`, and no keyword of your
+own. A definition is at most 32 KB of JSON, 512 nodes (each `enum` and `const`
+value counts), 64 subschemas, and 16 levels deep. A board registers 500
+versions at most: one more is 400 `too_many_schemas`.
+
+Anyone the board lets in reads the schemas, whatever channels they read.
+Registering needs `manage` at `*`. On Vercel's board, schemas are the team's:
+every board on the team shares one registry, people and apps whose team role
+is owner, member, or developer register, and a deployment's own credentials
+and board tokens reach none of it yet, reads included (403). It checks a
+definition more strictly: it also refuses a `required` name the schema's
+`properties` don't declare, and a keyword for one type, such as `minLength`,
+with no `type` that says it.
+
 ## Filters
 
 `GET /messages` and `GET /events` share these. All of them must match.
@@ -577,6 +630,9 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
+| 400 | `invalid_schema` | a schema's definition the board won't keep: a root that isn't an object, a keyword it doesn't take, or one too big. The message names it |
+| 400 | `invalid_schema_id` | `GET /schemas/:id` with an ID that isn't `name@version` |
+| 400 | `too_many_schemas` | a 501st schema version |
 | 400 | `size_mismatch` | finishing a direct upload whose bytes in the store aren't the size its start said |
 | 400 | `platform_error`, `invalid_target`, `unsupported` | a source read the platform failed, of a target it can't read, or on a platform that reads nothing on demand |
 | 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
@@ -585,10 +641,13 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 403 | `not_a_project` | a `path` in `POST /watchers` from a caller that isn't a Vercel project, on a board that wakes by path: a path is on the caller's own project |
 | 404 | `not_found` | no such route, a request a board with no backend doesn't serve, or a webhook for a sync entry the board doesn't have |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `post_not_found` | no such thing, or one the caller can't read |
+| 404 | `schema_not_found` | a schema version no one registered |
 | 404 | `thread_not_found` | `GET /sync/threads/:thread` for a thread that isn't there, or that the caller can't sync |
 | 404 | `no_registration`, `no_match`, `no_item` | pulling matches with no registration, or acking a match or inbox event that isn't waiting for the caller |
 | 404 | `not_synced_here` | a source read on a board that doesn't run that sync entry |
 | 404 | `channel_not_found` | a source read of a channel the platform doesn't have |
+| 409 | `schema_immutable` | a schema version that's there with another definition: register the next version |
+| 409 | `reserved_schema` | a version of a built-in schema's name |
 | 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else |
 | 409 | `label_conflict` | a label write whose `if` doesn't hold: the message names the label (`owner is set`, `state isn't open`), never its value |
 | 409 | `revision_conflict` | an edit or a delete whose `revision` isn't the message's: it's been edited or deleted since |
@@ -604,6 +663,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 500 | `internal` | anything else; the board logs it |
 | 501 | `no_scheduler` | a schedule on a board that keeps no schedules |
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
+| 501 | `no_schemas` | a schema route on a board that keeps no schemas |
 | 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
 | 501 | `not_supported` | on Vercel's board, what its API doesn't keep yet: files on a scheduled message, labels on a scheduled reply, a post's `sync` targets |
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |

@@ -16,6 +16,8 @@ import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentI
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
+import { formatSchema, formatSchemas } from './schemas.ts'
+import { parseSchemaId } from '../contract/data-schemas.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import { parseCan } from '../server/access.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
@@ -514,6 +516,29 @@ function configuredUrl(): string | null {
   }
 }
 
+/** A schema's JSON Schema, as `--schema` gives it: inline JSON, the file `@<path>` names, or stdin for `-`. */
+async function definition(): Promise<Record<string, unknown>> {
+  const given = flags.schema
+  if (given === undefined) throw usage('Missing --schema: its JSON Schema, inline, @<file>, or - for stdin.', { reason: 'missing_arguments' })
+  let source = given
+  if (given === '-') source = await io.stdin()
+  else if (given.startsWith('@')) {
+    const file = given.slice(1)
+    const data = await io.readFile(file)
+    if (!data) throw usage(`Can't read ${file}. There's no such file.`, { reason: 'file_not_found', next: [] })
+    source = new TextDecoder().decode(data)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    // A path given bare is the likeliest slip: say how a file is named.
+    throw usage(given === '-' || given.startsWith('@') ? `${given === '-' ? 'stdin' : given.slice(1)} isn't JSON.` : `--schema takes JSON, or a file as @<path>: ${given.length > 40 ? `${given.slice(0, 40)}…` : given} isn't JSON.`)
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw usage('A schema is a JSON object: {"type":"object", …}.')
+  return parsed as Record<string, unknown>
+}
+
 /** A board that predates what this run asked of it. */
 const outdated = (message: string) =>
   new Failed({
@@ -559,6 +584,8 @@ function doing(): string {
       return a === 'create' ? 'create the grant' : a === 'update' ? `update grant ${b}` : a === 'explain' ? `explain ${b ?? 'the channel'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
     case 'tokens':
       return a === 'create' ? `mint token ${b ?? ''}`.trimEnd() : a === 'revoke' ? `revoke token ${b}` : 'list tokens'
+    case 'schemas':
+      return a === 'create' ? `register schema ${b ?? ''}`.trimEnd() : a === 'inspect' ? `read schema ${b ?? ''}`.trimEnd() : 'list schemas'
     case 'sources':
       return b === undefined ? 'list sources' : `${b} ${c ?? 'it'} on ${a}`
     case 'download':
@@ -590,6 +617,7 @@ function missing(): string | undefined {
   if (ON_MESSAGE.has(command) || (['read', 'post', 'schedule'].includes(command) && isMessageRef(a))) return `message ${ref(a)}`
   if (command === 'schedule' && a === 'cancel' && b !== undefined) return `schedule ${b}`
   if ((command === 'grants' || command === 'tokens') && (a === 'revoke' || a === 'update') && b !== undefined) return `${command === 'grants' ? 'grant' : 'token'} ${b}`
+  if (command === 'schemas' && a === 'inspect' && b !== undefined) return `schema ${b}`
   if (command === 'download') return `attachment ${a}`
   return undefined
 }
@@ -705,6 +733,9 @@ function failureOf(error: unknown): Failure {
     const labeled = code === 'label_conflict' && (flags.if !== undefined || flags['if-unset'] !== undefined) && args[0] !== undefined
     // An edit's or a delete's --if-revision: the message as it is now has the revision to pass.
     const changed = code === 'revision_conflict' && flags['if-revision'] !== undefined && args[0] !== undefined
+    // A schema version that's there with another definition: what it holds is a read away.
+    if (code === 'schema_immutable' && current.command === 'schemas' && args[1] !== undefined)
+      return theirs('conflict', code, `Can't ${doing()}.`, [{ instruction: "See what it's registered as", argv: [...cli(), 'schemas', 'inspect', args[1]] }])
     return theirs('conflict', specific('conflict'), `Can't ${doing()}.`, newer
       ? [{ instruction: `Read what came after ${ref(flags.after)}`, argv: [...cli(), 'read', args[0]!.replace(/^#/, ''), '--after', flags.after!.replace(/^#/, '')] }]
       : labeled
@@ -1258,6 +1289,37 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       // The secret alone, so it pipes: BOARD_TOKEN=$(vb tokens create widget --can feedback/=post).
       if (flags.json) result({ token, secret })
       else out(secret)
+      return 0
+    }
+
+    case 'schemas': {
+      const [verb, ...rest] = args
+      if (verb === undefined || verb === 'list') {
+        if (rest.length > 0) throw usage(`schemas list takes no arguments: ${rest[0]} is one too many.`)
+        const list = await client().schemas()
+        if (flags.json) return result({ schemas: list }), 0
+        out(formatSchemas(list))
+        return 0
+      }
+      if (verb !== 'inspect' && verb !== 'create') throw usage(`Unknown command ${verb} for ${named()} schemas.`, { reason: 'unknown_command' })
+      const [id, extra] = rest
+      if (id === undefined) throw usage(`Missing the schema to ${verb}: its name and version, like sandbox@1.`, { reason: 'missing_arguments' })
+      if (extra !== undefined) throw usage(`schemas ${verb} takes one schema: ${extra} is one too many.`)
+      const wanted = parseSchemaId(id)
+      if (!wanted) throw usage(`${id} doesn't name a schema. One is name@version, like sandbox@1.`)
+      if (verb === 'inspect') {
+        const schema = await client().schema(id)
+        if (flags.json) result({ schema })
+        else out(formatSchema(schema))
+        return 0
+      }
+      const { schema, created } = await client().createSchema({
+        ...wanted,
+        schema: await definition(),
+        ...(flags.description !== undefined ? { description: flags.description } : {}),
+      })
+      if (flags.json) result({ schema, outcome: created ? 'created' : 'unchanged' })
+      else out(created ? `created ${schema.id}` : `${schema.id} is already registered`)
       return 0
     }
 
