@@ -2209,11 +2209,13 @@ first to register it keeps it. Registering never fails over a key:
 names who holds each of the rest in `elsewhere`
 (`{ key, platform, owner, environment }`). A deployment runs sync only through
 the keys it holds (`Backend.syncedHere(key)`). For one it doesn't, its webhook
-answers 200 and keeps nothing, it pulls no inbox, offers no root, and delivers
-to no target, and it says once who holds the key
+answers 200 before its adapter reads anything, it pulls no inbox, offers no
+root, and delivers to no target, and it says once who holds the key
 (`[board] slack is synced by production`). Its keyed calls answer without the
 API: an inbox push or ack is dropped, a pull or listing is empty, and an import
-or a receipt is 404 `not_synced_here`. Another project may also hold `slack`:
+or a receipt is 404 `not_synced_here`. A key another deployment took since it
+registered, however recently, the API refuses with 403 `sync_key_not_owned`:
+it registers again at once, and answers the same way. Another project may also hold `slack`:
 its targets and bindings say whose they are (`projectId`), and a
 `thread.synced` for another project's is not this one's to backfill, nor a
 target its thread's sync doesn't list. Against an API from before each project
