@@ -1485,16 +1485,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
-  /** When this deployment last couldn't register to learn which keys it holds. */
-  let heldFailedAt = 0
   /**
    * Whether this deployment holds its sync's key `key`, as its last registration said: another of its project's
-   * deployments may. Before one has said, it registers to learn; until it can, it holds every key, as the API decides.
+   * deployments may. Before one has said, it registers as on its first use; until one can, it holds every key, and
+   * the API decides.
    */
   async function holds(key: string): Promise<boolean> {
     if (!binding?.sync.some((entry) => entry.key === key)) return true
-    if (held === null && Date.now() - heldFailedAt >= WHO_AGAIN_MS && (await isDeployment().catch(() => false)))
-      await runner.registerNow().catch(() => (heldFailedAt = Date.now()))
+    if (held === null && (await isDeployment().catch(() => false))) await runner.start()
     return held === null || held.has(key)
   }
 

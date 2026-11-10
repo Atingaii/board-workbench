@@ -1786,7 +1786,7 @@ describe("each project's sync keys on Vercel's API", () => {
     ])
   })
 
-  it("takes no webhook, pull, import, or delivery through a key production holds from a preview, whose watchers run, and says once who has it", async () => {
+  it("runs nothing through a key production holds from a preview, whose watchers run, and says once who has it", async () => {
     const api = fakeMessageboard({ projects: NAMES })
     const productionSlack = fakePlatform('slack')
     const production = deployment(api, 'project:prj_support:production', SUPPORT_URL, { sync: { slack: slack({ adapter: productionSlack.adapter }, channels({ C_SUP: 'general' })) } })
@@ -1794,27 +1794,35 @@ describe("each project's sync keys on Vercel's API", () => {
     const said = vi.spyOn(console, 'info').mockImplementation(() => {})
     onTestFinished(() => said.mockRestore())
     const previewSlack = fakePlatform('slack')
-    const alerts = fakePlatform('slack')
+    const offered: string[] = []
     const ran: string[] = []
-    // Its own key `alerts` gets it every post on the board, which sync sees.
     const preview = deployment(api, 'project:prj_support:preview', PREVIEW_URL, {
-      sync: { slack: slack({ adapter: previewSlack.adapter }, channels({ C_SUP: 'general' })), alerts: slack({ adapter: alerts.adapter }, channels({ C_ALERTS: 'alerts' })) },
+      sync: {
+        slack: slack({ adapter: previewSlack.adapter }, async (sync) => void offered.push(sync.direction)),
+        // A key of its own, which has the API hand it every post on the board.
+        alerts: slack({ adapter: fakePlatform('slack').adapter }, channels({ C_ALERTS: 'alerts' })),
+      },
       watch: { seen: { tail: 'general', run: async ({ event }) => void ran.push(event.message!.text) } },
     })
-    // Slack's webhook to the preview is answered, and nothing of it lands.
+    // Slack's webhook is answered, and nothing of it lands.
     const webhook = await preview.webhook('slack', { threadId: 'slack:C_SUP:300', id: '300', text: 'to the preview', user: 'U_ADA', name: 'Ada' })
     expect(webhook.status).toBe(200)
-    expect(api.registrations.get('vercel:project:prj_support:preview')?.sync).toEqual([{ key: 'alerts', platform: 'slack' }])
     await handleOn(api).post('general', { text: 'deploy failed' })
     await Promise.all([production.wake(), preview.wake()])
     await vi.waitFor(() => expect(markdown(productionSlack.channelPosts)).toEqual(['**Julián Benegas**: deploy failed']))
     await vi.waitFor(() => expect(ran).toEqual(['deploy failed']))
+    // It registers again once its last registration is old: still not its key, and nothing more to say.
+    const now = Date.now.bind(Date)
+    vi.spyOn(Date, 'now').mockImplementation(() => now() + 60_000)
+    onTestFinished(() => vi.mocked(Date.now).mockRestore())
+    await preview.backend.registerWatchers()
     await preview.wake()
-    await vi.waitFor(() => expect(api.registrations.get('vercel:project:prj_support:preview')!.sync).toEqual([{ key: 'alerts', platform: 'slack' }]))
+    expect(preview.asked.filter((asked) => asked === 'PUT /watchers').length).toBeGreaterThan(1)
+    expect(offered).toEqual([])
     expect([previewSlack.channelPosts, previewSlack.posts]).toEqual([[], []])
     expect(preview.asked.filter((asked) => /\/sync\/(imports|receipts|inbox\/slack)/.test(asked))).toEqual([])
     expect((await handleOn(api).messages({ channel: 'general' })).messages.map((message) => message.text)).toEqual(['deploy failed'])
-    expect(said.mock.calls.filter(([line]) => String(line).includes('slack'))).toEqual([['[board] slack is synced by production']])
+    expect(said.mock.calls).toEqual([['[board] slack is synced by production']])
   })
 
   it("syncs every key it registered against an API from before each project had its own, which refuses a second registrant's, and names each target its own", async () => {
