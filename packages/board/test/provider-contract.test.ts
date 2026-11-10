@@ -297,28 +297,30 @@ providerContract('Chat SDK bridge', chatFixture)
 providerContract('chatSdk() with no hooks', chatSdkFixture)
 
 describe('who a post is from', () => {
-  it("gives a platform a sender only for an author the board verified: a person its host's verifier named, and their agent", async () => {
+  it("gives a platform a sender only for an author the board verified: a host's person under the handle it named, and their agent", async () => {
     const posted = async (verified: boolean) => {
       const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
       const board = testBoard({ sync: { tickets: provider }, ...(verified ? { authenticate: hostVerifier({ pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' } }) } : {}) })
       const token = verified ? 'pt_julian' : await personToken()
-      const person = caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' })
-      const agent = caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur', 'x-board-avatar': 'https://example.com/lemur.png' })
-      await person('POST', '/messages', { channel: 'tickets', text: 'from a person' })
-      await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
-      await agent('POST', '/messages', { channel: 'tickets', text: 'from an agent' })
-      await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
+      const writers = [
+        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-avatar': 'https://example.com/julian.png' }),
+        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' }),
+        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur', 'x-board-avatar': 'https://example.com/lemur.png' }),
+      ]
+      for (const [i, writer] of writers.entries()) {
+        await writer('POST', '/messages', { channel: 'tickets', text: `post ${i}` })
+        await vi.waitFor(() => expect(provider.posts).toHaveLength(i + 1))
+      }
       return provider.posts.map((post) => [post.body.as, post.body.markdown])
     }
     expect(await posted(true)).toEqual([
-      [{ name: 'Julián Benegas', avatar: 'https://example.com/julian.png', attribution: '' }, '**Julián Benegas**: from a person'],
-      [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png', attribution: ' via julian' }, '**clever-lemur via julian**: from an agent'],
+      [{ name: 'julian', avatar: 'https://example.com/julian.png', attribution: '' }, '**julian**: post 0'],
+      // A name the person's client sent is theirs to say, not the verifier's: only the label.
+      [undefined, '**Julián Benegas**: post 1'],
+      [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png', attribution: ' via julian' }, '**clever-lemur via julian**: post 2'],
     ])
     // A Vercel login's name and handle are what its CLI sent: no sender, only the label.
-    expect(await posted(false)).toEqual([
-      [undefined, '**Julián Benegas**: from a person'],
-      [undefined, '**clever-lemur via julian**: from an agent'],
-    ])
+    expect((await posted(false)).map(([as]) => as)).toEqual([undefined, undefined, undefined])
   })
 
   it("gives an agent with the board's built-in avatar its person's Vercel avatar", async () => {

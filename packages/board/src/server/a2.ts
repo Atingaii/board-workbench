@@ -21,7 +21,7 @@ import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, 
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
 import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
-import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
+import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
@@ -466,9 +466,9 @@ function build(options: A2Options, binding: BoardBinding) {
         .filter((a) => seen === null || seen(a.id))
         .sort((a, b) => a.handle.localeCompare(b.handle))
         .map((found) => {
-          const { host, via: _via, ...a } = found
+          const { host: _host, via: _via, ...a } = found
           const via = viaOfRecord(found)
-          return { ...a, ...(via ? { via } : {}), ...(host ? { verified: true as const } : {}) }
+          return { ...a, ...(via ? { via } : {}), ...(verifiedRecord(found) ? { verified: true as const } : {}) }
         })
       return { actors, cursor: ref(index) }
     },

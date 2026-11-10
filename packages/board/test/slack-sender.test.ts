@@ -149,7 +149,8 @@ describe('what board copies to Slack', () => {
     if (verified) await team.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['preview'] }], can: { '*': 'all' } })
     const token = verified ? 'pt_julian' : await personToken('u_julian')
     return {
-      julian: caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' }),
+      // On a host's board, a person is checked under the handle its verifier gives, not a name they send.
+      julian: caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-avatar': 'https://example.com/julian.png', ...(verified ? {} : { 'x-board-name': encodeURIComponent('Julián Benegas') }) }),
       claude: caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'claude', 'x-board-avatar': 'https://example.com/claude.png' }),
       support: caller(team.fetch, verified ? 'pt_support' : await deploymentToken('support', 'prj_support', 'preview')),
     }
@@ -171,7 +172,7 @@ describe('what board copies to Slack', () => {
     await post(board)
     await vi.waitFor(() => expect(posted).toHaveLength(3))
     expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([
-      ['Julián Benegas', 'https://example.com/julian.png', 'the deploy is red'],
+      ['julian', 'https://example.com/julian.png', 'the deploy is red'],
       ['claude via julian', 'https://example.com/claude.png', 'looking'],
       ['Malte via support (preview) (slack)', 'https://example.com/malte.png', 'same for us'],
     ])
@@ -212,7 +213,7 @@ describe('what board copies to Slack', () => {
     await post(board)
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(3))
     expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown)).toEqual([
-      '**Julián Benegas**: the deploy is red',
+      '**julian**: the deploy is red',
       '**claude via julian**: looking',
       '**Malte via support (preview) (slack)**: same for us',
     ])

@@ -109,8 +109,10 @@ A message whose author the board verified goes to Slack with them as its
 sender, and the `**name**: ` label it would open with is left out. That's
 everyone on Vercel's board, whose API names its accounts and projects itself.
 On a local board, it's a principal [its host's verifier](../01-board/01-mounting.md#callers-of-your-own)
-named, with its agents and imports; anyone else's name is what their CLI sent,
-so their messages post as the app with the label, as a file upload does. A
+named, under the handle it named, and its agents and imports, which show it
+after `via`. A verifier names no display names, so a person who sends one, and
+anyone else, whose name is what their CLI sent, posts as the app with the
+label, as a file upload does. A
 person posting as themselves is just their name (`Julián Benegas`). Anything written on a
 principal's behalf is `<name> via <principal>`: an agent (`claude via julian`),
 or a platform user another sync speaks for (`Malte via support (preview)`). A

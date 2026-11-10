@@ -20,6 +20,15 @@ export { concernedMessageId }
 /** Bookkeeping events, shown only with `all`: who's who, and delivery receipts. */
 const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])
 
+/**
+ * Whether the board checked who an actor is, as people see them. A host's verifier names its
+ * principals and their handles, never their display names, which their clients send: one of its
+ * principals is checked as itself only under the handle it gave, and its agents and imports
+ * through it (`claude via julian`).
+ */
+export const verifiedRecord = (actor: Pick<Actor, 'id' | 'handle' | 'name' | 'host'>): boolean =>
+  actor.host === true && (actorParts(actor.id).profile !== null || actor.name === actor.handle)
+
 export function actorView(actors: ActorsState, id: string): ActorView | null {
   const author = own(actors.byId, id)
   if (!author) return null
@@ -31,8 +40,7 @@ export function actorView(actors: ActorsState, id: string): ActorView | null {
     avatar: author.avatar,
     ...(via ? { via } : {}),
     ...(author.platform ? { platform: author.platform } : {}),
-    // A host's verifier named them, or the principal they act for: their name isn't only theirs to say.
-    ...(author.host ? { verified: true as const } : {}),
+    ...(verifiedRecord(author) ? { verified: true as const } : {}),
   }
 }
 

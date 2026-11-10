@@ -2793,11 +2793,13 @@ Connect's Slack app doesn't request it), map a private channel by its ID.
 **Messages post under their author's name.** A message whose author the board
 verified goes to Slack with their shown name as the message's sender, and the
 `**name**: ` label it would open with is left out. Verified is everyone on
-Vercel's board, which names its accounts and projects itself, and on a local
-board a principal its host's verifier named, with its agents and imports (their
-actor views say `verified: true`). Anyone else's name is what their client sent
-(`x-board-name`), so their messages post as the app with the label, which no one
-mistakes for a Slack user's. "via" names the principal: a person posting as
+Vercel's board, which names its accounts and projects itself. On a local board
+it's a principal its host's verifier named, under the handle it named (a
+verifier names no display names, so a person who sends one in `x-board-name`
+isn't checked as it), and its agents and imports, which show the verified
+principal after `via`. Their actor views say `verified: true`. Anyone else's
+name is what their client sent, so their messages post as the app with the
+label, which no one mistakes for a Slack user's. "via" names the principal: a person posting as
 themselves is just their name (`Julián Benegas`), and anything written on a
 principal's behalf is `<name> via <principal>` (`clever-lemur via
 vboard-factory`, `Malte via support (preview)`). A message imported through
