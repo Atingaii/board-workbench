@@ -845,8 +845,8 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
 - An import by a sync elsewhere is by a profile of its principal
   (`<principal>+<author ID>`), so its platform users are that principal's
   word and show through it. Their record (name, handle, avatar) is that
-  profile's, which only that principal's imports change, through `seen` or an
-  import's author: no sync renames another's platform users, or the board's
+  profile's, which only that principal's imports change, through an import's
+  author: no sync renames another's platform users, or the board's
   own sync's. An import's avatar that isn't an `https` URL is dropped.
 
 ### Grants and tokens
@@ -2146,7 +2146,7 @@ unlinking their own account:
 
 | Method | Route | What it keeps |
 | --- | --- | --- |
-| `syncImport` | `POST /sync/imports` | a platform's write as its platform author (a profile of the caller's principal, for any sync but the board's own), with its origin and sync key (null for a sync function's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID, or `seen` (a platform user to know, for `@[email]`) |
+| `syncImport` | `POST /sync/imports` | a platform's write as its platform author (a profile of the caller's principal, for any sync but the board's own), with its origin and sync key (null for a sync function's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID |
 | `syncReceipt` | `POST /sync/receipts` | `message.synced` (with `message.files_synced`), `message.files_synced`, `message.sync_failed`, or `thread.synced` with its `cause` |
 | `syncThread` | `GET /sync/threads/:thread` | a thread's root, channel, targets, and external threads |
 | `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, and the post an import made with a client ID |

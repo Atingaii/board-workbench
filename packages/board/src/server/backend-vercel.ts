@@ -1554,7 +1554,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** An import as the API takes it: a channel by its ID, and a reply's `after` as its sequence in the thread. */
   async function importBody(who: Who, body: Protocol['syncImport']['input']): Promise<Record<string, unknown>> {
-    if (body.op === 'seen') return { op: 'seen', operationId: operationId(), author: platformUser(body.author) }
     const base = { op: body.op, operationId: operationId(), author: platformUser(body.author), ...(body.from !== undefined ? { from: body.from } : {}) }
     if (body.op === 'post') {
       let after: number | undefined

@@ -16,7 +16,7 @@ import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
-import { actorSeen, viaOf } from './actors.ts'
+import { viaOf } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
@@ -752,14 +752,8 @@ function build(options: A2Options, binding: BoardBinding) {
     async syncImport(caller, body, signal) {
       const { principal } = (await needSync(caller, 'import', true))
       // Only a user of a sync key it has, never anyone this board signs in.
-      const platform = await speaksFor(caller, principal.id, body.author, body.op === 'seen' ? null : body.from)
+      const platform = await speaksFor(caller, principal.id, body.author, body.from)
       const author = externalIdentity(body.author, ownSync(caller) ? null : principal, platform)
-      if (body.op === 'seen') {
-        const { state: actors } = await session.state(actorsReducer)
-        const seen = actorSeen(author.actor, actors)
-        if (seen) await session.append(seen)
-        return { message: null }
-      }
       const may = (channel: string) => principal.access.can('sync', channel)
       // A mention of one of its keys' users is of the platform user as this import names them: its own profile of them.
       const keys = ownSync(caller) ? [] : (await entriesOf(caller, principal.id)).map(({ key }) => key)

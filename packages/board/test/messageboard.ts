@@ -754,7 +754,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     let found: RegExpExecArray | null
     if (method === 'POST' && rest === '/sync/imports') {
       // The key it came through, or for a write a sync makes as the user, the user's own.
-      const key: string = (body.op === 'seen' ? undefined : body.from) ?? prefixOf(body.author.id)
+      const key: string = body.from ?? prefixOf(body.author.id)
       requireKey(actor, key)
       if (!String(body.author.id).startsWith(`${key}:`)) throw new Refused(403, 'foreign_author')
       if (body.origin && !body.from) throw new Refused(400, 'invalid_import', 'An import with an origin names the sync key it came through: pass `from`.')
@@ -767,7 +767,6 @@ function fakeBoard(shared: Shared, boardId: string) {
         : { id: `${owner}+${body.author.id}`, principal, profile: { name: body.author.id, platform: { key, platform: platformOf(key), userId: String(body.author.id).slice(key.length + 1) } } }
       const via = shared.externalImports ? {} : { via: { name: shared.directory.projects[principal.projectId] ?? null, environment: principal.environment }, platform: platformOf(key) }
       actors.set(author.id, { id: author.id, kind: 'external', handle: body.author.handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), ...via, lastSeenAt: now() })
-      if (body.op === 'seen') return { message: null }
       if (body.op === 'post') {
         const landed = body.id !== undefined ? importIds.get(`${owner}|${body.id}`) : undefined
         if (landed) return { message: landed }
