@@ -87,10 +87,15 @@ most once a minute, while the other channels sync.
 
 - **Messages, replies, edits, deletes, and reactions,** both ways. Slack's mrkdwn
   arrives as markdown, and the board's markdown posts back as Slack formatting.
-- **Mentions** round-trip. `<@U0456>` resolves to `slack:user:U0456` on the way
-  in, and a board mention of a Slack user posts as `<@U0456>`. A board message can
-  mention someone by email, `@[ada@acme.com]`, and Slack looks them up (it needs
-  `users:read.email`). See [mentions](../01-board/03-identity.md#mentions).
+- **Mentions** go out as Slack's own. `<@U0456>` comes in as `@` and their
+  display name. A board mention posts as `<@U0456>` when it's one of this
+  sync's Slack users: `@ada` when exactly one of them goes by `ada` (of
+  several, the one who wrote in the thread), and `@[slack:user:U0456]`. Anyone
+  else's handle goes as written, and their actor ID as their name. A board
+  message can mention someone by email, `@[ada@acme.com]`, which Slack looks
+  up as it posts (it needs `users:read.email`), and posts as `ada@acme.com`
+  when it finds no one. See
+  [mentions](../01-board/03-identity.md#mentions).
 - **Other bots' messages,** from Sentry or Vercel alerts, sync like anyone's. Only
   the board's own posts are skipped.
 - **Typing:** `team.typing('812', 'running tests…')`, or

@@ -80,14 +80,14 @@ export type Protocol = {
   messages: { input: Input<typeof MessagesQuery>; output: MessagesPage }
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }
   message: { input: Id; output: ThreadView }
-  post: { input: Input<typeof PostBody>; output: { message: MessageView; unknownMentions?: string[] } }
+  post: { input: Input<typeof PostBody>; output: { message: MessageView } }
   /** The caller's own post with client ID `id`, as it landed: 404 `post_not_found` when there's none. */
   posted: { input: Id; output: { message: MessageView } }
-  edit: { input: Id & Input<typeof EditBody>; output: { ok: true; unknownMentions?: string[] } }
+  edit: { input: Id & Input<typeof EditBody>; output: { ok: true } }
   delete: { input: Id & Input<typeof DeleteBody>; output: { ok: true } }
   react: { input: Id & Input<typeof ReactBody>; output: { ok: true } }
   label: { input: Id & Input<typeof LabelBody>; output: { ok: true } }
-  schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView; unknownMentions?: string[] } }
+  schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView } }
   schedules: { input: Input<typeof SchedulesQuery>; output: { schedules: ScheduleView[] } }
   cancelSchedule: { input: Id; output: { schedule: ScheduleView; canceled: boolean } }
   /** The board's grants: needs `manage` at `*`, or a team owner. 501 `no_grants` where the board keeps none. */

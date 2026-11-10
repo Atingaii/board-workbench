@@ -48,7 +48,7 @@ hook, passed beside `adapter`:
 
 | What | Without a hook | Hook |
 | --- | --- | --- |
-| The platform's name | The adapter's `name`, in author IDs like `telegram:user:42` | `platform` |
+| The platform's name | The adapter's `name`, in author IDs like `telegram:user:42`, which the board files under the entry's key | `platform` |
 | Channels | The adapter's own channel IDs, without its `name:` prefix | `resolveChannel(name)` |
 | Targets | One the adapter reads as a thread is a thread in its channel; anything else is a channel | `resolveTarget(target)` |
 | New threads | Never: a new board root stays on the board, since on most platforms a chat is one conversation. Threads that came from the platform sync both ways. | `canStartThreads: true`, where a channel holds many threads (Discord, Teams) |
@@ -220,6 +220,11 @@ optional methods are native, without it: `support:t_812`. The board records each
 target's `kind` from `resolveTarget`, so it never parses your ID syntax, and a
 channel target on a provider whose `canStartThreads` is false is refused.
 
+**Authors.** Name a user on your platform (`desk:user:7`). The board names them
+under the entry's key instead, so a provider under key `support` brings
+`support:user:7`, and `mention(actor)` gets them back with your prefix
+(`desk:user:7`). A user is the key's, and renaming a key changes its users' IDs.
+
 **Dedupe.** `dedupe` is the identity of one occurrence. A platform redelivering the
 same event must produce the same value, so the retry does nothing; a later
 identical action (a reaction added, removed, and added again) must produce a new
@@ -255,8 +260,8 @@ Each has a default that does nothing, or says the platform can't:
 | `inboxChannel(key, thread)` | The platform channel a thread is in (`desk:support` for `desk:support:t_812`), without calling the platform: `sync.channel` going out, which `channels` routes by |
 | `read(target, { limit })` | A source read on the board that runs the entry: `readSource(key, target)`, `GET /sources/:key/read` |
 | `join(target)` | Adds the app to a channel so `read` can read it: `joinSource(key, target)`, `POST /sources/:key/join` |
-| `mention(actor)` | A board mention in the platform's native form |
-| `findByEmail(email)` | `@[ada@acme.com]` mentions |
+| `mention(actor)` | A board mention of one of your users in the platform's native form, as sync posts |
+| `findByEmail(email)` | `@[ada@acme.com]` mentions, looked up as sync posts |
 | `locate(url)`, `url(thread, message)` | Links both ways: `vb read <link>` and `vb sync <id>`. See [Links](#links) |
 
 `render(input)` builds the outgoing body when `deliver` gets no renderer;

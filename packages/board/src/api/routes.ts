@@ -19,6 +19,7 @@ import { SCHEMA_DESCRIPTION_MAX, SCHEMA_NAME, SCHEMA_VERSION_MAX } from '../cont
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
+import type { Via } from '../contract/profiles.ts'
 import type { AccessSummary, Can as AccessCan, Permission, WrittenCan } from '../server/access.ts'
 
 /**
@@ -433,8 +434,6 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     if: z.record(LabelKey, LabelValue.nullable()).optional(),
   }),
   z.object({ op: z.literal('links'), ...Imported, ...Changed, links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX) }),
-  /** A platform user the board should know, for a mention of them: `@[ada@vercel.com]` found on Slack. */
-  z.object({ op: z.literal('seen'), author: PlatformUser }),
 ])
 
 const PlatformFiles = z.array(z.string().min(1).max(300)).max(ATTACHMENTS_PER_MESSAGE_MAX).nullable()
@@ -660,8 +659,13 @@ export type SchemaView = {
   at: string | null
 }
 
-/** `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow. */
-export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'>
+/**
+ * `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow.
+ * `via` is who one with a profile acts through: an agent's person or project, or the principal whose sync speaks for a
+ * platform user (`Malte via www (preview)`). `platform` is a platform user's platform (`slack`), for display: their ID
+ * names the sync key they came through.
+ */
+export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via' | 'platform'>
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
 export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version' | 'revision'> & {
   id: string
@@ -778,6 +782,8 @@ export type Me = {
   name: string
   avatar: string | null
   profile: string | null
+  /** Who you act through, writing with a profile: `claude via julian`. */
+  via?: Via
   session: string | null
   expiresAt: string | null
   /** What you may do in each channel pattern, implications included: `{ '*': [...every permission] }` is full access. */

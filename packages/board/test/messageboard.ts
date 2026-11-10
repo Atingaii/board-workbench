@@ -3,6 +3,7 @@
 // `user:u_jb`, `app:oac_1`, or `project:prj_pong:production`.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
+import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -12,7 +13,8 @@ type Principal =
 type Actor = {
   id: string
   principal: Principal
-  profile?: { name: string; avatar?: string }
+  /** An agent's name, or for a platform user a project's sync imported, `<key>:<user>`, with `platform` its key, that key's platform, and the user's ID. */
+  profile?: { name: string; avatar?: string; platform?: { key: string; platform: string; userId: string } }
   session?: string
   /** The board token the request came with: it acts as `principal`, narrowed, on its own board. */
   token?: Minted
@@ -90,7 +92,17 @@ type Thread = {
   messages: Message[]
 }
 type Change = Record<string, unknown> & { createdAt: number; messageId?: string }
-type ActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'; handle: string; name?: string; avatar?: string; lastSeenAt: number }
+/** On a platform user a project's sync imported, `via` is the project's name, or null, and its environment, and `platform` its key's platform. */
+type ActorView = {
+  id: string
+  kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'
+  handle: string
+  name?: string
+  avatar?: string
+  via?: { name: string | null; environment: string }
+  platform?: string
+  lastSeenAt: number
+}
 
 const EMOJI = /^[a-z0-9_+-]{1,64}$/
 const CHANNEL = /^[a-z0-9_-]+(\/[a-z0-9_-]+)*$/
@@ -278,6 +290,7 @@ function viewOf(accounts: Accounts, actor: Actor): Omit<ActorView, 'lastSeenAt'>
   if (p.type === 'external') return { id: actor.id, kind: 'external', handle: p.id }
   const account = p.type === 'user' ? accounts[p.userId] : undefined
   const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
+  if (actor.profile?.platform) return { id: actor.id, kind: 'external', handle: actor.profile.platform.userId, platform: actor.profile.platform.platform }
   if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
   if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
   return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
@@ -304,8 +317,12 @@ const whoOf = (actor: Actor): Who => {
       : { kind: 'app', clientId: actor.principal.clientId, ...limit }
 }
 
-/** What every board in one fake API shares: its team, its accounts and directory, its clock, and its bucket. */
-type Shared = { teamId: string; accounts: Accounts; directory: Directory; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>> }
+/**
+ * What every board in one fake API shares: its team, its accounts and directory, its clock, and its bucket. `externalImports`:
+ * an import's author is the platform user alone, as Vercel's API named them before platform profiles. `platformHandles`: an
+ * import's handle is the platform user's own, as the API named them before it put them under their project's name.
+ */
+type Shared = { teamId: string; accounts: Accounts; directory: Directory; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>>; externalImports: boolean; platformHandles: boolean }
 
 const STORAGE = 'http://storage.test/'
 
@@ -341,7 +358,7 @@ function fakeBoard(shared: Shared, boardId: string) {
 
   const seen = (actor: Actor) => {
     // A platform user is named by what its sync last said of them.
-    if (actor.principal.type === 'external') return
+    if (actor.principal.type === 'external' || actor.profile?.platform) return
     actors.set(actor.id, { ...viewOf(accounts, actor), lastSeenAt: now() })
   }
 
@@ -729,6 +746,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
     if (syncKeys.get(key) !== principalId(actor.principal)) throw new Refused(403, 'sync_key_not_owned')
   }
+  /** The platform a sync key was registered with. */
+  const platformOf = (key: string) => [...registrations.values()].flatMap((r) => r.sync).find((entry) => entry.key === key)?.platform ?? key
   const ownedKeys = (actor: Actor) => new Set([...syncKeys].filter(([, owner]) => owner === principalId(actor.principal)).map(([key]) => key))
 
   /** Vercel's API's sync routes, as they behave: undefined for a route that isn't one. */
@@ -737,15 +756,20 @@ function fakeBoard(shared: Shared, boardId: string) {
     let found: RegExpExecArray | null
     if (method === 'POST' && rest === '/sync/imports') {
       // The key it came through, or for a write a sync makes as the user, the user's own.
-      const key: string = (body.op === 'seen' ? undefined : body.from) ?? prefixOf(body.author.id)
+      const key: string = body.from ?? prefixOf(body.author.id)
       requireKey(actor, key)
       if (!String(body.author.id).startsWith(`${key}:`)) throw new Refused(403, 'foreign_author')
       if (body.origin && !body.from) throw new Refused(400, 'invalid_import', 'An import with an origin names the sync key it came through: pass `from`.')
       // A change it imported says which sync it came through, so that sync doesn't send it back.
       const through = body.from ? { from: body.from } : {}
-      const author: Actor = { id: body.author.id, principal: { type: 'external', id: body.author.id, syncKey: key } }
-      actors.set(author.id, { id: author.id, kind: 'external', handle: body.author.handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), lastSeenAt: now() })
-      if (body.op === 'seen') return { message: null }
+      // The platform user is a profile of the project whose sync speaks for them, under the key it came through.
+      const principal = actor.principal as Extract<Principal, { type: 'project' }>
+      const author: Actor = shared.externalImports
+        ? { id: body.author.id, principal: { type: 'external', id: body.author.id, syncKey: key } }
+        : { id: `${owner}+${body.author.id}`, principal, profile: { name: body.author.id, platform: { key, platform: platformOf(key), userId: String(body.author.id).slice(key.length + 1) } } }
+      const via = shared.externalImports ? {} : { via: { name: shared.directory.projects[principal.projectId] ?? null, environment: principal.environment }, platform: platformOf(key) }
+      const handle = shared.externalImports || shared.platformHandles ? body.author.handle : importedHandle(shared.directory.projects[principal.projectId] ?? principal.projectId, body.author.handle, userIdOf(body.author.id))
+      actors.set(author.id, { id: author.id, kind: 'external', handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), ...via, lastSeenAt: now() })
       if (body.op === 'post') {
         const landed = body.id !== undefined ? importIds.get(`${owner}|${body.id}`) : undefined
         if (landed) return { message: landed }
@@ -790,10 +814,11 @@ function fakeBoard(shared: Shared, boardId: string) {
         : body.message
       const message = id ? messageNamed(id) : undefined
       if (!message) return { message: null }
-      const by = message.createdBy.principal
+      const by = message.createdBy
       // A sync edits and deletes only its own platform users' messages; it reacts and labels on any.
       if (body.op === 'edit' || body.op === 'delete') {
-        if (by.type !== 'external' || by.syncKey !== key) {
+        const own = by.principal.type === 'external' ? by.principal.syncKey === key : by.profile?.platform?.key === key && samePrincipal(by.principal, actor.principal)
+        if (!own || (body.message !== undefined && by.id !== author.id)) {
           throw new Refused(403, 'message_not_owned')
         }
         if (body.revision !== undefined && body.revision !== message.revision) {
@@ -1351,6 +1376,10 @@ export function fakeMessageboard(
     notDefault?: boolean
     /** Board tokens the API takes, by their secret, whatever it looks like: the principal each acts as, as `as()` names it. */
     tokens?: Record<string, string>
+    /** An import's author is the platform user alone (`principal: { type: 'external' }`), as Vercel's API named them before platform profiles. */
+    externalImports?: boolean
+    /** An import's handle is the platform user's own (`Malte Ubl`), as Vercel's API named them before it put them under their project's name. */
+    platformHandles?: boolean
   } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
@@ -1363,7 +1392,7 @@ export function fakeMessageboard(
   const now = () => (clock = Math.max(Date.now(), clock + 1))
   const roles = options.roles ?? ROLES
   const directory = { members: { ...(options.members ?? MEMBERS) }, roles, projects: options.projects ?? PROJECTS, repositories: options.repositories ?? REPOSITORIES, apps: APPS }
-  const shared: Shared = { teamId, accounts, directory, now, stored }
+  const shared: Shared = { teamId, accounts, directory, now, stored, externalImports: options.externalImports ?? false, platformHandles: options.platformHandles ?? false }
 
   const tokens = fakeTokens({ now })
   const schemas = fakeSchemas({ now, roles })
