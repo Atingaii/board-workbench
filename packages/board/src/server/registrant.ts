@@ -80,10 +80,16 @@ export function registrant(options: RegistrantOptions) {
 
   let last: { url: string | null; at: number; result: RegistrationView } | null = null
   let registering: Promise<RegistrationView> | null = null
-  /** Registers this board's watchers with the other board, as itself, replacing its last registration. */
-  async function register(here: string | null): Promise<RegistrationView> {
+  /**
+   * Registers this board's watchers with the other board, as itself, replacing its last registration. `fresh`
+   * registers again even so soon after the same one: the other board said something changed since (another
+   * deployment took a sync key), and only a new answer says what.
+   */
+  async function register(here: string | null, fresh = false): Promise<RegistrationView> {
     const current = await options.hash()
-    if (last && last.url === here && last.result.hash === current && Date.now() - last.at < REGISTER_EVERY_MS) return last.result
+    if (!fresh && last && last.url === here && last.result.hash === current && Date.now() - last.at < REGISTER_EVERY_MS) return last.result
+    // One already on its way was sent before what changed.
+    if (fresh && registering) await registering.catch(() => {})
     registering ??= options
       .wakeAt(here)
       .then((where) => registry.register(where))
@@ -226,8 +232,8 @@ export function registrant(options: RegistrantOptions) {
   return {
     start,
     routes,
-    /** Registers this board's watchers with the other board now, as `POST /watchers` does. */
-    registerNow: () => register(wakeable(bound().url())),
+    /** Registers this board's watchers with the other board now, as `POST /watchers` does, and with `fresh`, even if it just did. */
+    registerNow: (fresh = false) => register(wakeable(bound().url()), fresh),
     /** Stops pulling, for a board that pulls on its own. */
     close: () => {
       polling?.abort()

@@ -324,8 +324,6 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   // --- inbound: platform → inbox --------------------------------------------------
 
   async function intake(key: string, received: ReceivedEvent) {
-    // Another deployment holds the key: what the platform sends is that one's to import.
-    if (!(await here(key))) return
     const { event, raw, dedupe } = ReceivedEvent.parse(storableJson({ ...received, raw: jsonSafe(received.raw) }))
     for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
       if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`provider locations must belong to sync entry ${key}`)
@@ -359,6 +357,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function handleWebhook(key: string, request: Request): Promise<Response> {
     const platform = entries[key]
     if (!platform) throw notFound(`no sync entry named ${key}`)
+    // Another deployment holds the key: what the platform sends is that one's to import, and its adapter's to read.
+    if (!(await here(key))) return new Response(null, { status: 200 })
     let response: Response
     try {
       response = await platform.receive(key, request, (received) => intake(key, received))

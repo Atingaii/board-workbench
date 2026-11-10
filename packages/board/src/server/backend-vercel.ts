@@ -400,6 +400,25 @@ function projectNamesOf(views: Iterable<readonly [string, Pick<ApiActorView, 'ha
   return new Map([...byVia, ...byProfile, ...byHandle])
 }
 
+/**
+ * The handle board shows an actor of the actors list by, with its project named as `names` says: a deployment by
+ * its project's (`www`, or by ID `prj_www@preview`), a platform user under it (`www/ada`), and anyone else as the
+ * API names them.
+ */
+function shownHandle(id: string, view: ApiActorView, names: Map<string, string>): string {
+  const principal = principalFrom(id)
+  if (principal?.type !== 'project') return view.handle
+  const project = names.get(principal.projectId)
+  const { profile } = actorParts(id)
+  if (profile === null) return deploymentNamed(principal, project).handle
+  const user = platformProfile(profile)
+  return user ? importedHandleOf(view.handle, principal, view, user.user, project) : view.handle
+}
+
+/** Who goes by `handle` in a read of the actors list: as the API names them, or as board shows them. */
+const goingBy = (views: Iterable<readonly [string, ApiActorView]>, names: Map<string, string>, handle: string) =>
+  [...views].filter(([id, view]) => view.handle.toLowerCase() === handle || shownHandle(id, view, names).toLowerCase() === handle).map(([id]) => id)
+
 /** A short name for a person or an app the API doesn't name: the start of their ID. */
 const shortName = (principal: Extract<ApiPrincipal, { type: 'user' | 'app' }>) =>
   principal.type === 'user' ? `user-${principal.userId.slice(0, 6).toLowerCase()}` : `app-${principal.clientId.slice(0, 6).toLowerCase()}`
@@ -521,9 +540,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     try {
       return await api<T>(...args).catch(async (error: unknown) => {
         // A sync key is this deployment's once it registers, which its first request starts without
-        // waiting: a webhook can get there first, so it registers and tries once more.
+        // waiting: a webhook can get there first, so it registers and tries once more. Or another
+        // deployment took the key since it registered, however recently: registering again says so.
         if (!(error instanceof HttpError && error.code === 'sync_key_not_owned' && (binding?.sync.length ?? 0) > 0)) throw error
-        await runner.registerNow()
+        await runner.registerNow(true)
         return api<T>(...args)
       })
     } catch (error) {
@@ -785,8 +805,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** What a fresh read of the actors still didn't name: it isn't read again for them until names are read anyway. */
   const unnamed = new Set<string>()
   /**
-   * Projects' names by ID, as the actors list names them, read again at once when `wanted` (a project's ID, or a name
-   * as `name:<name>`) isn't among them, as for someone new since the list was read.
+   * Projects' names by ID, as the actors list names them, read again at once when `wanted` (one or more projects, by
+   * their IDs) isn't among them, as for someone new since the list was read.
    */
   async function projectNames(who: Who, wanted?: { key: string; found: (names: Map<string, string>) => boolean }): Promise<Map<string, string>> {
     const kept = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : null
@@ -959,8 +979,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const named = new Set([by])
     if (!by.startsWith('vercel:')) {
       const handle = by.toLowerCase()
-      const find = async (read: { views: Promise<Map<string, ApiActorView>> }) =>
-        [...(await read.views)].filter(([, view]) => view.handle.toLowerCase() === handle).map(([id]) => id)
+      const find = async (read: { views: Promise<Map<string, ApiActorView>> }) => goingBy(await read.views, await namesIn(read), handle)
       const kept = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : null
       let ids = await find(kept ?? readNames(who))
       // Someone new since the list was read: one read again finds them. A value no fresh read had
@@ -978,7 +997,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** Which messages a `--source` value covers. */
-  type Source = (message: ApiMessage) => boolean
+  type Source = (message: ApiMessage) => boolean | Promise<boolean>
 
   /**
    * Which messages `--source` names, as `fromOf` shows where they came from: `board`, a key bare for this caller's own
@@ -993,10 +1012,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return (message) => message.from === from && [null, own].includes(importerOf(message.createdBy))
     }
     const [project, key] = [from.slice(0, slash), from.slice(slash + 1)]
-    const names = await projectNames(who, { key: `name:${project}`, found: (names) => [...names.values()].includes(project) })
-    const named = [...names].filter(([, name]) => name === project).map(([id]) => id)
-    const projects = new Set([project, ...named])
-    return (message) => message.from === key && projects.has(importerOf(message.createdBy) ?? '')
+    // Its importer by ID, or by its name as the names say now: a project new since they were read is looked up
+    // as its first import comes, once, as `fromOf` names it, so a filter made before it names it from then on.
+    return async (message) => {
+      const importer = importerOf(message.createdBy)
+      return message.from === key && importer !== null && (importer === project || (await namedProject(who, importer)) === project)
+    }
   }
 
   /** What a read narrows its messages by beside what the API can: who `--by` names, and where `--source` does. */
@@ -1010,12 +1031,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * Whether a message matches a read's filters, `narrow` as `narrowOf` gives them for it. A label matches on the
    * message or its thread's root: `thread`'s labels, as `labeledBy` gives them when the read filters on labels.
    */
-  function matches(filters: Omit<Filters, 'channel'>, message: ApiMessage, thread: ApiThread, narrow: Narrow): boolean {
+  async function matches(filters: Omit<Filters, 'channel'>, message: ApiMessage, thread: ApiThread, narrow: Narrow): Promise<boolean> {
     if (filters.re !== undefined && filters.re !== message.id && filters.re !== idAt(thread.id, 1)) return false
     if (narrow.by && !narrow.by(message.createdBy)) return false
     // Nothing here resolves mentions yet, so a mention filter matches nothing.
     if (filters.mentions !== undefined) return false
-    if (filters.from !== undefined && !narrow.source?.(message)) return false
+    if (filters.from !== undefined && !(await narrow.source?.(message))) return false
     if (filters.text !== undefined && !message.text.toLowerCase().includes(filters.text.toLowerCase())) return false
     for (const [key, values] of filters.label ?? []) {
       const on = (labels: Labels | undefined) => labels !== undefined && Object.hasOwn(labels, key) && (values === null || values.includes(labels[key]!))
@@ -1127,7 +1148,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const labeled = labeledBy(thread, all.find((message) => message.sequence === 1))
       for (const message of all) {
         newest = Math.max(newest, message.createdAt)
-        if (matches(filters, message, labeled, narrow)) messages.push({ message, thread, channel })
+        if (await matches(filters, message, labeled, narrow)) messages.push({ message, thread, channel })
       }
     }
     messages.sort(byTime)
@@ -1188,7 +1209,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // A reply's read names its thread, not whether its root is deleted: a label filter reads the root.
     if (found && !given && filters.label?.length)
       found = { ...found, thread: found.message.sequence === 1 ? labeledBy(found.thread, found.message) : await threads(found.thread.id) }
-    if (!found || !matches(filters, found.message, found.thread, narrow)) return null
+    if (!found || !(await matches(filters, found.message, found.thread, narrow))) return null
     const message = await view(who, found.message, channel)
     const by = authorOf(change.actor)
     const from = await fromOf(who, change.from, change.actor)
@@ -1325,7 +1346,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const narrowed = filtered(query)
     const narrow = narrowed ? await narrowOf(who, query) : {}
     const keep = async (message: ApiMessage) =>
-      !narrowed || matches(query, message, query.label?.length ? await thread(message.threadId) : ({ id: message.threadId } as ApiThread), narrow)
+      !narrowed || (await matches(query, message, query.label?.length ? await thread(message.threadId) : ({ id: message.threadId } as ApiThread), narrow))
     const kept: ApiMessage[] = []
     if (query.after === undefined) {
       // Without a cursor, the newest: a filtered read looks among the channel's latest page.
@@ -1413,7 +1434,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (by === 'me') return [await actorOf(who)]
     if (by.startsWith('vercel:')) return [by]
     const listed = await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')
-    const named = listed.filter((actor) => actor.handle === by || (!by.includes(':') && actor.id.endsWith(`+${by.toLowerCase()}`))).map((actor) => actor.id)
+    const views = listed.map((actor) => [actor.id, actor] as const)
+    // As the API names them, or as board shows them: a deployment by its project's name.
+    const shown = new Set(goingBy(views, projectNamesOf(views), by.toLowerCase()))
+    const named = listed.filter((actor) => shown.has(actor.id) || (!by.includes(':') && actor.id.endsWith(`+${by.toLowerCase()}`))).map((actor) => actor.id)
     if (named.length === 0) throw new HttpError(400, 'bad_watcher', `--by ${by}: nobody here goes by that yet: name them by their actor ID`)
     return named
   }

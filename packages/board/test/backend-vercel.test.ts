@@ -1887,9 +1887,11 @@ describe("each project's sync keys on Vercel's API", () => {
       },
       watch: { seen: { tail: 'general', run: async ({ event }) => void ran.push(event.message!.text) } },
     })
-    // Slack's webhook is answered, and nothing of it lands.
+    // Slack's webhook is answered, and nothing of it lands: the adapter never reads it.
+    const read = vi.spyOn(previewSlack.adapter, 'handleWebhook')
     const webhook = await preview.webhook('slack', { threadId: 'slack:C_SUP:300', id: '300', text: 'to the preview', user: 'U_ADA', name: 'Ada' })
     expect(webhook.status).toBe(200)
+    expect(read).not.toHaveBeenCalled()
     await handleOn(api).post('general', { text: 'deploy failed' })
     await Promise.all([production.wake(), preview.wake()])
     await vi.waitFor(() => expect(markdown(productionSlack.channelPosts)).toEqual(['**Julián Benegas**: deploy failed']))
@@ -1906,6 +1908,107 @@ describe("each project's sync keys on Vercel's API", () => {
     expect(preview.asked.filter((asked) => /\/sync\/(imports|receipts|inbox\/slack)/.test(asked))).toEqual([])
     expect((await handleOn(api).messages({ channel: 'general' })).messages.map((message) => message.text)).toEqual(['deploy failed'])
     expect(said.mock.calls).toEqual([['[board] slack is synced by production']])
+  })
+
+  it("stops syncing a key production takes from it moments after it registered, at the first call the API refuses", async () => {
+    // On Vercel, where each registers its path and never pulls on its own: only what the test does registers.
+    for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_TARGET_ENV: '', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
+    onTestFinished(() => void vi.unstubAllEnvs())
+    const api = fakeMessageboard({ projects: NAMES })
+    const said = vi.spyOn(console, 'info').mockImplementation(() => {})
+    onTestFinished(() => said.mockRestore())
+    const preview = deployment(api, 'project:prj_support:preview', PREVIEW_URL, { sync: { slack: slack({ adapter: fakePlatform('slack').adapter }, channels({ C_SUP: 'general' })) } })
+    await preview.backend.registerWatchers()
+    expect(api.registrations.get('vercel:project:prj_support:preview')?.sync).toEqual([{ key: 'slack', platform: 'slack' }])
+    const production = deployment(api, 'project:prj_support:production', SUPPORT_URL, { sync: { slack: slack({ adapter: fakePlatform('slack').adapter }, channels({ C_SUP: 'general' })) } })
+    await production.backend.registerWatchers()
+    // The preview still holds slack as far as it knows: the API's refusal of its webhook's event tells it otherwise.
+    const body = { threadId: 'slack:C_SUP:300', id: '300', text: 'to the preview', user: 'U_ADA', name: 'Ada' }
+    expect((await preview.webhook('slack', body)).status).toBe(200)
+    expect(preview.asked.filter((asked) => asked === 'PUT /watchers')).toHaveLength(2)
+    expect(said.mock.calls).toEqual([['[board] slack is synced by production']])
+    // From then on it asks the API nothing through the key.
+    const asked = preview.asked.length
+    expect((await preview.webhook('slack', { ...body, id: '301' })).status).toBe(200)
+    expect(preview.asked.slice(asked).filter((call) => /\/sync\//.test(call))).toEqual([])
+    expect((await handleOn(api).messages({ channel: 'general' })).messages).toEqual([])
+  })
+
+  it("takes no other project's thread an API hands it under a key of its own name", async () => {
+    // An API that hands a thread's binding to every registrant of its key, and lists every target of a thread.
+    const api = fakeMessageboard({ projects: NAMES, unscopedSync: true })
+    const supportSlack = fakePlatform('slack')
+    const support = deployment(api, 'project:prj_support:production', SUPPORT_URL, { sync: { slack: slack({ adapter: supportSlack.adapter }, channels({ C_SUP: 'general' })) } })
+    await support.backend.registerWatchers()
+    const www = handleOn(api, 'project:prj_www:production')
+    await www.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    // A thread in a channel support doesn't mirror, which www syncs to its own Slack.
+    const root = await handleOn(api).post('random', { text: 'checkout is down' })
+    await www.syncReceipt({ kind: 'thread', message: root.id, target: 'slack:C_WWW', targetKind: 'channel', cause: 'request' })
+    await support.wake()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect([supportSlack.channelPosts, supportSlack.posts]).toEqual([[], []])
+    expect(support.asked.filter((asked) => asked === 'POST /sync/receipts')).toEqual([])
+  })
+
+  it("delivers to no target under a key another deployment holds, though an API lists it", async () => {
+    const api = fakeMessageboard({ projects: NAMES, unscopedSync: true })
+    const productionSlack = fakePlatform('slack')
+    const production = deployment(api, 'project:prj_support:production', SUPPORT_URL, { sync: { slack: slack({ adapter: productionSlack.adapter }, channels({ C_SUP: 'general' })) } })
+    await production.backend.registerWatchers()
+    const previewSlack = fakePlatform('slack')
+    const preview = deployment(api, 'project:prj_support:preview', PREVIEW_URL, {
+      sync: {
+        slack: slack({ adapter: previewSlack.adapter }, channels({ C_SUP: 'general' })),
+        // A key of its own, which has the API hand it every post on the board.
+        alerts: slack({ adapter: fakePlatform('slack').adapter }, channels({ C_ALERTS: 'alerts' })),
+      },
+    })
+    await preview.backend.registerWatchers()
+    const julian = handleOn(api)
+    const root = await julian.post('general', { text: 'deploy failed' })
+    await production.wake()
+    await vi.waitFor(() => expect(markdown(productionSlack.channelPosts)).toEqual(['**Julián Benegas**: deploy failed']))
+    await julian.reply(root.id, { text: 'rolled back' })
+    await Promise.all([production.wake(), preview.wake()])
+    await vi.waitFor(() => expect(markdown(productionSlack.posts)).toEqual(['**Julián Benegas**: rolled back']))
+    await preview.wake()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect([previewSlack.channelPosts, previewSlack.posts]).toEqual([[], []])
+  })
+
+  it("finds another project's imports by its name, though the filter was made before the project imported anything", async () => {
+    const api = fakeMessageboard({ projects: NAMES })
+    const julian = handleOn(api)
+    await julian.post('general', { text: 'before www syncs' })
+    const read = async () => (await julian.messages({ channel: 'general', from: 'www/slack' })).messages.map((message) => message.text)
+    // Twice, so the names it reads are kept, and nothing in them is www.
+    expect([await read(), await read()]).toEqual([[], []])
+    const www = handleOn(api, 'project:prj_www:production')
+    await www.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
+    await www.syncImport({ op: 'post', author: ada, from: 'slack', channel: 'general', text: 'checkout is down', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+    expect(await read()).toEqual(['checkout is down'])
+  })
+
+  it("takes a deployment by the name it shows for --by, a watcher's included, on an API that names it by its ID too", async () => {
+    for (const projectIdHandles of [false, true]) {
+      const api = fakeMessageboard({ projects: NAMES, projectIdHandles })
+      const www = handleOn(api, 'project:prj_www:production')
+      await www.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+      // An import of www's names it, wherever the API names its deployments by their IDs.
+      const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
+      await www.syncImport({ op: 'post', author: ada, from: 'slack', channel: 'random', text: 'hi', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+      const root = await www.post('general', { text: 'deployed' })
+      await handleOn(api, 'project:prj_www:preview').reply(root.id, { text: 'deployed a preview' })
+      await handleOn(api).post('general', { text: 'not www' })
+      const julian = handleOn(api)
+      expect((await julian.thread(root.id)).message.author).toMatchObject({ handle: 'www' })
+      expect((await julian.messages({ channel: 'general', by: 'www' })).messages.map((message) => message.text)).toEqual(['deployed', 'deployed a preview'])
+      const pong = handleOn(api, 'project:prj_pong:production')
+      await pong.register({ url: null, watch: { deploys: { tail: 'general --by www' } } })
+      expect(api.registrations.get('vercel:project:prj_pong:production')!.watch.deploys!.filter.authors!.sort()).toEqual(['vercel:project:prj_www:preview', 'vercel:project:prj_www:production'])
+    }
   })
 
   it("syncs every key it registered against an API from before each project had its own, which refuses a second registrant's, and names each target its own", async () => {

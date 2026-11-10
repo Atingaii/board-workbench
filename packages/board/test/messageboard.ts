@@ -327,7 +327,8 @@ const whoOf = (actor: Actor): Who => {
  * an import's author is the platform user alone, as Vercel's API named them before platform profiles. `platformHandles`: an
  * import's handle is the platform user's own, as the API named them before it put them under their project's name. `boardWideKeys`:
  * a sync key is one registrant's on the whole board, as Vercel's API kept them before each project had its own. `projectIdHandles`:
- * a deployment's handle is `project:<id>:<environment>`, as the API named one before it named it by its project.
+ * a deployment's handle is `project:<id>:<environment>`, as the API named one before it named it by its project. `unscopedSync`:
+ * a thread's binding goes to every registrant of its key, and `syncThread` lists every target, whose project and key they are.
  */
 type Shared = {
   teamId: string
@@ -339,6 +340,7 @@ type Shared = {
   platformHandles: boolean
   boardWideKeys: boolean
   projectIdHandles: boolean
+  unscopedSync: boolean
 }
 
 const STORAGE = 'http://storage.test/'
@@ -356,7 +358,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   const attachments = new Map<string, Attachment>()
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
   type Registration = { owner: string; path?: string; branch?: string; watch: Record<string, { filter: Filter }>; sync: { key: string; platform: string }[]; hash: string }
-  type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
+  type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; retryAt?: number; attempts: number }
   /** By principal, as the API keeps them: one each. */
   const registrations = new Map<string, Registration>()
   const queued = new Map<string, Match[]>()
@@ -458,7 +460,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (change.type === 'thread.synced' && binding) {
       for (const registration of registrations.values()) {
         const project = registration.owner.split(':')[2]
-        if (registration.sync.some((entry) => entry.key === prefixOf(binding.target)) && (binding.projectId === undefined || binding.projectId === project)) {
+        if (registration.sync.some((entry) => entry.key === prefixOf(binding.target)) && (binding.projectId === undefined || binding.projectId === project || shared.unscopedSync)) {
           queue(registration.owner, '@sync')
         }
       }
@@ -652,7 +654,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       for (;;) {
         // Read again each time: a match queued while it waits may be the registrant's first.
         const lane = queued.get(owner) ?? []
-        const held = new Set(lane.filter((m) => m.lease && m.leaseUntil! > Date.now()).map((m) => `${m.watcher}|${m.threadId}`))
+        // One leased, or waiting after an error, holds up its watcher's thread.
+        const held = new Set(lane.filter((m) => (m.lease && m.leaseUntil! > Date.now()) || (m.retryAt ?? 0) > Date.now()).map((m) => `${m.watcher}|${m.threadId}`))
         const heads = new Map<string, Match>()
         for (const m of lane) if (!heads.has(`${m.watcher}|${m.threadId}`)) heads.set(`${m.watcher}|${m.threadId}`, m)
         const free = [...heads.entries()].filter(([key]) => !held.has(key)).map(([, m]) => m).slice(0, limit)
@@ -678,8 +681,10 @@ function fakeBoard(shared: Shared, boardId: string) {
       const at = lane.findIndex((m) => m.id === decodeURIComponent(acking[1]!))
       if (at === -1) throw new Refused(404, 'no_match')
       if (lane[at]!.lease !== body.lease) throw new Refused(409, 'stale_lease')
+      // After an error it waits a second, doubling to 30, as the API's does.
       if (body.error !== undefined && !body.skip) {
         lane[at]!.attempts++
+        lane[at]!.retryAt = Date.now() + Math.min(30_000, 1000 * 2 ** (lane[at]!.attempts - 1))
         delete lane[at]!.lease
       } else lane.splice(at, 1)
       return { ok: true }
@@ -978,8 +983,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
       const thread = threadAt(decodeURIComponent(found[1]!))
       const owned = ownedKeys(actor)
-      // Its own project's targets, through the keys it holds.
-      const mine = (bindings.get(thread.id) ?? []).filter((bound) => owned.has(prefixOf(bound.target)) && (bound.projectId ?? '') === scope)
+      // Its own project's targets, through the keys it holds: with `unscopedSync`, every one.
+      const mine = (bindings.get(thread.id) ?? []).filter((bound) => shared.unscopedSync || (owned.has(prefixOf(bound.target)) && (bound.projectId ?? '') === scope))
       return {
         thread: thread.id,
         root: thread.messages[0]!.id,
@@ -1362,6 +1367,11 @@ export function fakeMessageboard(
     boardWideKeys?: boolean
     /** A deployment's handle is `project:prj_pong:production`, as Vercel's API named one before it named it by its project (`pong`). */
     projectIdHandles?: boolean
+    /**
+     * Sync's records aren't kept apart, as board can't take for granted of an API it doesn't run: a thread's binding goes
+     * to every registrant that syncs its key, another project's included, and `syncThread` lists every target of a thread.
+     */
+    unscopedSync?: boolean
   } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
@@ -1384,6 +1394,7 @@ export function fakeMessageboard(
     platformHandles: options.platformHandles ?? false,
     boardWideKeys: options.boardWideKeys ?? false,
     projectIdHandles: options.projectIdHandles ?? false,
+    unscopedSync: options.unscopedSync ?? false,
   }
 
   const tokens = fakeTokens({ now })

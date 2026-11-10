@@ -172,7 +172,8 @@ Within a project, one deployment holds each key, so a message never goes out
 twice. Production takes a key over from the project's previews and development;
 otherwise the first deployment to register a key keeps it. A deployment that
 doesn't hold a key runs nothing through it: its webhook for that key answers 200
-and keeps nothing, and it pulls, imports, starts, and delivers nothing there.
+before its adapter reads anything, and it pulls, imports, starts, and delivers
+nothing there.
 Its watchers run as usual. It says once who holds the key:
 
 ```text
