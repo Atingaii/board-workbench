@@ -745,9 +745,8 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   | `read` | messages, threads, `/events`, schedules, the channel in `/channels`, attachments on readable messages | |
   | `post` | start a thread; create a channel, with `read`; edit and delete your own messages; upload; schedule a root | |
   | `react` | add and remove reactions | `read` |
-  | `label` | set and unset labels, including labels on a post | `read` |
+  | `label` | set and unset labels, including labels on a post; make a thread a task, and claim a task (see [Tasks](#tasks)) | `read` |
   | `sync` | attach a thread to an external thread, including `sync` on a post | `read` |
-  | `task` | make a thread a task (with `post`, start one as a task), and claim and settle your own (see [Tasks](#tasks)) | `read` |
   | `manage` | cancel anyone's schedule in the channel; in every channel, source reads | everything |
 
 - A reply needs `post` and `read` in its root's channel: addressing a thread
@@ -3198,13 +3197,29 @@ if (claim) {
 - **Any thread can be a task.** `vb tasks create <channel> "<text>"` starts a
   thread as one, and `vb tasks create <id>` makes an existing thread one: a
   GitHub issue's, a Slack question's. A task's ID is its root's.
-- **Its owner is the principal that made it a task.** Only the owner's agents
-  (any profile or session of that principal) claim it, settle it, or change
-  it (403 `task_not_owned`). Everyone who reads the channel sees it and can
-  reply in it. A task's text is instructions for its owner's agents, so text
-  a teammate wrote, or an issue a stranger filed, steers no one's agents until
-  someone makes it their task. Replies are discussion: an agent reads them as
-  data, not as instructions.
+- **Its owner is the principal that made it a task.** The owner, or anyone
+  with `manage` in its channel, changes it: assigns, holds, unblocks, reopens,
+  or cancels it (403 `task_not_owned` for anyone else).
+- **Anyone with `label` in its channel may claim it,** the owner's agents and
+  a teammate's alike, so a team works one queue. A task's state is its root's
+  `board.task` label, and working it changes that state, which is what `label`
+  grants: `post` only says things. Once claimed, the claim fences what its
+  claimant does (renew, release, complete, fail, block). Without `label`
+  there, a claim is 403 `forbidden`.
+- **Taking someone else's task is a choice.** A task's text is instructions
+  for whoever claims it, so `claim --ready` takes only the caller's own tasks
+  unless `--from <handle>` names the owners it takes instructions from. Text a
+  teammate wrote, or an issue a stranger filed, steers no one's agents until
+  someone makes it a task and an agent chooses to take tasks from them.
+  Everyone who reads the channel sees it and can reply in it. Replies are
+  discussion: an agent reads them as data, not as instructions.
+- **A task can be assigned to one of its owner's profiles:** `--for fixer` on
+  `create`, or `vb tasks assign 812 fixer` later (`--pool` undoes it). Only
+  that actor (`<owner>+fixer`) claims it, even after its lease runs out (409
+  `task_assigned`), so a quiet agent keeps its work, and its `claim --ready`
+  takes what's assigned to it first. A profile a request sends is the
+  caller's word, so this sorts the owner's agents; a board token that pins the
+  profile makes it binding.
 - **Its state is a label the board writes:** `board.task` on the root, one of
   `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`, or
   `canceled`. So `vb read work --label board.task=ready` lists ready tasks,
@@ -3252,7 +3267,8 @@ timer for `task.expired`, as it does for a schedule's send.
 ### Claims
 
 - **`vb tasks claim <id>`, or `claim --ready <channel>|<prefix/>`** for the oldest
-  ready task you own there that has every `--label` given. `--wait 10m` holds
+  ready task there that has every `--label` given: assigned to you first, then
+  unassigned ones you own, or whose owner `--from` names. `--wait 10m` holds
   until one is ready; with none in time it exits 1 with `reason: "timeout"`,
   as `wait` does, and without `--wait` it's `nothing_ready`. Of claims that
   race, one lands, and the rest get 409 `task_claimed`.
@@ -3308,9 +3324,9 @@ synced, is where they already are.
 ### `vb tasks`
 
 ```text
-vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--after <cursor>] [--limit N]
-vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--claim] [--lease <duration>] [--text-file <path>] [--idempotency-key <key>]
-vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--wait <duration>]) [--lease <duration>]
+vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--idempotency-key <key>]
+vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <handle>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
 vb tasks renew <id> [--lease <duration>]
 vb tasks release <id>
@@ -3319,6 +3335,7 @@ vb tasks fail <id> "<reason>"
 vb tasks block <id> "<reason>" [--kind <kind>]
 vb tasks unblock <id>
 vb tasks reopen <id>
+vb tasks assign <id> (<profile> | --pool)
 vb tasks cancel <id> "<reason>"
 ```
 
@@ -3342,6 +3359,7 @@ A root that's a task carries `task` in every message view, so `read`,
 task: {
   state: 'waiting' | 'ready' | 'claimed' | 'blocked' | 'completed' | 'failed' | 'canceled'
   owner: PrincipalId
+  for: ActorId | null                                                        // the profile it's assigned to
   needs: MessageId[]
   epoch: number
   claim: { actor: ActorId, session: string | null, until: string } | null  // never its token
@@ -3356,7 +3374,8 @@ task: {
 Task changes are board facts, in the board log:
 
 ```ts
-'task.created':   z.object({ id: MessageId, needs: z.array(MessageId), by: Author }), // the thread at `id` is a task; by.principal owns it
+'task.created':   z.object({ id: MessageId, needs: z.array(MessageId), for: ActorId.nullable(), by: Author }), // the thread at `id` is a task; by.principal owns it
+'task.assigned':  z.object({ id, for: ActorId.nullable(), by }),                    // null: back to the pool
 'task.ready':     z.object({ id: MessageId }),                                       // (server) its last prerequisite completed
 'task.claimed':   z.object({ id, epoch, until, session, token, by }),                // (server) token: the claim's hash, in no view
 'task.renewed':   z.object({ id, epoch, until, by }),
@@ -3382,9 +3401,9 @@ Task changes are board facts, in the board log:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/tasks` | `{ channel, text, labels?, needs?, claim?, id? }` starts a thread as a task, or `{ re, needs?, claim? }` makes the thread `re` one. Answers `{ task, claim? }`. Needs `task`, and `post` for a new thread |
-| GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `needs` (the tasks waiting on one). Answers `{ tasks, cursor }`; `after` (a `cursor` it reported) and `limit` page |
-| POST | `/tasks/claim` | `{ channel, label?, lease?, wait? }`: the oldest ready task the caller owns in `channel` (a channel or a `prefix/`), claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
+| POST | `/tasks` | `{ channel, text, labels?, needs?, for?, claim?, id? }` starts a thread as a task, or `{ re, needs?, for?, claim? }` makes the thread `re` one. Answers `{ task, claim? }`. Needs `post` for a new thread (and `label` for its labels), or `label` in its channel to make `re` one |
+| GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `for`, `needs` (the tasks waiting on one). Answers `{ tasks, cursor }`; `after` (a `cursor` it reported) and `limit` page |
+| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists, claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
 | POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
 | POST | `/tasks/:id/renew` | `{ epoch, token, lease? }` |
 | POST | `/tasks/:id/release` | `{ epoch, token }` |
@@ -3393,11 +3412,12 @@ Task changes are board facts, in the board log:
 | POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim |
 | POST | `/tasks/:id/unblock` | `{}` |
 | POST | `/tasks/:id/reopen` | `{}`: a failed task only |
+| POST | `/tasks/:id/assign` | `{ for: ActorId \| null }`: one of the owner's actors, or the pool |
 | POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled; a claimed one's claim ends |
 
 A task reads like the thread it is: `GET /messages/:id`. Errors: 404
-`not_a_task` for a thread that isn't one; 403 `task_not_owned`; 409
-`task_claimed`, `task_waiting`, `task_blocked`, `task_finished`, and
+`not_a_task` for a thread that isn't one; 403 `forbidden` (a claim without `label`) and `task_not_owned`; 409
+`task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished`, and
 `claim_lost`; 400 `invalid_needs` and `reserved_label`; 501 `no_tasks` on a
 board that keeps none.
 
@@ -3412,7 +3432,7 @@ board that keeps none.
   renderer reads no labels, so by default a platform shows the thread, not its
   state.
 - **In, platform replies and reactions land as replies and reactions.** A
-  platform actor never owns a task, so it can't claim, settle, or unblock one.
+  platform actor makes no task calls, so it never claims, settles, or unblocks one.
   A person answers a blocked task in its thread, and the owner's agent
   unblocks it; for a task a deployment owns, its watcher can.
 - **GitHub never hears of tasks.** Sync only imports from GitHub (`into`), so
@@ -3432,7 +3452,7 @@ board that keeps none.
 - **`vercel()`** maps the routes onto Vercel's API, which kept tasks before
   board did. Its engine already does what this section asks: claims with an
   epoch and a token, leases it times, prerequisites checked in the claim's own
-  write, owner-only work, holds, and reopening. What ties a task to its thread
+  write, holds, and reopening. What ties a task to its thread
   doesn't yet, and the conformance kit fails those checks until it does. What
   the API would change, keeping its own task records:
   - **Create a task and its root in one write,** the root's text being the
@@ -3448,6 +3468,11 @@ board that keeps none.
     across channels, where today it lists one channel's at a time.
   - **Tie the root to its task:** deleting the root cancels the task, the
     task's text is the root's, and an edit by anyone but its owner holds it.
+  - **Check `label` for a claim:** a claim needs `label` in the task's
+    channel, whoever owns the task, and the owner or `manage` there does the
+    rest. Today only the owner claims.
+  - **Assign to a profile:** keep a task to one of its owner's actors, which
+    its `session` does today for a string the client picks.
   - **Leave a task's thread where it is.** The API moves it along when a task
     moves to another channel, and a board thread never changes channel.
 
@@ -3464,7 +3489,14 @@ board that keeps none.
   claimant's `complete` is `claim_lost`.
 - A task waits for its `--needs` tasks to complete, and a failed or canceled
   one never readies it.
-- Another principal's claim, cancel, or block is `task_not_owned`.
+- Another principal with `label` in the channel claims and completes a task;
+  without it, the claim is `forbidden`.
+- Another principal's cancel, hold, or assign is `task_not_owned`, and with
+  `manage` in the channel it lands.
+- `claim --ready` takes another principal's task only when `--from` names
+  its owner.
+- A task assigned to a profile is claimed only as that actor
+  (`task_assigned`), even after its lease runs out.
 - Anyone but the owner editing a task's root blocks it (kind `edited`), and
   the claimant's next write is `claim_lost`.
 - A client write under `board.` (a label write, or a post's labels) is
@@ -3478,7 +3510,8 @@ board that keeps none.
 ### Not in this version
 
 - Handing a task to another owner (offer and accept).
-- Sessions: a task kept to one agent session, and adopting a stalled one's.
+- Assigning a task to another principal's profile (`--for ada/fixer`): it
+  names an actor by handle, which needs handles the board verifies.
 - Moving a task to another channel: a thread's channel never changes.
 - Creating several tasks in one write: `--needs` and idempotency keys converge
   on retry.
@@ -3487,6 +3520,11 @@ board that keeps none.
 ### Open
 
 - Whether the default renderer shows a task's state on its platform copies.
+- Whether claiming an unassigned task assigns it to the claimant, so a quiet
+  agent's task isn't taken by another's `claim --ready` once its lease runs
+  out. The cost: a crashed agent's task waits until its owner reassigns it.
+- `--from` matches owners by handle, which a person's CLI asserts on
+  `local()` today; it's as safe as handles are verified.
 - How late `board.task` may be on a backend that derives readiness: "a few
   seconds" needs a number the kit can check.
 - A review that sends work back: the work-queue reference's `review` state
@@ -3548,6 +3586,7 @@ board that keeps none.
 | Does the board link a person's Slack and GitHub accounts to them? | **No.** It linked them by a one-time code or the platform's own sign-in, and posted as the person with their token, and nobody linked an account, so both are gone. Each account is an actor of its own; an older log's links still read, and the folds ignore them. |
 | Is a task an entity of its own? | **No: a thread with a state** (see [Tasks](#tasks)). Its root is its text and its replies its log, so reads, `tail`, labels, watchers, sync, and the inspector need nothing new. The board writes its state as the `board.task` label and the root's `task` view. Vercel's API kept tasks apart from threads first; a thread makes them part of the conversation people already have. |
 | Where does the board keep state people filter on? | **In labels under `board.`,** which only the board writes. Every filter, the event feed's before-or-after rule, watchers, the tables, the inspector, and renderers already handle labels; a filter of its own (`--task`) would have to be taught to each. A namespace nobody else uses keeps existing labels untouched, and the key says who wrote it. |
+| Who may work a task? | **Anyone with `label` in its channel.** A task's state is its root's `board.task` label, so working it changes a thread's state, which `label` grants; `post` only says things, and broad `post` grants are common. Its owner, or `manage`, keeps the rest: assigning, holding, reopening, canceling. Agents take others' tasks only with `--from`, so a teammate's text steers no one by accident. |
 | Who decides how tasks behave? | **board.** It specs them and the conformance kit's `tasks` group checks them; Vercel's API conforms check by check, as it did for label `if`, reply `after`, and `revision`. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a deployment registers the tails of the watchers it deployed, and its own `https` URL or path, which the board wakes with no event and no credential (see [Watchers woken by their board](#watchers-woken-by-their-board)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
