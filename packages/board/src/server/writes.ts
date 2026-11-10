@@ -1,5 +1,5 @@
 import { derivedId } from '../client/ids.ts'
-import type { BoardEvent } from '../contract/events.ts'
+import { ALONG_MAX, type BoardEvent } from '../contract/events.ts'
 import type { Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { foldMessages, type ActorsState, type Channel, type Message, type MessagesState } from '../contract/folds.ts'
@@ -277,29 +277,15 @@ export async function landedFor(ctx: WriteContext, identity: Identity, landed: M
   if (access.readable(landed.channel)) return view(landed, actors, await readerFor(ctx, access, landed))
   // A post written by a caller that could read isn't its to replay, as `authorizeOwn` holds.
   if (!landed.blind) return null
-  // Its post, and what its own write made of it in the same append: the task it started as, and its claim.
-  const events = (await ctx.session.history({ gte: landed.id, lte: landed.id + STARTED.length })) as BoardEvent[]
+  // Its post, and what its own append made of it: the task it started as, which the post counts.
+  // Never what follows by its type or author: another caller of the same principal may have made
+  // the thread a task since, with what this one can't read.
+  const events = (await ctx.session.history({ gte: landed.id, lte: landed.id + ALONG_MAX })) as BoardEvent[]
+  const along = (events[0] as BoardEvent<'message.posted'>).payload.along ?? 0
   const folded: MessagesState = { byId: {}, replies: {} }
-  for (const [at, event] of events.entries()) {
-    if (at > 0 && !startedWith(event, landed.id, at, identity.author)) break
-    foldMessages(folded, event)
-  }
+  for (const event of events.slice(0, 1 + along)) foldMessages(folded, event)
   const posted = folded.byId[landed.id]!
   return { ...view(posted, actors, await readerFor(ctx, access, posted)), text: blindText(posted.text, identity.actor.id) }
-}
-
-/** What a root's own append can carry after its post, in order: what made it a task. */
-const STARTED = ['task.created', 'task.ready', 'task.claimed'] as const
-
-/**
- * Whether `event`, `at` places after root `id`'s post, came with it: one of what starts a task,
- * about that root, by the same author. Anything else is a later write, and so is one that follows it.
- */
-function startedWith(event: BoardEvent, id: number, at: number, author: Author): boolean {
-  // `task.created` right after the post, then `task.ready` and `task.claimed` where the write made them.
-  if (at === 1 ? event.type !== STARTED[0] : !(STARTED as readonly string[]).slice(1).includes(event.type)) return false
-  const payload = event.payload as { id?: number; by?: Author }
-  return payload.id === id && (payload.by === undefined || sameAuthor(payload.by, author))
 }
 
 /**
@@ -371,7 +357,10 @@ async function commitPost(
       const before = events.findIndex((event) => event.type === 'message.posted')
       rows = await appendFrom(ctx, async () => {
         const { position, events: more } = await along()
-        return { position, events: [...events, ...more({ id: position + 1 + before, thread })] }
+        const came = more({ id: position + 1 + before, thread })
+        // The post says how many came with it, so a replay tells its own append from what was written since.
+        const batch = events.map((event) => (event.type === 'message.posted' ? { ...event, payload: { ...event.payload, along: came.length } } : event)) as Events
+        return { position, events: [...batch, ...came] }
       })
     } else rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendWhile(ctx, nothingAfter(ctx, re, input.after), events)
   } catch (error) {

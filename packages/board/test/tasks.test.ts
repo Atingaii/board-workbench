@@ -155,6 +155,18 @@ describe('a task', () => {
     const refiled = await workflow('POST', '/tasks', { channel: 'intake', text: 'triage the outage', id: 'outage-1' })
     expect(refiled.body.task).toMatchObject({ id: filed.body.task.id, text: 'triage the outage', task: { state: 'ready', owner: CI, epoch: 0, claim: null } })
 
+    // A plain post stays one to its writer, whatever was made of it since: another workflow of the
+    // same repository, which reads and labels there, makes it a task as the very next event.
+    const triage = fresh(board.fetch, () => workflowToken({ workflow_ref: 'acme/web/.github/workflows/triage.yml@refs/heads/main' }))
+    await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: '.github/workflows/triage.yml' }], can: { intake: ['read', 'post', 'label'], work: ['read'] } })
+    const secret = await task(reader, 'rotate the leaked key')
+    const note = await workflow('POST', '/messages', { channel: 'intake', text: 'the deploy looks stuck', id: 'stuck-1' })
+    expect((await triage('POST', '/tasks', { re: note.body.message.id, needs: [secret.id], for: `${CI}+triager` })).body.task.task).toMatchObject({ owner: CI, needs: [secret.id] })
+    const renoted = await workflow('POST', '/messages', { channel: 'intake', text: 'the deploy looks stuck', id: 'stuck-1' })
+    expect(renoted.body.message).toMatchObject({ id: note.body.message.id, text: 'the deploy looks stuck' })
+    expect(renoted.body.message.task).toBeUndefined()
+    expect(renoted.body.message.labels).toEqual({})
+
     // An id a plain post took is that post's, not a task's.
     await ada('POST', '/messages', { channel: 'work', text: 'just a note', id: 'a-note' })
     expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'just a note', id: 'a-note' }))).toEqual([409, 'duplicate_id'])
@@ -603,6 +615,15 @@ describe('claiming the next ready task', () => {
     // An ID is the credential's, and so is a deployment's handle: both name their owners.
     expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, 'web'] })).body.task.id).toBe(hers.id)
     expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, 'web'] })).body.task.id).toBe(theirs.id)
+  })
+
+  it("takes an owner's tasks by their ID even when they only ever wrote through a profile", async () => {
+    const { bo, board } = setup()
+    const made = await task(person(board, 'ada', { 'x-board-profile': 'planner' }), 'plan the migration')
+    expect(made.task).toMatchObject({ owner: ADA })
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA] })).body.task.id).toBe(made.id)
+    // An ID the board has never seen is still an ID: it names no one's tasks yet, and isn't refused.
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['vercel:user:u_nobody'] })).body).toEqual({ task: null })
   })
 
   it("never takes a task from someone who only picked a trusted owner's handle", async () => {

@@ -47,6 +47,9 @@ const stateNow = (task: Task, at: number): TaskState => (lapsed(task, at) ? 'rea
 
 const finished = (task: Task) => task.state === 'completed' || task.state === 'failed' || task.state === 'canceled'
 
+/** Whether `value` is shaped like an ID, `<where it's from>:<who>`, as every principal's and actor's is. What it names is a credential's to say, never a client's. */
+const isId = (value: string) => /^[^\s:]+:\S+$/.test(value)
+
 /** The profile part of an actor ID, as the board writes one: lowercase. */
 const PROFILE = /^[a-z][a-z0-9-]{0,31}$/
 
@@ -311,12 +314,14 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
    * The owners a claim's `from` names: the principal with that ID, or whoever the board verified
    * under that handle. A task's text is instructions for whoever claims it, so whose it takes is
    * never a name its holder picked: a handle a client sent names no one, and neither does one the
-   * board hasn't seen, so the claim says so instead of waiting for tasks that can't come.
+   * board hasn't seen, so the claim says so instead of waiting for tasks that can't come. An ID
+   * names its principal whether or not the board has seen it write as itself: one that only ever
+   * wrote through a profile owns its tasks all the same.
    */
   async function ownersFrom(value: string): Promise<string[]> {
     const { state: actors } = await writes().session.state(actorsReducer)
     const verified = (own(actors.byHandle, value.toLowerCase()) ?? []).filter((id) => verifiedRecord(own(actors.byId, id) ?? {}))
-    if (verified.length > 0 || own(actors.byId, value)) return [value, ...verified]
+    if (verified.length > 0 || isId(value)) return [value, ...verified]
     throw badRequest(`from: this board hasn't verified anyone as ${value}, and a handle its holder picked names no owner: name them by ID`, 'invalid_from')
   }
 

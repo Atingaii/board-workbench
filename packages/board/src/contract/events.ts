@@ -32,6 +32,9 @@ const ThreadKey = z.string().min(1).max(200).refine(storable, 'thread key has a 
 
 /** The task an event changes: its root's ID, and the root's thread key, which lanes go by. */
 const Task = { id: MessageId, thread: ThreadKey }
+/** The most events a new thread's own append carries after its post: `task.created`, `task.ready`, and `task.claimed`. */
+export const ALONG_MAX = 3
+
 /** Which claim of a task this is: 1 for its first, one more for each after. A write that names an older one changes nothing. */
 const Epoch = z.number().int().positive()
 /** When a claim's lease runs out, as an ISO time. */
@@ -65,6 +68,12 @@ export const boardEvents = {
        * from before channel access have none: everyone read everything then.
        */
       blind: z.literal(true).optional(),
+      /**
+       * (server) How many events right after it, in its own append, are about it: what made a new
+       * thread a task. A writer that can't read its channel gets those back with its post on a
+       * retry, and nothing written since. A post that came alone has none.
+       */
+      along: z.number().int().positive().max(ALONG_MAX).optional(),
       /**
        * (server) The principal of the sync elsewhere that imported it, whose copy `origin` names:
        * that sync's to act on. None for the board's own sync, or a write on the board.

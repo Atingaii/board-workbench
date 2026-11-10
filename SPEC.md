@@ -1338,6 +1338,7 @@ export const boardContract = contract({
       schedule: z.object({ id, n }).optional(), // (server) the schedule that posted it, and which send
       blind: z.literal(true).optional(),     // (server) its author couldn't read the channel
       importedBy: ActorId.optional(),        // (server) the sync elsewhere that imported it, whose copy `origin` names
+      along: z.number().optional(),          // (server) how many events right after it, in its own append, made it a task: no view shows it
     }),
     // Every event below also carries `thread`, and each change from a platform its `from`.
     'channel.created':   z.object({ channel: ChannelPath, by: Author }),   // one made before anything posted to it; a post makes one with no event of its own

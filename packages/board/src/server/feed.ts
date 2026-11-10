@@ -340,7 +340,8 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
 function payloadView(payload: Record<string, unknown>, links: LinkView[] | undefined): Record<string, unknown> {
   // Only `task.claimed` carries a `token`: its hash is the board's to check claims against, and no reader's.
   // A post or an edit from before mentions were text alone carries the actor IDs they resolved to.
-  const { token: _token, mentions: _mentions, ...shown }: Record<string, unknown> = payload
+  // A post's `along` is the board's own count of what its append carried.
+  const { token: _token, mentions: _mentions, along: _along, ...shown }: Record<string, unknown> = payload
   for (const key of ['id', 're', 'replyTo'] as const) if (typeof shown[key] === 'number') shown[key] = ref(shown[key])
   if (Array.isArray(shown.needs)) shown.needs = (shown.needs as number[]).map(ref)
   const schedule = shown.schedule as { id: number; n: number } | undefined
