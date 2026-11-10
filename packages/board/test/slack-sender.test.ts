@@ -222,6 +222,20 @@ describe('what board copies to Slack', () => {
     expect(posted).toEqual([])
   })
 
+  it("keep a deployment's environment whole when its project's name is cut to fit", async () => {
+    const { team, posted } = mirrored(['chat:write', 'chat:write.customize'], false)
+    const project = `www-${'x'.repeat(86)}`
+    for (const environment of ['preview', 'production']) {
+      const deployment = caller(team.fetch, await deploymentToken(project, 'prj_www', environment))
+      expect((await deployment('POST', '/messages', { channel: 'firehose', text: environment })).status).toBe(201)
+    }
+    await vi.waitFor(() => expect(posted).toHaveLength(2))
+    const [preview, production] = posted.map(({ username }) => username as string)
+    expect(preview).toMatch(/^www-x+…@preview$/)
+    expect(production).toMatch(/^www-x+…$/)
+    for (const username of [preview!, production!]) expect(Array.from(username).length).toBeLessThanOrEqual(80)
+  })
+
   it("go out under an agent's name through the project whose OIDC token wrote it, as the factory's agents post", async () => {
     const { team, s, posted } = mirrored(['chat:write', 'chat:write.customize'], false)
     // The factory's own deployments, as a grant on the project lets them in.

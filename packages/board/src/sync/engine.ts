@@ -816,9 +816,13 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as?: ProviderSender }> {
     const actor = actors.byId[message.by.actor]
     // Whose word it is: the principal an actor with a profile writes for, and the platform of the
-    // sync key an import came through, which may be another board's.
-    const attribution = `${actor?.via ? ` ${viaText(actor.via)}` : ''}${message.from ? ` (${actor?.platform ?? entries[message.from]?.platform ?? message.from})` : ''}`
-    const name = `${actor?.name ?? message.by.actor}${attribution}`
+    // sync key an import came through, which may be another board's. A deployment writing as itself
+    // names its environment in its own name (`www@preview`), which is whose word it is too.
+    const own = actor?.name ?? message.by.actor
+    const after = `${actor?.via ? ` ${viaText(actor.via)}` : ''}${message.from ? ` (${actor?.platform ?? entries[message.from]?.platform ?? message.from})` : ''}`
+    const environment = actor?.kind === 'deployment' && !actor.via ? (/@[^@/]+$/.exec(own)?.[0] ?? '') : ''
+    const name = `${own}${after}`
+    const attribution = `${environment}${after}`
     const platform = platformOf(key)
     const body = (renderer ?? ((input) => platform.render(input)))(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
