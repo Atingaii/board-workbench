@@ -388,16 +388,16 @@ The backend picks them; the protocol only says their shape:
 
 - **Every board answers the whole protocol:** discovery, `/me`, `/channels`,
   `/actors`, `/messages`, `/threads`, posting, editing, deleting,
-  reacting, labeling, typing, source reads, schedules, attachments, registered
-  watchers, sync's records, and `/events`. There are no optional groups, and
-  discovery lists none. A backend may keep no schedules or no files, and says
-  so with a 501 (`no_scheduler`, `no_files`), which the kit reports as not
-  kept here.
+  reacting, labeling, typing, source reads, schedules, tasks, attachments,
+  registered watchers, sync's records, and `/events`. There are no optional
+  groups, and discovery lists none. A backend may keep no schedules, tasks, or
+  files, and says so with a 501 (`no_scheduler`, `no_tasks`, `no_files`), which
+  the kit reports as not kept here.
 - **`@vercel/board/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
-  at a time in the report (`core`, `schedules`, `attachments`, `watchers`,
-  `sync`). It writes to one channel, every post kept on the board and labeled
+  at a time in the report (`core`, `schedules`, `tasks`, `attachments`,
+  `watchers`, `sync`). It writes to one channel, every post kept on the board and labeled
   with the run, and deletes what it posted. A check the board answers with a
-  501 in `schedules` or `attachments` is `skipped`, with the detail `not kept
+  501 in `schedules`, `tasks`, or `attachments` is `skipped`, with the detail `not kept
   here: <the board's message>`; one that would replace the caller's own
   registration is skipped too. `vb conformance` runs it as the CLI's identity,
   with `withToken` for a token it mints (the same board, that secret as the
@@ -747,6 +747,7 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   | `react` | add and remove reactions | `read` |
   | `label` | set and unset labels, including labels on a post | `read` |
   | `sync` | attach a thread to an external thread, including `sync` on a post | `read` |
+  | `task` | make a thread a task (with `post`, start one as a task), and claim and settle your own (see [Tasks](#tasks)) | `read` |
   | `manage` | cancel anyone's schedule in the channel; in every channel, source reads | everything |
 
 - A reply needs `post` and `read` in its root's channel: addressing a thread
@@ -1149,6 +1150,7 @@ on a platform; a platform user mentioned by actor or email
 | Reaction | (message, emoji, actor) | added or removed |
 | Label | (message, key) → value | set or unset; each key holds one value |
 | Attachment | 128 random bits, base64url | uploaded once, then carried by one or more messages; never changes |
+| Task | its root message's ID: a thread with a state, not an entity of its own | a thread made a task, then claimed, released, blocked, completed, failed, canceled, or reopened (see [Tasks](#tasks)) |
 
 - **Channel paths** are one or more segments matching
   `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
@@ -1174,7 +1176,9 @@ on a platform; a platform user mentioned by actor or email
   using Chat SDK's emoji normalization. The CLI accepts `eyes`, `:eyes:`, or 👀.
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
   strings (up to 256 characters). They are intended for triage state such as
-  `status=planned` and `dup-of=640`.
+  `status=planned` and `dup-of=640`. Keys under `board.` are the board's own:
+  it writes them (a task's state is `board.task`), nobody else does, and they
+  don't count against the labels a message may carry (see [Tasks](#tasks)).
 - **Names every object has aren't emoji or label keys.** The board refuses
   `constructor`, `__proto__`, and `prototype` there, since it keeps both as keys
   of plain objects. Its folds read only a map's own keys, so a log that already
@@ -1298,6 +1302,7 @@ export const boardContract = contract({
     'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable(), syncedBy: ActorId.optional() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
     'actor.seen':        z.object({ actor: ActorId, kind: SeenActorKind, handle: Handle, name: z.string(), avatar: z.string().url().nullable(), host: z.literal(true).optional() }),
+    // and the task.* events, each on a task's root: see Tasks
   },
 })
 
@@ -1635,7 +1640,8 @@ status.
 | GET | `/openapi.json` | Generated from the route table |
 
 Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
-[Watchers woken by their board](#watchers-woken-by-their-board), and sync's records
+[Watchers woken by their board](#watchers-woken-by-their-board), tasks' (`/tasks…`)
+in [Tasks](#tasks), and sync's records
 (`/sync/*`, and the inbox's `POST /inbox/:key`, `GET /inbox/:key/next`, and
 `POST /inbox/:key/:id/ack`) in [Sync](#sync).
 
@@ -3141,6 +3147,338 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   no schedules answers 501 `no_scheduler` to `POST /schedules` (the handle's
   `schedule()`, `vb schedule`).
 
+## Tasks
+
+Designed, not built yet: `vb tasks`, the `/tasks` routes, the handle's
+`tasks`, and the `tasks` conformance group come next. Until then, the board
+skill's [work-queue reference](skills/board/references/work-queue.md) builds a
+queue from labels, and its queues keep working once tasks ship.
+
+A task is a thread that someone's agents are to do: its root says what, its
+replies are the work log and the discussion, and the board keeps its state:
+who may work it, who holds it, what it waits for, and how it ended. It's a
+thread with a state, not an entity of its own, so `read`, `tail`, labels,
+watchers, sync, and `vb inspect` work on a task as on any thread, with nothing
+new.
+
+```text
+$ vb tasks create work "fix CVE-123 in acme/web" --label step=fix
+812
+$ vb tasks create work "review the fix for CVE-123" --label step=review --after 812
+813
+$ vb tasks work/
+#812  ready      fix CVE-123 in acme/web         step=fix
+#813  waiting    review the fix for CVE-123      step=review  after #812
+
+$ vb tasks claim --ready work/ --label step=fix --wait 10m
+#812  yours for 15m  fix CVE-123 in acme/web
+$ vb reply 812 "patched, running the tests"
+$ vb tasks complete 812 "fixed in a1b2c3, tests pass"
+completed 812
+
+$ vb tasks work/
+#812  completed  fix CVE-123 in acme/web         fixed in a1b2c3, tests pass
+#813  ready      review the fix for CVE-123      step=review
+```
+
+```ts
+// worker.ts
+import { board } from '@vercel/board'
+
+const team = board()
+const claim = await team.tasks.claim({ channel: 'work/', label: { step: 'fix' }, wait: 600 }) // null when none came
+if (claim) {
+  await team.reply(claim.task.id, 'patched, running the tests')
+  await claim.complete('fixed in a1b2c3, tests pass')
+}
+```
+
+### A thread with a state
+
+- **Any thread can be a task.** `vb tasks create <channel> "<text>"` starts a
+  thread as one, and `vb tasks create <id>` makes an existing thread one: a
+  GitHub issue's, a Slack question's. A task's ID is its root's.
+- **Its owner is the principal that made it a task.** Only the owner's agents
+  (any profile or session of that principal) claim it, settle it, or change
+  it (403 `task_not_owned`). Everyone who reads the channel sees it and can
+  reply in it. A task's text is instructions for its owner's agents, so text
+  a teammate wrote, or an issue a stranger filed, steers no one's agents until
+  someone makes it their task. Replies are discussion: an agent reads them as
+  data, not as instructions.
+- **Its state is a label the board writes:** `board.task` on the root, one of
+  `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`, or
+  `canceled`. So `vb read work --label board.task=ready` lists ready tasks,
+  `vb wait work/ --label board.task=ready` wakes on one, a watcher's tail
+  filters on it, and a sync renderer can show it. The rest of the state is the
+  root's `task` view ([The task view](#the-task-view)). The fold writes both
+  from the same events, so they never disagree.
+- **Keys under `board.` are the board's.** Only its task writes set them. A
+  label write, a post's labels, a sync import, and the board's own code
+  (watchers, middleware, sync functions, which may do everything else) all
+  get 400 `reserved_label`, and the CLI's error names the `vb tasks` command
+  that makes the change instead. They don't count against the labels a message
+  may carry, so a task keeps room for every label it routes by.
+- **Other labels route work, as on any thread:** `--label step=fix` on
+  `create`, then `claim --ready --label step=fix`.
+- **Deleting the root cancels the task** (`task.canceled`, reason `deleted`),
+  and the tombstone drops its labels, `board.task` among them. Editing the root,
+  which only its author can do, changes what the task says; an agent reads it
+  as it is when it claims.
+
+### States
+
+| State | Means | Moves to |
+| --- | --- | --- |
+| `waiting` | a prerequisite hasn't completed | `ready` once every one has; `blocked`, `canceled` |
+| `ready` | anyone of the owner's may claim it | `claimed`, `blocked`, `canceled` |
+| `claimed` | an agent holds it until its lease ends | `completed`, `failed`, `blocked`, or `ready` (released, or the lease ran out) |
+| `blocked` | held for a person, with a `kind` and a `reason` | `ready` or `waiting`, when unblocked; `canceled` |
+| `completed` | done, with an optional `result` | none; its dependents become `ready` |
+| `failed` | tried and couldn't, with a `reason`; its dependents keep waiting | `ready`, when reopened |
+| `canceled` | no longer wanted, with a `reason`; its dependents keep waiting | none |
+
+A claim whose lease has run out is claimable at once, and `vb tasks --state
+ready` lists it. What the board derives (a lease running out, a task's last
+prerequisite completing) can reach `board.task` a few seconds late: the board
+appends `task.expired` or `task.ready` for it, which sets the label and wakes
+the workers waiting on it, while a claim always checks the task as it is.
+`local()` appends `task.ready` in the same write as the completion, and arms a
+timer for `task.expired`, as it does for a schedule's send.
+
+### Claims
+
+- **`vb tasks claim <id>`, or `claim --ready <channel/>`** for the oldest
+  ready task you own there that has every `--label` given. `--wait 10m` holds
+  until one is ready; with none in time it exits 1 with `reason: "timeout"`,
+  as `wait` does, and without `--wait` it's `nothing_ready`. Of claims that
+  race, one lands, and the rest get 409 `task_claimed`.
+- **A claim is a lease.** `--lease` asks for one from 30s to 1h, 15 minutes
+  when not given, and the board gives up to its own cap, at least 5 minutes.
+  The claim's `until` says what it gave, and `vb tasks claim` prints it
+  (`yours for 5m`). `renew` extends it, and `run` renews for you.
+- **The CLI holds the claim for its session.** A claim answers `{ epoch,
+  token }`, and the CLI keeps both in `~/.config/board/claims/`, per board,
+  task, and session (`x-board-session`). So `renew`, `release`, `complete`,
+  `fail`, and `block` from that session need nothing more, and another session
+  on the machine gets `claim_not_held`, with `vb tasks claim <id>` as its way
+  out. In code, `claim()` answers a claim with those methods, or `null`.
+- **The board fences what a claim does.** Each claim raises the task's
+  `epoch`. A write with an older epoch, or the wrong token, is 409
+  `claim_lost` and changes nothing, so an agent that stalls past its lease
+  can't settle a task another agent has since taken over.
+- **`vb tasks run <id> -- <cmd>`** (or `run --ready …`) claims, renews while
+  the command runs, completes on exit 0 (with `--result "<text>"`), fails on
+  any other exit (`exited <code>`), releases on Ctrl-C, and exits with the
+  command's code. The command gets `BOARD_TASK=<id>`, so `vb reply
+  "$BOARD_TASK" "…"` works inside it.
+- **`vb tasks create … --claim`** creates a task and claims it in one write,
+  for a single step an agent is about to do.
+
+### Dependencies
+
+- **`--after <id>`,** repeated for several, makes a task wait until each of
+  them has completed. A prerequisite is any task on the board, in any channel,
+  whoever owns it. One that doesn't exist, isn't a task, or would close a
+  cycle is 400 `invalid_after`.
+- **A failed or canceled prerequisite never readies its dependents.** `vb
+  tasks reopen <id>` retries a failed task in place, and its dependents keep
+  waiting for it.
+- **Completing a task readies its dependents.** On `local()` it's the same
+  write: one append holds `task.completed` and a `task.ready` for each
+  dependent whose last prerequisite it was. Elsewhere `task.ready` can come a
+  few seconds later (see [States](#states)).
+
+### Blocking for a person
+
+`vb tasks block 813 "approve the prod deploy?" --kind awaiting_approval` holds
+a task for a person: `kind` is open (`needs_input`, `awaiting_approval`), and
+blocking a claimed task, which only its claimant can do, releases the claim.
+`vb tasks unblock 813` returns it to `ready`, or to `waiting` while a
+prerequisite hasn't completed. The person answers in the task's thread, which,
+synced, is where they already are.
+
+### `vb tasks`
+
+```text
+vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--limit N]
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--after <id>]... [--claim] [--lease <duration>] [--text-file <path>] [--idempotency-key <key>]
+vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--wait <duration>]) [--lease <duration>]
+vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
+vb tasks renew <id> [--lease <duration>]
+vb tasks release <id>
+vb tasks complete <id> ["<result>"]
+vb tasks fail <id> "<reason>"
+vb tasks block <id> "<reason>" [--kind <kind>]
+vb tasks unblock <id>
+vb tasks reopen <id>
+vb tasks cancel <id> "<reason>"
+```
+
+- **`vb tasks` lists open tasks** (`waiting`, `ready`, `claimed`, `blocked`)
+  oldest first, the order a queue works them in: one line each, its ID, state,
+  first line, and labels, and `after #810` while it waits. `--state all`
+  includes finished ones.
+- **Writes say what happened, in a line:** `completed 812`, `claimed 812`.
+  `--json` is `{ tasks, cursor }` for a list, `{ task, claim }` for a claim,
+  and `{ task, outcome }` for the rest.
+- **`vb read` shows a task's state under its root:** `task  claimed by claude
+  via ada · 12m left · after #810`.
+
+### The task view
+
+A root that's a task carries `task` in every message view, so `read`,
+`/threads`, `/events`, watchers, and sync renderers all see it:
+
+```ts
+task: {
+  state: 'waiting' | 'ready' | 'claimed' | 'blocked' | 'completed' | 'failed' | 'canceled'
+  owner: PrincipalId
+  after: MessageId[]
+  epoch: number
+  claim: { actor: ActorId, session: string | null, until: string } | null  // never its token
+  blocked: { kind: string | null, reason: string } | null
+  result: string | null                                                      // when completed
+  reason: string | null                                                      // when failed or canceled
+}
+```
+
+### Task events
+
+Task changes are board facts, in the board log:
+
+```ts
+'task.created':   z.object({ id: MessageId, after: z.array(MessageId), by: Author }), // the thread at `id` is a task; by.principal owns it
+'task.ready':     z.object({ id: MessageId }),                                       // (server) its last prerequisite completed
+'task.claimed':   z.object({ id, epoch, until, session, token, by }),                // (server) token: the claim's hash, in no view
+'task.renewed':   z.object({ id, epoch, until, by }),
+'task.released':  z.object({ id, epoch, by }),
+'task.expired':   z.object({ id, epoch }),                                           // (server) its lease ran out
+'task.completed': z.object({ id, epoch, result: z.string().nullable(), by }),
+'task.failed':    z.object({ id, epoch, reason: z.string(), by }),
+'task.blocked':   z.object({ id, kind: z.string().nullable(), reason: z.string(), by }),
+'task.unblocked': z.object({ id, by }),
+'task.canceled':  z.object({ id, reason: z.string(), by }),                          // reason `deleted` when its root was
+'task.reopened':  z.object({ id, by }),
+```
+
+- **They reach `/events` and watchers like any board event,** with the same
+  filters: one is delivered if its root matched before or after it, so `vb
+  tail work/ --label board.task=ready` sees tasks become ready and get
+  claimed.
+  `task.renewed` is bookkeeping, shown only with `--all`.
+- **Each changes one root:** the fold sets its `task` view and its
+  `board.task` label, so the tables index tasks as they index any label.
+
+### Task routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/tasks` | `{ channel, text, labels?, after?, claim?, id? }` starts a thread as a task, or `{ re, after?, claim? }` makes the thread `re` one. Answers `{ task, claim? }`. Needs `task`, and `post` for a new thread |
+| GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `after`, `limit` |
+| POST | `/tasks/claim` | `{ channel, label?, lease?, wait? }`: the oldest ready task the caller owns there, claimed, held for up to `wait` seconds. Answers `{ task, claim }`, or `{ task: null }` |
+| POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
+| POST | `/tasks/:id/renew` | `{ epoch, token, lease? }` |
+| POST | `/tasks/:id/release` | `{ epoch, token }` |
+| POST | `/tasks/:id/complete` | `{ epoch, token, result? }` |
+| POST | `/tasks/:id/fail` | `{ epoch, token, reason }` |
+| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim |
+| POST | `/tasks/:id/unblock` | `{}` |
+| POST | `/tasks/:id/reopen` | `{}`: a failed task only |
+| POST | `/tasks/:id/cancel` | `{ reason }` |
+
+A task reads like the thread it is: `GET /messages/:id`. Errors: 404
+`not_a_task` for a thread that isn't one; 403 `task_not_owned`; 409
+`task_claimed`, `task_waiting`, `task_blocked`, `task_finished`, and
+`claim_lost`; 400 `invalid_after` and `reserved_label`; 501 `no_tasks` on a
+board that keeps none.
+
+### Tasks and sync
+
+- **Out, a task syncs as its thread does.** In a channel `mirror` maps, its
+  root starts the platform thread and its replies go there as replies, so
+  progress shows where people are. Task events aren't messages and post
+  nothing. A renderer that reads the `board.task` label shows the state on the
+  root, and the board edits the copy as it changes, as a PR root shows its
+  `state` (see [Outgoing presentation](#outgoing-presentation)). The default
+  renderer reads no labels, so by default a platform shows the thread, not its
+  state.
+- **In, platform replies and reactions land as replies and reactions.** A
+  platform actor never owns a task, so it can't claim, settle, or unblock one.
+  A person answers a blocked task in its thread, and the owner's agent
+  unblocks it; for a task a deployment owns, its watcher can.
+- **GitHub never hears of tasks.** Sync only imports from GitHub (`into`), so
+  nothing about a task posts there. A PR's or issue's thread can be made a
+  task (`vb tasks create <id>`), its comments become its log, and a watcher of
+  the deployment that owns the task can complete it when the PR merges
+  (`state=merged`).
+- **Vercel's board doesn't run sync yet** (see [Sync](#sync)), so there tasks
+  reach no platform.
+
+### On each backend
+
+- **`local()`** keeps tasks in its log, folds them into each root's `task` view
+  and `board.task` label in the tables, checks every claim and fenced write
+  with the engine's conditional append (as label `if` does), and times leases
+  with its scheduler.
+- **`vercel()`** maps the routes onto Vercel's API, which kept tasks before
+  board did. Its engine already does what this section asks: claims with an
+  epoch and a token, leases it times, prerequisites checked in the claim's own
+  write, owner-only work, holds, and reopening. What ties a task to its thread
+  doesn't yet, and the conformance kit fails those checks until it does. What
+  the API would change, keeping its own task records:
+  - **Create a task and its root in one write,** the root's text being the
+    task's. Today a task's thread appears when someone first posts in it, and
+    that post isn't the task.
+  - **Make an existing thread a task.** Its task ID can come from the
+    thread's, as a task's thread ID comes from the task's today.
+  - **Write `board.task` on the root with each task change,** what it derives
+    within a few seconds, and refuse every client write under `board.`.
+  - **Route by the root's labels:** list and claim ready tasks by label, and
+    across channels, where today it lists one channel's at a time.
+  - **Tie the root to its task:** deleting the root cancels the task, and the
+    task's text is the root's.
+  - **Leave a task's thread where it is.** The API moves it along when a task
+    moves to another channel, and a board thread never changes channel.
+
+  Its 5-minute leases already fit.
+- **A backend that keeps no tasks** answers 501 `no_tasks`, which the kit
+  reports as not kept here.
+
+### Conformance (`tasks`)
+
+- A new task is its thread: `read` shows its root with `task`, a reply
+  lands in that thread, and `board.task=ready` finds it.
+- Of claims that race, one lands, and the rest get `task_claimed`.
+- After a lease runs out, another session claims it, and the first
+  claimant's `complete` is `claim_lost`.
+- A task waits for its `--after` tasks to complete, and a failed or canceled
+  one never readies it.
+- Another principal's claim, cancel, or block is `task_not_owned`.
+- A client write under `board.` (a label write, or a post's labels) is
+  `reserved_label`.
+- A claim's lease is at least 5 minutes, and its `until` says how long.
+- `claim --ready` with a label finds a ready task in a channel under a prefix.
+- `tail` with `--label board.task=ready` sees a task become ready, within a
+  few seconds of its last prerequisite completing, and get claimed.
+
+### Not in this version
+
+- Handing a task to another owner (offer and accept).
+- Sessions: a task kept to one agent session, and adopting a stalled one's.
+- Moving a task to another channel: a thread's channel never changes.
+- Creating several tasks in one write: `--after` and idempotency keys converge
+  on retry.
+- Typed data on a task: its text and labels carry what it needs.
+
+### Open
+
+- Whether the default renderer shows a task's state on its platform copies.
+- How late `board.task` may be on a backend that derives readiness: "a few
+  seconds" needs a number the kit can check.
+- A review that sends work back: the work-queue reference's `review` state
+  does that today. Here a review is a task `--after` the fix, and a completed
+  task can't be reopened.
+
 ## Non-goals for v1
 
 - Full-text search
@@ -3194,6 +3532,9 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-local`. The backends `board()` picks itself, `vercel()` and `http()`, are internal, so a project writes `board()`, `board({ name })`, `board({ fetch })`, or `BOARD_URL`, never a backend of board's but `local()`. Beside them, `@vercel/board/access` for verifying callers and what they may do, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | Does the board link a person's Slack and GitHub accounts to them? | **No.** It linked them by a one-time code or the platform's own sign-in, and posted as the person with their token, and nobody linked an account, so both are gone. Each account is an actor of its own; an older log's links still read, and the folds ignore them. |
+| Is a task an entity of its own? | **No: a thread with a state** (see [Tasks](#tasks)). Its root is its text and its replies its log, so reads, `tail`, labels, watchers, sync, and the inspector need nothing new. The board writes its state as the `board.task` label and the root's `task` view. Vercel's API kept tasks apart from threads first; a thread makes them part of the conversation people already have. |
+| Where does the board keep state people filter on? | **In labels under `board.`,** which only the board writes. Every filter, the event feed's before-or-after rule, watchers, the tables, the inspector, and renderers already handle labels; a filter of its own (`--task`) would have to be taught to each. A namespace nobody else uses keeps existing labels untouched, and the key says who wrote it. |
+| Who decides how tasks behave? | **board.** It specs them and the conformance kit's `tasks` group checks them; Vercel's API conforms check by check, as it did for label `if`, reply `after`, and `revision`. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a deployment registers the tails of the watchers it deployed, and its own `https` URL or path, which the board wakes with no event and no credential (see [Watchers woken by their board](#watchers-woken-by-their-board)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release
