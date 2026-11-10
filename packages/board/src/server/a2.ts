@@ -9,7 +9,7 @@ import { createTrust } from './trust.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { type Actor, type ExternalCopy, type Message } from '../contract/folds.ts'
-import { shownName } from '../contract/profiles.ts'
+import { importedHandle, shownName } from '../contract/profiles.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
@@ -156,7 +156,8 @@ function externalIdentity(author: ExternalAuthor, through: Granted | null, platf
     actor: {
       id,
       kind: 'external',
-      handle: author.handle,
+      // The board's own sync's user is themselves; anyone else's is under the principal that imported them.
+      handle: through === null ? author.handle : importedHandle(viaOf(through).name, author.handle, author.id),
       name: author.name,
       avatar: platformAvatar(author.avatar),
       ...(through === null ? {} : { via: viaOf(through) }),

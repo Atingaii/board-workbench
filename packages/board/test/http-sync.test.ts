@@ -399,8 +399,8 @@ describe('who an import is by', () => {
     expect([continues(one, two!), continues(two, three!)]).toEqual([true, false])
     const actors = (await (await vbOn(team))(['actors'])).stdout.split('\n').filter((line) => line.includes('U_MALTE'))
     expect(actors.sort()).toEqual([
-      '@malte  Malte via support (preview)  vercel:project:prj_support:preview+slack-eu:user:U_MALTE',
-      '@malte  Malte via web  vercel:project:prj_web:production+slack-eu:user:U_MALTE',
+      '@support/malte  Malte via support (preview)  vercel:project:prj_support:preview+slack-eu:user:U_MALTE',
+      '@web/malte  Malte via web  vercel:project:prj_web:production+slack-eu:user:U_MALTE',
     ])
   })
 
@@ -499,6 +499,49 @@ describe('platform users, named by sync key', () => {
   })
 })
 
+describe("an imported platform user's handle", () => {
+  it("is under its importer's project name, in every environment, and typable: two projects' Maltes are support/malte and www/malte", async () => {
+    const s = fakePlatform('slack')
+    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
+    const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
+    const www = caller(team.fetch, await deploymentToken('www', 'prj_www', 'production'))
+    const imported = async (as: typeof support, author: object, text: string) => {
+      expect((await as('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
+      expect((await as('POST', '/sync/imports', { op: 'post', author, from: 'slack-eu', channel: 'support', text })).status).toBe(200)
+    }
+    const malte = { id: 'slack-eu:user:U_MALTE', handle: 'Malte Ubl', name: 'Malte Ubl', avatar: null, isBot: false }
+    await imported(support, malte, 'one')
+    await imported(www, malte, 'two')
+    await imported(www, { ...malte, id: 'slack-eu:user:U_SHRUG', handle: '¯\\_(ツ)_/¯', name: 'Shrug' }, 'three')
+    // The board's own sync's user is themselves, as Slack names them.
+    await team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hi', user: 'U_ADA', name: 'Ada' }) }))
+    const julian = await julianOn(team.fetch)
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const actors = (await (await vbOn(team))(['actors'])).stdout.split('\n').filter((line) => line.includes('slack'))
+    expect(actors.sort()).toEqual([
+      '@Ada  Ada  slack:user:U_ADA',
+      '@support/malte-ubl  Malte Ubl via support (preview)  vercel:project:prj_support:preview+slack-eu:user:U_MALTE',
+      '@www/malte-ubl  Malte Ubl via www  vercel:project:prj_www:production+slack-eu:user:U_MALTE',
+      '@www/u_shrug  Shrug via www  vercel:project:prj_www:production+slack-eu:user:U_SHRUG',
+    ])
+  })
+
+  it("is what mention filters find, and a project's name covers everyone it imported", async () => {
+    const team = testBoard()
+    const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'production'))
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
+    const malte = { id: 'slack-eu:user:U_MALTE', handle: 'malte', name: 'Malte', avatar: null, isBot: false }
+    expect((await support('POST', '/sync/imports', { op: 'post', author: malte, from: 'slack-eu', channel: 'support', text: 'hi' })).status).toBe(200)
+    expect((await support('POST', '/messages', { channel: 'support', text: 'deployed' })).status).toBe(201)
+    const julian = await julianOn(team.fetch)
+    for (const text of ['@support/malte can you look?', 'cc @[vercel:project:prj_support:production+slack-eu:user:U_MALTE]', 'thanks @support', '@malte alone', '@supported'])
+      await julian('POST', '/messages', { channel: 'dev', text })
+    const texts = async (mentions: string) => ((await julian('GET', `/messages?channel=dev&mentions=${encodeURIComponent(mentions)}`)).body.messages as Read[]).map((m) => m.text)
+    expect(await texts('support/malte')).toEqual(['@support/malte can you look?', 'cc @[vercel:project:prj_support:production+slack-eu:user:U_MALTE]'])
+    expect(await texts('support')).toEqual(['@support/malte can you look?', 'cc @[vercel:project:prj_support:production+slack-eu:user:U_MALTE]', 'thanks @support'])
+  })
+})
+
 describe('mentions, as sync posts them', () => {
   const webhook = (team: ReturnType<typeof testBoard>, body: object) =>
     team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', ...body }) }))
@@ -587,8 +630,8 @@ describe("platform users' records", () => {
       author: { name: 'The CEO', via: { name: 'support', environment: 'production' } },
     })
     expect((await imported(support, { ...renamed, name: 'The New CEO' }, 'support/inbox')).status).toBe(200)
-    expect(await record(`${SUPPORT}+${eve.id}`)).toMatchObject({ handle: 'ceo', name: 'The New CEO' })
-    expect(await record(`vercel:project:prj_all:production+${eve.id}`)).toMatchObject({ handle: 'eve', name: 'Eve', avatar: 'https://avatars.test/eve.png' })
+    expect(await record(`${SUPPORT}+${eve.id}`)).toMatchObject({ handle: 'support/ceo', name: 'The New CEO' })
+    expect(await record(`vercel:project:prj_all:production+${eve.id}`)).toMatchObject({ handle: 'all/eve', name: 'Eve', avatar: 'https://avatars.test/eve.png' })
     expect(await record('slack:user:U_EVE')).toMatchObject({ handle: 'Eve', name: 'Eve' })
 
     // An avatar that isn't https never shows: it's dropped, and the one the board knows stays.
