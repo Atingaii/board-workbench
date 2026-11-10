@@ -23,7 +23,7 @@ export function actorView(actors: ActorsState, id: string): ActorView | null {
   const author = own(actors.byId, id)
   if (!author) return null
   const via = viaOfRecord(author)
-  return { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(via ? { via } : {}) }
+  return { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(via ? { via } : {}), ...(author.platform ? { platform: author.platform } : {}) }
 }
 
 /**

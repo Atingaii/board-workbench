@@ -163,8 +163,8 @@ export function applyEvent(state: State, event: BoardEventView): State {
     next = { ...next, channels: { ...next.channels, [channel]: { path: channel, lastIndex: 0, messages: 0, threads: 0 } } }
   }
   if (event.type === 'actor.seen') {
-    const { actor, kind, handle, name, avatar, via } = event.payload
-    next = { ...next, actors: { ...next.actors, [actor]: { kind: actorKind(kind), handle, name, avatar, ...(via ? { via } : {}) } } }
+    const { actor, kind, handle, name, avatar, via, platform } = event.payload
+    next = { ...next, actors: { ...next.actors, [actor]: { kind: actorKind(kind), handle, name, avatar, ...(via ? { via } : {}), ...(platform ? { platform } : {}) } } }
   }
   // The stream comes in order, so the last event's cursor is where to resume.
   return { ...next, cursor: event.cursor }
@@ -189,9 +189,10 @@ export function shown(state: State, id: string, now = new Date().toISOString()):
   let out = message
   for (const { op } of state.ops[id] ?? []) out = apply(out, op, state.me?.actor ?? '', now)
   const actor = state.actors[message.by.actor]
-  // Who it acts through stays as the board showed it when what it records now doesn't say.
+  // Who it acts through, and its platform, stay as the board showed them when what it records now doesn't say.
   const via = actor?.via ?? out.author?.via
-  return actor ? { ...out, author: { ...actor, ...(via ? { via } : {}) } } : out
+  const platform = actor?.platform ?? out.author?.platform
+  return actor ? { ...out, author: { ...actor, ...(via ? { via } : {}), ...(platform ? { platform } : {}) } } : out
 }
 
 export type Thread = { root: MessageView; replies: MessageView[]; pending: Pending[] }
@@ -280,6 +281,13 @@ const GROUP_MS = 5 * 60_000
 const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString()
 
 export type Groupable = Pick<MessageView, 'by' | 'createdAt' | 'deleted' | 'channel' | 're'>
+
+/**
+ * The platform whose logo a message wears, for one that came from a platform: its author's, as their
+ * sync key was registered, or else what the board's sync entries say of the key it came through.
+ */
+export const sourcePlatform = (m: Pick<MessageView, 'from' | 'author'>, platforms: Record<string, string> = {}): string | null =>
+  m.from === null ? null : (m.author?.platform ?? platforms[m.from] ?? m.from)
 
 /** Whether `m` continues `previous`: same author and place, same day, close in time, nothing in between. */
 export function continues(previous: Groupable | undefined, m: Groupable, hasReplies = false): boolean {

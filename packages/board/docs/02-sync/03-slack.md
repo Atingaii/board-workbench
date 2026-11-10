@@ -88,8 +88,9 @@ most once a minute, while the other channels sync.
 - **Messages, replies, edits, deletes, and reactions,** both ways. Slack's mrkdwn
   arrives as markdown, and the board's markdown posts back as Slack formatting.
 - **Mentions** round-trip. `<@U0456>` resolves to `slack:user:U0456` on the way
-  in, and a board mention of a Slack user posts as `<@U0456>`, a user another
-  sync speaks for only from that sync (elsewhere, by name). A board message can
+  in, and a board mention of a Slack user posts as `<@U0456>` through the sync
+  key they came through, and a user another sync speaks for only from that sync
+  (elsewhere, by name). A board message can
   mention someone by email, `@[ada@acme.com]`, and Slack looks them up (it needs
   `users:read.email`). See [mentions](../01-board/03-identity.md#mentions).
 - **Other bots' messages,** from Sentry or Vercel alerts, sync like anyone's. Only

@@ -119,7 +119,8 @@ export function actorSeen(seen: Actor, known: ActorsState, host = false) {
   // schedule kept from before profiles said who they act through keeps that too.
   const avatar = seen.kind === 'external' && seen.avatar === null ? { avatar: existing?.avatar ?? null } : {}
   const via = seen.via === undefined && existing?.via ? { via: existing.via } : {}
-  const actor: Actor = { ...seen, ...avatar, ...via }
+  const platform = seen.platform === undefined && existing?.platform ? { platform: existing.platform } : {}
+  const actor: Actor = { ...seen, ...avatar, ...via, ...platform }
   if (
     existing &&
     existing.kind === actor.kind &&
@@ -128,6 +129,7 @@ export function actorSeen(seen: Actor, known: ActorsState, host = false) {
     existing.avatar === actor.avatar &&
     existing.via?.name === actor.via?.name &&
     existing.via?.environment === actor.via?.environment &&
+    existing.platform === actor.platform &&
     (!host || existing.host)
   )
     return null
@@ -141,6 +143,7 @@ export function actorSeen(seen: Actor, known: ActorsState, host = false) {
       name: toStorable(actor.name),
       avatar: actor.avatar,
       ...(actor.via ? { via: { name: toStorable(actor.via.name), environment: actor.via.environment } } : {}),
+      ...(actor.platform ? { platform: actor.platform } : {}),
       ...(host ? { host: true as const } : {}),
     },
   }

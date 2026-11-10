@@ -135,6 +135,21 @@ const describe = (error: unknown): string => {
 const missing = (error: unknown) => error instanceof HttpError && error.status === 404
 
 /**
+ * A platform user's ID as the board names them: under the sync key they came through, not the
+ * platform their provider names (`slack-eu:user:U0456` for `slack:user:U0456` through key
+ * `slack-eu`). The key is the connection, so a user is that connection's.
+ */
+export function keyedId(key: string, platform: string, id: string): string {
+  if (id.startsWith(`${key}:`)) return id
+  return `${key}:${id.startsWith(`${platform}:`) ? id.slice(platform.length + 1) : id}`
+}
+
+/** A platform event with its author named under `key`. */
+function keyedEvent(key: string, platform: string, event: ExternalEvent): ExternalEvent {
+  return 'author' in event ? ({ ...event, author: { ...event.author, id: keyedId(key, platform, event.author.id) } } as ExternalEvent) : event
+}
+
+/**
  * Two-way sync between a board and its platforms, run by board(): webhooks come in through its
  * adapters and land in the backend's inbox, and what the board's subscription delivers goes out
  * to them. It reads and writes only through the backend's protocol methods, as `caller`.
@@ -216,7 +231,15 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const [{ actors }, me] = await Promise.all([call('actors', {}), principalNow().catch(() => null)])
     const state: Actors = { byId: {}, principal: me }
     for (const actor of actors)
-      state.byId[actor.id] = { id: actor.id, kind: actor.kind, handle: actor.handle, name: actor.name, avatar: actor.avatar, ...(actor.via ? { via: { ...actor.via } } : {}) }
+      state.byId[actor.id] = {
+        id: actor.id,
+        kind: actor.kind,
+        handle: actor.handle,
+        name: actor.name,
+        avatar: actor.avatar,
+        ...(actor.via ? { via: { ...actor.via } } : {}),
+        ...(actor.platform ? { platform: actor.platform } : {}),
+      }
     return state
   }
 
@@ -257,11 +280,11 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     }
   }
 
-  /** A synced platform's user with this email, for `@[ada@vercel.com]`. */
+  /** A synced platform's user with this email, for `@[ada@vercel.com]`, under the key that found them. */
   async function findByEmail(email: string): Promise<Actor | null> {
-    for (const platform of Object.values(entries)) {
+    for (const [key, platform] of Object.entries(entries)) {
       const author = await platform.findByEmail(email).catch(() => null)
-      if (author) return { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar }
+      if (author) return { id: keyedId(key, platform.platform, author.id), kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar, platform: platform.platform }
     }
     return null
   }
@@ -468,9 +491,11 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /** One platform event from the inbox, through its entry's sync function. `id` is its ID there, which its writes derive theirs from. */
-  async function inbound(key: string, item: InboxDelivery, meta: { id: string; attempt: number }) {
-    const { event, raw } = item
+  async function inbound(key: string, received: InboxDelivery, meta: { id: string; attempt: number }) {
     const platform = platformOf(key)
+    // Its author is the key's user, whatever the provider named them, events queued before included.
+    const item = { ...received, event: keyedEvent(key, platform.platform, received.event) }
+    const { event, raw } = item
     const linked = (await find({ thread: event.thread })).thread ?? undefined
     if (event.kind === 'message') {
       const copied = (await find({ thread: event.subthread ?? event.thread, message: event.message })).message
@@ -479,7 +504,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         if (!origin || origin.message !== event.message || (origin.subthread ?? origin.thread) !== (event.subthread ?? event.thread)) return
       }
     }
-    const author: ExternalAuthor = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
+    const author: ExternalAuthor = 'author' in event ? event.author : { id: `${key}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
     // Built when it's first read: an import that never reads it never needs what its schema asks of the payload.
     let typed: ProviderEvent | undefined
     const typedEvent = () => (typed ??= immutable(platform.event({ id: meta.id, key, event, raw })))
@@ -638,7 +663,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         }
         const draft = rootDraft({ ...fetched, raw: fetched.raw ?? null })
         const root = await post({
-          author: fetched.author, channel,
+          author: { ...fetched.author, id: keyedId(key, platform.platform, fetched.author.id) }, channel,
           text: clampText(draft.text), labels: labels(draft.labels),
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `root:${meta.id}`, context: null },
           id: await writeId(1),
@@ -650,7 +675,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       case 'reaction': {
         const id = (await find({ thread: event.subthread ?? event.thread, message: event.message })).message
         if (id === null) return { root: rootId ?? null, message: null }
-        const author: ExternalAuthor = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
+        const author: ExternalAuthor = 'author' in event ? event.author : { id: `${key}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
         const origin = { thread: event.subthread ?? event.thread, message: event.message }
         if (rootId !== undefined) await setExtraLabels(author, rootId)
         if (event.kind === 'deleted') await call('syncImport', { op: 'delete', author, from: key, origin })
@@ -726,18 +751,21 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /**
-   * How entry `key`'s platform mentions an actor: natively when it's one of the platform's own
-   * users, or null. A platform user another principal's sync speaks for is that sync's word, so
-   * only that sync, under the key it imported them through, mentions them natively.
+   * How entry `key`'s platform mentions an actor: natively when it's one of that key's users, found
+   * on the platform by their ID there, or null. A platform user a sync speaks for is that sync's
+   * word, so only that sync, the principal that imported them under that key, mentions them natively.
    */
   function nativeMention(key: string, actor: string, actors: Actors): string | null {
     const account = actors.byId[actor]
     if (!account) return null
     const { principal, profile } = actorParts(actor)
     const user = platformProfile(profile)
-    if (user === null) return platformOf(key).mention(account)
-    if (principal !== actors.principal || user.key !== key) return null
-    return platformOf(key).mention({ ...account, id: profile! })
+    if (profile !== null && user === null) return null
+    if (user !== null && principal !== actors.principal) return null
+    const id = user === null ? actor : profile!
+    if (!id.startsWith(`${key}:`)) return null
+    const platform = platformOf(key)
+    return platform.mention({ ...account, id: `${platform.platform}:${id.slice(key.length + 1)}` })
   }
 
   /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
@@ -745,7 +773,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const actor = actors.byId[message.by.actor]
     let name = actor ? shownName(actor) : message.by.actor
     // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
-    if (message.from) name = `${name} (${entries[message.from]?.platform ?? (platformProfile(message.by.profile)?.key ?? message.by.actor).split(':')[0]})`
+    if (message.from) name = `${name} (${actor?.platform ?? entries[message.from]?.platform ?? message.from})`
     const platform = platformOf(key)
     const body = (renderer ?? ((input) => platform.render(input)))(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },

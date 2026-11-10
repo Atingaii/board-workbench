@@ -633,9 +633,10 @@ export type TokenView = {
 /**
  * `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow.
  * `via` is who one with a profile acts through: an agent's person or project, or the principal whose sync speaks for a
- * platform user (`Malte via www (preview)`).
+ * platform user (`Malte via www (preview)`). `platform` is a platform user's platform (`slack`), for display: their ID
+ * names the sync key they came through.
  */
-export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via'>
+export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via' | 'platform'>
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
 export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version' | 'revision'> & {
   id: string

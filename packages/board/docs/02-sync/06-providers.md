@@ -48,7 +48,7 @@ hook, passed beside `adapter`:
 
 | What | Without a hook | Hook |
 | --- | --- | --- |
-| The platform's name | The adapter's `name`, in author IDs like `telegram:user:42` | `platform` |
+| The platform's name | The adapter's `name`, in author IDs like `telegram:user:42`, which the board files under the entry's key | `platform` |
 | Channels | The adapter's own channel IDs, without its `name:` prefix | `resolveChannel(name)` |
 | Targets | One the adapter reads as a thread is a thread in its channel; anything else is a channel | `resolveTarget(target)` |
 | New threads | Never: a new board root stays on the board, since on most platforms a chat is one conversation. Threads that came from the platform sync both ways. | `canStartThreads: true`, where a channel holds many threads (Discord, Teams) |
@@ -219,6 +219,11 @@ platform message ID is unique within its thread, as GitHub's comment IDs are. Ta
 optional methods are native, without it: `support:t_812`. The board records each
 target's `kind` from `resolveTarget`, so it never parses your ID syntax, and a
 channel target on a provider whose `canStartThreads` is false is refused.
+
+**Authors.** Name a user on your platform (`desk:user:7`). The board names them
+under the entry's key instead, so a provider under key `support` brings
+`support:user:7`, and `mention(actor)` gets them back with your prefix
+(`desk:user:7`). A user is the key's, and renaming a key changes its users' IDs.
 
 **Dedupe.** `dedupe` is the identity of one occurrence. A platform redelivering the
 same event must produce the same value, so the retry does nothing; a later

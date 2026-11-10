@@ -10,6 +10,7 @@ import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { type Actor, type ExternalCopy, type Message } from '../contract/folds.ts'
 import { shownName } from '../contract/profiles.ts'
+import { replaceMentions } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
@@ -146,7 +147,7 @@ const blindSchedule = (schedule: ScheduleView, access: Access, own: string): Sch
  * are its word, a profile of its principal (`vercel:project:prj_1:production+slack:user:U0456`),
  * whose record only its own imports change.
  */
-function externalIdentity(author: ExternalAuthor, through: Granted | null): Identity {
+function externalIdentity(author: ExternalAuthor, through: Granted | null, platform: string): Identity {
   const id = through === null ? author.id : `${through.id}+${author.id}`
   const principal: Granted = { id: through?.id ?? author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
   return {
@@ -159,6 +160,7 @@ function externalIdentity(author: ExternalAuthor, through: Granted | null): Iden
       name: author.name,
       avatar: platformAvatar(author.avatar),
       ...(through === null ? {} : { via: viaOf(through) }),
+      platform,
     },
   }
 }
@@ -749,9 +751,9 @@ function build(options: A2Options, binding: BoardBinding) {
 
     async syncImport(caller, body, signal) {
       const { principal } = (await needSync(caller, 'import', true))
-      // Only a platform user it syncs, never anyone this board signs in.
-      await speaksFor(caller, principal.id, body.author, body.op === 'seen' ? null : body.from)
-      const author = externalIdentity(body.author, ownSync(caller) ? null : principal)
+      // Only a user of a sync key it has, never anyone this board signs in.
+      const platform = await speaksFor(caller, principal.id, body.author, body.op === 'seen' ? null : body.from)
+      const author = externalIdentity(body.author, ownSync(caller) ? null : principal, platform)
       if (body.op === 'seen') {
         const { state: actors } = await session.state(actorsReducer)
         const seen = actorSeen(author.actor, actors)
@@ -759,6 +761,10 @@ function build(options: A2Options, binding: BoardBinding) {
         return { message: null }
       }
       const may = (channel: string) => principal.access.can('sync', channel)
+      // A mention of one of its keys' users is of the platform user as this import names them: its own profile of them.
+      const keys = ownSync(caller) ? [] : (await entriesOf(caller, principal.id)).map(({ key }) => key)
+      const asNamed = (text: string) =>
+        keys.length === 0 ? text : replaceMentions(text, (token) => (token.kind === 'actor' && keys.some((key) => token.actor.startsWith(`${key}:`)) ? `@[${principal.id}+${token.actor}]` : null))
       if (body.op === 'post') {
         if ((body.channel === undefined) === (body.re === undefined)) throw badRequest('an import needs `channel`; a reply needs `re`')
         let re: number | undefined
@@ -780,7 +786,7 @@ function build(options: A2Options, binding: BoardBinding) {
             proofs,
             channel: body.channel,
             re,
-            text,
+            text: asNamed(text),
             labels,
             noSync: body.noSync,
             id,
@@ -814,7 +820,7 @@ function build(options: A2Options, binding: BoardBinding) {
       if (body.op === 'edit') {
         const proof = await authorized('post')
         const commit = async ({ text }: { text: string }) => {
-          await writeEdit(writes, { identity: author, authorized: proof, text, from: body.from, asAuthor, revision: body.revision })
+          await writeEdit(writes, { identity: author, authorized: proof, text: asNamed(text), from: body.from, asAuthor, revision: body.revision })
           return ref(found.id)
         }
         const write = { kind: 'edit' as const, id: ref(found.id), channel: found.channel, re: found.re === null ? null : ref(found.re), text: body.text }
@@ -1023,16 +1029,18 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   /**
-   * Whether a caller may write as `author`: a platform user, never anyone this board
-   * signs in, on a platform it syncs: the one of entry `from`, when it names one.
+   * Whether a caller may write as `author`, and the platform of the sync key they're a user of: a
+   * platform user, never anyone this board signs in, named under a key it syncs (`slack-eu:…`):
+   * entry `from`, when it names one.
    */
-  async function speaksFor(caller: Caller, principal: string, author: { id: string }, from: string | null) {
+  async function speaksFor(caller: Caller, principal: string, author: { id: string }, from: string | null): Promise<string> {
     if (authenticates(author.id) || (await signedIn(author.id))) throw forbidden(`${author.id} is someone this board signs in, not a platform user: sync can't write as them`)
     const entries = await entriesOf(caller, principal)
-    const platforms = (from === null ? entries : entries.filter((entry) => entry.key === from)).map((entry) => entry.platform)
-    if (from !== null && platforms.length === 0) throw forbidden(`this token doesn't sync ${from} here: its board registers its sync entries`)
-    if (!platforms.some((platform) => author.id.startsWith(`${platform}:`)))
-      throw forbidden(`${author.id} isn't a user of ${platforms.length ? platforms.join(' or ') : 'a platform this token syncs'}`)
+    const keys = from === null ? entries : entries.filter((entry) => entry.key === from)
+    if (from !== null && keys.length === 0) throw forbidden(`this token doesn't sync ${from} here: its board registers its sync entries`)
+    const entry = keys.find(({ key }) => author.id.startsWith(`${key}:`))
+    if (!entry) throw forbidden(`${author.id} isn't a user of ${keys.length ? keys.map(({ key }) => key).join(' or ') : 'a sync key this token has'}: their ID starts with its key`)
+    return entry.platform
   }
 
   /**

@@ -27,9 +27,15 @@ type ApiPrincipal =
   | { type: 'external'; id: string; syncKey: string }
 /**
  * Who wrote something. An imported message's author is the importing project with a platform profile:
- * `<project's principal>+<key>:<user>`, its `profile.platform` the sync key and the user's ID there.
+ * `<project's principal>+<key>:<user>`, its `profile.platform` the sync key, the platform that key was
+ * registered with, and the user's ID there.
  */
-type ApiActor = { id: string; principal: ApiPrincipal; profile?: { name: string; avatar?: string; platform?: { key: string; userId: string } }; session?: string }
+type ApiActor = {
+  id: string
+  principal: ApiPrincipal
+  profile?: { name: string; avatar?: string; platform?: { key: string; platform?: string; userId: string } }
+  session?: string
+}
 type ApiChannel = { id: string; name: string }
 type ApiThread = {
   id: string
@@ -94,7 +100,10 @@ type ApiSchedule = {
 }
 /** A file on the board: `messageId` once a post carries it. */
 type ApiAttachment = Attachment & { boardId: string; sha256: string; state: 'pending' | 'ready'; messageId?: string }
-/** `via`, on a platform user a project's sync imported: that project's name, where the API knows it, and its environment. */
+/**
+ * On a platform user a project's sync imported, `via` is that project's name, where the API knows it,
+ * and its environment, and `platform` the platform its sync key was registered with.
+ */
 type ApiActorView = {
   id: string
   kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'
@@ -102,6 +111,7 @@ type ApiActorView = {
   name?: string
   avatar?: string
   via?: { name?: string | null; environment?: string | null }
+  platform?: string
 }
 type ApiChange = {
   type: string
@@ -352,8 +362,10 @@ function actorView(actor: ApiActor, view?: ApiActorView): ActorView & { id: stri
   const { principal, profile } = actor
   // A platform user a sync imported, by their ID on the platform until the API names them.
   if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null }
-  if (profile?.platform)
-    return { id: actor.id, kind: 'external', handle: profile.platform.userId.slice(profile.platform.userId.lastIndexOf(':') + 1), name: profile.name, avatar: null, via: viaFor(principal, view) }
+  if (profile?.platform) {
+    const { userId, platform, key } = profile.platform
+    return { id: actor.id, kind: 'external', handle: userId.slice(userId.lastIndexOf(':') + 1), name: profile.name, avatar: null, via: viaFor(principal, view), platform: view?.platform ?? platform ?? key }
+  }
   const base =
     principal.type === 'user' || principal.type === 'app'
       ? shortName(principal)
@@ -698,7 +710,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // The API names a project or an app by its ID, and an agent under one after it: board's names say more.
     if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor, found)
     const via = actor.profile && actor.principal.type !== 'external' ? { via: viaFor(actor.principal, found) } : {}
-    return { id: actor.id, kind, handle: found.handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via }
+    const platform = found.platform ?? actor.profile?.platform?.platform
+    return { id: actor.id, kind, handle: found.handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via, ...(platform ? { platform } : {}) }
   }
 
   async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
@@ -1683,6 +1696,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           name: actor.name ?? actor.handle,
           avatar: actor.avatar ?? null,
           ...(principal ? { via: viaFor(principal, actor) } : {}),
+          ...(actor.platform ? { platform: actor.platform } : {}),
         }
       })
       return { actors: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }

@@ -695,7 +695,14 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   - `github:user:583231` (a GitHub user the board's own sync checked)
   - `slack:user:U0456` (a Slack user the board's own sync checked)
 
-  Principals name the platform identity, so they don't include sync keys.
+  A platform user's ID starts with the sync key they came through, not the
+  platform: `slack:user:U0456` under the default key `slack`,
+  `slack-eu:user:U0456` under a key `slack-eu` registered for Slack. The key
+  is the connection, and a user is that connection's; the platform is
+  display (the inspector's logo, a relayed message's label), on each actor
+  view of a platform user as `platform`. Renaming a key changes its users'
+  IDs. Providers name their users on their platform (`slack:user:…`), and
+  the engine puts them under the key.
 - **Profile:** an optional named identity within a principal, with an avatar.
   It's Just Chat's delegated profile, slimmed down.
   - **Selection:** `team.as('claude')` on a handle, `--as claude` in the CLI.
@@ -1143,7 +1150,13 @@ key it imported them through.
 - **Platform round-trips:**
   - **Inbound mentions resolve on their own platform.** A Slack `<@U0456>`
     becomes `slack:user:U0456`. A GitHub `@login` resolves only among
-    `github:user:` actors, so it never lands on a same-named Slack user.
+    `github:user:` actors, so it never lands on a same-named Slack user. A
+    sync elsewhere's import that mentions one of its keys' users,
+    `@[<key>:<user>]`, mentions its own profile of them,
+    `@[<principal>+<key>:<user>]`.
+  - **Outbound, a platform user renders natively only through their own
+    key,** with the key's prefix taken off to find them on the platform, and a
+    profile only through the sync of its own principal.
   - **If an inbound mention names an actor the board hasn't seen,** the inbound
     consumer fetches that user's profile through the adapter and appends
     `actor.seen` in the same batch.
@@ -2150,8 +2163,9 @@ unlinking their own account:
 Only these take provenance (an author, an origin) from a body, and only from a
 caller with `sync` where it lands: `sync` says this project may speak for
 platform users there. An author is a user of a
-platform the caller syncs (its own sync's entries, or those it registered),
-never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`,
+sync key the caller syncs (its own sync's entries, or those it registered),
+named under it: the import's `from` (`slack-eu:user:U0456` through
+`slack-eu`), or with none, any of its keys. Never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`,
 `local:`, `board:`), nor a host's principal the board has seen register or
 write, or its agents and registered watchers (`<principal>+<id>`). A caller
 that pushes to an inbox pulls it back:

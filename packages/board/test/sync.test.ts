@@ -1913,7 +1913,7 @@ describe('provider callbacks', () => {
     await receive(root)
     await vi.waitFor(async () => expect(await read(call, 'support')).toHaveLength(1))
     const [imported] = await read(call, 'support')
-    expect(imported).toMatchObject({ text: 'custom: hello', labels: { area: 'support' }, by: { actor: 'slack:user:U1' } })
+    expect(imported).toMatchObject({ text: 'custom: hello', labels: { area: 'support' }, by: { actor: 'work:user:U1' } })
     const view = await call('GET', `/messages/${imported!.id}`)
     expect(view.body.message.attachments).toHaveLength(1)
     await receive({ ...root, id: '101', files: root.files, text: 'reply' })
@@ -1921,7 +1921,7 @@ describe('provider callbacks', () => {
     await receive({ type: 'edit', threadId: root.threadId, id: '101', text: 'edited', user: 'U1' })
     await vi.waitFor(async () => expect((await read(call, 'support'))[1]?.text).toBe('custom: edited'))
     await receive({ type: 'reaction', threadId: root.threadId, messageId: '100', emoji: 'eyes', added: true, user: 'U2' })
-    await vi.waitFor(async () => expect((await read(call, 'support'))[0]?.reactions).toEqual({ eyes: ['slack:user:U2'] }))
+    await vi.waitFor(async () => expect((await read(call, 'support'))[0]?.reactions).toEqual({ eyes: ['work:user:U2'] }))
     await receive({ type: 'delete', threadId: root.threadId, id: '101' })
     await vi.waitFor(() => expect(seen).toEqual(['message', 'message', 'message.edited', 'reaction.added', 'message.deleted']))
     const reply = (await read(call, 'support'))[1]!
@@ -2084,7 +2084,8 @@ describe('provider callbacks', () => {
     const thread = `opaque:${nativeChannel}:${p.channelPosts[0]!.id}`
     await board.fetch(new Request(`${BOARD_URL}/webhooks/tickets`, { method: 'POST', headers: { 'x-native-signature': 'valid' }, body: JSON.stringify({ type: 'message', threadId: thread, id: 'response', text: 'native reply', user: '42' }) }))
     await vi.waitFor(async () => expect((await read(call, 'tickets'))[1]?.re).toBe(posted.body.message.id))
-    expect((await read(call, 'tickets'))[1]?.by.actor).toBe('opaque:tenant:sample:user:42')
+    // Its author is a user of the key it came through, which names them.
+    expect((await read(call, 'tickets'))[1]?.by.actor).toBe('tickets:tenant:sample:user:42')
     expect((await board.fetch(new Request(`${BOARD_URL}/webhooks/tickets`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: thread, id: 'forged', text: 'forged', user: '42' }) }))).status).toBe(401)
     const uploaded = await board.fetch(new Request(`${BOARD_URL}/attachments`, { method: 'POST', headers: { authorization: `Bearer ${await personToken()}`, 'content-type': 'image/png', 'x-board-filename': 'proof.png' }, body: new Uint8Array([1, 2, 3]) }))
     const attachment = (await uploaded.json()).attachment

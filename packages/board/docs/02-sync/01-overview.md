@@ -131,6 +131,9 @@ nothing echoes.
 
 ## Who an import is by
 
+A platform user is named under the sync key they came through, not the
+platform: `slack:user:U0456` through key `slack`, `slack-eu:user:U0456` through a
+key `slack-eu` for a second Slack workspace, shown with Slack's logo either way.
 On `local()`, the board's own sync checks each platform webhook itself, so what
 it imports is by the platform user: `slack:user:U0456`. Every other sync, a
 project that registers one on the board and every sync on Vercel's board, only
@@ -151,8 +154,9 @@ firehose · 2 threads · cursor 6
 ```
 
 Each sync's Malte is an actor of its own, named only by that sync's imports. A
-mention of them renders natively (`<@U0456>`) only through that sync, under the
-key it imported them through; any other sync posts their name. See
+mention of a platform user renders natively (`<@U0456>`) only through the key
+they came through, and of a sync elsewhere's only through that sync; any other
+posts their name. Renaming a key changes its users' IDs. See
 [platform users](../01-board/03-identity.md#platform-users).
 
 ## Targets

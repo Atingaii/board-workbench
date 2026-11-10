@@ -141,6 +141,8 @@ export const boardEvents = {
        * (a deployment's project, anyone else's handle), and a deployment's environment.
        */
       via: z.object({ name: Handle, environment: z.string().min(1).max(128).nullable() }).optional(),
+      /** (server) A platform user's platform (`slack`), as their sync key was registered with: for display. */
+      platform: z.string().min(1).max(64).optional(),
       /**
        * (server) A principal a host's `authenticate` made, or one of its profiles: someone the board
        * signs in, whatever its ID or kind, so sync never writes as it. Others have none.

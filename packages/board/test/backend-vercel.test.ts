@@ -1276,26 +1276,43 @@ describe('vercel()', () => {
     ])
   })
 
-  it("shows a project's import as the platform user through that project, in its environment, as the API names them", async () => {
+  it("shows a project's import as the platform user through that project, in its environment, with its key's platform, as the API names them", async () => {
     const api = fakeMessageboard()
     const preview = handleOn(api, 'project:prj_pong:preview')
-    await preview.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
-    const malte = { id: 'slack:user:U_MALTE', handle: 'malte', name: 'Malte', avatar: null, isBot: false }
-    await preview.syncImport({ op: 'post', author: malte, from: 'slack', channel: 'general', text: 'ship it', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+    await preview.register({ url: null, watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })
+    const malte = { id: 'slack-eu:user:U_MALTE', handle: 'malte', name: 'Malte', avatar: null, isBot: false }
+    await preview.syncImport({ op: 'post', author: malte, from: 'slack-eu', channel: 'general', text: 'ship it', origin: { thread: 'slack-eu:C1:1', subthread: null, message: '1', context: null } })
     const julian = handleOn(api)
     await julian.post('general', { text: 'on the board' })
     const { messages } = await julian.messages({ channel: 'general' })
     expect(messages.map((message) => [message.text, message.by, message.author])).toEqual([
       [
         'ship it',
-        { actor: 'vercel:project:prj_pong:preview+slack:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack:user:U_MALTE', session: null },
-        { id: 'vercel:project:prj_pong:preview+slack:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' } },
+        { actor: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack-eu:user:U_MALTE', session: null },
+        { id: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' }, platform: 'slack' },
       ],
       ['on the board', { actor: 'vercel:user:u_jb', principal: 'vercel:user:u_jb', profile: null, session: null }, expect.not.objectContaining({ via: expect.anything() })],
     ])
-    expect((await julian.actors()).find((actor) => actor.id.endsWith('+slack:user:U_MALTE'))).toMatchObject({ name: 'Malte', via: { name: 'pong', environment: 'preview' } })
+    expect((await julian.actors()).find((actor) => actor.id.endsWith('+slack-eu:user:U_MALTE'))).toMatchObject({ name: 'Malte', via: { name: 'pong', environment: 'preview' }, platform: 'slack' })
     // A profile name covers that agent of anyone's, but a platform user is only ever themselves.
-    expect((await julian.messages({ channel: 'general', by: 'slack:user:U_MALTE' })).messages).toEqual([])
+    expect((await julian.messages({ channel: 'general', by: 'slack-eu:user:U_MALTE' })).messages).toEqual([])
+  })
+
+  it("imports through a sync key not named for its platform, its users named for the key", async () => {
+    const api = fakeMessageboard()
+    const s = fakePlatform('slack')
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { 'slack-eu': slack({ adapter: s.adapter }, channels({ C1: 'general' })) },
+    })
+    const webhook = await pong.fetch(new Request(`${PONG_URL}/webhooks/slack-eu`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'hej', user: 'U_ADA', name: 'Ada' }) }))
+    expect(webhook.status).toBe(200)
+    const julian = handleOn(api)
+    await vi.waitFor(async () => expect((await julian.messages({ channel: 'general' })).messages).toHaveLength(1))
+    const [message] = (await julian.messages({ channel: 'general' })).messages
+    expect([message!.by.actor, message!.from, message!.author?.platform]).toEqual(['vercel:project:prj_pong:production+slack-eu:user:U_ADA', 'slack-eu', 'slack'])
   })
 
   it('shows an import as the platform user alone, as before, from an API that names them so', async () => {

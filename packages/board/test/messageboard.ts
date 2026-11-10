@@ -12,8 +12,8 @@ type Principal =
 type Actor = {
   id: string
   principal: Principal
-  /** An agent's name, or for a platform user a project's sync imported, `<key>:<user>` with `platform` its parts. */
-  profile?: { name: string; avatar?: string; platform?: { key: string; userId: string } }
+  /** An agent's name, or for a platform user a project's sync imported, `<key>:<user>`, with `platform` its key, that key's platform, and the user's ID. */
+  profile?: { name: string; avatar?: string; platform?: { key: string; platform: string; userId: string } }
   session?: string
   /** The board token the request came with: it acts as `principal`, narrowed, on its own board. */
   token?: Minted
@@ -91,8 +91,17 @@ type Thread = {
   messages: Message[]
 }
 type Change = Record<string, unknown> & { createdAt: number; messageId?: string }
-/** `via`, on a platform user a project's sync imported: the project's name, or null, and its environment. */
-type ActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'; handle: string; name?: string; avatar?: string; via?: { name: string | null; environment: string }; lastSeenAt: number }
+/** On a platform user a project's sync imported, `via` is the project's name, or null, and its environment, and `platform` its key's platform. */
+type ActorView = {
+  id: string
+  kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'
+  handle: string
+  name?: string
+  avatar?: string
+  via?: { name: string | null; environment: string }
+  platform?: string
+  lastSeenAt: number
+}
 
 const EMOJI = /^[a-z0-9_+-]{1,64}$/
 const CHANNEL = /^[a-z0-9_-]+(\/[a-z0-9_-]+)*$/
@@ -280,7 +289,7 @@ function viewOf(accounts: Accounts, actor: Actor): Omit<ActorView, 'lastSeenAt'>
   if (p.type === 'external') return { id: actor.id, kind: 'external', handle: p.id }
   const account = p.type === 'user' ? accounts[p.userId] : undefined
   const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
-  if (actor.profile?.platform) return { id: actor.id, kind: 'external', handle: actor.profile.platform.userId }
+  if (actor.profile?.platform) return { id: actor.id, kind: 'external', handle: actor.profile.platform.userId, platform: actor.profile.platform.platform }
   if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
   if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
   return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
@@ -735,6 +744,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
     if (syncKeys.get(key) !== principalId(actor.principal)) throw new Refused(403, 'sync_key_not_owned')
   }
+  /** The platform a sync key was registered with. */
+  const platformOf = (key: string) => [...registrations.values()].flatMap((r) => r.sync).find((entry) => entry.key === key)?.platform ?? key
   const ownedKeys = (actor: Actor) => new Set([...syncKeys].filter(([, owner]) => owner === principalId(actor.principal)).map(([key]) => key))
 
   /** Vercel's API's sync routes, as they behave: undefined for a route that isn't one. */
@@ -753,8 +764,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       const principal = actor.principal as Extract<Principal, { type: 'project' }>
       const author: Actor = shared.externalImports
         ? { id: body.author.id, principal: { type: 'external', id: body.author.id, syncKey: key } }
-        : { id: `${owner}+${body.author.id}`, principal, profile: { name: body.author.id, platform: { key, userId: String(body.author.id).slice(key.length + 1) } } }
-      const via = shared.externalImports ? {} : { via: { name: shared.directory.projects[principal.projectId] ?? null, environment: principal.environment } }
+        : { id: `${owner}+${body.author.id}`, principal, profile: { name: body.author.id, platform: { key, platform: platformOf(key), userId: String(body.author.id).slice(key.length + 1) } } }
+      const via = shared.externalImports ? {} : { via: { name: shared.directory.projects[principal.projectId] ?? null, environment: principal.environment }, platform: platformOf(key) }
       actors.set(author.id, { id: author.id, kind: 'external', handle: body.author.handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), ...via, lastSeenAt: now() })
       if (body.op === 'seen') return { message: null }
       if (body.op === 'post') {
