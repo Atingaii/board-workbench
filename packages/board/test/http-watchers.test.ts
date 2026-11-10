@@ -287,7 +287,7 @@ describe('pulling matches', () => {
     const sync = caller(remote.fetch, await deploymentToken('sync', 'prj_sync', 'production'))
     expect((await sync('POST', '/watchers', { watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })).status).toBe(200)
     const snapshot = { author: 'Ada', text: 'the key is hunter2', createdAt: null, files: [] }
-    const author = { id: 'slack:user:U_JB', handle: 'jb', name: 'JB', avatar: null, isBot: false }
+    const author = { id: 'helpdesk:user:U_JB', handle: 'jb', name: 'JB', avatar: null, isBot: false }
     const links = [{ url: permalink, message: linked.id, snapshot, unavailable: null }]
     expect((await sync('POST', '/sync/imports', { op: 'post', author, from: 'helpdesk', channel: 'feedback', text: `see ${permalink}`, links })).status).toBe(200)
     const queue = remote.servers.at(-1)!.session(`watch:@${V0}`)

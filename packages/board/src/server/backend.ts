@@ -14,10 +14,8 @@ import type { WriteOrigin } from './origin.ts'
 /**
  * Who a verified caller is: its principal, with what board()'s `access` lets it do now (its scope
  * included, which only narrows), the author record its writes carry, and the actor it writes as.
- * `records: false`: its writes leave the board's record of its actor (name, avatar) as it is, for
- * a platform user a sync that can't sync everywhere writes as.
  */
-export type Identity = { principal: Granted; author: Author; actor: Actor; records?: false }
+export type Identity = { principal: Granted; author: Author; actor: Actor }
 
 /**
  * A caller board() verified, and what its policy lets it do: a request's, or for work a backend does
