@@ -808,7 +808,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
-  async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as?: ProviderSender }> {
+  async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as: ProviderSender }> {
     const actor = actors.byId[message.by.actor]
     let name = actor ? shownName(actor) : message.by.actor
     // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
@@ -853,7 +853,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const key = keyOf(target)
     const { markdown, as } = await render(key, target, message, actors, renderer)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles)
-    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
+    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, as }
   }
 
   async function postReply(message: MessageView, target: string, externalThread: string, actors: Actors, renderer?: Renderer) {
