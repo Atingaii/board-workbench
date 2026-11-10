@@ -739,16 +739,54 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return { id: actor.id, kind, handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via, ...(platform ? { platform } : {}) }
   }
 
-  /** Projects' names by ID, as the API names each on the platform users its sync imported (their `via`). */
-  async function projectNames(who: Who): Promise<Map<string, string>> {
-    const current = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : readNames(who)
-    const names = new Map<string, string>()
-    for (const [id, found] of await current.views.catch(() => new Map<string, ApiActorView>())) {
-      const principal = found.via?.name ? principalFrom(id) : null
-      if (principal?.type === 'project') names.set(principal.projectId, found.via!.name!)
+  /**
+   * Projects' names by ID, from what a read of the actors says: a deployment's handle, which the API makes its
+   * project's name, then the name it gives a project on its users (their `via`). An API that names a deployment by its
+   * ID (`project:prj_…:production`) names its project only there.
+   */
+  const namesRead = new WeakMap<object, Promise<Map<string, string>>>()
+  function namesIn(read: { views: Promise<Map<string, ApiActorView>> }): Promise<Map<string, string>> {
+    let names = namesRead.get(read)
+    if (!names)
+      namesRead.set(
+        read,
+        (names = read.views.then(
+          (views) => {
+            const byHandle = new Map<string, string>()
+            const byVia = new Map<string, string>()
+            for (const [id, found] of views) {
+              const principal = principalFrom(id)
+              if (principal?.type !== 'project') continue
+              if (actorParts(id).profile === null) {
+                if (!found.handle.startsWith('project:')) byHandle.set(principal.projectId, found.handle)
+              } else if (found.via?.name) byVia.set(principal.projectId, found.via.name)
+            }
+            return new Map([...byVia, ...byHandle])
+          },
+          () => new Map<string, string>(),
+        )),
+      )
+    return names
+  }
+  /** What a fresh read of the actors still didn't name: it isn't read again for them until names are read anyway. */
+  const unnamed = new Set<string>()
+  /**
+   * Projects' names by ID, as the actors list names them, read again at once when `wanted` (a project's ID, or a name
+   * as `name:<name>`) isn't among them, as for someone new since the list was read.
+   */
+  async function projectNames(who: Who, wanted?: { key: string; found: (names: Map<string, string>) => boolean }): Promise<Map<string, string>> {
+    const kept = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : null
+    let names = await namesIn(kept ?? readNames(who))
+    if (!wanted || wanted.found(names) || !kept || unnamed.has(wanted.key)) return names
+    names = await namesIn(actorNames && actorNames !== kept ? actorNames : readNames(who))
+    if (!wanted.found(names)) {
+      if (unnamed.size >= 1000) unnamed.clear()
+      unnamed.add(wanted.key)
     }
     return names
   }
+  /** A project's name, as `projectNames` finds it, or its ID. */
+  const projectName = async (who: Who, project: string) => (await projectNames(who, { key: project, found: (names) => names.has(project) })).get(project) ?? project
 
   /** The project these credentials are, whose sync keys a caller names bare: null for a person's or an app's. */
   const ownProject = async (who: Who) => {
@@ -766,7 +804,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (from === undefined) return null
     const project = importerOf(by)
     if (project === null || project === (await ownProject(who))) return from
-    return `${(await nameOf(who, by)).via?.name ?? project}/${from}`
+    return `${await projectName(who, project)}/${from}`
   }
 
   async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
@@ -939,7 +977,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return (message) => message.from === from && [null, own].includes(importerOf(message.createdBy))
     }
     const [project, key] = [from.slice(0, slash), from.slice(slash + 1)]
-    const named = [...(await projectNames(who))].filter(([, name]) => name === project).map(([id]) => id)
+    const names = await projectNames(who, { key: `name:${project}`, found: (names) => [...names.values()].includes(project) })
+    const named = [...names].filter(([, name]) => name === project).map(([id]) => id)
     const projects = new Set([project, ...named])
     return (message) => message.from === key && projects.has(importerOf(message.createdBy) ?? '')
   }
@@ -1451,7 +1490,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     watch: Record<string, { tail: string }>,
     sync: readonly SyncEntrySpec[],
     fromHere: boolean,
-    registered: (made: ApiRegistration) => void = () => {},
+    registered: (made: ApiRegistration) => Promise<void> = async () => {},
   ): Promise<RegistrationView> {
     const specs: Record<string, WatcherSpec> = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail }]))
     const filters = Object.fromEntries(await Promise.all(Object.entries(specs).map(async ([id, spec]) => [id, await filterOf(who, id, spec, fromHere)] as const)))
@@ -1465,13 +1504,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     } catch (error) {
       throw needsProject(error)
     }
-    registered(made)
+    await registered(made)
     return { owner: made.owner, ...whereOf(made), watch: specs, sync: syncOf(made), hash: made.hash }
   }
 
   /** The sync keys this deployment holds, as its last registration said: null before one has. */
   let held: Set<string> | null = null
-  /** Who holds each of its sync's keys that it doesn't, as people read it: `production`. */
+  /** Who holds each of its sync's keys that it doesn't, as people read it: `production`, or `support (production)`. */
   const holders = new Map<string, string>()
 
   /**
@@ -1479,16 +1518,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * the rest, another of its project's deployments (production takes a key from a preview), which is said once each.
    * An API from before each project had its own keys says none, and holds every key it lists.
    */
-  function holding(made: ApiRegistration) {
+  async function holding(made: ApiRegistration) {
     held = new Set((made.sync ?? []).map((entry) => entry.key))
     const mine = principalFrom(made.owner)
     for (const { key, owner, environment } of made.elsewhere ?? []) {
       const holder = principalFrom(owner)
       let shown = owner
       if (holder?.type === 'project') {
-        // Its own project's deployment by its environment, and another project's with the project.
+        // Its own project's deployment by its environment, and another project's by the project's name too.
         const where = environment ?? holder.environment
-        shown = mine?.type === 'project' && mine.projectId === holder.projectId ? where : `${holder.projectId} (${where})`
+        shown = mine?.type === 'project' && mine.projectId === holder.projectId ? where : `${await projectName(deployment, holder.projectId)} (${where})`
       }
       if (holders.get(key) !== shown) console.info(`[board] ${key} is synced by ${shown}`)
       holders.set(key, shown)
@@ -2237,7 +2276,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       )
       const own = await ownProject(who)
       const foreign = (projectId: string | undefined): projectId is string => projectId !== undefined && projectId !== own
-      const names = targets.some((target) => foreign(target.projectId)) ? await projectNames(who) : new Map<string, string>()
+      const others = [...new Set(targets.flatMap(({ projectId }) => (foreign(projectId) ? [projectId] : [])))]
+      const names = others.length ? await projectNames(who, { key: others.join(' '), found: (names) => others.every((id) => names.has(id)) }) : new Map<string, string>()
       // The API keeps platform IDs and parses no URLs: the board's own sync knows its platforms' links. Another project's
       // key is named by that project (`www/slack`), and only that project's sync, which has its app, links its copies.
       return {

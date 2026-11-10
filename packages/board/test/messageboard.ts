@@ -284,12 +284,17 @@ function fakeTokens(shared: { now: () => number }) {
 
 type Accounts = Record<string, { username: string; name: string }>
 
-/** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
-function viewOf(accounts: Accounts, actor: Actor): Omit<ActorView, 'lastSeenAt'> {
+/**
+ * An actor as the API names them: a person by their account, and a deployment by its project's name, in every
+ * environment, or with `projectIdHandles`, as `project:<id>:<environment>`, as the API named one before. One whose
+ * project it doesn't know it names that way too.
+ */
+function viewOf(names: Pick<Shared, 'accounts' | 'directory' | 'projectIdHandles'>, actor: Actor): Omit<ActorView, 'lastSeenAt'> {
   const p = actor.principal
   if (p.type === 'external') return { id: actor.id, kind: 'external', handle: p.id }
-  const account = p.type === 'user' ? accounts[p.userId] : undefined
-  const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
+  const account = p.type === 'user' ? names.accounts[p.userId] : undefined
+  const project = p.type === 'project' && !names.projectIdHandles ? names.directory.projects[p.projectId] : undefined
+  const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : (project ?? `project:${p.projectId}:${p.environment}`)
   if (actor.profile?.platform) return { id: actor.id, kind: 'external', handle: actor.profile.platform.userId, platform: actor.profile.platform.platform }
   if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
   if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
@@ -321,7 +326,8 @@ const whoOf = (actor: Actor): Who => {
  * What every board in one fake API shares: its team, its accounts and directory, its clock, and its bucket. `externalImports`:
  * an import's author is the platform user alone, as Vercel's API named them before platform profiles. `platformHandles`: an
  * import's handle is the platform user's own, as the API named them before it put them under their project's name. `boardWideKeys`:
- * a sync key is one registrant's on the whole board, as Vercel's API kept them before each project had its own.
+ * a sync key is one registrant's on the whole board, as Vercel's API kept them before each project had its own. `projectIdHandles`:
+ * a deployment's handle is `project:<id>:<environment>`, as the API named one before it named it by its project.
  */
 type Shared = {
   teamId: string
@@ -332,6 +338,7 @@ type Shared = {
   externalImports: boolean
   platformHandles: boolean
   boardWideKeys: boolean
+  projectIdHandles: boolean
 }
 
 const STORAGE = 'http://storage.test/'
@@ -377,7 +384,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   const seen = (actor: Actor) => {
     // A platform user is named by what its sync last said of them.
     if (actor.principal.type === 'external' || actor.profile?.platform) return
-    actors.set(actor.id, { ...viewOf(accounts, actor), lastSeenAt: now() })
+    actors.set(actor.id, { ...viewOf(shared, actor), lastSeenAt: now() })
   }
 
   /** A channel's feed position, as the API's `c1.` cursor carries it: shared by its messages and its events. */
@@ -1353,6 +1360,8 @@ export function fakeMessageboard(
      * second registrant's is 409 `sync_key_taken`, a registration names no `elsewhere`, and nothing names a binding's project.
      */
     boardWideKeys?: boolean
+    /** A deployment's handle is `project:prj_pong:production`, as Vercel's API named one before it named it by its project (`pong`). */
+    projectIdHandles?: boolean
   } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
@@ -1374,6 +1383,7 @@ export function fakeMessageboard(
     externalImports: options.externalImports ?? false,
     platformHandles: options.platformHandles ?? false,
     boardWideKeys: options.boardWideKeys ?? false,
+    projectIdHandles: options.projectIdHandles ?? false,
   }
 
   const tokens = fakeTokens({ now })
@@ -1418,13 +1428,13 @@ export function fakeMessageboard(
     // Sync's routes take none either, but imports.
     if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
     const me = () => {
-      if (options.me === false) return { teamId, actor, view: viewOf(accounts, actor) }
+      if (options.me === false) return { teamId, actor, view: viewOf(shared, actor) }
       const role = actor.principal.type === 'user' ? (roles[actor.principal.userId] ?? 'member') : null
       // A deployment's own credential may sync too, which no team role says: where, its grants do.
       const can = role === null ? ['read', 'post', 'react', 'label', ...(actor.principal.type === 'project' ? ['sync'] : [])] : role === 'viewer' ? ['read', 'react'] : ALL
       // A board token may do what its scope says, until it expires, in milliseconds as the API sends times.
       const says = options.me?.[bearer] ?? (actor.token ? { can: tokens.summary(actor.token.can), expiresAt: actor.token.expiresAt } : { can: { '*': can }, expiresAt: null })
-      return { teamId, actor, view: viewOf(accounts, actor), can: says.can, expiresAt: says.expiresAt }
+      return { teamId, actor, view: viewOf(shared, actor), can: says.can, expiresAt: says.expiresAt }
     }
     if (method === 'GET' && path === '/me') return me()
     if (method === 'GET' && path === '/boards') {

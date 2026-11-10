@@ -1594,15 +1594,18 @@ describe('vercel()', () => {
     expect(api.registrations.get('vercel:project:prj_pong:production')!.hash).toBe(watchersHash(watch, [{ key: 'slack', platform: 'slack' }]))
   })
 
-  it("refuses a project it names by name that turns out to be the run's own, after one grant it revokes", async () => {
-    const api = fakeMessageboard()
-    await handleOn(api).createGrant({ principals: [{ kind: 'project', project: 'web', environments: ['production'] }], can: { '*': 'all' } })
-    const before = [...api.grants.keys()]
-    // web's own deployment names web: only the API knows that's prj_web, so the kit asks it with a grant that changes nothing for the run.
-    await expect(conformance(handleOn(api, 'project:prj_web:production'), { principals: { project: 'web', repository: 'acme/api' } })).rejects.toThrow(
-      "principals.project is this run's own project, web (prj_web)",
-    )
-    expect([...api.grants.keys()]).toEqual(before)
+  it("refuses a project it names by name that turns out to be the run's own: by its handle, or after one grant it revokes where the API names it by ID", async () => {
+    for (const [projectIdHandles, refusal] of [
+      [false, "principals.project is this run's own project, web: "],
+      // Only the API knows web is prj_web, so the kit asks it with a grant that changes nothing for the run.
+      [true, "principals.project is this run's own project, web (prj_web)"],
+    ] as const) {
+      const api = fakeMessageboard({ projectIdHandles })
+      await handleOn(api).createGrant({ principals: [{ kind: 'project', project: 'web', environments: ['production'] }], can: { '*': 'all' } })
+      const before = [...api.grants.keys()]
+      await expect(conformance(handleOn(api, 'project:prj_web:production'), { principals: { project: 'web', repository: 'acme/api' } })).rejects.toThrow(refusal)
+      expect([...api.grants.keys()]).toEqual(before)
+    }
   })
 
   it("fails a board whose team role lets a viewer post, in the conformance kit's viewer check", async () => {
@@ -1794,11 +1797,63 @@ describe("each project's sync keys on Vercel's API", () => {
       ['slack', 'slack:C_SUP', `https://acme.slack.com/archives/C_SUP/p${supportSlack.channelPosts[0]!.id}`],
       ['www/slack', 'www/slack:C_WWW', null],
     ])
-    // Support has imported no one, so nothing the API says names it: it goes by its ID.
+    // Support has imported no one, but its deployment wrote as itself, by its project's name.
     expect(await targets(julian)).toEqual([
-      ['prj_support/slack', 'prj_support/slack:C_SUP', null],
+      ['support/slack', 'support/slack:C_SUP', null],
       ['www/slack', 'www/slack:C_WWW', null],
     ])
+  })
+
+  it("names another project by its deployments' handle, else by what its users say, else by its ID, as the API names them", async () => {
+    for (const [projectIdHandles, keys] of [
+      [false, ['support/slack', 'www/slack']],
+      // An API that names a deployment by its ID names support nowhere, and www on the user it imported.
+      [true, ['prj_support/slack', 'www/slack']],
+    ] as const) {
+      const api = fakeMessageboard({ projects: NAMES, projectIdHandles })
+      const support = handleOn(api, 'project:prj_support:production')
+      const www = handleOn(api, 'project:prj_www:production')
+      for (const project of [support, www]) await project.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+      const julian = handleOn(api)
+      const root = await julian.post('general', { text: 'checkout is down' })
+      // Each binds the thread as its deployment, and www brings Ada's reply in.
+      await support.syncReceipt({ kind: 'thread', message: root.id, target: 'slack:C_SUP', targetKind: 'channel', cause: 'request' })
+      await www.syncReceipt({ kind: 'thread', message: root.id, target: 'slack:C_WWW:1', targetKind: 'thread', cause: 'request' })
+      const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
+      await www.syncImport({ op: 'post', author: ada, from: 'slack', re: root.id, text: 'on it', origin: { thread: 'slack:C_WWW:1', subthread: null, message: '2', context: null } })
+      expect((await julian.sync(root.id)).targets.map((target) => target.key)).toEqual(keys)
+      expect((await julian.thread(root.id)).replies.map((reply) => reply.from)).toEqual(['www/slack'])
+      expect((await support.thread(root.id)).replies.map((reply) => reply.from)).toEqual(['www/slack'])
+    }
+  })
+
+  it("says another project's deployment holds a key by its project's name, where the API names it", async () => {
+    for (const [projectIdHandles, holder] of [
+      [false, 'www (production)'],
+      [true, 'prj_www (production)'],
+    ] as const) {
+      const api = fakeMessageboard({ projects: NAMES, projectIdHandles })
+      await handleOn(api, 'project:prj_www:production').post('general', { text: 'deployed' })
+      const said = vi.spyOn(console, 'info').mockImplementation(() => {})
+      const fetch = as(api, 'project:prj_support:production')
+      // An API that says a key of support's is another project's deployment's.
+      const backend = vercel({
+        team: 'team_test',
+        api: API,
+        fetch: async (input, init) => {
+          const request = new Request(input, init)
+          const response = await fetch(request)
+          if (request.method !== 'PUT' || !new URL(request.url).pathname.endsWith('/watchers')) return response
+          const elsewhere = [{ key: 'slack', platform: 'slack', owner: 'vercel:project:prj_www:production', environment: 'production' }]
+          return Response.json({ ...(await response.json()), sync: [], elsewhere })
+        },
+      })
+      board({ backend, url: SUPPORT_URL, basePath: '/api/board', sync: { slack: slack({ adapter: fakePlatform('slack').adapter }, channels({ C_SUP: 'general' })) } })
+      await backend.registerWatchers()
+      backend.close()
+      expect(said.mock.calls).toEqual([[`[board] slack is synced by ${holder}`]])
+      said.mockRestore()
+    }
   })
 
   it("runs nothing through a key production holds from a preview, whose watchers run, and says once who has it", async () => {
