@@ -5,11 +5,12 @@ import type { Protocol } from '../api/protocol.ts'
 import { LEASES_SESSION, leasesContract, type LeaseEvents } from '../contract/contract.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import { foldMessages, type Message, type MessagesState, type Task } from '../contract/folds.ts'
+import { own } from '../contract/own.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { OPEN_TASK_STATES, TASK_LABEL, type TaskState } from '../contract/schemas.ts'
 import { authorize, type Access, type Permission } from './access.ts'
 import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
-import { indexOf, ref, toMessageFilter, view, whoIs } from './feed.ts'
+import { indexOf, ref, toMessageFilter, verifiedRecord, view, whoIs } from './feed.ts'
 import type { MessageFilter, ThreadSummary } from '../store/types.ts'
 import { appendFrom, authorizeMessage, movedOn, seenFor, untilApplied, type Along, type Events, type Identity, type WriteContext } from './writes.ts'
 
@@ -306,6 +307,19 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     return new Set([value, ...who.actors, ...who.principals])
   }
 
+  /**
+   * The owners a claim's `from` names: the principal with that ID, or whoever the board verified
+   * under that handle. A task's text is instructions for whoever claims it, so whose it takes is
+   * never a name its holder picked: a handle a client sent names no one, and neither does one the
+   * board hasn't seen, so the claim says so instead of waiting for tasks that can't come.
+   */
+  async function ownersFrom(value: string): Promise<string[]> {
+    const { state: actors } = await writes().session.state(actorsReducer)
+    const verified = (own(actors.byHandle, value.toLowerCase()) ?? []).filter((id) => verifiedRecord(own(actors.byId, id) ?? {}))
+    if (verified.length > 0 || own(actors.byId, value)) return [value, ...verified]
+    throw badRequest(`from: this board hasn't verified anyone as ${value}, and a handle its holder picked names no owner: name them by ID`, 'invalid_from')
+  }
+
   /** A claim of the oldest ready task there that the caller takes, or null when there's none now. */
   async function claimNext(identity: Identity, input: Protocol['claimReadyTask']['input']): Promise<{ root: Message; claim: TaskClaim } | null> {
     const ctx = writes()
@@ -320,7 +334,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     if (filter.channels?.length === 0) return null
     // Whose tasks it takes: its own, and those of the owners it names.
     const owners = new Set([principal.id])
-    for (const handle of input.from ?? []) for (const id of await named(handle)) owners.add(id)
+    for (const value of input.from ?? []) for (const id of await ownersFrom(value)) owners.add(id)
     const seen = seenFor(identity, (await ctx.session.state(actorsReducer)).state)
     const token = newToken()
     const read: { taken: { root: Root; claim: TaskClaim } | null } = { taken: null }

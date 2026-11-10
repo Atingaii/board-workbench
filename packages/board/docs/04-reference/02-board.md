@@ -344,7 +344,9 @@ if (claim) {
   `task_assigned`. With `{ channel }` it claims the oldest ready task in that
   channel (`work`) or subtree (`work/`) that has every label in `label`: one
   assigned to you first, then an unassigned one you own, or whose owner `from`
-  names by handle. It answers `null` when nothing is ready, after waiting up to
+  names, by ID or by a handle the board verified. A handle someone's client
+  sent names no owner, and fails with 400 `invalid_from`. It answers `null`
+  when nothing is ready, after waiting up to
   `wait` seconds. `lease` is seconds, 30 to 3600.
 - **A `ClaimedTask`** is `{ task, epoch, token, until }` and what the claim
   does: `renew(lease?)`, `release()`, `complete(result?)`, `fail(reason)`, and

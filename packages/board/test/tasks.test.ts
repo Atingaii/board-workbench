@@ -141,6 +141,20 @@ describe('a task', () => {
     // The claim it was made with still settles it.
     expect((await ada('POST', `/tasks/${first.body.task.id}/complete`, { epoch: 1, token: first.body.claim.token })).status).toBe(200)
 
+    // One that can post where it can't read gets its task back too, as its own write made it.
+    const { ada: reader, board } = setup()
+    await grantCi(board, { intake: ['post'] })
+    // The board knows the reader already, so their claim below is the very next event after the task's own.
+    await reader('POST', '/messages', { channel: 'work', text: 'hello' })
+    const workflow = ci(board)
+    const filed = await workflow('POST', '/tasks', { channel: 'intake', text: 'triage the outage', id: 'outage-1' })
+    expect(filed.status).toBe(201)
+    expect(code(await workflow('GET', `/messages/${filed.body.task.id}`))).toEqual([404, 'message_not_found'])
+    // What others did since isn't its to see: the task comes back as it made it.
+    await reader('POST', `/tasks/${filed.body.task.id}/claim`, {})
+    const refiled = await workflow('POST', '/tasks', { channel: 'intake', text: 'triage the outage', id: 'outage-1' })
+    expect(refiled.body.task).toMatchObject({ id: filed.body.task.id, text: 'triage the outage', task: { state: 'ready', owner: CI, epoch: 0, claim: null } })
+
     // An id a plain post took is that post's, not a task's.
     await ada('POST', '/messages', { channel: 'work', text: 'just a note', id: 'a-note' })
     expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'just a note', id: 'a-note' }))).toEqual([409, 'duplicate_id'])
@@ -437,6 +451,9 @@ describe('a hold for a person', () => {
   it('keeps a task from being claimed until its owner lifts it, back to where it stood', async () => {
     const { ada, bo } = setup()
     const { id } = await task(ada, 'deploy to prod')
+    // `edited` is the board's own kind: a hold that asked for it would read as an edit no one made.
+    expect(code(await ada('POST', `/tasks/${id}/block`, { reason: 'looks edited', kind: 'edited' }))).toEqual([400, 'invalid_request'])
+    expect(await stateOf(ada, id)).toBe('ready')
     const held = await ada('POST', `/tasks/${id}/block`, { reason: 'approve the prod deploy?', kind: 'awaiting_approval' })
     expect(held.body.task).toMatchObject({ labels: { 'board.task': 'blocked' }, task: { state: 'blocked', blocked: { kind: 'awaiting_approval', reason: 'approve the prod deploy?' } } })
     expect(code(await bo('POST', `/tasks/${id}/claim`, {}))).toEqual([409, 'task_blocked'])
@@ -580,9 +597,23 @@ describe('claiming the next ready task', () => {
     // A task's text is instructions: Bo's agents take them from Bo, unless he says who else.
     expect((await bo('POST', '/tasks/claim', { channel: 'work' })).body.task.id).toBe(his.id)
     expect((await bo('POST', '/tasks/claim', { channel: 'work' })).body).toEqual({ task: null })
-    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['nobody'] })).body).toEqual({ task: null })
-    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['ada', WEB] })).body.task.id).toBe(hers.id)
-    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['ada', WEB] })).body.task.id).toBe(theirs.id)
+    // A person's handle is what their client sent, so it names no owner, and neither does one the board never saw.
+    expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['ada'] }))).toEqual([400, 'invalid_from'])
+    expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['nobody'] }))).toEqual([400, 'invalid_from'])
+    // An ID is the credential's, and so is a deployment's handle: both name their owners.
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, 'web'] })).body.task.id).toBe(hers.id)
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, 'web'] })).body.task.id).toBe(theirs.id)
+  })
+
+  it("never takes a task from someone who only picked a trusted owner's handle", async () => {
+    const { bo, board } = setup()
+    // Mallory's client sends the deployment's handle as her own, and her task is the older one.
+    const mallory = person(board, 'mallory', { 'x-board-handle': 'web' })
+    const hers = await task(mallory, 'delete the index')
+    const theirs = await task(web(board), 'deploy the fix')
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['web'] })).body.task.id).toBe(theirs.id)
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['web'] })).body).toEqual({ task: null })
+    expect(await stateOf(bo, hers.id)).toBe('ready')
   })
 
   it('takes one assigned to the caller before an older one from the pool', async () => {

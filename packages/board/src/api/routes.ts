@@ -14,6 +14,7 @@ import {
   platformAvatar,
   storable,
   TASK_NEEDS_MAX,
+  EDITED_HOLD,
   TaskHoldKind,
   TaskNote,
   TaskState,
@@ -242,7 +243,7 @@ export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()
 
 /**
  * Claims the oldest ready task in `channel` that has every label in `label`: one assigned to the
- * caller first, then an unassigned one it owns, or whose owner `from` names by handle. `wait`
+ * caller first, then an unassigned one it owns, or whose owner `from` names, by ID or by a handle the board verified. `wait`
  * holds the request up to that many seconds for one.
  */
 export const ClaimReadyTaskBody = z.object({
@@ -257,9 +258,14 @@ export const RenewTaskBody = z.object({ ...Claimed, lease: Lease.optional() })
 export const ReleaseTaskBody = z.object(Claimed)
 export const CompleteTaskBody = z.object({ ...Claimed, result: TaskNote.optional() })
 export const FailTaskBody = z.object({ ...Claimed, reason: TaskNote })
-/** A hold for a person. A claimed task's comes from its claim, with the claim's `epoch` and `token`. */
+/** A hold for a person. A claimed task's comes from its claim, with the claim's `epoch` and `token`. Kind `edited` is the board's own, so none asks for it. */
 export const BlockTaskBody = z
-  .object({ reason: TaskNote, kind: TaskHoldKind.optional(), epoch: Claimed.epoch.optional(), token: Claimed.token.optional() })
+  .object({
+    reason: TaskNote,
+    kind: TaskHoldKind.refine((kind) => kind !== EDITED_HOLD, "`edited` is the board's own kind, for a task whose root someone else edited: name another").optional(),
+    epoch: Claimed.epoch.optional(),
+    token: Claimed.token.optional(),
+  })
   .refine((body) => (body.epoch === undefined) === (body.token === undefined), { message: 'a claim is its `epoch` and its `token`: pass both, or neither' })
 /** The one actor of its owner's that claims the task, or null for anyone who may. */
 export const AssignTaskBody = z.object({ for: ActorId.nullable() })

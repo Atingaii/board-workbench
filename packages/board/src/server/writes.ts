@@ -5,7 +5,7 @@ import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { foldMessages, type ActorsState, type Channel, type Message, type MessagesState } from '../contract/folds.ts'
 import { own } from '../contract/own.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
-import type { Attachment, Author, Labels } from '../contract/schemas.ts'
+import { EDITED_HOLD, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { platformProfile } from '../contract/profiles.ts'
 import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
@@ -277,9 +277,29 @@ export async function landedFor(ctx: WriteContext, identity: Identity, landed: M
   if (access.readable(landed.channel)) return view(landed, actors, await readerFor(ctx, access, landed))
   // A post written by a caller that could read isn't its to replay, as `authorizeOwn` holds.
   if (!landed.blind) return null
-  const [event] = await ctx.session.history({ gte: landed.id, lte: landed.id })
-  const posted = foldMessages({ byId: {}, replies: {} }, event as BoardEvent).byId[landed.id]!
+  // Its post, and what its own write made of it in the same append: the task it started as, and its claim.
+  const events = (await ctx.session.history({ gte: landed.id, lte: landed.id + STARTED.length })) as BoardEvent[]
+  const folded: MessagesState = { byId: {}, replies: {} }
+  for (const [at, event] of events.entries()) {
+    if (at > 0 && !startedWith(event, landed.id, at, identity.author)) break
+    foldMessages(folded, event)
+  }
+  const posted = folded.byId[landed.id]!
   return { ...view(posted, actors, await readerFor(ctx, access, posted)), text: blindText(posted.text, identity.actor.id) }
+}
+
+/** What a root's own append can carry after its post, in order: what made it a task. */
+const STARTED = ['task.created', 'task.ready', 'task.claimed'] as const
+
+/**
+ * Whether `event`, `at` places after root `id`'s post, came with it: one of what starts a task,
+ * about that root, by the same author. Anything else is a later write, and so is one that follows it.
+ */
+function startedWith(event: BoardEvent, id: number, at: number, author: Author): boolean {
+  // `task.created` right after the post, then `task.ready` and `task.claimed` where the write made them.
+  if (at === 1 ? event.type !== STARTED[0] : !(STARTED as readonly string[]).slice(1).includes(event.type)) return false
+  const payload = event.payload as { id?: number; by?: Author }
+  return payload.id === id && (payload.by === undefined || sameAuthor(payload.by, author))
 }
 
 /**
@@ -623,7 +643,7 @@ function heldByEdit(root: Message | undefined, editor: Identity): Events {
   const owner = task?.owner === editor.principal.id && editor.principal.kind !== 'external'
   if (!root || root.deleted || !task || owner) return []
   if (task.state !== 'waiting' && task.state !== 'ready' && task.state !== 'claimed') return []
-  return [{ type: 'task.blocked', payload: { id: root.id, thread: root.thread, kind: 'edited', reason: EDITED, by: editor.author } }]
+  return [{ type: 'task.blocked', payload: { id: root.id, thread: root.thread, kind: EDITED_HOLD, reason: EDITED, by: editor.author } }]
 }
 
 /** The cancel a delete of a task's root brings, unless the task has completed or been canceled: before the delete, while the root still wears its labels. */

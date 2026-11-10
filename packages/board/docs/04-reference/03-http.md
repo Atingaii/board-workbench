@@ -127,7 +127,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/tasks/:id/release` | `{ epoch, token }`. Answers `{ task }`, as the routes below do |
 | POST | `/tasks/:id/complete` | `{ epoch, token, result? }` |
 | POST | `/tasks/:id/fail` | `{ epoch, token, reason }` |
-| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim |
+| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim. `kind` is any name but `edited`, the board's own |
 | POST | `/tasks/:id/unblock` | No body. A task that isn't blocked stays as it is |
 | POST | `/tasks/:id/reopen` | No body. A failed task is ready again |
 | POST | `/tasks/:id/assign` | `{ for }`: one of the owner's actors, or `null` for anyone who may claim it |
@@ -435,7 +435,8 @@ A task is a thread with a state. Its ID is its root's, and its root carries
 - **`POST /tasks/claim`** takes a channel (`work`) or a subtree (`work/`), and
   the labels a task must have, as `label: { step: "fix" }`. It claims one
   assigned to the caller first, then the oldest unassigned one the caller's
-  principal owns, or whose owner `from` names by handle. `wait` holds the
+  principal owns, or whose owner `from` names, by ID or by a handle the board
+  verified. `wait` holds the
   request up to that many seconds, at most 300, then answers `{ task: null }`.
 - **Completing a task** readies each task that waited only for it, in the same
   write. A failed or canceled one readies nothing.
@@ -677,6 +678,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
 | 400 | `reserved_label` | a write that sets or unsets a label under `board.` |
 | 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, or the task itself |
+| 400 | `invalid_from` | a claim whose `from` names no ID the board knows and no handle it verified: a handle someone's client sent names no owner |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
 | 400 | `size_mismatch` | finishing a direct upload whose bytes in the store aren't the size its start said |

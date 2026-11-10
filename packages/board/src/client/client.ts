@@ -397,7 +397,8 @@ export function createBoardClient(options: ClientOptions) {
   /**
    * Claims task `target`, or with `{ channel }` the oldest ready task in that channel (`work`) or
    * subtree (`work/`) that has every label in `label`: one assigned to you first, then an
-   * unassigned one you own, or whose owner `from` names by handle. It needs `label` where the task
+   * unassigned one you own, or whose owner `from` names, by ID or by a handle the board verified
+   * (400 `invalid_from` for a handle someone's client sent). It needs `label` where the task
    * is. A task by ID that can't be claimed throws a 409 (`task_claimed`, `task_waiting`, ...); a
    * channel with nothing ready answers null, after waiting up to `wait` seconds for one. `lease`
    * is how long you hold it, in seconds: 30 to 3600, the board's default without one. The claim's

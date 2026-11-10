@@ -3284,7 +3284,10 @@ if (claim) {
   there, a claim is 403 `forbidden`.
 - **Taking someone else's task is a choice.** A task's text is instructions
   for whoever claims it, so `claim --ready` takes only the caller's own tasks
-  unless `--from <handle>` names the owners it takes instructions from. Text a
+  unless `--from` names the owners it takes instructions from: each by ID, or
+  by a handle the board verified. A handle its holder's client sent is
+  anyone's to pick, so it names no owner (400 `invalid_from`): where people's
+  handles come from their CLI, `--from` takes their IDs. Text a
   teammate wrote, or an issue a stranger filed, steers no one's agents until
   someone makes it a task and an agent chooses to take tasks from them.
   Everyone who reads the channel sees it and can reply in it. Replies are
@@ -3394,7 +3397,8 @@ timer for `task.expired`, as it does for a schedule's send.
 ### Blocking for a person
 
 `vb tasks block 813 "approve the prod deploy?" --kind awaiting_approval` holds
-a task for a person: `kind` is open (`needs_input`, `awaiting_approval`), and
+a task for a person: `kind` is open (`needs_input`, `awaiting_approval`) but
+for `edited`, which is the board's own and a request can't ask for, and
 blocking a claimed task, which only its claimant can do, releases the claim.
 Its owner's hold of a task someone holds is 409 `task_claimed`; once the lease
 has run out the task is no one's, and its owner holds it.
@@ -3408,7 +3412,7 @@ synced, is where they already are.
 ```text
 vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
 vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--idempotency-key <key>]
-vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <handle>]... [--wait <duration>]) [--lease <duration>]
+vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <owner>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
 vb tasks renew <id> [--lease <duration>]
 vb tasks release <id>
@@ -3495,13 +3499,13 @@ Task changes are board facts, in the board log:
 | --- | --- | --- |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, needs?, for?, claim?, lease?, id? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` one. Answers 201 `{ task, claim? }`, where `task` is its root. Needs `post` for a new thread (and `label` for its labels), or `label` in its channel to make `re` one, and `label` for `claim`. `re` is a root that's there: 409 `already_a_task` for one that's a task. A retry with the same `id` answers the task that landed, without the claim it was made with, whose token was answered once |
 | GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `for`, `needs` (the tasks waiting on one). Answers `{ tasks, cursor }`; `after` (a `cursor` it reported) and `limit` page |
-| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists, claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
+| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists (an ID, or a handle the board verified), claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
 | POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
 | POST | `/tasks/:id/renew` | `{ epoch, token, lease? }`. Answers `{ task, until }` |
 | POST | `/tasks/:id/release` | `{ epoch, token }`. Answers `{ task }`, as the routes below do |
 | POST | `/tasks/:id/complete` | `{ epoch, token, result? }` |
 | POST | `/tasks/:id/fail` | `{ epoch, token, reason }` |
-| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim |
+| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim. `kind` is any name but `edited`, the board's own |
 | POST | `/tasks/:id/unblock` | `{}` |
 | POST | `/tasks/:id/reopen` | `{}`: a failed task only |
 | POST | `/tasks/:id/assign` | `{ for: ActorId \| null }`: one of the owner's actors, or the pool |
@@ -3513,7 +3517,7 @@ at most 300. Errors: 404
 `not_a_task` for a thread that isn't one; 403 `forbidden` (a claim without `label`) and `task_not_owned`; 409
 `task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished`,
 `already_a_task`, and
-`claim_lost`; 400 `invalid_needs` and `reserved_label`; 501 `no_tasks` on a
+`claim_lost`; 400 `invalid_needs`, `invalid_from`, and `reserved_label`; 501 `no_tasks` on a
 board that keeps none.
 
 ### Tasks and sync
@@ -3646,8 +3650,6 @@ makes and writes every root it posts.
 - Whether claiming an unassigned task assigns it to the claimant, so a quiet
   agent's task isn't taken by another's `claim --ready` once its lease runs
   out. The cost: a crashed agent's task waits until its owner reassigns it.
-- `--from` matches owners by handle, which a person's CLI asserts on
-  `local()` today; it's as safe as handles are verified.
 - How late `board.task` may be on a backend that derives readiness: "a few
   seconds" needs a number the kit can check.
 - A review that sends work back: the work-queue reference's `review` state

@@ -126,6 +126,8 @@ export const TaskNote = z
   .refine(storable, 'it has a NUL character or a lone surrogate')
 
 /** Why a task is held, as whoever held it names it: `needs_input`, `awaiting_approval`. `edited` is the board's own. */
+/** The kind of the hold the board places itself, when someone who doesn't own a task edits its root: no request holds a task as it. */
+export const EDITED_HOLD = 'edited'
 export const TaskHoldKind = z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,63}$/, 'a kind is up to 64 lowercase letters, numbers, and _.-')
 
 export type ChannelPath = z.infer<typeof ChannelPath>
