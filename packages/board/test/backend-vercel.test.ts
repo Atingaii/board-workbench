@@ -1754,7 +1754,7 @@ describe("each project's sync keys on Vercel's API", () => {
       fetch: (input, init) => {
         const request = new Request(input, init)
         asked.push(`${request.method} ${new URL(request.url).pathname.replace(/^\/v1\/messageboard(\/boards\/[^/]+)?/, '')}`)
-        return fetch(request)
+        return fetch(input, init)
       },
     })
     onTestFinished(() => backend.close())
@@ -1804,10 +1804,10 @@ describe("each project's sync keys on Vercel's API", () => {
     ])
   })
 
-  it("names another project by its deployments' handle, else by what its users say, else by its ID, as the API names them", async () => {
+  it("names another project by the handle its deployments and their profiles go by, else by what its users say, else by its ID", async () => {
     for (const [projectIdHandles, keys] of [
       [false, ['support/slack', 'www/slack']],
-      // An API that names a deployment by its ID names support nowhere, and www on the user it imported.
+      // An API that names a deployment by its ID, and its profiles under that, names support nowhere, and www on the user it imported.
       [true, ['prj_support/slack', 'www/slack']],
     ] as const) {
       const api = fakeMessageboard({ projects: NAMES, projectIdHandles })
@@ -1816,8 +1816,8 @@ describe("each project's sync keys on Vercel's API", () => {
       for (const project of [support, www]) await project.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
       const julian = handleOn(api)
       const root = await julian.post('general', { text: 'checkout is down' })
-      // Each binds the thread as its deployment, and www brings Ada's reply in.
-      await support.syncReceipt({ kind: 'thread', message: root.id, target: 'slack:C_SUP', targetKind: 'channel', cause: 'request' })
+      // Support binds the thread through its sync, as a profile of its deployment, www as its deployment, and www brings Ada's reply in.
+      await support.as('sync').syncReceipt({ kind: 'thread', message: root.id, target: 'slack:C_SUP', targetKind: 'channel', cause: 'request' })
       await www.syncReceipt({ kind: 'thread', message: root.id, target: 'slack:C_WWW:1', targetKind: 'thread', cause: 'request' })
       const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
       await www.syncImport({ op: 'post', author: ada, from: 'slack', re: root.id, text: 'on it', origin: { thread: 'slack:C_WWW:1', subthread: null, message: '2', context: null } })
@@ -1842,7 +1842,7 @@ describe("each project's sync keys on Vercel's API", () => {
         api: API,
         fetch: async (input, init) => {
           const request = new Request(input, init)
-          const response = await fetch(request)
+          const response = await fetch(input, init)
           if (request.method !== 'PUT' || !new URL(request.url).pathname.endsWith('/watchers')) return response
           const elsewhere = [{ key: 'slack', platform: 'slack', owner: 'vercel:project:prj_www:production', environment: 'production' }]
           return Response.json({ ...(await response.json()), sync: [], elsewhere })

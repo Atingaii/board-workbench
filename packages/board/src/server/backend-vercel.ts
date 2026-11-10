@@ -741,8 +741,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /**
    * Projects' names by ID, from what a read of the actors says: a deployment's handle, which the API makes its
-   * project's name, then the name it gives a project on its users (their `via`). An API that names a deployment by its
-   * ID (`project:prj_…:production`) names its project only there.
+   * project's name, then what comes before the `/` in one of its profiles' (`support/sync`, its sync's; `support/malte`,
+   * a user it imported), then the name the API gives a project on its users (their `via`). An API that names a
+   * deployment by its ID (`project:prj_…:production`, `project:prj_…:production/sync`) names its project only there.
    */
   const namesRead = new WeakMap<object, Promise<Map<string, string>>>()
   function namesIn(read: { views: Promise<Map<string, ApiActorView>> }): Promise<Map<string, string>> {
@@ -753,15 +754,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         (names = read.views.then(
           (views) => {
             const byHandle = new Map<string, string>()
+            const byProfile = new Map<string, string>()
             const byVia = new Map<string, string>()
             for (const [id, found] of views) {
               const principal = principalFrom(id)
               if (principal?.type !== 'project') continue
-              if (actorParts(id).profile === null) {
-                if (!found.handle.startsWith('project:')) byHandle.set(principal.projectId, found.handle)
-              } else if (found.via?.name) byVia.set(principal.projectId, found.via.name)
+              const profiled = actorParts(id).profile !== null
+              if (profiled && found.via?.name) byVia.set(principal.projectId, found.via.name)
+              if (found.handle.startsWith('project:')) continue
+              const slash = found.handle.indexOf('/')
+              if (!profiled) byHandle.set(principal.projectId, found.handle)
+              else if (slash > 0) byProfile.set(principal.projectId, found.handle.slice(0, slash))
             }
-            return new Map([...byVia, ...byHandle])
+            return new Map([...byVia, ...byProfile, ...byHandle])
           },
           () => new Map<string, string>(),
         )),
