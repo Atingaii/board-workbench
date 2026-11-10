@@ -10,6 +10,7 @@ import { platformProfile } from '../contract/profiles.ts'
 import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
 import { actorSeen } from './actors.ts'
+import { replaceMentions } from '../contract/mentions.ts'
 import { syncTarget, type SyncTarget } from './targets.ts'
 import type { BoardSession } from './a2.ts'
 import type { BoardReads } from './reads.ts'
@@ -250,8 +251,15 @@ export async function landedFor(ctx: WriteContext, identity: Identity, landed: M
   if (!landed.blind) return null
   const [event] = await ctx.session.history({ gte: landed.id, lte: landed.id })
   const posted = foldMessages({ byId: {}, replies: {} }, event as BoardEvent).byId[landed.id]!
-  return view(posted, actors, await readerFor(ctx, access, posted))
+  return { ...view(posted, actors, await readerFor(ctx, access, posted)), text: blindText(posted.text, identity.actor.id) }
 }
+
+/**
+ * A message's text for its writer where it can't read: each exact mention but of itself shows as
+ * `@…`. The board turned an email it wrote into an actor ID before mentions were text, and a sync's
+ * import names its own profiles: who those are, `/actors` doesn't show it either.
+ */
+export const blindText = (text: string, own: string) => replaceMentions(text, (token) => (token.kind === 'actor' && token.actor !== own ? '@…' : null))
 
 const sameAuthor = (a: Author, b: Author) =>
   a.actor === b.actor && a.principal === b.principal && a.profile === b.profile && a.session === b.session

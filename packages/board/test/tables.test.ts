@@ -223,7 +223,7 @@ function conformance(open: () => Promise<MessageTables>) {
     const me = { id: 'vercel:user:u_bo', handle: 'bo' }
     for (const filters of FILTERS) {
       const matches = compileFilter(filters, { me, actors, messages, access: FULL_ACCESS })
-      const filter = toMessageFilter(filters, { me, actors })
+      const filter = toMessageFilter(filters, { me, actors, access: FULL_ACCESS })
       for (const page of [{ limit: 50 }, { limit: 7, after: 120 }, { limit: 7, before: 300 }, { limit: 500 }]) {
         const got = await tables.messages(filter, page)
         expect(got.messages, JSON.stringify({ filters, page })).toEqual(expectedMessages(messages, matches, page))
@@ -286,7 +286,7 @@ function conformance(open: () => Promise<MessageTables>) {
       const access = compileAccess(can)
       for (const filters of FILTERS) {
         const matches = compileFilter(filters, { me: null, actors, messages, access })
-        const filter = readableFilter(toMessageFilter(filters, { me: null, actors }), known, access)
+        const filter = readableFilter(toMessageFilter(filters, { me: null, actors, access }), known, access)
         const expected = expectedMessages(messages, matches, { limit: 500 })
         const got = filter.channels?.length === 0 ? [] : (await tables.messages(filter, { limit: 500 })).messages
         expect(got, JSON.stringify({ can, filters })).toEqual(expected)

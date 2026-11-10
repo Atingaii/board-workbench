@@ -137,6 +137,35 @@ describe('a write-only source', () => {
     expect((await julian('GET', '/messages?channel=feedback&mentions=me')).body.messages.map((m: { text: string }) => m.text)).toEqual(['thanks @julian!'])
   })
 
+  it('never shows a write-only caller an actor ID in its own post or schedule read back', async () => {
+    const board = await granting([intake], { scheduler: fakeQueue().scheduler })
+    const front = caller(board.fetch, await deploymentToken())
+    const text = 'thanks @julian, cc @[vercel:user:u_ada] and @[ada@vercel.com]'
+    expect((await front('POST', '/messages', { channel: 'feedback', text, id: 'thanks-1' })).status).toBe(201)
+    const scheduled = (await front('POST', '/schedules', { channel: 'feedback', text, in: '1h' })).body.schedule
+    const masked = 'thanks @julian, cc @… and @…'
+    expect((await front('GET', '/posts/thanks-1')).body.message.text).toBe(masked)
+    expect(((await front('GET', '/schedules')).body.schedules as { text: string }[]).map((schedule) => schedule.text)).toEqual([masked])
+    expect((await front('POST', `/schedules/${scheduled.id}/cancel`, {})).body.schedule.text).toBe(masked)
+  })
+
+  it("finds a mention by someone's other name only for a caller that reads every channel", async () => {
+    const board = await granting([{ ...intake, can: { 'feedback/': ['read', 'post'] } }])
+    // Without g2's every project on the team: front may read only feedback.
+    await board.revokeGrant('g2')
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const front = caller(board.fetch, await deploymentToken())
+    // Sam writes only in secret, which front can't read; feedback mentions @sam, and his agent.
+    await caller(board.fetch, await personToken('u_sam'), { 'x-board-handle': 'sam' })('POST', '/messages', { channel: 'secret', text: 'hi' })
+    for (const text of ['@sam can you look?', 'over to @sam/claude', 'cc @[vercel:user:u_sam]']) await julian('POST', '/messages', { channel: 'feedback', text })
+    const texts = async (as: typeof julian, mentions: string) =>
+      ((await as('GET', `/messages?channel=feedback&mentions=${encodeURIComponent(mentions)}`)).body.messages as { text: string }[]).map((m) => m.text)
+    expect(await texts(julian, 'vercel:user:u_sam')).toEqual(['@sam can you look?', 'over to @sam/claude', 'cc @[vercel:user:u_sam]'])
+    // Front gets what it names, as written: no saying that vercel:user:u_sam goes by sam.
+    expect(await texts(front, 'vercel:user:u_sam')).toEqual(['cc @[vercel:user:u_sam]'])
+    expect(await texts(front, 'sam')).toEqual(['@sam can you look?', 'over to @sam/claude'])
+  })
+
   for (const middleware of [undefined, [async ({ next }) => next()] satisfies Middleware[]]) {
     it(`gets back a retry as it landed, not what others added since (${middleware ? 'with' : 'without'} middleware)`, async () => {
       const board = await granting([intake], middleware ? { middleware } : {})

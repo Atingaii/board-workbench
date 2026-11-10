@@ -802,9 +802,15 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   channel. Links to an unreadable board message lose their snapshot when read.
 - **A write doesn't answer what a read wouldn't.** A post in a channel its
   caller can't read comes back with the text it sent, not what the middleware
-  made of it. A mention is text, resolved by no write: a handle one actor has,
-  one several share, one no one has, and an `@[actor-id]` the board doesn't
-  know all answer alike, so a write tells no one which handles or actors exist.
+  made of it. Where that caller reads its post again (`GET /posts/:id`) or
+  lists its schedules, each exact mention but of itself shows as `@…`: before
+  mentions were text, the board turned emails into actor IDs, and a sync's
+  import names its own profiles. A mention is text, resolved by no write: a
+  handle one actor has, one several share, one no one has, and an
+  `@[actor-id]` the board doesn't know all answer alike, so a write tells no
+  one which handles or actors exist. Nor does a read: only a caller that reads
+  every channel finds someone through their other name (`--mentions` by ID
+  matching their handle); anyone else's matches what it names as written.
 - Only the principal that wrote a message may edit or delete it. A person can
   edit their own profiles' messages. A principal ID is coarser than access (a
   repo's workflows share one), so where a caller can't read, its own is only
@@ -1130,7 +1136,9 @@ through the sync that speaks for them, under the key it imported them through.
   with it, an actor ID covers that actor's handle, and a person covers their
   agents too (`@julian/claude`, `@[vercel:user:u_1+claude]`). `me` is the
   caller's handle and ID. An email matches `@[ada@vercel.com]`, as written, and
-  nothing asks a platform who has it.
+  nothing asks a platform who has it. Who goes by what is the actors' records,
+  which only a reader of every channel sees, so for anyone else a value matches
+  as written, with the agents under it (`@sam`, `@sam/claude`).
 - **Each sync resolves mentions when it posts,** against its own users only:
   its own profiles of platform users under the key it posts through
   (`<principal>+<key>:…`), and users named under the key alone (`<key>:…`),

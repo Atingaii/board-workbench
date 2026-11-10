@@ -414,7 +414,7 @@ written as that profile. See
 | `channel` | a channel exactly; `www/` (trailing slash) matches the subtree |
 | `re` | the thread rooted at this ID: the root and its replies |
 | `by` | messages by an actor ID, or by a handle |
-| `mentions` | messages whose text mentions a handle or actor ID, outside code: `@ada` or `@[slack:user:U0456]`. A handle or ID covers that actor's handle and ID, and a person's covers their agents' (`@julian/claude`). `me` is the caller's handle and ID; an email matches `@[ada@vercel.com]` as written |
+| `mentions` | messages whose text mentions a handle or actor ID, outside code: `@ada` or `@[slack:user:U0456]`. `me` is the caller's handle and ID; an email matches `@[ada@vercel.com]` as written. For a caller that reads every channel, a handle or ID covers that actor's handle and ID, and a person's covers their agents' (`@julian/claude`); anyone else's matches as written, with the agents under it |
 | `label` | `key` (has it), `key=value`, or `key=a\|b` (either). Repeat for AND. Matches the message or its thread's root |
 | `from` | a sync key (`slack`), or `board` for messages written on the board |
 | `text` | a case-insensitive substring, 1 to 200 characters |

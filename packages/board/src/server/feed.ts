@@ -142,11 +142,14 @@ export type Me = { id: string; handle: string }
 /**
  * What a `--mentions` value matches in a message's text (`mentionTerms`): `me` is the caller's handle
  * and ID. Anyone else is the value as written, and each actor it names, by ID or by handle: their
- * handle and ID, and a person's agents too (`@julian/claude`, `@[vercel:user:u_1+claude]`).
+ * handle and ID, and a person's agents too (`@julian/claude`, `@[vercel:user:u_1+claude]`). Only a
+ * reader of every channel sees every actor, so anyone else gets the value and its agents as written:
+ * finding someone by their other name would say who goes by what where it can't read.
  */
-export function mentionFilter(value: string, context: { me: Me | null; actors: ActorsState }): NonNullable<MessageFilter['mentions']> {
+export function mentionFilter(value: string, context: { me: Me | null; actors: ActorsState; access: Access }): NonNullable<MessageFilter['mentions']> {
   if (value === 'me') return { terms: context.me === null ? [] : [mentionTerm(context.me.handle), context.me.id], prefixes: [] }
   const terms = new Set([mentionTerm(value)])
+  if (!context.access.readsAll) return { terms: [...terms], prefixes: [value.includes(':') ? `${value}+` : `${mentionTerm(value)}/`] }
   const prefixes = new Set<string>()
   for (const id of actorSet(value, context.actors)) {
     const actor = own(context.actors.byId, id)!
@@ -225,7 +228,7 @@ export function readableFilter(filter: MessageFilter, known: Iterable<string>, a
 }
 
 /** The filters as the tables take them: handles resolved to who they cover, mentions to the terms they match. */
-export function toMessageFilter(filters: ParsedFilters, context: { me: Me | null; actors: ActorsState }): MessageFilter {
+export function toMessageFilter(filters: ParsedFilters, context: { me: Me | null; actors: ActorsState; access: Access }): MessageFilter {
   const out: MessageFilter = {}
   const channel = filters.channel
   if (channel !== undefined)

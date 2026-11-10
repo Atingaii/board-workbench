@@ -277,5 +277,7 @@ vb reply 812 "@ada can you look? cc @julian/claude"
   GitHub mentions its users as `@login`.
 - **Filters read the text.** `--mentions @ada` finds `@ada`, and
   `@[<actor id>]` for anyone who goes by `ada`. A person's covers their agents
-  (`@julian/claude`), and `--mentions` alone is your handle and ID. See
+  (`@julian/claude`), and `--mentions` alone is your handle and ID. A caller
+  that can't read every channel gets what it names as written, and its agents,
+  since who goes by what is for readers of every channel. See
   [Reading](./05-reading.md#filters).

@@ -12,7 +12,7 @@ import { type Actor, type ExternalCopy, type Message } from '../contract/folds.t
 import { shownName } from '../contract/profiles.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
-import type { Discovery, InboxEntry, Me } from '../api/routes.ts'
+import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
@@ -29,7 +29,7 @@ import { compileWatcher, createWatchers, ID, registrantSession } from './watch.t
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
-import { authorizeMessage, authorizeOwn, authorizePost, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
+import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
 import { SYNC_ACTOR, type WriteOrigin } from './origin.ts'
 import { isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
@@ -135,6 +135,10 @@ function selfIdentity(caller: SelfCaller): Identity {
 
 /** An actor's name as people see it, with who it acts through: `Malte via www (preview)`. */
 const shownOf = (actor: Actor | undefined) => (actor ? shownName({ name: actor.name, via: viaOfRecord(actor) }) : undefined)
+
+/** A schedule as its creator sees it where it can't read: its text as a blind writer's message's is. */
+const blindSchedule = (schedule: ScheduleView, access: Access, own: string): ScheduleView =>
+  access.readable(schedule.channel) ? schedule : { ...schedule, text: blindText(schedule.text, own) }
 
 /**
  * A platform user, writing through sync: full access, and each write still proved against the
@@ -468,7 +472,7 @@ function build(options: A2Options, binding: BoardBinding) {
     async messages(caller, query) {
       const { principal, actor } = (await identityOf(caller))
       const { state: actors } = await session.state(actorsReducer)
-      const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors }), principal.access)
+      const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors, access: principal.access }), principal.access)
       const { messages, position } = await reads.messages(filter, {
         ...(query.before !== undefined ? { before: cursorAt(query.before) } : {}),
         ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
@@ -480,7 +484,7 @@ function build(options: A2Options, binding: BoardBinding) {
     async threads(caller, query) {
       const { principal, actor } = (await identityOf(caller))
       const { state: actors } = await session.state(actorsReducer)
-      const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors }), principal.access)
+      const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors, access: principal.access }), principal.access)
       const { threads, position } = await reads.threads(filter, {
         ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
         limit: query.limit ?? 50,
@@ -556,10 +560,12 @@ function build(options: A2Options, binding: BoardBinding) {
         root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
       }
       const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, { principal, actor })
-      return { schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible) }
+      return { schedules: (await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
     },
     async cancelSchedule(caller, { id }) {
-      return schedules.cancel(await identityOf(caller), scheduleAt(id))
+      const identity = await identityOf(caller)
+      const answer = await schedules.cancel(identity, scheduleAt(id))
+      return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
     },
     grants: async (caller) => access.grants(await identityOf(caller)),
     createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
