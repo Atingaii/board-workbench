@@ -49,13 +49,16 @@ describe('a mentions filter', () => {
 
 describe("an imported platform user's handle", () => {
   it('is typable as a mention, and made so in one pass, however long a run of punctuation it holds', () => {
-    expect(typableHandle('Malte Ubl', 'slack:user:U_MALTE')).toBe('malte-ubl')
-    expect(typableHandle('--.Ünïcode_ ', 'slack:user:U_X')).toBe('n-code')
-    expect(typableHandle('🙂', 'slack-eu:user:U0456')).toBe('u0456')
+    expect(typableHandle('Malte Ubl', 'user:U_MALTE')).toBe('malte-ubl')
+    // Diacritics come off first, so what's left reads as the name.
+    expect(typableHandle('Jürgen', 'user:U_J')).toBe('jurgen')
+    expect(typableHandle('--.Ünïcode_ ', 'user:U_X')).toBe('unicode')
+    // With nothing left, their ID on the platform, the same way.
+    expect(typableHandle('🙂', 'T_EU:U0MALTE')).toBe('t_eu-u0malte')
     // A run a trim by regex would backtrack over from every dash in it.
     const long = `x${'-'.repeat(200_000)}x`
     const started = performance.now()
-    expect(typableHandle(long, 'slack:user:U_X')).toBe(long)
+    expect(typableHandle(long, 'user:U_X')).toBe(long)
     expect(performance.now() - started).toBeLessThan(1000)
   })
 })

@@ -43,7 +43,7 @@ import { SYNC, type Caller, type InboxDelivery, type ProtocolMethods, type SelfC
 import type { Board, BoardContext } from './board.ts'
 import { derivedId } from '../client/ids.ts'
 import { claimsOf, KNOWN_AGENTS, viaOf } from './actors.ts'
-import { importedHandle } from '../contract/profiles.ts'
+import { importedHandle, userIdOf } from '../contract/profiles.ts'
 import type { CallerRequest } from './auth.ts'
 import { avatarSvg } from './avatars.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
@@ -206,7 +206,7 @@ const externalActor = (author: ExternalAuthor, importer: { principal: string; ac
   return {
     id: own ? author.id : `${importer.principal}+${author.id}`,
     kind: 'external',
-    handle: own ? author.handle : importedHandle(viaOf({ id: importer.principal, handle: importer.actor.handle }).name, author.handle, author.id),
+    handle: own ? author.handle : importedHandle(viaOf({ id: importer.principal, handle: importer.actor.handle }).name, author.handle, userIdOf(author.id)),
     name: author.name,
     avatar: author.avatar,
   }
