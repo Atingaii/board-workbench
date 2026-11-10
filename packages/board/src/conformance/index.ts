@@ -1,17 +1,17 @@
 import type { Explanation, GrantView, Me, MessageView, RegistrationView } from '../api/routes.ts'
-import { BoardError, type ExplainPrincipal } from '../client/client.ts'
+import { BoardError, type ExplainPrincipal, type TaskOptions } from '../client/client.ts'
 import { compileAccess, type Permission } from '../server/access.ts'
 import type { Board } from '../server/board.ts'
 
 /**
  * Checks that a board speaks the protocol, through a handle on it (`conformance(board())`), as
- * `vb` and agents use it: every board answers all of it. A board may keep no schedules or files,
- * and says so with a 501, which the kit reports as not kept here. It writes to one channel
+ * `vb` and agents use it: every board answers all of it. A board may keep no schedules, tasks, or
+ * files, and says so with a 501, which the kit reports as not kept here. It writes to one channel
  * (`conformance` by default), keeps every post on the board, and deletes what it posted.
  */
 
 /** What a check is about, for the report's headings. */
-export type CheckGroup = 'core' | 'schedules' | 'grants' | 'tokens' | 'attachments' | 'watchers' | 'sync'
+export type CheckGroup = 'core' | 'schedules' | 'tasks' | 'grants' | 'tokens' | 'attachments' | 'watchers' | 'sync'
 
 export type CheckResult = {
   group: CheckGroup
@@ -140,11 +140,11 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
 
 /**
  * The groups a board may keep none of, saying so with a 501: a board without a scheduler answers
- * `no_scheduler`, and without a blob store `no_files`; a backend of one's own that keeps no grants
- * answers `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
- * and fails.
+ * `no_scheduler`, and without a blob store `no_files`; one that keeps no tasks answers `no_tasks`,
+ * and a backend of one's own that keeps no grants `no_grants`. A board that's meant to keep
+ * something and doesn't yet answers otherwise, and fails.
  */
-const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'attachments'])
+const OPTIONAL = new Set<CheckGroup>(['schedules', 'tasks', 'grants', 'tokens', 'attachments'])
 
 const needRoot = (ctx: Context) => {
   check(ctx.root && ctx.reply, "posting failed, so there's nothing to read")
@@ -331,6 +331,35 @@ async function reply(ctx: Context, re: string, text: string, extra: { after?: st
   const message = await ctx.board.reply(re, { text, noSync: true, ...extra })
   ctx.posted.push(message.id)
   return message
+}
+
+/** A task of this run's, in a thread of its own that stays on the board: the run deletes its root at the end, which cancels it. */
+async function task(ctx: Context, text: string, options: TaskOptions & { labels?: Record<string, string> } = {}) {
+  const { labels, ...rest } = options
+  const made = await ctx.board.tasks.create(ctx.channel, { text, labels: { ...ctx.labels, ...labels }, noSync: true, ...rest })
+  ctx.posted.push(made.task.id)
+  return made
+}
+
+/** A task's state, as its thread reads now. */
+const taskState = async (ctx: Context, id: string) => (await ctx.board.thread(id)).message.task?.state
+
+/** Waits up to a few seconds for what a board may derive a moment late, a task becoming ready, say. */
+async function soon(found: () => Promise<boolean>, what: string) {
+  for (const deadline = Date.now() + 10_000; ; ) {
+    if (await found()) return
+    if (Date.now() >= deadline) throw new Mismatch(`${what}, within a few seconds`)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+}
+
+/** That each claim that lost a race was told the task is claimed. */
+function lostRace(racing: PromiseSettledResult<unknown>[]) {
+  for (const result of racing) {
+    if (result.status === 'fulfilled') continue
+    const error = result.reason as unknown
+    check(error instanceof BoardError && error.status === 409 && error.code === 'task_claimed', `a claim that lost the race should be 409 task_claimed, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
+  }
 }
 
 const CHECKS: Check[] = [
@@ -681,6 +710,302 @@ const CHECKS: Check[] = [
         same((await ctx.board.schedules({ re: root.id })).find((s) => s.id === schedule.id)?.noSync, true, "the listed schedule's noSync")
       } finally {
         await ctx.board.cancelSchedule(schedule.id).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'starts a thread as a task, or makes one of a thread that was there: it reads as its thread, and board.task finds it',
+    run: async (ctx) => {
+      const { task: root } = await task(ctx, 'conformance: a task')
+      isRef(root.id, "a task's id")
+      same(root.task?.state, 'ready', "a new task's state")
+      same(root.task?.owner, ctx.me.principal, "a new task's owner")
+      same(root.labels['board.task'], 'ready', "its root's board.task")
+      const answer = await reply(ctx, root.id, 'conformance: working on it')
+      const thread = await ctx.board.thread(root.id)
+      same(thread.message.task?.state, 'ready', 'the task, read as its thread')
+      check(thread.replies.some((m) => m.id === answer.id), "a reply should land in the task's thread")
+      const { messages } = await ctx.board.messages({ channel: ctx.channel, label: { ...ctx.labels, 'board.task': 'ready' } })
+      check(messages.some((m) => m.id === root.id), 'board.task=ready should find the task')
+      const listed = (await ctx.board.tasks.list({ channel: ctx.channel, label: ctx.labels })).tasks.find((t) => t.message.id === root.id)
+      check(listed, `the tasks should include ${root.id}`)
+      same(listed.replies, 1, "the listed task's reply count")
+      same(listed.last?.id, answer.id, "the listed task's latest reply")
+      // A thread that was there, made a task as it is.
+      const plain = await post(ctx, 'conformance: a thread to make a task')
+      await rejects(ctx.board.tasks.claim(plain.id), 404, 'not_a_task', "claiming a thread that isn't a task")
+      const adopted = await ctx.board.tasks.create({ re: plain.id })
+      same(adopted.task.id, plain.id, "the task's id, its root's")
+      same(adopted.task.text, 'conformance: a thread to make a task', "the task's text, its root's")
+      same((await ctx.board.thread(plain.id)).message.labels['board.task'], 'ready', "the thread's board.task, once it's a task")
+      await rejects(ctx.board.tasks.create({ re: plain.id }), 409, 'already_a_task', 'making a task of a thread that is one')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'gives a task to one of the claims that race for it, and takes its result',
+    run: async (ctx) => {
+      const { task: root } = await task(ctx, 'conformance: a task to race for')
+      const racing = await Promise.allSettled([1, 2, 3].map(() => ctx.board.tasks.claim(root.id, { lease: 60 })))
+      const landed = racing.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
+      same(landed.length, 1, 'the claims that landed of three racing for one task')
+      lostRace(racing)
+      const claim = landed[0]!
+      same(claim.task.task?.state, 'claimed', 'the task, once claimed')
+      same(claim.task.labels['board.task'], 'claimed', "its root's board.task, once claimed")
+      same(claim.task.task?.claim?.actor, ctx.me.actor, 'who holds it')
+      check(typeof claim.token === 'string' && claim.token.length > 0, `a claim's token should be a string, got ${show(claim.token)}`)
+      check(!show(await ctx.board.thread(root.id)).includes(claim.token), "a task's thread shouldn't show its claim's token")
+      const done = await claim.complete('conformance: done')
+      same(done.task?.state, 'completed', 'the task, once completed')
+      same(done.task?.result, 'conformance: done', "the completed task's result")
+      await rejects(ctx.board.tasks.claim(root.id), 409, 'task_finished', 'claiming a completed task')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'gives a claim the lease it asks for, up to 5 minutes, and says when it ends',
+    run: async (ctx) => {
+      const { task: root } = await task(ctx, 'conformance: a task to hold')
+      const asked = Date.now()
+      const claim = await ctx.board.tasks.claim(root.id, { lease: 300 })
+      const lease = Date.parse(claim.until) - asked
+      check(lease >= 295_000 && lease <= 305_000 + (Date.now() - asked), `a claim that asks for 300 seconds should end in 300, got ${claim.until}`)
+      same(claim.task.task?.claim?.until, claim.until, "the task's own word for when its claim ends")
+      const again = Date.now()
+      const renewed = await claim.renew(60)
+      const left = Date.parse(renewed.until) - again
+      check(left >= 55_000 && left <= 65_000 + (Date.now() - again), `a claim renewed for 60 seconds should end in 60, got ${renewed.until}`)
+      await renewed.release()
+      // Without one, a board gives its own, and none gives under 5 minutes.
+      const fallback = Date.now()
+      const unasked = await ctx.board.tasks.claim(root.id)
+      check(Date.parse(unasked.until) - fallback >= 295_000, `a claim that asks for no lease should get at least 5 minutes, got ${unasked.until}`)
+      await unasked.release()
+      await rejects(ctx.board.tasks.claim(root.id, { lease: 5 }), 400, 'invalid_request', 'a lease under 30 seconds')
+    },
+  },
+  {
+    group: 'tasks',
+    name: "fences what a claim does: once it's over, its writes are lost and change nothing",
+    run: async (ctx) => {
+      const { task: root } = await task(ctx, 'conformance: a task to take over')
+      const first = await ctx.board.tasks.claim(root.id, { lease: 60 })
+      await rejects(ctx.board.tasks.held(root.id, { epoch: first.epoch, token: `${first.token}x` }).complete('conformance: not mine'), 409, 'claim_lost', "a complete with a token that isn't the claim's")
+      same(await taskState(ctx, root.id), 'claimed', 'the task, after a write with the wrong token')
+      same((await first.release()).task?.state, 'ready', 'the task, once released')
+      await rejects(first.renew(), 409, 'claim_lost', 'renewing a claim that was released')
+      const second = await ctx.board.tasks.claim(root.id, { lease: 60 })
+      same(second.epoch, first.epoch + 1, 'the epoch of the claim after it')
+      await rejects(first.complete('conformance: too late'), 409, 'claim_lost', "the first claim's complete, once another holds the task")
+      await rejects(first.fail('conformance: too late'), 409, 'claim_lost', "the first claim's fail, once another holds the task")
+      const held = (await ctx.board.thread(root.id)).message.task
+      check(held?.state === 'claimed' && held.epoch === second.epoch && held.result === null, `lost writes should leave the task with the claim that holds it, got ${show(held)}`)
+      const failed = await second.fail('conformance: could not')
+      same(failed.task?.state, 'failed', 'the task, once failed')
+      same(failed.task?.reason, 'conformance: could not', "the failed task's reason")
+      same((await ctx.board.tasks.reopen(root.id)).task?.state, 'ready', 'a failed task, reopened')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'holds a task until the tasks it needs complete, which a failed or canceled one never does',
+    run: async (ctx) => {
+      const { task: first } = await task(ctx, 'conformance: a prerequisite')
+      const { task: second } = await task(ctx, 'conformance: a task that waits for it', { needs: [first.id] })
+      same(second.task?.state, 'waiting', 'a task that needs one that has not completed')
+      same(second.labels['board.task'], 'waiting', "its root's board.task")
+      alike(second.task?.needs, [first.id], 'what it needs')
+      await rejects(ctx.board.tasks.claim(second.id), 409, 'task_waiting', 'claiming a task that waits')
+      // A failed one doesn't ready it; reopened and completed, it does.
+      await (await ctx.board.tasks.claim(first.id, { lease: 60 })).fail('conformance: not this time')
+      same(await taskState(ctx, second.id), 'waiting', 'the task, once what it needs failed')
+      await ctx.board.tasks.reopen(first.id)
+      await (await ctx.board.tasks.claim(first.id, { lease: 60 })).complete()
+      await soon(async () => (await taskState(ctx, second.id)) === 'ready', 'the task should be ready once what it needs completed')
+      // Nor does a canceled one.
+      const { task: dropped } = await task(ctx, 'conformance: a prerequisite to cancel')
+      const { task: stuck } = await task(ctx, 'conformance: a task that waits for that', { needs: [dropped.id] })
+      const canceled = await ctx.board.tasks.cancel(dropped.id, 'conformance: not wanted')
+      same(canceled.task?.state, 'canceled', 'a canceled task')
+      same(canceled.task?.reason, 'conformance: not wanted', "the canceled task's reason")
+      same(await taskState(ctx, stuck.id), 'waiting', 'the task, once what it needs was canceled')
+      // What it needs is a task: a thread that isn't one, or the task itself, is refused.
+      const plain = await post(ctx, 'conformance: not a task')
+      const waiting = ctx.board.tasks.create(ctx.channel, { text: 'conformance: needs a thread', labels: ctx.labels, noSync: true, needs: [plain.id] }).then((made) => {
+        ctx.posted.push(made.task.id)
+        return made
+      })
+      await rejects(waiting, 400, 'invalid_needs', "a task that needs a thread that isn't a task")
+      await rejects(ctx.board.tasks.create({ re: plain.id }, { needs: [plain.id] }), 400, 'invalid_needs', 'a task that needs itself')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'holds a task for a person, by its owner or its claim, and gives it back when unblocked',
+    run: async (ctx) => {
+      const { task: root } = await task(ctx, 'conformance: a task to hold for a person')
+      const blocked = await ctx.board.tasks.block(root.id, 'conformance: approve?', { kind: 'awaiting_approval' })
+      same(blocked.task?.state, 'blocked', 'a held task')
+      alike(blocked.task?.blocked, { kind: 'awaiting_approval', reason: 'conformance: approve?' }, 'what it is held for')
+      await rejects(ctx.board.tasks.claim(root.id), 409, 'task_blocked', 'claiming a held task')
+      same((await ctx.board.tasks.unblock(root.id)).task?.state, 'ready', 'the task, unblocked')
+      // A claimed task's hold is its claim's, and ends it.
+      const claim = await ctx.board.tasks.claim(root.id, { lease: 60 })
+      await rejects(ctx.board.tasks.block(root.id, 'conformance: without the claim'), 409, 'task_claimed', 'holding a claimed task without its claim')
+      same((await claim.block('conformance: which one?', { kind: 'needs_input' })).task?.state, 'blocked', 'a claimed task, held by its claim')
+      await rejects(claim.complete(), 409, 'claim_lost', 'completing with a claim that held the task')
+      await ctx.board.tasks.unblock(root.id)
+      await ctx.board.tasks.cancel(root.id, 'conformance: done checking')
+      await rejects(ctx.board.tasks.claim(root.id), 409, 'task_finished', 'claiming a canceled task')
+      await rejects(ctx.board.tasks.cancel(root.id, 'conformance: again'), 409, 'task_finished', 'canceling a canceled task')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'keeps a task assigned to a profile for that actor alone',
+    run: async (ctx) => {
+      // The same credential, as a profile of its own: its actor, under the run's principal.
+      const fixer = ctx.board.as('conformance')
+      const assignee = await fixer.me()
+      if (assignee.principal !== ctx.me.principal) return "this handle's profiles are principals of their own, so none is its principal's actor"
+      if (assignee.actor === ctx.me.actor) return 'this credential writes as one actor only, so no other actor of its principal can try'
+      const { task: root } = await task(ctx, 'conformance: a task for one profile', { for: assignee.actor })
+      same(root.task?.for, assignee.actor, 'who the task is for')
+      await rejects(ctx.board.tasks.claim(root.id), 409, 'task_assigned', 'claiming a task assigned to another actor')
+      const claim = await fixer.tasks.claim(root.id, { lease: 60 })
+      same(claim.task.task?.claim?.actor, assignee.actor, 'who holds it')
+      await claim.release()
+      // Back in the pool, anyone who may claims it.
+      same((await ctx.board.tasks.assign(root.id, null)).task?.for, null, 'who the task is for, back in the pool')
+      await (await ctx.board.tasks.claim(root.id, { lease: 60 })).release()
+      await rejects(ctx.board.tasks.assign(root.id, 'conformance:not-an-actor-of-its-owner'), 400, 'invalid_request', "assigning a task to an actor that isn't its owner's")
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'takes label in its channel to claim a task: a caller narrowed to reading and posting claims none',
+    run: async (ctx) => {
+      // A board that keeps no tasks says so first, whatever the run can send.
+      const { task: root } = await task(ctx, 'conformance: a task to claim without label')
+      if (!ctx.withCan) return NO_CAN
+      const narrowed = ctx.withCan(`${ctx.channel}=read,post`)
+      same((await narrowed.thread(root.id)).message.task?.state, 'ready', 'the task, as a caller narrowed to reading and posting reads it')
+      await rejects(narrowed.tasks.claim(root.id), 403, 'forbidden', 'a claim by a caller without label in its channel')
+      await rejects(narrowed.tasks.claim({ channel: ctx.channel, label: ctx.labels }), 403, 'forbidden', 'a claim of the next ready task by a caller without label in that channel')
+      same(await taskState(ctx, root.id), 'ready', 'the task, after the refused claims')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'claims the oldest ready task in a channel or its subtree that has the labels asked for, and waits for one',
+    run: async (ctx) => {
+      const queue = { ...ctx.labels, queue: `q${ctx.labels.conformance}` }
+      const { task: older } = await task(ctx, 'conformance: the older of two', { labels: queue })
+      const { task: newer } = await task(ctx, 'conformance: the newer of two', { labels: queue })
+      same(await ctx.board.tasks.claim({ channel: ctx.channel, label: { ...queue, queue: 'no-such-queue' } }), null, 'a claim for labels no ready task has')
+      // The channel is under its own subtree.
+      const first = await ctx.board.tasks.claim({ channel: `${ctx.channel}/`, label: queue, lease: 60 })
+      same(first?.task.id, older.id, 'the task claimed first, in the subtree')
+      const second = await ctx.board.tasks.claim({ channel: ctx.channel, label: queue, lease: 60 })
+      same(second?.task.id, newer.id, 'the task claimed next, in the channel')
+      same(await ctx.board.tasks.claim({ channel: ctx.channel, label: queue }), null, 'a claim once both are held')
+      // One that waits gets the task released while it does.
+      const waiting = ctx.board.tasks.claim({ channel: ctx.channel, label: queue, wait: 10, lease: 60 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      await first!.release()
+      const got = await waiting
+      same(got?.task.id, older.id, 'the task a waiting claim got')
+      await got!.release()
+      await second!.release()
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token',
+    run: async (ctx) => {
+      const { task: first } = await task(ctx, 'conformance: a prerequisite to watch')
+      const { task: second } = await task(ctx, 'conformance: a task to watch become ready', { needs: [first.id] })
+      const label = [`conformance=${ctx.labels.conformance}`, 'board.task=ready']
+      let { cursor } = await ctx.board.poll({ channel: ctx.channel, label })
+      const seen: Awaited<ReturnType<Board['poll']>>['events'] = []
+      const until = async (found: () => boolean, what: string) => {
+        for (const deadline = Date.now() + 10_000; !found(); ) {
+          if (Date.now() >= deadline) throw new Mismatch(`${what}, within a few seconds`)
+          const page = await ctx.board.poll({ channel: ctx.channel, label, after: cursor, wait: 2 })
+          seen.push(...page.events)
+          cursor = page.cursor
+        }
+      }
+      await (await ctx.board.tasks.claim(first.id, { lease: 60 })).complete()
+      await until(() => seen.some((event) => event.type === 'task.ready' && event.message?.id === second.id), 'the feed should show the task become ready')
+      const claim = await ctx.board.tasks.claim(second.id, { lease: 60 })
+      await until(() => seen.some((event) => event.type === 'task.claimed' && event.message?.id === second.id), 'the feed should show the task being claimed')
+      const claimed = seen.find((event) => event.type === 'task.claimed' && event.message?.id === second.id)!
+      same(claimed.message?.task?.state, 'claimed', "the task in its claim's event")
+      check(!('token' in claimed.payload) && !show(seen).includes(claim.token), "the feed shouldn't show a claim's token")
+      await claim.release()
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'keeps labels under board. its own: a label write or a post that sets one is refused',
+    run: async (ctx) => {
+      const { task: root } = await task(ctx, 'conformance: a task whose label is the board\'s')
+      await rejects(ctx.board.label(root.id, { set: { 'board.task': 'completed' } }), 400, 'reserved_label', 'a label write that sets board.task')
+      await rejects(ctx.board.label(root.id, { unset: ['board.task'] }), 400, 'reserved_label', 'a label write that unsets board.task')
+      const posting = ctx.board.post(ctx.channel, { text: 'conformance: a post that names itself ready', labels: { ...ctx.labels, 'board.task': 'ready' }, noSync: true }).then((message) => {
+        ctx.posted.push(message.id)
+        return message
+      })
+      await rejects(posting, 400, 'reserved_label', 'a post whose labels set board.task')
+      same(await taskState(ctx, root.id), 'ready', 'the task, after the refused writes')
+      // It reads like any label: a write may be conditional on it.
+      await ctx.board.label(root.id, { set: { seen: 'yes' }, if: { 'board.task': 'ready' } })
+      same((await ctx.board.thread(root.id)).message.labels.seen, 'yes', "a label set while board.task is what the write's `if` says")
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'holds a task when anyone but its owner edits its root, which ends its claim',
+    run: async (ctx) => {
+      // A board that keeps no tasks says so before anything is imported.
+      await ctx.board.tasks.list({ channel: ctx.channel, limit: 1 })
+      // The run owns every task it makes and writes every root it posts, so the other author is a
+      // platform's: a thread imported as its user, made a task, then edited on the platform.
+      const key = SYNC_KEY
+      const thread = `${key}:${ctx.labels.conformance}:task`
+      const author = { id: `${key}:user:${ctx.labels.conformance}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
+      const origin = { thread, message: '1' }
+      const registered = await registerSync(ctx)
+      if ('skip' in registered) return registered.skip
+      let id: string | null
+      try {
+        ;({ message: id } = await ctx.board.syncImport({
+          op: 'post', author, from: key, channel: ctx.channel, text: 'conformance: from a platform, to make a task', labels: ctx.labels, noSync: true,
+          origin: { channel: `${key}:${ctx.labels.conformance}`, thread, subthread: null, message: '1', context: null },
+        }))
+      } catch (error) {
+        await ctx.board.register({ ...registered.where, watch: {} }).catch(() => {})
+        if (error instanceof BoardError && error.status === 403) return `this token can't sync in ${ctx.channel}`
+        throw error
+      }
+      try {
+        isRef(id, "an import's message")
+        await ctx.board.tasks.create({ re: id! })
+        const claim = await ctx.board.tasks.claim(id!, { lease: 60 })
+        await ctx.board.syncImport({ op: 'edit', author, from: key, origin, text: 'conformance: edited on the platform' })
+        const edited = (await ctx.board.thread(id!)).message
+        same(edited.text, 'conformance: edited on the platform', "the root's text, once edited")
+        same(edited.task?.state, 'blocked', 'the task, once its root was edited by someone else')
+        same(edited.task?.blocked?.kind, 'edited', 'what it is held for')
+        await rejects(claim.complete(), 409, 'claim_lost', "the claim's complete, once the edit held the task")
+        same((await ctx.board.tasks.unblock(id!)).task?.state, 'ready', 'the task, once its owner unblocked it')
+      } finally {
+        // Its author is the platform user: only an import can take it down.
+        await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
+        await ctx.board.register({ ...registered.where, watch: {} }).catch(() => {})
       }
     },
   },

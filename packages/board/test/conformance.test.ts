@@ -51,6 +51,7 @@ const withCan =
 /** The checks of a caller narrowed with x-board-can, which a run that can't send the header skips. */
 const NARROWED = [
   'narrows a caller to what its x-board-can says',
+  'takes label in its channel to claim a task: a caller narrowed to reading and posting claims none',
   "refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking",
   "refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox",
 ]
@@ -60,6 +61,8 @@ const NO_CAN = "this run can't call the board with an x-board-can header"
 const NO_ROLES = ['caps a person by their team role, so a viewer reads but neither posts nor manages', 'name a viewer in principals to check it: a board without team roles caps no one']
 const NO_APPS = ['names an app by its slug or client ID, keeps it by client ID, and every app as a group', 'name an app in principals to check it: a local board has no apps']
 const CROSS_TEAM = ['lets a project on another team in, in its environments', "grants across teams aren't specified yet: what a project on another team needs, and what all-projects means for one, comes later"]
+/** The tasks check a board's own code skips: its profiles are `board:client:<profile>`, principals of their own. */
+const OWN_PROFILES = ['keeps a task assigned to a profile for that actor alone', "this handle's profiles are principals of their own, so none is its principal's actor"]
 /** And one no run can check: shut out by a lock, it couldn't lift the lock after. */
 const LOCKED_OUT = ['lets a member grant on a pattern after a lock under it', "a run can't be shut out by a lock and lift it afterwards: the board's own tests check it"]
 const skipped = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.status !== 'passed').map((check) => [check.name, check.detail])
@@ -131,22 +134,27 @@ describe('the conformance kit', () => {
     const client = await clientOf(board.fetch)
     const report = await conformance(client, { withToken: withToken(board.fetch), withCan: withCan(board.fetch) })
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
-    expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => check.status)).toEqual(['passed', 'passed', 'passed'])
+    expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => check.status)).toEqual(['passed', 'passed', 'passed', 'passed'])
     expect(skipped(report)).toEqual([NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM])
     expect(tokenUse(report)?.status).toBe('passed')
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'tokens', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'tasks', 'grants', 'tokens', 'attachments', 'watchers', 'sync'])
+    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 12 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
+    // Every task it made went with its root: none is left open, and none still wears a state.
+    expect((await client.tasks.list({ channel: 'conformance', state: 'all' })).tasks).toEqual([])
+    expect((await client.messages({ channel: 'conformance', limit: 500, label: ['board.task'] })).messages).toEqual([])
   })
 
   it("passes through a board's own handle, in-process", async () => {
     const team = testBoard({ scheduler: fakeQueue().scheduler })
     const report = await conformance(team, { withToken: withToken(team.fetch) })
-    // The board's own code needs no grant to keep it in what it closes, and no proxy narrows it.
-    expect(skipped(report)).toEqual([[NARROWED[0], NO_CAN], NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM, [NARROWED[1], NO_CAN], [NARROWED[2], NO_CAN]])
+    // The board's own code needs no grant to keep it in what it closes, and no proxy narrows it. Each
+    // of its profiles is a principal of its own there, so none is an actor a task of its own could be for.
+    expect(skipped(report)).toEqual([[NARROWED[0], NO_CAN], OWN_PROFILES, [NARROWED[1], NO_CAN], NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM, [NARROWED[2], NO_CAN], [NARROWED[3], NO_CAN]])
     expect((await team.me()).actor).toBe('board:client')
   })
 
@@ -176,6 +184,7 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(board.fetch), { withCan: withCan(ignoring) })
     expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => [check.status, check.detail])).toEqual([
       ['failed', 'what a caller narrowed to read says it may do: expected {"conformance":["read"]}, got {"*":["read","post","react","label","sync","manage"]}'],
+      ['failed', 'a claim by a caller without label in its channel: expected 403 forbidden, and it succeeded'],
       ['failed', 'registering watchers, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
       ['failed', 'an import, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
     ])
@@ -267,6 +276,71 @@ describe('the conformance kit', () => {
       ['attachments', 'skipped', 'not kept here: this board keeps no files'],
     ])
   })
+
+  it('reports tasks as not kept here on a board that answers 501 no_tasks, and writes none of what the group would', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const asked: string[] = []
+    // A board that keeps no tasks, as one on Vercel's API answers today: every task route says so.
+    const taskless: Fetch = async (request) => {
+      const { pathname } = new URL(request.url)
+      if (!/\/tasks(\/|$)/.test(pathname)) return board.fetch(request)
+      asked.push(`${request.method} ${pathname.slice(pathname.indexOf('/tasks'))}`)
+      return Response.json({ error: { code: 'no_tasks', message: 'this board keeps no tasks' } }, { status: 501 })
+    }
+    const report = await conformance(await clientOf(taskless))
+    expect(report.ok).toBe(true)
+    const tasks = report.checks.filter((check) => check.group === 'tasks')
+    expect(tasks).toHaveLength(12)
+    // The one that needs no task route is about labels, which a board has either way.
+    expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
+    expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
+    // The check that imports from a platform asks about tasks first, so nothing was imported for it.
+    expect((await board.messages({ channel: 'conformance', limit: 500 })).messages.filter((message) => message.text.includes('to make a task'))).toEqual([])
+    expect(asked.length).toBeGreaterThan(0)
+  })
+
+  it("fails a board that gets tasks wrong: one that drops needs, one that ignores a lease, and one that shows a claim's token", async () => {
+    const failed = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
+    /** A board in front of `fetch` that changes the JSON body of the requests `match` picks. */
+    const rewriting = (fetch: Fetch, match: (method: string, path: string) => boolean, change: (body: Record<string, unknown>) => void): Fetch => async (request) => {
+      if (!match(request.method, new URL(request.url).pathname)) return fetch(request)
+      const body = (await request.json()) as Record<string, unknown>
+      change(body)
+      return fetch(new Request(request, { body: JSON.stringify(body) }))
+    }
+    // A board that hasn't built dependencies: a task that needs another is ready at once.
+    const flat = testBoard({ scheduler: fakeQueue().scheduler })
+    const noNeeds = rewriting(flat.fetch, (method, path) => method === 'POST' && path.endsWith('/tasks'), (body) => delete body.needs)
+    expect(failed(await conformance(await clientOf(noNeeds)))).toEqual([
+      ['holds a task until the tasks it needs complete, which a failed or canceled one never does', 'a task that needs one that has not completed: expected "waiting", got "ready"'],
+      ['shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token', 'the feed should show the task become ready, within a few seconds'],
+    ])
+    // One that gives every claim its own default lease, whatever it asked for.
+    const fixed = testBoard({ scheduler: fakeQueue().scheduler })
+    const noLease = rewriting(fixed.fetch, (method, path) => method === 'POST' && /\/tasks\/[^/]+\/(claim|renew)$/.test(path), (body) => delete body.lease)
+    expect(failed(await conformance(await clientOf(noLease)))).toMatchObject([
+      ['gives a claim the lease it asks for, up to 5 minutes, and says when it ends', expect.stringMatching(/^a claim that asks for 300 seconds should end in 300, got /)],
+    ])
+    // One that shows a claim's token to whoever reads the task: its thread carries what the claim answered.
+    const leaky = testBoard({ scheduler: fakeQueue().scheduler })
+    const tokens = new Map<string, string>()
+    const showing: Fetch = async (request) => {
+      const { pathname } = new URL(request.url)
+      const response = await leaky.fetch(request)
+      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) return response
+      const body = await response.json()
+      if (request.method === 'POST' && /\/tasks\/[^/]+\/claim$/.test(pathname)) tokens.set(body.task.id, body.claim.token)
+      const read = request.method === 'GET' ? /\/messages\/([^/]+)$/.exec(pathname)?.[1] : undefined
+      if (read !== undefined && body.message?.task?.claim && tokens.has(read)) body.message.task.claim.token = tokens.get(read)
+      return Response.json(body, { status: response.status })
+    }
+    expect(failed(await conformance(await clientOf(showing)))).toEqual([
+      ['gives a task to one of the claims that race for it, and takes its result', "a task's thread shouldn't show its claim's token"],
+    ])
+    // A board that takes a write under board. can't be played here: the handle the kit runs through
+    // is a board() too, which refuses one before any request leaves it. The routes' own refusal is
+    // checked where requests reach the board with no handle in front (test/tasks.test.ts).
+  }, 60_000)
 
   it('leaves the grants as it found them as a project, which a grant keeps in what it closes, and as a run no grant could keep in, which skips closing', async () => {
     const team = await ownPrincipals()

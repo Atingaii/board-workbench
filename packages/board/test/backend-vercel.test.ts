@@ -96,6 +96,19 @@ describe('vercel()', () => {
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'passed',
+      // Tasks aren't mapped onto Vercel's API yet: a board here keeps none, and says so.
+      'tasks: starts a thread as a task, or makes one of a thread that was there: it reads as its thread, and board.task finds it': 'skipped',
+      'tasks: gives a task to one of the claims that race for it, and takes its result': 'skipped',
+      'tasks: gives a claim the lease it asks for, up to 5 minutes, and says when it ends': 'skipped',
+      "tasks: fences what a claim does: once it's over, its writes are lost and change nothing": 'skipped',
+      'tasks: holds a task until the tasks it needs complete, which a failed or canceled one never does': 'skipped',
+      'tasks: holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'skipped',
+      'tasks: keeps a task assigned to a profile for that actor alone': 'skipped',
+      'tasks: takes label in its channel to claim a task: a caller narrowed to reading and posting claims none': 'skipped',
+      'tasks: claims the oldest ready task in a channel or its subtree that has the labels asked for, and waits for one': 'skipped',
+      'tasks: shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token': 'skipped',
+      'tasks: keeps labels under board. its own: a label write or a post that sets one is refused': 'skipped',
+      'tasks: holds a task when anyone but its owner edits its root, which ends its claim': 'skipped',
       'grants: grants a principal, lists it, and revokes it': 'passed',
       'grants: makes another grant for the same principals, and changes one by its ID': 'passed',
       "grants: keeps a grant's can as written, a pattern with no permissions included": 'passed',
@@ -120,7 +133,40 @@ describe('vercel()', () => {
     })
     // It leaves the grants as it found them.
     expect([...api.grants.keys()]).toEqual(['g1', 'g2', 'g3'])
+    expect([...new Set(report.checks.filter((check) => check.group === 'tasks').map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
   }, 30_000)
+
+  it("keeps no tasks yet: every task call answers 501 no_tasks without asking Vercel's API, and a label under board. is refused before it gets there", async () => {
+    const api = fakeMessageboard()
+    const handle = handleOn(api)
+    const root = await handle.post('dev', 'fix CVE-123')
+    api.requests.length = 0
+    const proof = { epoch: 1, token: 'secret' }
+    for (const [what, attempt] of [
+      ['list', () => handle.tasks.list()],
+      ['create', () => handle.tasks.create('dev', 'a task')],
+      ['create from a thread', () => handle.tasks.create({ re: root.id })],
+      ['claim', () => handle.tasks.claim(root.id)],
+      ['claim the next', () => handle.tasks.claim({ channel: 'dev', wait: 30 })],
+      ['renew', () => handle.tasks.held(root.id, proof).renew()],
+      ['release', () => handle.tasks.held(root.id, proof).release()],
+      ['complete', () => handle.tasks.held(root.id, proof).complete('done')],
+      ['fail', () => handle.tasks.held(root.id, proof).fail('no')],
+      ['block', () => handle.tasks.block(root.id, 'hold')],
+      ['unblock', () => handle.tasks.unblock(root.id)],
+      ['reopen', () => handle.tasks.reopen(root.id)],
+      ['assign', () => handle.tasks.assign(root.id, null)],
+      ['cancel', () => handle.tasks.cancel(root.id, 'no')],
+    ] as const)
+      await expect(attempt(), what).rejects.toMatchObject({ status: 501, code: 'no_tasks' })
+    // The board's own labels are board()'s to keep, on every backend.
+    await expect(handle.label(root.id, { set: { 'board.task': 'ready' } })).rejects.toMatchObject({ status: 400, code: 'reserved_label' })
+    await expect(handle.post('dev', { text: 'looks ready', labels: { 'board.task': 'ready' } })).rejects.toMatchObject({ status: 400, code: 'reserved_label' })
+    expect(api.requests).toEqual([])
+    // Any other label still goes through.
+    await handle.label(root.id, { set: { step: 'fix' } })
+    expect((await handle.thread(root.id)).message.labels).toEqual({ step: 'fix' })
+  })
 
   it('answers only wake-ups and webhooks: it verifies no request, and none reaches the API, while its own code writes as the project', async () => {
     const api = fakeMessageboard()
