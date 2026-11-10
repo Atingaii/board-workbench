@@ -195,6 +195,8 @@ export type Actor = {
   platform?: string
   /** A host's principal, or one of its profiles: once it's seen as one, it stays one. Views leave it out. */
   host?: true
+  /** Its last `actor.seen` was by a write whose credential named it as shown. Each write says it anew. */
+  verified?: true
 }
 
 export type ActorsState = {
@@ -206,7 +208,7 @@ export type ActorsState = {
 /** Who's who: `actor.seen`. */
 export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
   if (event.type !== 'actor.seen') return state
-  const { actor, kind, handle, name, avatar, via, platform, host } = event.payload
+  const { actor, kind, handle, name, avatar, via, platform, host, verified } = event.payload
   const previous = own(state.byId, actor)
   if (previous) {
     const key = previous.handle.toLowerCase()
@@ -214,7 +216,7 @@ export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
     if (remaining.length > 0) setOwn(state.byHandle, key, remaining)
     else delete state.byHandle[key]
   }
-  setOwn(state.byId, actor, { id: actor, kind: actorKind(kind), handle, name, avatar, ...(via ? { via: { ...via } } : {}), ...(platform ? { platform } : {}), ...(host || previous?.host ? { host: true as const } : {}) })
+  setOwn(state.byId, actor, { id: actor, kind: actorKind(kind), handle, name, avatar, ...(via ? { via: { ...via } } : {}), ...(platform ? { platform } : {}), ...(host || previous?.host ? { host: true as const } : {}), ...(verified ? { verified: true as const } : {}) })
   const key = handle.toLowerCase()
   const ids = own(state.byHandle, key) ?? setOwn(state.byHandle, key, [])
   if (!ids.includes(actor)) ids.push(actor)

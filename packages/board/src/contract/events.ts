@@ -146,6 +146,12 @@ export const boardEvents = {
        * signs in, whatever its ID or kind, so sync never writes as it. Others have none.
        */
       host: z.literal(true).optional(),
+      /**
+       * (server) Whether this write's credential named the actor as shown, rather than taking it from what
+       * the caller sent: under the handle it gave the principal, as itself or after `via`. Unlike `host`,
+       * each `actor.seen` says it anew. Others, and events from before, have none.
+       */
+      verified: z.literal(true).optional(),
     }),
 }
 

@@ -443,16 +443,16 @@ const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule'
 function actorView(actor: ApiActor, view?: ApiActorView, project?: string): ActorView & { id: string } {
   const { principal, profile } = actor
   // A platform user a sync imported, by their ID on the platform until the API names them.
-  if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null }
+  if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null, verified: true }
   if (profile?.platform) {
     const { userId, platform, key } = profile.platform
     const handle = importedHandleOf(view?.handle ?? '', principal, view, userId, project)
-    return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view, project), platform: view?.platform ?? platform ?? key }
+    return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view, project), platform: view?.platform ?? platform ?? key, verified: true }
   }
-  if (profile) return { id: actor.id, kind: 'agent', handle: profile.name, name: profile.name, avatar: profile.avatar ?? null, via: viaFor(principal, view, project) }
-  if (principal.type === 'project') return { id: actor.id, kind: 'deployment', ...deploymentNamed(principal, project), avatar: null }
+  if (profile) return { id: actor.id, kind: 'agent', handle: profile.name, name: profile.name, avatar: profile.avatar ?? null, via: viaFor(principal, view, project), verified: true }
+  if (principal.type === 'project') return { id: actor.id, kind: 'deployment', ...deploymentNamed(principal, project), avatar: null, verified: true }
   const handle = shortName(principal)
-  return { id: actor.id, kind: principal.type === 'user' ? 'person' : 'workflow', handle, name: handle, avatar: null }
+  return { id: actor.id, kind: principal.type === 'user' ? 'person' : 'workflow', handle, name: handle, avatar: null, verified: true }
 }
 
 /** A message's labels just before a change, from what they are after it and what it changed. */
@@ -794,7 +794,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const platform = found.platform ?? actor.profile?.platform?.platform
     const user = actor.profile?.platform
     const handle = user && actor.principal.type !== 'external' ? importedHandleOf(found.handle, actor.principal, found, user.userId, project) : found.handle
-    return { id: actor.id, kind, handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via, ...(platform ? { platform } : {}) }
+    return { id: actor.id, kind, handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via, ...(platform ? { platform } : {}), verified: true }
   }
 
   /** Projects' names by ID, as `projectNamesOf` reads them from a read of the actors list. */
@@ -1932,6 +1932,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           avatar: actor.avatar ?? null,
           ...(principal ? { via: viaFor(principal, actor, project) } : {}),
           ...(actor.platform ? { platform: actor.platform } : {}),
+          // The API names everyone itself: its accounts' names, and its projects' for what they sync.
+          verified: true as const,
         }
       })
       return { actors: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }

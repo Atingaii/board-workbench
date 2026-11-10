@@ -21,7 +21,7 @@ import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, 
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
 import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
-import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
+import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
@@ -149,7 +149,9 @@ const blindSchedule = (schedule: ScheduleView, access: Access, own: string): Sch
  */
 function externalIdentity(author: ExternalAuthor, through: Granted | null, platform: string): Identity {
   const id = through === null ? author.id : `${through.id}+${author.id}`
-  const principal: Granted = { id: through?.id ?? author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
+  // A host's principal's imports are its profiles: the board records them as the host's, as its agents.
+  const host = through?.facts?.issuer === 'host' ? { facts: through.facts } : {}
+  const principal: Granted = { id: through?.id ?? author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null, ...host }
   return {
     principal,
     author: { actor: id, principal: principal.id, profile: through === null ? null : author.id, session: null },
@@ -162,6 +164,8 @@ function externalIdentity(author: ExternalAuthor, through: Granted | null, platf
       avatar: platformAvatar(author.avatar),
       ...(through === null ? {} : { via: viaOf(through) }),
       platform,
+      // A sync elsewhere's word, which names it by the handle its credential gave it: checked as `via` shows.
+      ...(through !== null && !through.id.startsWith('board:') ? { verified: true as const } : {}),
     },
   }
 }
@@ -466,7 +470,7 @@ function build(options: A2Options, binding: BoardBinding) {
         .map((found) => {
           const { host: _host, via: _via, ...a } = found
           const via = viaOfRecord(found)
-          return { ...a, ...(via ? { via } : {}) }
+          return { ...a, ...(via ? { via } : {}), ...(verifiedRecord(found) ? { verified: true as const } : {}) }
         })
       return { actors, cursor: ref(index) }
     },
