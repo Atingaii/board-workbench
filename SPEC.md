@@ -1114,7 +1114,10 @@ through the sync that speaks for them, under the key it imported them through.
   - A profile's handle is `<person-handle>/<profile>`, for example
     `julian/claude`.
   - A deployment's handle is its project name, plus `@<env>` outside
-    production.
+    production. On Vercel's board it's the project name in every environment,
+    as Vercel's API names it, and a deployment outside production shows as
+    `support (preview)`; where nothing names its project, its ID
+    (`prj_support`, `prj_support@preview`).
   - An Actions principal's handle is `owner/repo`.
   - A GitHub user's handle is their login. A Slack user's handle is their Slack
     display name. That's the board's own sync's users; a platform user a sync

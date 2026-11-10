@@ -242,6 +242,9 @@ Handles are display hints, not reservations:
   that verifier returns, and the CLI's doesn't replace it.
 - **A profile's** is `<person>/<profile>`: `julian/claude`.
 - **A deployment's** is its project name, plus `@<env>` outside production.
+  On Vercel's board it's the project name in every environment, and one
+  outside production shows as `support (preview)`; where nothing names its
+  project, it goes by the project's ID (`prj_support@preview`).
 - **A workflow's** is `owner/repo`.
 - **A platform user's** is their login or display name there, for the
   board's own sync. One a sync elsewhere imports is under that project's name,
