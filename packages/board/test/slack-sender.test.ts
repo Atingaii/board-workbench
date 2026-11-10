@@ -4,6 +4,15 @@ import { slack, slackIcon, withoutLabel, type SlackClient } from '../src/sync/sl
 import { channels } from '../src/sync/fn.ts'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { caller, deploymentToken, personToken, testBoard } from './harness.ts'
+import type { CallerRequest, HostPrincipal } from '../src/access/index.ts'
+
+/** A host's own verifier, which names Julián and support's preview deployment by their tokens. */
+const PEOPLE: Record<string, HostPrincipal> = {
+  pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' },
+  pt_support: { id: 'vercel:project:prj_support:preview', kind: 'deployment', handle: 'support@preview' },
+}
+const hostVerifier = (request: CallerRequest) =>
+  PEOPLE[request.credential ?? ''] ?? Response.json({ error: { code: 'unauthorized', message: 'who are you?' } }, { status: 401 })
 
 const thread = 'C1:1700000000.000100'
 const as = { name: 'clever-lemur via vboard-factory', avatar: 'https://cdn.example.com/lemur.png' }
@@ -113,8 +122,11 @@ describe('messages in Slack', () => {
 })
 
 describe('what board copies to Slack', () => {
-  /** A board whose Slack sync mirrors firehose into C1, through an app with these scopes. */
-  function mirrored(scopes: string[]) {
+  /**
+   * A board whose Slack sync mirrors firehose into C1, through an app with these scopes: one whose
+   * host's verifier names who's who, or with `verified: false`, one Vercel logins use.
+   */
+  function mirrored(scopes: string[], verified = true) {
     const posted: Record<string, unknown>[] = []
     const client = {
       conversations: { list: async () => ({}), info: async () => ({}), replies: async () => ({ messages: [] }) },
@@ -128,16 +140,24 @@ describe('what board copies to Slack', () => {
         decodeThreadId: (id: string) => ({ channel: id.split(':')[1], threadTs: id.split(':')[2] ?? '' }),
       })
     })
-    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => client as never }, channels({ C1: 'firehose' })) } })
-    return { team, s, posted }
+    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => client as never }, channels({ C1: 'firehose' })) }, ...(verified ? { authenticate: hostVerifier } : {}) })
+    return { team, s, posted, verified }
+  }
+
+  /** Who's who on a board `mirrored` made: Julián, his agent, and support's preview deployment. */
+  async function callers({ team, verified }: ReturnType<typeof mirrored>) {
+    if (verified) await team.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['preview'] }], can: { '*': 'all' } })
+    const token = verified ? 'pt_julian' : await personToken('u_julian')
+    return {
+      julian: caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' }),
+      claude: caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'claude', 'x-board-avatar': 'https://example.com/claude.png' }),
+      support: caller(team.fetch, verified ? 'pt_support' : await deploymentToken('support', 'prj_support', 'preview')),
+    }
   }
 
   /** Julián, his agent, and a Malte support's preview imports through its own Slack key, each posting a thread in firehose. */
-  async function post(team: ReturnType<typeof testBoard>) {
-    const token = await personToken('u_julian')
-    const julian = caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' })
-    const claude = caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'claude', 'x-board-avatar': 'https://example.com/claude.png' })
-    const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
+  async function post(board: ReturnType<typeof mirrored>) {
+    const { julian, claude, support } = await callers(board)
     expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
     const malte = { id: 'slack-eu:user:U_MALTE', handle: 'malte', name: 'Malte', avatar: 'https://example.com/malte.png', isBot: false }
     expect((await julian('POST', '/messages', { channel: 'firehose', text: 'the deploy is red' })).status).toBe(201)
@@ -146,8 +166,9 @@ describe('what board copies to Slack', () => {
   }
 
   it("go out under their author's name and picture: a person as themselves, and anyone else via the principal they write for", async () => {
-    const { team, s, posted } = mirrored(['chat:write', 'chat:write.customize'])
-    await post(team)
+    const board = mirrored(['chat:write', 'chat:write.customize'])
+    const { s, posted } = board
+    await post(board)
     await vi.waitFor(() => expect(posted).toHaveLength(3))
     expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([
       ['Julián Benegas', 'https://example.com/julian.png', 'the deploy is red'],
@@ -158,8 +179,9 @@ describe('what board copies to Slack', () => {
   })
 
   it("cut a long name to fit Slack's username, and keep whose word it is whole", async () => {
-    const { team, posted } = mirrored(['chat:write.customize'])
-    const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
+    const board = mirrored(['chat:write.customize'])
+    const { posted } = board
+    const { support } = await callers(board)
     expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
     const name = `Malte ${'the very important '.repeat(6)}person`
     const malte = { id: 'slack-eu:user:U_MALTE', handle: 'malte', name, avatar: null, isBot: false }
@@ -171,9 +193,23 @@ describe('what board copies to Slack', () => {
     expect(markdown_text).toBe('same for us')
   })
 
+  it("go out as the app, each labeled with its author, when the board didn't verify them: a name a caller sent is no sender", async () => {
+    const board = mirrored(['chat:write', 'chat:write.customize'], false)
+    const { s, posted } = board
+    await post(board)
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(3))
+    expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown)).toEqual([
+      '**Julián Benegas**: the deploy is red',
+      '**claude via julian**: looking',
+      '**Malte via support (preview) (slack)**: same for us',
+    ])
+    expect(posted).toEqual([])
+  })
+
   it('go out as the app, each labeled with its author, when the app lacks chat:write.customize', async () => {
-    const { team, s, posted } = mirrored(['chat:write'])
-    await post(team)
+    const board = mirrored(['chat:write'])
+    const { s, posted } = board
+    await post(board)
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(3))
     expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown)).toEqual([
       '**Julián Benegas**: the deploy is red',

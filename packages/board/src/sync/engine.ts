@@ -45,7 +45,7 @@ export type SyncHost = {
  * The actors sync renders with: who each is, and who this sync is on its board (`principal`), whose
  * platform users it may mention natively. Null when the board didn't say.
  */
-type Actors = { byId: Record<string, Actor>; principal: string | null }
+type Actors = { byId: Record<string, Actor & { verified?: true }>; principal: string | null }
 
 /** `files`: a message with files may have no text. */
 const clampText = (raw: string, files = false) => {
@@ -242,6 +242,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         avatar: actor.avatar,
         ...(actor.via ? { via: { ...actor.via } } : {}),
         ...(actor.platform ? { platform: actor.platform } : {}),
+        ...(actor.verified ? { verified: true as const } : {}),
       }
     return state
   }
@@ -812,7 +813,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
-  async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as: ProviderSender }> {
+  async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as?: ProviderSender }> {
     const actor = actors.byId[message.by.actor]
     // Whose word it is: the principal an actor with a profile writes for, and the platform of the
     // sync key an import came through, which may be another board's.
@@ -828,8 +829,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     const markdown = await textFor(key, message, actors, body)
-    // Where the platform shows a sender per message, every message carries its author's name and picture.
-    return { markdown, as: { name, avatar: senderAvatar(message, actor, actors), attribution } }
+    // Where the platform shows a sender per message, it shows one the board checked: anyone else's
+    // name is what they sent, so it stays a label in the text, under the app.
+    return actor?.verified ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors), attribution } } : { markdown }
   }
 
   /** An author's own picture, or for an agent with the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
@@ -858,7 +860,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const key = keyOf(target)
     const { markdown, as } = await render(key, target, message, actors, renderer)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles)
-    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, as }
+    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
   }
 
   async function postReply(message: MessageView, target: string, externalThread: string, actors: Actors, renderer?: Renderer) {

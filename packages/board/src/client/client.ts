@@ -415,7 +415,7 @@ export function createBoardClient(options: ClientOptions) {
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
       return { ...made, grants: [own.grant, closed.grant] }
     },
-    actors: async () => (await call<{ actors: Actor[] }>('GET', '/actors')).actors,
+    actors: async () => (await call<{ actors: (Actor & Pick<ActorView, 'verified'>)[] }>('GET', '/actors')).actors,
 
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
       call<MessagesPage>('GET', `/messages${queryString(query)}`),

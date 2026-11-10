@@ -7,6 +7,11 @@ import { channels, mirror, type SyncIn } from '../src/sync/fn.ts'
 import { envelope, eventSchema, type SyncResult } from '../src/sync/events.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
+import type { CallerRequest, HostPrincipal } from '../src/access/index.ts'
+
+/** A host's own verifier, which names the people its tokens are. */
+const hostVerifier = (people: Record<string, HostPrincipal>) => (request: CallerRequest) =>
+  people[request.credential ?? ''] ?? Response.json({ error: { code: 'unauthorized', message: 'who are you?' } }, { status: 401 })
 
 const channel = 'https://provider.test/team:inbox'
 const thread = `${channel}:conversation:1`
@@ -292,28 +297,37 @@ providerContract('Chat SDK bridge', chatFixture)
 providerContract('chatSdk() with no hooks', chatSdkFixture)
 
 describe('who a post is from', () => {
-  it("gives a platform every author's name and avatar to post under: a person's, and an agent's through them", async () => {
-    const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
-    const board = testBoard({ sync: { tickets: provider } })
-    const token = await personToken()
-    const person = caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' })
-    const agent = caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur', 'x-board-avatar': 'https://example.com/lemur.png' })
-    await person('POST', '/messages', { channel: 'tickets', text: 'from a person' })
-    await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
-    await agent('POST', '/messages', { channel: 'tickets', text: 'from an agent' })
-    await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
-    expect(provider.posts.map((post) => [post.body.as, post.body.markdown])).toEqual([
+  it("gives a platform a sender only for an author the board verified: a person its host's verifier named, and their agent", async () => {
+    const posted = async (verified: boolean) => {
+      const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
+      const board = testBoard({ sync: { tickets: provider }, ...(verified ? { authenticate: hostVerifier({ pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' } }) } : {}) })
+      const token = verified ? 'pt_julian' : await personToken()
+      const person = caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' })
+      const agent = caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur', 'x-board-avatar': 'https://example.com/lemur.png' })
+      await person('POST', '/messages', { channel: 'tickets', text: 'from a person' })
+      await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
+      await agent('POST', '/messages', { channel: 'tickets', text: 'from an agent' })
+      await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
+      return provider.posts.map((post) => [post.body.as, post.body.markdown])
+    }
+    expect(await posted(true)).toEqual([
       [{ name: 'Julián Benegas', avatar: 'https://example.com/julian.png', attribution: '' }, '**Julián Benegas**: from a person'],
       [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png', attribution: ' via julian' }, '**clever-lemur via julian**: from an agent'],
+    ])
+    // A Vercel login's name and handle are what its CLI sent: no sender, only the label.
+    expect(await posted(false)).toEqual([
+      [undefined, '**Julián Benegas**: from a person'],
+      [undefined, '**clever-lemur via julian**: from an agent'],
     ])
   })
 
   it("gives an agent with the board's built-in avatar its person's Vercel avatar", async () => {
     const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
-    const board = testBoard({ sync: { tickets: provider } })
-    const claude = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'claude' })
+    const people = { pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' }, pt_ada: { id: 'vercel:user:u_ada', kind: 'person', handle: 'user-u_ada' } } as const
+    const board = testBoard({ sync: { tickets: provider }, authenticate: hostVerifier(people) })
+    const claude = caller(board.fetch, 'pt_julian', { 'x-board-profile': 'claude' })
     // No username to go by: the handle the board made up isn't one.
-    const unnamed = caller(board.fetch, await personToken('u_ada'), { 'x-board-profile': 'claude' })
+    const unnamed = caller(board.fetch, 'pt_ada', { 'x-board-profile': 'claude' })
     await claude('POST', '/messages', { channel: 'tickets', text: 'from claude' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
     await unnamed('POST', '/messages', { channel: 'tickets', text: 'from another claude' })
@@ -324,10 +338,9 @@ describe('who a post is from', () => {
 
   it("prefers the person's own picture to one guessed from a handle they chose", async () => {
     const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
-    const board = testBoard({ sync: { tickets: provider } })
-    const token = await personToken()
-    const julian = caller(board.fetch, token, { 'x-board-handle': 'jb', 'x-board-avatar': 'https://vercel.com/api/www/avatar/c275ff?s=128' })
-    const claude = caller(board.fetch, token, { 'x-board-handle': 'jb', 'x-board-profile': 'claude' })
+    const board = testBoard({ sync: { tickets: provider }, authenticate: hostVerifier({ pt_jb: { id: 'vercel:user:u_julian', kind: 'person', handle: 'jb' } }) })
+    const julian = caller(board.fetch, 'pt_jb', { 'x-board-avatar': 'https://vercel.com/api/www/avatar/c275ff?s=128' })
+    const claude = caller(board.fetch, 'pt_jb', { 'x-board-profile': 'claude' })
     await julian('POST', '/messages', { channel: 'tickets', text: 'from julian' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
     await claude('POST', '/messages', { channel: 'tickets', text: 'from claude' })

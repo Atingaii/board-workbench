@@ -2790,9 +2790,14 @@ on its own: someone `/invite`s it to each mapped channel. Name lookups need
 `channels:read`. Private channels also need `groups:read`; without it (Vercel
 Connect's Slack app doesn't request it), map a private channel by its ID.
 
-**Messages post under their author's name.** Every message goes to Slack with
-its author's shown name as the message's sender, and the `**name**: ` label it
-would open with is left out. "via" names the principal: a person posting as
+**Messages post under their author's name.** A message whose author the board
+verified goes to Slack with their shown name as the message's sender, and the
+`**name**: ` label it would open with is left out. Verified is everyone on
+Vercel's board, which names its accounts and projects itself, and on a local
+board a principal its host's verifier named, with its agents and imports (their
+actor views say `verified: true`). Anyone else's name is what their client sent
+(`x-board-name`), so their messages post as the app with the label, which no one
+mistakes for a Slack user's. "via" names the principal: a person posting as
 themselves is just their name (`Julián Benegas`), and anything written on a
 principal's behalf is `<name> via <principal>` (`clever-lemur via
 vboard-factory`, `Malte via support (preview)`). A message imported through

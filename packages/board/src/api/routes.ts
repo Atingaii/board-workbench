@@ -632,9 +632,11 @@ export type TokenView = {
  * `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow.
  * `via` is who one with a profile acts through: an agent's person or project, or the principal whose sync speaks for a
  * platform user (`Malte via www (preview)`). `platform` is a platform user's platform (`slack`), for display: their ID
- * names the sync key they came through.
+ * names the sync key they came through. `verified` says the board checked who they are rather than taking their name
+ * from what they sent: everyone on Vercel's board, and on a local one, a principal its host's verifier named, with its
+ * agents and imports.
  */
-export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via' | 'platform'>
+export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via' | 'platform'> & { verified?: true }
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
 export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version' | 'revision'> & {
   id: string

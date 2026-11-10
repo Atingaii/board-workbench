@@ -149,7 +149,9 @@ const blindSchedule = (schedule: ScheduleView, access: Access, own: string): Sch
  */
 function externalIdentity(author: ExternalAuthor, through: Granted | null, platform: string): Identity {
   const id = through === null ? author.id : `${through.id}+${author.id}`
-  const principal: Granted = { id: through?.id ?? author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
+  // A host's principal's imports are its profiles: the board records them as the host's, as its agents.
+  const host = through?.facts?.issuer === 'host' ? { facts: through.facts } : {}
+  const principal: Granted = { id: through?.id ?? author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null, ...host }
   return {
     principal,
     author: { actor: id, principal: principal.id, profile: through === null ? null : author.id, session: null },
@@ -464,9 +466,9 @@ function build(options: A2Options, binding: BoardBinding) {
         .filter((a) => seen === null || seen(a.id))
         .sort((a, b) => a.handle.localeCompare(b.handle))
         .map((found) => {
-          const { host: _host, via: _via, ...a } = found
+          const { host, via: _via, ...a } = found
           const via = viaOfRecord(found)
-          return { ...a, ...(via ? { via } : {}) }
+          return { ...a, ...(via ? { via } : {}), ...(host ? { verified: true as const } : {}) }
         })
       return { actors, cursor: ref(index) }
     },
