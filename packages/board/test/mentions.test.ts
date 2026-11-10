@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { extractMentions } from '../src/contract/mentions.ts'
+import { typableHandle } from '../src/contract/profiles.ts'
 import type { ActorsState, Message } from '../src/contract/folds.ts'
 import { compileFilter } from '../src/server/feed.ts'
 import { FULL_ACCESS } from '../src/server/access.ts'
@@ -43,5 +44,18 @@ describe('a mentions filter', () => {
       expect([matches(message(`thanks @${name}`)), matches(message(`cc @[${name}]`)), matches(message('thanks @someone'))], name).toEqual([true, true, false])
     }
     expect([matcher('__proto__')(message('cc @[__proto__]')), matcher('__proto__')(message('cc @[someone]'))]).toEqual([true, false])
+  })
+})
+
+describe("an imported platform user's handle", () => {
+  it('is typable as a mention, and made so in one pass, however long a run of punctuation it holds', () => {
+    expect(typableHandle('Malte Ubl', 'slack:user:U_MALTE')).toBe('malte-ubl')
+    expect(typableHandle('--.Ünïcode_ ', 'slack:user:U_X')).toBe('n-code')
+    expect(typableHandle('🙂', 'slack-eu:user:U0456')).toBe('u0456')
+    // A run a trim by regex would backtrack over from every dash in it.
+    const long = `x${'-'.repeat(200_000)}x`
+    const started = performance.now()
+    expect(typableHandle(long, 'slack:user:U_X')).toBe(long)
+    expect(performance.now() - started).toBeLessThan(1000)
   })
 })
