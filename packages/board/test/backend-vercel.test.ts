@@ -1828,7 +1828,7 @@ describe("each project's sync keys on Vercel's API", () => {
     ])
   })
 
-  it("names another project by the handle its deployments and their profiles go by, else by what its users say, else by its ID", async () => {
+  it("names another project by the handle its deployments and their agents go by, else by what its users say, else by its ID", async () => {
     for (const [projectIdHandles, keys] of [
       [false, ['support/slack', 'www/slack']],
       // An API that names a deployment by its ID, and its profiles under that, names support nowhere, and www on the user it imported.
