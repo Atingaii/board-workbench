@@ -1219,7 +1219,8 @@ through the sync that speaks for them, under the key it imported them through.
   Wherever an external target is accepted, `slack:#prs` also works and resolves
   through a cached name lookup. On Vercel's board a key is its project's, and
   a reader outside that project sees it as `<project>/<key>`
-  (`www/slack:C0123ABC`), by the project's name or its ID; the project's own
+  (`www/slack:C0123ABC`), by the project's name (the handle its deployments go
+  by, or else the `via` its imported users name) or its ID; the project's own
   deployments see it bare.
 - **Emoji are stored as normalized short names** (`eyes`, `white_check_mark`),
   using Chat SDK's emoji normalization. The CLI accepts `eyes`, `:eyes:`, or 👀.

@@ -179,10 +179,11 @@ Its watchers run as usual. It says once who holds the key:
 [board] slack is synced by production
 ```
 
-Another project's key reads `<project>/<key>`, by the project's name, or its ID
-where Vercel's API doesn't name it: in a message's `from`, in `vb sync <id>`,
-and in `--source`, which takes either. A deployment's own project's keys are
-bare, and a person sees each key under its project:
+Another project's key reads `<project>/<key>`, by the name its deployments go
+by on the board, or its ID where Vercel's API doesn't name it: in a message's
+`from`, in `vb sync <id>`, and in `--source`, which takes either. A
+deployment's own project's keys are bare, and a person sees each key under its
+project:
 
 ```text
 $ vb read general --source www/slack --json   # trimmed to text and from

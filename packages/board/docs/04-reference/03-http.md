@@ -508,7 +508,8 @@ the thread key:
 - **`from`** is the sync key a change came from (`slack`), or null on the
   board. On Vercel's board, each project's sync keys are its own: a key of the
   reader's own project is bare, and another project's is `<project>/<key>`
-  (`www/slack`), by the name Vercel's API gives the project, or its ID.
+  (`www/slack`), by the name its deployments go by on the board, or that its
+  imported users say, or else its ID.
 - **`actor.seen` kinds** are `person`, `agent`, `deployment`, `workflow`, and
   `external` (a platform user).
 - **The feed hides bookkeeping** by default: `actor.seen`, `thread.synced`,
