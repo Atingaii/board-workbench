@@ -107,7 +107,8 @@ function isAvatarUrl(value: string): boolean {
 
 /**
  * An `actor.seen` event, or null when the board already knows these details. `host`: the actor is
- * a host's principal or one of its profiles, which the board records once.
+ * a host's principal or one of its profiles, which the board records once. `seen.verified`: this
+ * write's verifier named it as shown, which each write says anew.
  */
 export function actorSeen(seen: Actor, known: ActorsState, host = false) {
   const existing = own(known.byId, seen.id)
@@ -127,6 +128,7 @@ export function actorSeen(seen: Actor, known: ActorsState, host = false) {
     existing.via?.name === actor.via?.name &&
     existing.via?.environment === actor.via?.environment &&
     existing.platform === actor.platform &&
+    existing.verified === actor.verified &&
     (!host || existing.host)
   )
     return null
@@ -142,6 +144,7 @@ export function actorSeen(seen: Actor, known: ActorsState, host = false) {
       ...(actor.via ? { via: { name: toStorable(actor.via.name), environment: actor.via.environment } } : {}),
       ...(actor.platform ? { platform: actor.platform } : {}),
       ...(host ? { host: true as const } : {}),
+      ...(actor.verified ? { verified: true as const } : {}),
     },
   }
 }

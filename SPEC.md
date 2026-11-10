@@ -1342,7 +1342,7 @@ export const boardContract = contract({
     'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage, syncedBy: ActorId.optional() }), // (server) external: { thread, message }
     'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable(), syncedBy: ActorId.optional() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
-    'actor.seen':        z.object({ actor: ActorId, kind: SeenActorKind, handle: Handle, name: z.string(), avatar: z.string().url().nullable(), via: z.object({ name, environment }).optional(), host: z.literal(true).optional() }), // via: who a profile acts through, as it shows
+    'actor.seen':        z.object({ actor: ActorId, kind: SeenActorKind, handle: Handle, name: z.string(), avatar: z.string().url().nullable(), via: z.object({ name, environment }).optional(), host: z.literal(true).optional(), verified: z.literal(true).optional() }), // via: who a profile acts through, as it shows; verified: this write's verifier named it as shown, said anew each time
   },
 })
 
@@ -2797,7 +2797,10 @@ Vercel's board, which names its accounts and projects itself. On a local board
 it's a principal its host's verifier named, under the handle it named (a
 verifier names no display names, so a person who sends one in `x-board-name`
 isn't checked as it), and its agents and imports, which show the verified
-principal after `via`. Their actor views say `verified: true`. Anyone else's
+principal after `via`. It's what the actor's last write said (`verified` on its
+`actor.seen`), not the `host` mark that stays: one a host named that then
+writes through another verifier, under a handle it sends, isn't verified. Their
+actor views say `verified: true`. Anyone else's
 name is what their client sent, so their messages post as the app with the
 label, which no one mistakes for a Slack user's. "via" names the principal: a person posting as
 themselves is just their name (`Julián Benegas`), and anything written on a

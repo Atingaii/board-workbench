@@ -47,7 +47,12 @@ export type WriteContext = {
  * the host's, which sync never writes as.
  */
 function seenFor(identity: Identity, actors: ActorsState) {
-  return actorSeen(identity.actor, actors, identity.principal.facts?.issuer === 'host')
+  const host = identity.principal.facts?.issuer === 'host'
+  // A host's verifier names its principals and their handles, never their display names: one is as shown only
+  // under the handle it named, and its agents and imports through it (`claude via julian`).
+  const { verified: _verified, ...actor } = identity.actor
+  const verified = host && (identity.author.profile !== null || actor.name === actor.handle)
+  return actorSeen(verified ? { ...actor, verified: true } : actor, actors, host)
 }
 
 /**
@@ -328,7 +333,7 @@ async function commitPost(
   await untilApplied(ctx, rows)
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
   // The author as the board now records them: a host's principal stays the host's.
-  const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: { ...identity.actor, ...(seen.payload.host ? { host: true as const } : {}) } } } : actors
+  const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: { ...identity.actor, ...(seen.payload.host ? { host: true as const } : {}), ...(seen.payload.verified ? { verified: true as const } : {}) } } } : actors
   return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent)
 }
 

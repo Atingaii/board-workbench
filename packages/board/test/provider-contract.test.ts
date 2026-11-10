@@ -7,7 +7,8 @@ import { channels, mirror, type SyncIn } from '../src/sync/fn.ts'
 import { envelope, eventSchema, type SyncResult } from '../src/sync/events.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
-import type { CallerRequest, HostPrincipal } from '../src/access/index.ts'
+import { oidcTokens, type CallerRequest, type HostPrincipal } from '../src/access/index.ts'
+import { testAuth } from './tokens.ts'
 
 /** A host's own verifier, which names the people its tokens are. */
 const hostVerifier = (people: Record<string, HostPrincipal>) => (request: CallerRequest) =>
@@ -325,6 +326,22 @@ describe('who a post is from', () => {
     ])
     // A Vercel login's name and handle are what its CLI sent: no sender, only the label.
     expect((await posted(false)).map(([as]) => as)).toEqual([undefined, undefined, undefined])
+  })
+
+  it("gives a sender only to a write its verifier named as shown, not to an actor a host once named", async () => {
+    const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
+    // A host that also takes Vercel logins: the same person through either.
+    const host = hostVerifier({ pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' } })
+    const tokens = oidcTokens(testAuth)
+    const board = testBoard({ sync: { tickets: provider }, authenticate: (request) => (request.credential === 'pt_julian' ? host(request) : tokens(request)) })
+    await caller(board.fetch, 'pt_julian')('POST', '/messages', { channel: 'tickets', text: 'as the host named me' })
+    await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
+    await caller(board.fetch, await personToken('u_julian'), { 'x-board-handle': 'ceo' })('POST', '/messages', { channel: 'tickets', text: 'as I say I am' })
+    await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
+    expect(provider.posts.map((post) => [post.body.as?.name ?? null, post.body.markdown])).toEqual([
+      ['julian', '**julian**: as the host named me'],
+      [null, '**ceo**: as I say I am'],
+    ])
   })
 
   it("gives an agent with the board's built-in avatar its person's Vercel avatar", async () => {
