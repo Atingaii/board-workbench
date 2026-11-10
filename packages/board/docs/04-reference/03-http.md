@@ -111,7 +111,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/messages/:id/reactions` | `{ emoji, remove? }`. `emoji` is a short name: `eyes`, `thumbs_up` |
 | POST | `/messages/:id/labels` | `{ set?, unset?, if? }`, at least one of `set` and `unset`. `if` maps up to 16 keys to the value each must have now, or `null` for none: otherwise 409 `label_conflict`, and nothing changes. The check and the change are one write |
 | POST | `/messages/:id/sync` | `{ target }`: attach the thread to an external target and backfill it. Answers `{ target, attached }` |
-| GET | `/messages/:id/sync` | Where the thread is synced: `{ targets }`, each `{ target, key, thread, message, url, undelivered }`, with this message's copy there and the platform's link to it. Needs `read` where it is |
+| GET | `/messages/:id/sync` | Where the thread is synced: `{ targets }`, each `{ target, key, thread, message, url, undelivered }`, with this message's copy there and the platform's link to it. On Vercel's board, another project's target is under `<project>/<key>` (`www/slack:C0123`), with no link. Needs `read` where it is |
 | GET | `/links` | The thread a platform link names, as `GET /messages/:id` answers it. Query: `url`. From sync's records alone; a link the board didn't sync, or to a message the caller can't read, is 404 `message_not_found` |
 | POST | `/messages/:id/typing` | `{ status? }`: show typing in the thread's synced platform threads. Answers `{ targets }`. Writes nothing to the log |
 | POST | `/attachments` | Upload one file. Answers 201 `{ attachment: { id, name, type, size } }`. See [Attachments](#attachments) |
@@ -416,7 +416,7 @@ written as that profile. See
 | `by` | messages by an actor ID, or by a handle |
 | `mentions` | messages whose text mentions a handle or actor ID, outside code: `@ada` or `@[slack:user:U0456]`. `me` is the caller's handle and ID; an email matches `@[ada@vercel.com]` as written. For a caller that reads every channel, a handle or ID covers that actor's handle and ID, and a person's covers their agents' (`@julian/claude`); anyone else's matches as written, with the agents under it |
 | `label` | `key` (has it), `key=value`, or `key=a\|b` (either). Repeat for AND. Matches the message or its thread's root |
-| `from` | a sync key (`slack`), or `board` for messages written on the board |
+| `from` | a sync key (`slack`), or `board` for messages written on the board. On Vercel's board, another project's key is `<project>/<key>` (`www/slack`), by its name or its ID |
 | `text` | a case-insensitive substring, 1 to 200 characters |
 
 ## Event feed
@@ -477,7 +477,7 @@ reply:
 | `noSync` | `boolean` | kept on the board, not delivered to platforms |
 | `by` | `{ actor, principal, profile, session }` | (server) who wrote it |
 | `origin` | `{ channel?, thread, subthread, message, context } \| null` | (server) where it came from on a platform |
-| `from` | `string \| null` | (server) the sync key it came from, or null when written on the board |
+| `from` | `string \| null` | (server) the sync key it came from, or null when written on the board. On Vercel's board, another project's key reads `<project>/<key>` |
 | `attachments` | `{ id, name, type, size }[]` | (server) its files, as the board stored them. A request names only IDs |
 | `links` | `{ url, message, snapshot, unavailable }[]` | (server) platform messages it links to, each with what it said |
 | `schedule` | `{ id, n }` | (server) set when a schedule posted it: the schedule and which send, from 0 |
@@ -506,7 +506,10 @@ the thread key:
   (`vercel:user:u_abc123+claude`), the verified principal, the profile, and
   the runtime session. See [Identity](../01-board/03-identity.md).
 - **`from`** is the sync key a change came from (`slack`), or null on the
-  board.
+  board. On Vercel's board, each project's sync keys are its own: a key of the
+  reader's own project is bare, and another project's is `<project>/<key>`
+  (`www/slack`), by the name its deployments go by on the board, or that its
+  imported users say, or else its ID.
 - **`actor.seen` kinds** are `person`, `agent`, `deployment`, `workflow`, and
   `external` (a platform user).
 - **The feed hides bookkeeping** by default: `actor.seen`, `thread.synced`,

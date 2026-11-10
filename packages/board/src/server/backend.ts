@@ -189,6 +189,12 @@ export interface Backend extends ProtocolMethods {
    * board() screens a schedule's message once, when it's made. True when left out.
    */
   readonly sendsSchedulesHere?: boolean
+  /**
+   * Whether board()'s sync runs its entry `key` here: false for one another deployment holds, as vercel()'s
+   * deployments of one project hold each of its keys once (production takes one from a preview). Sync takes webhooks,
+   * pulls its inbox, starts threads, and delivers only through the keys it holds. Every key, when left out.
+   */
+  syncedHere?(key: string): Promise<boolean>
   /** Its grants and tokens, for a backend that keeps them (`local()`): board() checks requests against them. */
   readonly trust?: Trust
   /**

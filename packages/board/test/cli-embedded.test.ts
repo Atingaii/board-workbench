@@ -10,7 +10,9 @@ import { createApp, type Failure } from '../src/cli/embedded.ts'
 import { main, type Command } from '../src/cli/main.ts'
 import { local } from '../src/cli/local.ts'
 import { env, url, useBoard } from './cli-harness.ts'
-import { fakeMessageboard } from './messageboard.ts'
+import { board } from '../src/server/index.ts'
+import { vercel } from '../src/backend-vercel/index.default.ts'
+import { as, fakeMessageboard } from './messageboard.ts'
 
 /** What `run` printed, and the exit code it answered. */
 async function capture(run: () => Promise<number>) {
@@ -306,6 +308,73 @@ describe('the embedded CLI', () => {
       fetching.mockRestore()
       process.chdir(cwd)
       await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("names where another project's import came from by that project, and takes it to --source by its name or its ID", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard({ slug: 'acme', projects: { prj_www: 'www' } })
+    // www's deployment syncs Slack, and brings Ada's message in.
+    const www = board({ backend: vercel({ team: 'team_test', api: 'http://localhost', fetch: as(api, 'project:prj_www:production') }) })
+    await www.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
+    await www.syncImport({ op: 'post', author: ada, from: 'slack', channel: 'general', text: 'checkout is down', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+    await board({ backend: vercel({ team: 'team_test', api: 'http://localhost', fetch: as(api, 'user:u_jb') }) }).post('general', { text: 'on the board' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const read = async (...args: string[]) => {
+        const done = await capture(() => app.run(['read', 'general', '--scope', 'acme', '--json', ...args]))
+        expect(done.code).toBe(0)
+        return (JSON.parse(done.stdout) as { threads: { message: { text: string; from: string | null } }[] }).threads.map(({ message }) => [message.text, message.from])
+      }
+      vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+      expect(await read()).toEqual([['checkout is down', 'www/slack'], ['on the board', null]])
+      expect(await read('--source', 'www/slack')).toEqual([['checkout is down', 'www/slack']])
+      expect(await read('--source', 'prj_www/slack')).toEqual([['checkout is down', 'www/slack']])
+      expect(await read('--source', 'slack')).toEqual([])
+      // Inside www, its own key is as its sync names it.
+      vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_www:production')
+      expect(await read()).toEqual([['checkout is down', 'slack'], ['on the board', null]])
+      expect(await read('--source', 'slack')).toEqual([['checkout is down', 'slack']])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('shows a deployment by its project, with its environment outside production, or by its ID where the API names it by that', async () => {
+    for (const [projectIdHandles, production, preview] of [
+      [false, 'www', 'www (preview)'],
+      [true, 'prj_www', 'prj_www@preview'],
+    ] as const) {
+      const home = await isolated()
+      const api = fakeMessageboard({ slug: 'acme', projects: { prj_www: 'www' }, projectIdHandles })
+      const www = (environment: string) => board({ backend: vercel({ team: 'team_test', api: 'http://localhost', fetch: as(api, `project:prj_www:${environment}`) }) })
+      const root = await www('production').post('general', { text: 'deployed' })
+      await www('preview').reply(root.id, { text: 'deployed a preview' })
+      const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+      const cwd = process.cwd()
+      process.chdir(home)
+      try {
+        vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+        const app = createApp({ appName: 'vercel board' })
+        const read = await capture(() => app.run(['read', root.id, '--scope', 'acme']))
+        expect(read.stdout.split('\n').filter((line) => line.includes(' · ')).map((line) => line.replace(/^.*?_\d+  /, '').replace(/ · .*$/, ''))).toEqual([production, preview])
+        // In every environment, a deployment goes by its project's name.
+        const handle = projectIdHandles ? 'prj_www@preview' : 'www'
+        expect(await capture(() => app.run(['actors', '--scope', 'acme']))).toMatchObject({
+          code: 0,
+          stdout: `@${handle}  ${preview}  vercel:project:prj_www:preview\n@${production}  ${production}  vercel:project:prj_www:production\n`,
+        })
+      } finally {
+        fetching.mockRestore()
+        process.chdir(cwd)
+        await rm(home, { recursive: true, force: true })
+      }
     }
   })
 
