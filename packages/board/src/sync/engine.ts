@@ -39,6 +39,8 @@ export type SyncHost = {
    * IDs derived from `trigger`.
    */
   client(platform: { author: ExternalAuthor; key: string } & EventSource, trigger: string): BoardClient
+  /** Whether sync runs entry `key` here, as the backend says: another deployment may hold it. */
+  syncedHere(key: string): Promise<boolean>
 }
 
 /**
@@ -178,8 +180,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     return platform
   }
   const keyOf = (target: string) => target.slice(0, target.indexOf(':'))
-  /** A target of this sync's own: another sync on the board (its own, or one elsewhere) delivers the rest. */
-  const ours = (target: string) => entries[keyOf(target)] !== undefined
+  /** Whether this board syncs entry `key` here: another deployment may hold it, and take its webhooks and deliveries. */
+  const here = (key: string) => host().syncedHere(key)
+  /** A target of this sync's own, here: another sync on the board (its own, one elsewhere, or another deployment's) delivers the rest. */
+  const ours = async (target: string) => entries[keyOf(target)] !== undefined && (await here(keyOf(target)))
   const native = (external: string) => external.slice(external.indexOf(':') + 1)
 
   // --- lookups --------------------------------------------------------------------
@@ -320,6 +324,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   // --- inbound: platform → inbox --------------------------------------------------
 
   async function intake(key: string, received: ReceivedEvent) {
+    // Another deployment holds the key: what the platform sends is that one's to import.
+    if (!(await here(key))) return
     const { event, raw, dedupe } = ReceivedEvent.parse(storableJson({ ...received, raw: jsonSafe(received.raw) }))
     for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
       if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`provider locations must belong to sync entry ${key}`)
@@ -373,7 +379,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function pull(keys: readonly string[] = Object.keys(entries)): Promise<number> {
     let ran = 0
     const until = Date.now() + PULL_MS
-    for (const key of keys)
+    for (const key of keys) {
+      if (!(await here(key))) continue
       while (Date.now() < until) {
         const { items } = await call('inboxNext', { key, limit: 10 })
         if (items.length === 0) break
@@ -381,6 +388,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         await Promise.all(items.map((item) => runItem(key, item)))
         ran += items.length
       }
+    }
     return ran
   }
 
@@ -997,7 +1005,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 
   /** A new root, offered to each platform that can start threads: its sync function may `start` one there. */
   async function deliverRoot(event: Extract<SyncEvent, { type: 'message.posted' }>, attempt: number) {
-    const starters = Object.keys(entries).filter((key) => entries[key]!.canStartThreads)
+    const starters: string[] = []
+    for (const key of Object.keys(entries)) if (entries[key]!.canStartThreads && (await here(key))) starters.push(key)
     if (event.payload.noSync || starters.length === 0) return
     const root = await messageOf(event.message!.id)
     if (!root || root.deleted) return
@@ -1014,12 +1023,14 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 
   async function deliverThread(event: Extract<SyncEvent, { type: 'thread.synced' }>, attempt: number) {
     const { thread, target } = event.payload
-    if (!ours(target)) return
+    if (!(await ours(target))) return
     // Joining: only messages written after the join are delivered.
     if ((event.payload.kind ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'thread') return
     const synced = await syncOf(thread)
-    const [root, ...replies] = synced ? await threadOf(synced.root) : []
-    if (!synced || !root || root.id !== synced.root || root.deleted) return
+    // A target its sync doesn't list is another's: another project's, under a key of the same name.
+    if (!synced?.targets.includes(target)) return
+    const [root, ...replies] = await threadOf(synced.root)
+    if (!root || root.id !== synced.root || root.deleted) return
     const failures: Failure[] = []
     try {
       await offer(keyOf(target), event, root, target, (renderer) => backfill(synced, root, replies, target, failures, renderer))
@@ -1112,7 +1123,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const failures: Failure[] = []
     for (const target of synced.targets) {
       const externalThread = synced.external[target]
-      if (!ours(target) || !externalThread) continue // the root isn't there yet; its thread.synced delivery backfills
+      if (!(await ours(target)) || !externalThread) continue // the root isn't there yet; its thread.synced delivery backfills
       if (cameFrom(message, target)) continue
       try {
         await offer(keyOf(target), event, message, target, async (renderer) => {
@@ -1136,7 +1147,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (!message || (event.type === 'message.edited' && message.deleted)) return
     const actors = await actorsNow()
     for (const [target, copy] of Object.entries(copies)) {
-      if (!ours(target) || (event.payload.from !== null && keyOf(target) === event.payload.from)) continue
+      if (!(await ours(target)) || (event.payload.from !== null && keyOf(target) === event.payload.from)) continue
       try {
         await offer(keyOf(target), event, message, target, async (renderer) => {
           const platform = platformOf(keyOf(target))
@@ -1173,7 +1184,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const message = { ...current, labels: after.labels }
     const previous = { ...current, labels: event.before?.labels ?? {} }
     for (const [target, copy] of Object.entries(copies)) {
-      if (!ours(target)) continue
+      if (!(await ours(target))) continue
       try {
         await offer(keyOf(target), event, message, target, async (renderer) => {
           const body = await renderFor(target, message, actors, copy.files === null, renderer)
@@ -1215,7 +1226,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function typing(messages: readonly MessageView[], status?: string): Promise<string[]> {
     const synced = messages[0] ? await syncOf(messages[0].thread) : null
     if (!synced) return []
-    const externals = [...new Set(Object.values(synced.external))].filter(ours)
+    const externals: string[] = []
+    for (const external of new Set(Object.values(synced.external))) if (await ours(external)) externals.push(external)
     const done = await Promise.all(
       externals.map(async (external) => {
         const key = keyOf(external)
