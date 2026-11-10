@@ -1,3 +1,7 @@
+import { execFile } from 'node:child_process'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardEventView, MessageView } from '../src/api/routes.ts'
 import type { Can } from '../src/access/index.ts'
@@ -371,6 +375,25 @@ describe('a task that needs others', () => {
     // One whose prerequisites completed already is ready from the start.
     expect(await task(ada, 'announce it', { needs: [fix.id, docs.id] })).toMatchObject({ labels: { 'board.task': 'ready' }, task: { state: 'ready', needs: [fix.id, docs.id] } })
   })
+
+  it('answers a completion that readies another in a script with nothing else running', async () => {
+    // local()'s timers don't keep a process alive, so a write that waited on the board's own
+    // background work would leave a short script to exit before it answered, with nothing printed.
+    const from = (path: string) => JSON.stringify(pathToFileURL(join(import.meta.dirname, '../src', path)).href)
+    const script = `
+      const { board } = await import(${from('server/index.ts')})
+      const { local } = await import(${from('backend-local/index.ts')})
+      const team = board({ backend: local({ memory: true }) })
+      const fix = await team.tasks.create('work', 'fix CVE-123')
+      const review = await team.tasks.create('work', { text: 'review the fix', needs: [fix.task.id] })
+      const claim = await team.tasks.claim(fix.task.id)
+      const done = await claim.complete('fixed')
+      const { message } = await team.thread(review.task.id)
+      console.log(done.task.state, message.task.state)
+    `
+    const ran = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script]).catch((error: { code?: number; stdout?: string }) => error)
+    expect({ code: 'code' in ran ? ran.code : 0, stdout: ran.stdout?.trim() }).toEqual({ code: 0, stdout: 'completed ready' })
+  }, 30_000)
 
   it('keeps waiting for one that failed or was canceled, until the failed one is reopened and completes', async () => {
     const { ada } = setup()

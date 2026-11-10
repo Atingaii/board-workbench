@@ -420,7 +420,13 @@ export async function untilApplied(ctx: WriteContext, rows: readonly { index: nu
   const last = events.at(-1)!.index
   try {
     let caughtUp = true
-    for (const event of events) if (!(caughtUp = await ctx.reads.tables.applyNext(event))) break
+    for (const event of events) {
+      if (await ctx.reads.tables.applyNext(event)) continue
+      // The consumer got to this one first: it's applied all the same, and the next may still be the writer's.
+      if ((await ctx.reads.tables.position()) >= event.index) continue
+      caughtUp = false
+      break
+    }
     if (caughtUp) return
   } catch {
     // The consumer applies them.
