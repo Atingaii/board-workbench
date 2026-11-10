@@ -154,8 +154,9 @@ firehose · 2 threads · cursor 6
 ```
 
 Each sync's Malte is an actor of its own, named only by that sync's imports. A
-mention resolves as each sync posts it, against its own users: `@malte`
-renders natively (`<@U0456>`) through the sync whose Malte it is, and a
+mention resolves as each sync posts it, against its own users: support's Malte
+is `@support/malte`, `@malte` renders natively (`<@U0456>`) through the sync
+whose Malte it is, and a
 platform user named by actor only through the key they came through, and of a
 sync elsewhere's only through that sync; any other posts their name. Renaming a key changes its users' IDs. See
 [platform users](../01-board/03-identity.md#platform-users).

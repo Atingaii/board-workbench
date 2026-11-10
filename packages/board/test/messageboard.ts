@@ -3,6 +3,7 @@
 // `user:u_jb`, `app:oac_1`, or `project:prj_pong:production`.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
+import { importedHandle } from '../src/contract/profiles.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -318,10 +319,20 @@ const whoOf = (actor: Actor): Who => {
 
 /**
  * What every board in one fake API shares: its team, its accounts and directory, its clock, and its bucket. `externalImports`:
- * an import's author is the platform user alone, as Vercel's API named them before platform profiles. `boardWideKeys`: a
- * sync key is one registrant's on the whole board, as Vercel's API kept them before each project had its own.
+ * an import's author is the platform user alone, as Vercel's API named them before platform profiles. `platformHandles`: an
+ * import's handle is the platform user's own, as the API named them before it put them under their project's name. `boardWideKeys`:
+ * a sync key is one registrant's on the whole board, as Vercel's API kept them before each project had its own.
  */
-type Shared = { teamId: string; accounts: Accounts; directory: Directory; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>>; externalImports: boolean; boardWideKeys: boolean }
+type Shared = {
+  teamId: string
+  accounts: Accounts
+  directory: Directory
+  now: () => number
+  stored: Map<string, Uint8Array<ArrayBuffer>>
+  externalImports: boolean
+  platformHandles: boolean
+  boardWideKeys: boolean
+}
 
 const STORAGE = 'http://storage.test/'
 
@@ -795,7 +806,8 @@ function fakeBoard(shared: Shared, boardId: string) {
         ? { id: body.author.id, principal: { type: 'external', id: body.author.id, syncKey: key } }
         : { id: `${owner}+${body.author.id}`, principal, profile: { name: body.author.id, platform: { key, platform: platformOf(owner, key), userId: String(body.author.id).slice(key.length + 1) } } }
       const via = shared.externalImports ? {} : { via: { name: shared.directory.projects[principal.projectId] ?? null, environment: principal.environment }, platform: platformOf(owner, key) }
-      actors.set(author.id, { id: author.id, kind: 'external', handle: body.author.handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), ...via, lastSeenAt: now() })
+      const handle = shared.externalImports || shared.platformHandles ? body.author.handle : importedHandle(shared.directory.projects[principal.projectId] ?? principal.projectId, body.author.handle, body.author.id)
+      actors.set(author.id, { id: author.id, kind: 'external', handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), ...via, lastSeenAt: now() })
       if (body.op === 'post') {
         const landed = body.id !== undefined ? importIds.get(`${owner}|${body.id}`) : undefined
         if (landed) return { message: landed }
@@ -1334,6 +1346,8 @@ export function fakeMessageboard(
     tokens?: Record<string, string>
     /** An import's author is the platform user alone (`principal: { type: 'external' }`), as Vercel's API named them before platform profiles. */
     externalImports?: boolean
+    /** An import's handle is the platform user's own (`Malte Ubl`), as Vercel's API named them before it put them under their project's name. */
+    platformHandles?: boolean
     /**
      * A sync key is one registrant's on the whole board, as Vercel's API kept them before each project had its own: a
      * second registrant's is 409 `sync_key_taken`, a registration names no `elsewhere`, and nothing names a binding's project.
@@ -1351,7 +1365,16 @@ export function fakeMessageboard(
   const now = () => (clock = Math.max(Date.now(), clock + 1))
   const roles = options.roles ?? ROLES
   const directory = { members: { ...(options.members ?? MEMBERS) }, roles, projects: options.projects ?? PROJECTS, repositories: options.repositories ?? REPOSITORIES, apps: APPS }
-  const shared: Shared = { teamId, accounts, directory, now, stored, externalImports: options.externalImports ?? false, boardWideKeys: options.boardWideKeys ?? false }
+  const shared: Shared = {
+    teamId,
+    accounts,
+    directory,
+    now,
+    stored,
+    externalImports: options.externalImports ?? false,
+    platformHandles: options.platformHandles ?? false,
+    boardWideKeys: options.boardWideKeys ?? false,
+  }
 
   const tokens = fakeTokens({ now })
 

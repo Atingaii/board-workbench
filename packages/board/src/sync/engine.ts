@@ -757,7 +757,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   /**
    * A message's text for a platform, through entry `key`, its mentions resolved as it posts and only
    * against that entry's own users. An `@handle` reads natively when one of them has it, or of
-   * several, the one who wrote in the thread. An `@[actor-id]` reads natively when it's one of them,
+   * several, the one who wrote in the thread: `@support/malte` names one of support's users, and
+   * `@malte` is short for whichever of this sync's users that is, under its principal's name. An `@[actor-id]` reads natively when it's one of them,
    * and as the actor's name otherwise; an `@[email]`, as whoever the platform finds with it, or as
    * the email. The rest go as written.
    */
@@ -770,7 +771,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const users = new Map<string, { id: string; mention: string }[]>()
     for (const token of tokens) {
       if (token.kind !== 'handle') continue
-      const theirs = Object.values(actors.byId).filter((actor) => actor.handle.toLowerCase() === token.handle)
+      const theirs = Object.values(actors.byId).filter((actor) => {
+        const handle = actor.handle.toLowerCase()
+        return handle === token.handle || (!token.handle.includes('/') && handle.slice(handle.indexOf('/') + 1) === token.handle)
+      })
       users.set(token.handle, theirs.flatMap((actor) => {
         const mention = nativeMention(key, actor.id, actors)
         return mention === null ? [] : [{ id: actor.id, mention }]

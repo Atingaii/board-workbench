@@ -1096,9 +1096,10 @@ actor and their agents (`julian/claude`, by `by.principal`), and their
 (`@julian/claude`). Their Slack or GitHub account is an actor of its own, named
 to cover it (`--by slack:user:U0456`, `--mentions slack:user:U0456`), and each
 sync elsewhere's profile of that account is another
-(`--by vercel:project:prj_support:production+slack:user:U0456`). Two syncs'
-profiles of one person can share a handle: `@malte` is text, so it fails no
-write and each sync reads it as its own Malte. A person mentioned on the board
+(`--by vercel:project:prj_support:production+slack:user:U0456`), under its
+project's name: support's Malte is `@support/malte`, and www's `@www/malte`.
+`@malte` is text, so it fails no write and each sync reads it as its own Malte,
+and `--mentions support` covers everyone support imported. A person mentioned on the board
 reads as their name on a platform; a platform user mentioned by handle, actor,
 or email (`@[ada@vercel.com]`) renders natively there (`<@U0456>`), and only
 through the sync that speaks for them, under the key it imported them through.
@@ -1116,7 +1117,17 @@ through the sync that speaks for them, under the key it imported them through.
     production.
   - An Actions principal's handle is `owner/repo`.
   - A GitHub user's handle is their login. A Slack user's handle is their Slack
-    display name.
+    display name. That's the board's own sync's users; a platform user a sync
+    elsewhere imports is `<the importing principal's name>/<their handle>`:
+    `support/malte`, in every environment of project `support`. The handle has
+    no `@<env>`, which mention syntax can't take; the environment shows only in
+    the name (**Malte via support (preview)**). The part after `/` is typable:
+    lowercased, each run of anything but `a-z`, `0-9`, `.`, `_`, and `-` turned
+    into one `-`, and `-`, `.`, and `_` trimmed from the ends, so "Malte Ubl" is
+    `support/malte-ubl`; when nothing is left, it's the user's ID on the
+    platform, the same way (`u0456`). Vercel's API names them by the same rule,
+    and `vercel()` composes it from the profile's project name (or its ID) for
+    an API that names them as their platform does.
 - **Syntax:**
   - `@handle` and `@person/profile`. The parser is a port of Just Chat's
     `extractMentions`, extended to allow one `/`.
@@ -1135,8 +1146,10 @@ through the sync that speaks for them, under the key it imported them through.
 - **Filters match the text.** `--mentions <who>` on `read`, `tail`, and `wait`,
   and a watcher's `--mentions`, match a message whose text, outside code, has
   `@<handle>` or `@[<actor id>]` for who it names: a handle covers each actor
-  with it, an actor ID covers that actor's handle, and a person covers their
-  agents too (`@julian/claude`, `@[vercel:user:u_1+claude]`). `me` is the
+  with it, an actor ID covers that actor's handle, and a name covers what's
+  under it: a person's agents (`@julian/claude`, `@[vercel:user:u_1+claude]`),
+  and the platform users a project imported (`--mentions support` finds
+  `@support/malte`). `me` is the
   caller's handle and ID. An email matches `@[ada@vercel.com]`, as written, and
   nothing asks a platform who has it. Who goes by what is the actors' records,
   which only a reader of every channel sees, so for anyone else a value matches
@@ -1146,8 +1159,10 @@ through the sync that speaks for them, under the key it imported them through.
   (`<principal>+<key>:…`), and users named under the key alone (`<key>:…`),
   the board's own sync's and, on Vercel's board, imports from before profiles.
   - **`@handle`:** natively (`<@U0456>`) when exactly one of its users has that
-    handle. Of several, the one who wrote in the message's thread, if exactly
-    one did. Otherwise it goes out as written.
+    handle. `@support/malte` is a user of support's sync, and plain `@malte` is
+    the shorthand: whichever of this sync's users is `<its principal>/malte`,
+    or the board's own sync's `malte`. Of several, the one who wrote in the
+    message's thread, if exactly one did. Otherwise it goes out as written.
   - **`@[actor-id]`:** natively when it's one of its users, and as the actor's
     name otherwise; as written when the board doesn't know the actor.
   - **`@[email]`:** looked up when it posts (Slack's `users.lookupByEmail`, which

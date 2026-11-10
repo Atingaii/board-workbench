@@ -42,7 +42,8 @@ import type { SyncEvent } from '../sync/engine.ts'
 import { SYNC, type Caller, type InboxDelivery, type ProtocolMethods, type SelfCaller, type VerifiedCaller } from './backend.ts'
 import type { Board, BoardContext } from './board.ts'
 import { derivedId } from '../client/ids.ts'
-import { claimsOf, KNOWN_AGENTS } from './actors.ts'
+import { claimsOf, KNOWN_AGENTS, viaOf } from './actors.ts'
+import { importedHandle } from '../contract/profiles.ts'
 import type { CallerRequest } from './auth.ts'
 import { avatarSvg } from './avatars.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
@@ -196,17 +197,20 @@ export type PlatformCaller = {
 }
 
 /**
- * A platform user an import by `principal` is by, as the board records them: themselves for the
+ * A platform user an import by `importer` is by, as the board records them: themselves for the
  * board's own sync on a board that keeps its log here, which checked them, and a profile of
- * anyone else's principal, whose word they are.
+ * anyone else's principal, whose word they are, under its name.
  */
-const externalActor = (author: ExternalAuthor, principal: string): Actor => ({
-  id: principal === SYNC_ACTOR ? author.id : `${principal}+${author.id}`,
-  kind: 'external',
-  handle: author.handle,
-  name: author.name,
-  avatar: author.avatar,
-})
+const externalActor = (author: ExternalAuthor, importer: { principal: string; actor: Actor }): Actor => {
+  const own = importer.principal === SYNC_ACTOR
+  return {
+    id: own ? author.id : `${importer.principal}+${author.id}`,
+    kind: 'external',
+    handle: own ? author.handle : importedHandle(viaOf({ id: importer.principal, handle: importer.actor.handle }).name, author.handle, author.id),
+    name: author.name,
+    avatar: author.avatar,
+  }
+}
 
 /** A write's caller, as the middleware is told: where it came from. The middleware's own handle and sync's lookups skip it. */
 function sourceOf(caller: Caller): WriteSource | null {
@@ -498,7 +502,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       const source = await importSource(caller, body, null, signal)
       if (!source) return send(body)
       const attachments = await attachmentsOf(caller, body.attachments, signal)
-      const author = externalActor(body.author, (await whoIs(caller, signal)).principal)
+      const author = externalActor(body.author, await whoIs(caller, signal))
       return dropped(async () =>
         screen({ kind: 'post', channel: channel!, re, text: body.text, labels: body.labels ?? {}, attachments }, author, source, async (write) =>
           send({ ...body, text: write.text, labels: write.labels }),
@@ -507,7 +511,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     }
     if ((body.origin === undefined) === (body.message === undefined)) return send(body)
     const found = await importTarget(caller, body, signal)
-    const author = externalActor(body.author, (await whoIs(caller, signal)).principal)
+    const author = externalActor(body.author, await whoIs(caller, signal))
     // Only an edit that would land reaches the middleware: the author's own, when it's named by board ID. A
     // backend that names imports by the platform user alone (Vercel's, before profiles) stored them so.
     const own = found !== null && (found.by.actor === author.id || found.by.actor === body.author.id)

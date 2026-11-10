@@ -10,6 +10,23 @@ export function platformProfile(profile: string | null): { key: string; user: st
   return profile && colon > 0 ? { key: profile.slice(0, colon), user: profile.slice(colon + 1) } : null
 }
 
+/**
+ * A platform user's handle as board's mention syntax takes it (`NAME` in `mentions.ts`), so anyone
+ * can type it: lowercased, each run of anything but `a-z`, `0-9`, `.`, `_`, and `-` as one `-`, and
+ * `-`, `.`, and `_` trimmed from the ends. "Malte Ubl" is `malte-ubl`. One with nothing left is
+ * their ID on the platform, the same way (`slack-eu:user:U0456` is `u0456`).
+ */
+export function typableHandle(handle: string, id: string): string {
+  const typable = (value: string) => value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '')
+  return typable(handle) || typable(id.slice(id.lastIndexOf(':') + 1)) || typable(id)
+}
+
+/**
+ * A platform user's handle as a principal's sync imported them: the principal's name (a project's,
+ * in every environment), then theirs, typable: `support/malte-ubl`.
+ */
+export const importedHandle = (principal: string, handle: string, id: string): string => `${principal}/${typableHandle(handle, id)}`
+
 /** An actor ID's principal and profile: `vercel:user:u_1+claude` is `vercel:user:u_1` with `claude`. */
 export function actorParts(actor: string): { principal: string; profile: string | null } {
   const plus = actor.indexOf('+')

@@ -4,7 +4,7 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
-import { actorParts, type Via } from '../contract/profiles.ts'
+import { actorParts, importedHandle, platformProfile, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
@@ -355,6 +355,13 @@ function viaFor(principal: ApiPrincipal, view?: Pick<ApiActorView, 'handle' | 'v
   return { name: named ?? username ?? shortName(principal), environment: null }
 }
 
+/**
+ * A platform user's handle as a project's sync imported them, `support/malte-ubl`: as the API names
+ * them, or from an API that names them as their platform does, under their project's name.
+ */
+const importedHandleOf = (handle: string, principal: ApiPrincipal, view: Pick<ApiActorView, 'handle' | 'via'> | undefined, userId: string) =>
+  handle.includes('/') ? handle : importedHandle(viaFor(principal, view).name, handle, userId)
+
 /** A short name for a person or an app the API doesn't name: the start of their ID. */
 const shortName = (principal: Extract<ApiPrincipal, { type: 'user' | 'app' }>) =>
   principal.type === 'user' ? `user-${principal.userId.slice(0, 6).toLowerCase()}` : `app-${principal.clientId.slice(0, 6).toLowerCase()}`
@@ -379,7 +386,8 @@ function actorView(actor: ApiActor, view?: ApiActorView): ActorView & { id: stri
   if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null }
   if (profile?.platform) {
     const { userId, platform, key } = profile.platform
-    return { id: actor.id, kind: 'external', handle: userId.slice(userId.lastIndexOf(':') + 1), name: profile.name, avatar: null, via: viaFor(principal, view), platform: view?.platform ?? platform ?? key }
+    const handle = importedHandleOf(view?.handle ?? userId.slice(userId.lastIndexOf(':') + 1), principal, view, userId)
+    return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view), platform: view?.platform ?? platform ?? key }
   }
   const base =
     principal.type === 'user' || principal.type === 'app'
@@ -726,7 +734,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor, found)
     const via = actor.profile && actor.principal.type !== 'external' ? { via: viaFor(actor.principal, found) } : {}
     const platform = found.platform ?? actor.profile?.platform?.platform
-    return { id: actor.id, kind, handle: found.handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via, ...(platform ? { platform } : {}) }
+    const user = actor.profile?.platform
+    const handle = user && actor.principal.type !== 'external' ? importedHandleOf(found.handle, actor.principal, found, user.userId) : found.handle
+    return { id: actor.id, kind, handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via, ...(platform ? { platform } : {}) }
   }
 
   /** Projects' names by ID, as the API names each on the platform users its sync imported (their `via`). */
@@ -1816,11 +1826,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async actors(caller, _input, signal) {
       const who = whoOf(caller)
       const listed = (await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors', {}, signal)).map((actor) => {
-        const principal = actorParts(actor.id).profile === null ? null : principalFrom(actor.id)
+        const { profile } = actorParts(actor.id)
+        const principal = profile === null ? null : principalFrom(actor.id)
+        const user = platformProfile(profile)
         return {
           id: actor.id,
           kind: apiKind(actor.kind),
-          handle: actor.handle,
+          handle: principal && user ? importedHandleOf(actor.handle, principal, actor, user.user) : actor.handle,
           name: actor.name ?? actor.handle,
           avatar: actor.avatar ?? null,
           ...(principal ? { via: viaFor(principal, actor) } : {}),

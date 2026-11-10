@@ -141,20 +141,21 @@ export type Me = { id: string; handle: string }
 
 /**
  * What a `--mentions` value matches in a message's text (`mentionTerms`): `me` is the caller's handle
- * and ID. Anyone else is the value as written, and each actor it names, by ID or by handle: their
- * handle and ID, and a person's agents too (`@julian/claude`, `@[vercel:user:u_1+claude]`). Only a
- * reader of every channel sees every actor, so anyone else gets the value and its agents as written:
- * finding someone by their other name would say who goes by what where it can't read.
+ * and ID. Anyone else is the value as written, and what's under it: a person's agents
+ * (`@julian/claude`), a project's imports (`@support/malte`), and their IDs. A reader of every
+ * channel also gets each actor the value names, by ID or by handle, through their other name: their
+ * handle and ID. Anyone else doesn't, since that would say who goes by what where it can't read.
  */
 export function mentionFilter(value: string, context: { me: Me | null; actors: ActorsState; access: Access }): NonNullable<MessageFilter['mentions']> {
   if (value === 'me') return { terms: context.me === null ? [] : [mentionTerm(context.me.handle), context.me.id], prefixes: [] }
+  const under = (name: string) => (name.includes(':') ? `${name}+` : `${mentionTerm(name)}/`)
   const terms = new Set([mentionTerm(value)])
-  if (!context.access.readsAll) return { terms: [...terms], prefixes: [value.includes(':') ? `${value}+` : `${mentionTerm(value)}/`] }
-  const prefixes = new Set<string>()
+  const prefixes = new Set([under(value)])
+  if (!context.access.readsAll) return { terms: [...terms], prefixes: [...prefixes] }
   for (const id of actorSet(value, context.actors)) {
     const actor = own(context.actors.byId, id)!
     terms.add(id).add(mentionTerm(actor.handle))
-    if (actor.kind === 'person') prefixes.add(`${mentionTerm(actor.handle)}/`).add(`${id}+`)
+    prefixes.add(under(actor.handle)).add(under(id))
   }
   return { terms: [...terms], prefixes: [...prefixes] }
 }
