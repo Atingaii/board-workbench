@@ -660,7 +660,8 @@ or `unchanged`, and with `--private`, the `grants` it made.
 vb actors
 ```
 
-Every actor the board has seen: `@handle`, name, and actor ID.
+Every actor the board has seen: `@handle`, name (through its principal, for
+one with a profile: `Malte via support (preview)`), and actor ID.
 
 ### read
 
@@ -936,7 +937,7 @@ watchers
   passed   wakes by path only where its discovery says so, and only a Vercel project
 
 sync
-  passed   keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced
+  passed   keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced
   passed   queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked
   passed   hands a sync each message change as a match of its @sync watcher
   passed   keeps noSync on a post and a reply, so sync sends neither

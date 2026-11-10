@@ -6,7 +6,8 @@ import type { Link } from '../contract/external.ts'
 import { FULL_ACCESS, type Access } from './access.ts'
 import { hasCriteria } from './watch-spec.ts'
 import { channelsReducer } from '../contract/reducers.ts'
-import { foldActors, foldMessages, iso, type ActorsState, type Message, type MessagesState } from '../contract/folds.ts'
+import { foldActors, foldMessages, iso, type Actor, type ActorsState, type Message, type MessagesState } from '../contract/folds.ts'
+import { actorParts, type Via } from '../contract/profiles.ts'
 import { own } from '../contract/own.ts'
 import { concernedMessageId } from '../store/project.ts'
 import type { MessageFilter } from '../store/types.ts'
@@ -21,7 +22,18 @@ const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])
 export function actorView(actors: ActorsState, id: string): ActorView | null {
   const author = own(actors.byId, id)
   if (!author) return null
-  return { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar }
+  const via = viaOfRecord(author)
+  return { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(via ? { via } : {}) }
+}
+
+/**
+ * Who an actor with a profile acts through, as its record says. An agent recorded before records
+ * said, whose handle is `<person>/<profile>`, acts through the person its handle names.
+ */
+export function viaOfRecord(actor: Pick<Actor, 'id' | 'handle' | 'via'>): Via | undefined {
+  if (actor.via) return { ...actor.via }
+  const slash = actor.handle.indexOf('/')
+  return actorParts(actor.id).profile !== null && slash > 0 ? { name: actor.handle.slice(0, slash), environment: null } : undefined
 }
 
 /**

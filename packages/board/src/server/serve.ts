@@ -50,7 +50,7 @@ import { DroppedError, runMiddleware, type Write, type WriteSource } from './mid
 import { createRouter, METHODS, openapi, queryObject, readCapped, readJson, type BoardRoute } from './routing.ts'
 import type { Access } from './access.ts'
 import { mentionsEmails, syncTarget, withEmailMentions, type SyncTarget } from './targets.ts'
-import type { WriteOrigin } from './origin.ts'
+import { SYNC_ACTOR, type WriteOrigin } from './origin.ts'
 import type { WatcherContext } from './watcher.ts'
 import { VERSION } from '../version.ts'
 
@@ -200,8 +200,18 @@ export type PlatformCaller = {
   origin: WriteOrigin & { via: Extract<WriteSource, { kind: 'sync' }> }
 }
 
-/** A platform user, as the middleware is told who's writing. */
-const externalActor = (author: ExternalAuthor): Actor => ({ id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar })
+/**
+ * A platform user an import by `principal` is by, as the board records them: themselves for the
+ * board's own sync on a board that keeps its log here, which checked them, and a profile of
+ * anyone else's principal, whose word they are.
+ */
+const externalActor = (author: ExternalAuthor, principal: string): Actor => ({
+  id: principal === SYNC_ACTOR ? author.id : `${principal}+${author.id}`,
+  kind: 'external',
+  handle: author.handle,
+  name: author.name,
+  avatar: author.avatar,
+})
 
 /** A write's caller, as the middleware is told: where it came from. The middleware's own handle and sync's lookups skip it. */
 function sourceOf(caller: Caller): WriteSource | null {
@@ -281,8 +291,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    */
   async function learnEmail(email: string): Promise<Actor | null> {
     const actor = await engine!.findByEmail(email)
-    if (actor) await backend.syncImport(engine!.caller, { op: 'seen', author: { ...actor, isBot: false } }, new AbortController().signal)
-    return actor
+    if (!actor) return null
+    const signal = new AbortController().signal
+    const author = { ...actor, isBot: false }
+    await backend.syncImport(engine!.caller, { op: 'seen', author }, signal)
+    return externalActor(author, (await whoIs(engine!.caller, signal)).principal)
   }
 
   /** Emails filters named, as sync found them, for a few minutes: `tail` and `wait` ask at every page. */
@@ -533,20 +546,22 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       const source = await importSource(caller, body, null, signal)
       if (!source) return send(body)
       const attachments = await attachmentsOf(caller, body.attachments, signal)
+      const author = externalActor(body.author, (await whoIs(caller, signal)).principal)
       return dropped(async () =>
-        screen({ kind: 'post', channel: channel!, re, text: body.text, labels: body.labels ?? {}, attachments }, externalActor(body.author), source, async (write) =>
+        screen({ kind: 'post', channel: channel!, re, text: body.text, labels: body.labels ?? {}, attachments }, author, source, async (write) =>
           send({ ...body, text: write.text, labels: write.labels }),
         ),
       )
     }
     if ((body.origin === undefined) === (body.message === undefined)) return send(body)
     const found = await importTarget(caller, body, signal)
+    const author = externalActor(body.author, (await whoIs(caller, signal)).principal)
     // Only an edit that would land reaches the middleware: the author's own, when it's named by board ID.
-    if (!found || found.deleted || (access && !access.can('sync', found.channel)) || (body.message !== undefined && found.by.principal !== body.author.id)) return send(body)
+    if (!found || found.deleted || (access && !access.can('sync', found.channel)) || (body.message !== undefined && found.by.actor !== author.id)) return send(body)
     const source = await importSource(caller, body, found, signal)
     if (!source) return send(body)
     return dropped(async () =>
-      screen({ kind: 'edit', id: found.id, channel: found.channel, re: found.re, text: body.text }, externalActor(body.author), source, async (write) => send({ ...body, text: write.text })),
+      screen({ kind: 'edit', id: found.id, channel: found.channel, re: found.re, text: body.text }, author, source, async (write) => send({ ...body, text: write.text })),
     )
   }
 

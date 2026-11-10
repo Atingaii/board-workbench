@@ -137,6 +137,11 @@ export const boardEvents = {
       name: z.string().min(1).max(128).refine(storable, 'name has a NUL character or a lone surrogate'),
       avatar: z.string().url().nullable(),
       /**
+       * (server) Who an actor with a profile acts through, as the board shows it: its principal's name
+       * (a deployment's project, anyone else's handle), and a deployment's environment.
+       */
+      via: z.object({ name: Handle, environment: z.string().min(1).max(128).nullable() }).optional(),
+      /**
        * (server) A principal a host's `authenticate` made, or one of its profiles: someone the board
        * signs in, whatever its ID or kind, so sync never writes as it. Others have none.
        */

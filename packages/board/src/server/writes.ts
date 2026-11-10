@@ -6,6 +6,7 @@ import { foldMessages, type Actor, type ActorsState, type Channel, type Message 
 import { own } from '../contract/own.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
+import { platformProfile } from '../contract/profiles.ts'
 import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
@@ -42,14 +43,19 @@ export type WriteContext = {
 
 /**
  * The `actor.seen` a write carries, or null: who its author is, as the board's record of them
- * says, unless the board knows that already. A platform user's record is board-wide, so a write
- * whose identity doesn't keep it (`records: false`) leaves it as it is. A host's principal and its
- * profiles are recorded as the host's, which sync never writes as.
+ * says, unless the board knows that already. A host's principal and its profiles are recorded as
+ * the host's, which sync never writes as.
  */
 function seenFor(identity: Identity, actors: ActorsState) {
-  if (identity.records === false) return null
   return actorSeen(identity.actor, actors, identity.principal.facts?.issuer === 'host')
 }
+
+/**
+ * Whether `identity` wrote `message`, to change it as its author: its principal did, as itself or
+ * any of its agents, and a platform user a sync speaks for only as that same user.
+ */
+const authored = (message: Message, identity: Identity) =>
+  message.by.principal === identity.principal.id && (platformProfile(identity.author.profile) === null || message.by.actor === identity.author.actor)
 
 /** The actors a write can mention: the ones the board knows, plus the ones an email named. */
 const knownWith = (actors: ActorsState, found: Actor[]): ActorsState =>
@@ -465,7 +471,7 @@ export type EditInput = WriteOrigin & {
 
 export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ unknownMentions?: string[] }> {
   const message = spent(input.authorized, 'post')
-  if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
+  if (input.asAuthor !== false && !authored(message, input.identity))
     throw forbidden('only the author can edit a message')
   if (message.deleted) {
     // Read before the delete, it's that the message changed since that the caller needs to know.
@@ -522,7 +528,7 @@ export async function writeDelete(
   input: { identity: Identity; authorized: Authorized<'post'>; from?: string | null; asAuthor?: boolean; revision?: number | undefined },
 ) {
   const message = spent(input.authorized, 'post')
-  if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
+  if (input.asAuthor !== false && !authored(message, input.identity))
     throw forbidden('only the author can delete a message')
   // A tombstone changes no more: deleting it again is nothing, unless the caller read it before.
   if (message.deleted) {

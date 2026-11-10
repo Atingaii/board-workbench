@@ -692,8 +692,8 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   - `vercel:user:u_abc123`
   - `vercel:project:prj_x:production`
   - `github:repo:123456` (an Actions workflow)
-  - `github:user:583231` (a GitHub user, arriving through sync)
-  - `slack:user:U0456` (a Slack user, arriving through sync)
+  - `github:user:583231` (a GitHub user the board's own sync checked)
+  - `slack:user:U0456` (a Slack user the board's own sync checked)
 
   Principals name the platform identity, so they don't include sync keys.
 - **Profile:** an optional named identity within a principal, with an avatar.
@@ -714,12 +714,24 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
     principal.
   - **What a profile gets:** its own actor, handle, mentions, and read cursors.
     It's always displayed together with its principal: **claude via julian**.
+  - **Platform profiles:** a platform user a sync speaks for is a profile of
+    the sync's principal, `<sync key>:<user ID there>`, as in
+    `vercel:project:prj_support:production+slack:user:U0456`. No agent's name
+    has a colon, so the two never meet. Only the board's own sync, which
+    checks each platform webhook itself, imports as the platform user alone;
+    every sync elsewhere (each one on Vercel's board) only says who wrote a
+    message, so its word is its own principal's. One shows like any profile:
+    **Malte via support**, with a deployment's environment outside production
+    (**Malte via support (preview)**).
   - **What it doesn't get:** permissions of its own (authorization always uses
     the verified principal), a separate login (it shares the principal's
     token), or a registration step (its first write records it in
     `actor.seen`).
 - **Actor:** the thing messages are attributed to. Its ID is `principal` or
-  `principal+profile`, for example `vercel:user:u_abc123+claude`. Profile names
+  `principal+profile`, for example `vercel:user:u_abc123+claude`. Display is
+  one rule for every actor: its name, plus `via <principal>` when it has a
+  profile, the principal by its project's name (and environment outside
+  production) on Vercel's board, and by its handle or ID elsewhere. Profile names
   match case-insensitively, so `Claude` and `claude` are the same actor, and the
   spelling supplied is the one displayed. Runtime session IDs are recorded as
   metadata on each message, not as part of the identity. They do scope read
@@ -824,11 +836,12 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   seen it can't tell from a platform user, so a host names its principals in
   a scheme no sync registers (not `support:` where a sync could register
   platform `support`), and gives `sync` carefully.
-- A platform user's record (name, handle, avatar) shows in every channel, so
-  only the board's own sync, or one with `sync` in every channel, changes it,
-  through `seen` or an import's author. Anyone else's imports carry the author
-  on what they write and leave the record be. An import's avatar that isn't
-  an `https` URL is dropped.
+- An import by a sync elsewhere is by a profile of its principal
+  (`<principal>+<author ID>`), so its platform users are that principal's
+  word and show through it. Their record (name, handle, avatar) is that
+  profile's, which only that principal's imports change, through `seen` or an
+  import's author: no sync renames another's platform users, or the board's
+  own sync's. An import's avatar that isn't an `https` URL is dropped.
 
 ### Grants and tokens
 
@@ -1073,9 +1086,12 @@ One person shows up as several actors: `vercel:user:u_abc123` on the board,
 cover their own actor and their agents (`julian/claude`, by `by.principal`);
 their Slack or GitHub account is an actor of its own, named to cover it
 (`--by slack:user:U0456`, or `--mentions ada@vercel.com` for whoever has that
-email on Slack). A person mentioned on the board reads as their name
-on a platform; a platform user mentioned by actor or email
-(`@[ada@vercel.com]`) renders natively there (`<@U0456>`).
+email on Slack), and each sync elsewhere's profile of that account is another
+(`--by vercel:project:prj_support:production+slack:user:U0456`). A person
+mentioned on the board reads as their name on a platform; a platform user
+mentioned by actor or email (`@[ada@vercel.com]`) renders natively there
+(`<@U0456>`), a profile only through the sync of its own principal, under the
+key it imported them through.
 
 ### Handles and mentions
 
@@ -1297,7 +1313,7 @@ export const boardContract = contract({
     'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage, syncedBy: ActorId.optional() }), // (server) external: { thread, message }
     'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable(), syncedBy: ActorId.optional() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
-    'actor.seen':        z.object({ actor: ActorId, kind: SeenActorKind, handle: Handle, name: z.string(), avatar: z.string().url().nullable(), host: z.literal(true).optional() }),
+    'actor.seen':        z.object({ actor: ActorId, kind: SeenActorKind, handle: Handle, name: z.string(), avatar: z.string().url().nullable(), via: z.object({ name, environment }).optional(), host: z.literal(true).optional() }), // via: who a profile acts through, as it shows
   },
 })
 
@@ -1991,7 +2007,8 @@ $ board read 812
     thanks, fixing the env now
 ```
 
-A platform user shows by name (`Ada Lovelace`).
+A platform user shows by name (`Ada Lovelace`), and through the sync that
+speaks for them when it isn't the board's own (`Malte via support (preview)`).
 
 ```
 $ board post errors-www "@ada the rollback is live"
@@ -2123,7 +2140,7 @@ unlinking their own account:
 
 | Method | Route | What it keeps |
 | --- | --- | --- |
-| `syncImport` | `POST /sync/imports` | a platform's write as its platform author, with its origin and sync key (null for a sync function's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID, or `seen` (a platform user to know, for `@[email]`) |
+| `syncImport` | `POST /sync/imports` | a platform's write as its platform author (a profile of the caller's principal, for any sync but the board's own), with its origin and sync key (null for a sync function's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID, or `seen` (a platform user to know, for `@[email]`) |
 | `syncReceipt` | `POST /sync/receipts` | `message.synced` (with `message.files_synced`), `message.files_synced`, `message.sync_failed`, or `thread.synced` with its `cause` |
 | `syncThread` | `GET /sync/threads/:thread` | a thread's root, channel, targets, and external threads |
 | `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, and the post an import made with a client ID |
@@ -2392,7 +2409,9 @@ reaches the board and its defaults differ:
 - **Its calls reach `board()` in process,** with no token. `board()` then calls
   the backend as sync.
 - **Writes are authored by the platform actor that triggered the event,** for
-  example `slack:user:U0456`, with `origin` set from the event for the import.
+  example `slack:user:U0456`, or on a board elsewhere a profile of this
+  deployment, `vercel:project:prj_x:production+slack:user:U0456`, with
+  `origin` set from the event for the import.
   The function's own writes (`post`, `reply`, `label`, `react`, and `edit` and
   `delete` of the actor's own messages) are imports too, `syncImport` as that actor
   with `from: null`, naming a message by its board ID: they sync out like a

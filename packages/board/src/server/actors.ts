@@ -1,6 +1,7 @@
 import { own } from '../contract/own.ts'
 import type { ActorsState, Actor } from '../contract/folds.ts'
 import { toStorable, type Author } from '../contract/schemas.ts'
+import type { Via } from '../contract/profiles.ts'
 import { extractMentions } from '../contract/mentions.ts'
 import { parseCan } from './access.ts'
 import type { Claims, Principal } from './auth.ts'
@@ -76,11 +77,23 @@ export function resolveActor(principal: Principal, claims: Claims, audience: str
     handle: profile === null ? baseHandle : `${baseHandle}/${profile}`,
     name: claims.profile ?? personName ?? baseHandle,
     avatar: claims.avatar ?? (known ? `${audience}/avatars/${profile}` : null),
+    ...(profile === null ? {} : { via: viaOf({ id: principal.id, handle: baseHandle }) }),
   }
   return {
     author: { actor: id, principal: principal.id, profile, session: claims.session },
     actor,
   }
+}
+
+/**
+ * Who a profile of `principal` acts through, as the board shows it: a deployment by its project's name
+ * and its environment (its handle is `www@preview`), anyone else by their handle.
+ */
+export function viaOf(principal: { id: string; handle: string }): Via {
+  const environment = /^vercel:project:[^:]+:([^:]+)$/.exec(principal.id)?.[1] ?? null
+  const suffix = `@${environment}`
+  const name = environment !== null && principal.handle.endsWith(suffix) && principal.handle.length > suffix.length ? principal.handle.slice(0, -suffix.length) : principal.handle
+  return { name, environment }
 }
 
 function isAvatarUrl(value: string): boolean {
@@ -102,14 +115,19 @@ function isAvatarUrl(value: string): boolean {
 export function actorSeen(seen: Actor, known: ActorsState, host = false) {
   const existing = own(known.byId, seen.id)
   // Platforms don't always send an avatar (GitHub comments via Chat SDK omit it,
-  // its webhooks include it): a missing one keeps the avatar the board knows.
-  const actor = seen.kind === 'external' && seen.avatar === null ? { ...seen, avatar: existing?.avatar ?? null } : seen
+  // its webhooks include it): a missing one keeps the avatar the board knows. A
+  // schedule kept from before profiles said who they act through keeps that too.
+  const avatar = seen.kind === 'external' && seen.avatar === null ? { avatar: existing?.avatar ?? null } : {}
+  const via = seen.via === undefined && existing?.via ? { via: existing.via } : {}
+  const actor: Actor = { ...seen, ...avatar, ...via }
   if (
     existing &&
     existing.kind === actor.kind &&
     existing.handle === actor.handle &&
     existing.name === actor.name &&
     existing.avatar === actor.avatar &&
+    existing.via?.name === actor.via?.name &&
+    existing.via?.environment === actor.via?.environment &&
     (!host || existing.host)
   )
     return null
@@ -122,6 +140,7 @@ export function actorSeen(seen: Actor, known: ActorsState, host = false) {
       handle: toStorable(actor.handle),
       name: toStorable(actor.name),
       avatar: actor.avatar,
+      ...(actor.via ? { via: { name: toStorable(actor.via.name), environment: actor.via.environment } } : {}),
       ...(host ? { host: true as const } : {}),
     },
   }

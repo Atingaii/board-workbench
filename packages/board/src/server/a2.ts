@@ -9,17 +9,18 @@ import { createTrust } from './trust.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { type Actor, type ExternalCopy, type Message } from '../contract/folds.ts'
+import { shownName } from '../contract/profiles.ts'
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
-import { actorSeen } from './actors.ts'
+import { actorSeen, viaOf } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
 import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
-import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds } from './feed.ts'
+import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
@@ -28,7 +29,7 @@ import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
 import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
-import type { WriteOrigin } from './origin.ts'
+import { SYNC_ACTOR, type WriteOrigin } from './origin.ts'
 import { isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
 import { VERSION } from '../version.ts'
@@ -63,8 +64,6 @@ const boardServer = (options: A2Options) =>
 
 export type BoardSession = ReturnType<ReturnType<typeof boardServer>['session']>
 
-/** Sync's own lookups and receipts, from board() in this deployment. */
-const SYNC_ACTOR = 'board:sync'
 /** The board's own code, through its handle: `team.post(…)`. With `as(profile)`, `board:client:<profile>`. */
 const CLIENT_ACTOR = 'board:client'
 
@@ -133,22 +132,34 @@ function selfIdentity(caller: SelfCaller): Identity {
   return deploymentIdentity(`${CLIENT_ACTOR}:${self}`, self)
 }
 
+/** An actor's name as people see it, with who it acts through: `Malte via www (preview)`. */
+const shownOf = (actor: Actor | undefined) => (actor ? shownName({ name: actor.name, via: viaOfRecord(actor) }) : undefined)
+
 /** A schedule as its creator sees it where it can't read: its text as a blind writer's message's is. */
 const blindSchedule = (schedule: ScheduleView, access: Access, own: string): ScheduleView =>
   access.readable(schedule.channel) ? schedule : { ...schedule, text: blindText(schedule.text, own) }
 
 /**
  * A platform user, writing through sync: full access, and each write still proved against the
- * channel it lands in. Their avatar is an https URL or none. `records`: the write keeps the
- * board's record of who they are, which only a sync that may sync everywhere does.
+ * channel it lands in. Their avatar is an https URL or none. This board's own sync checked the
+ * platform said so, so its platform users are themselves (`slack:user:U0456`); a sync elsewhere's
+ * are its word, a profile of its principal (`vercel:project:prj_1:production+slack:user:U0456`),
+ * whose record only its own imports change.
  */
-function externalIdentity(author: ExternalAuthor, records: boolean): Identity {
-  const principal: Granted = { id: author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
+function externalIdentity(author: ExternalAuthor, through: Granted | null): Identity {
+  const id = through === null ? author.id : `${through.id}+${author.id}`
+  const principal: Granted = { id: through?.id ?? author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
   return {
     principal,
-    author: { actor: author.id, principal: author.id, profile: null, session: null },
-    actor: { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: platformAvatar(author.avatar) },
-    ...(records ? {} : { records: false as const }),
+    author: { actor: id, principal: principal.id, profile: through === null ? null : author.id, session: null },
+    actor: {
+      id,
+      kind: 'external',
+      handle: author.handle,
+      name: author.name,
+      avatar: platformAvatar(author.avatar),
+      ...(through === null ? {} : { via: viaOf(through) }),
+    },
   }
 }
 
@@ -418,6 +429,7 @@ function build(options: A2Options, binding: BoardBinding) {
         name: actor.name,
         avatar: actor.avatar,
         profile: author.profile,
+        ...(actor.via ? { via: { ...actor.via } } : {}),
         session: author.session,
         expiresAt: principal.expiresAt?.toISOString() ?? null,
         can: principal.access.summary(),
@@ -448,7 +460,11 @@ function build(options: A2Options, binding: BoardBinding) {
       const actors = Object.values(state.byId)
         .filter((a) => seen === null || seen(a.id))
         .sort((a, b) => a.handle.localeCompare(b.handle))
-        .map(({ host: _host, ...a }) => a)
+        .map((found) => {
+          const { host: _host, via: _via, ...a } = found
+          const via = viaOfRecord(found)
+          return { ...a, ...(via ? { via } : {}) }
+        })
       return { actors, cursor: ref(index) }
     },
     async messages(caller, query) {
@@ -735,10 +751,10 @@ function build(options: A2Options, binding: BoardBinding) {
       const { principal } = (await needSync(caller, 'import', true))
       // Only a platform user it syncs, never anyone this board signs in.
       await speaksFor(caller, principal.id, body.author, body.op === 'seen' ? null : body.from)
-      const author = externalIdentity(body.author, recordsActors(caller, principal))
+      const author = externalIdentity(body.author, ownSync(caller) ? null : principal)
       if (body.op === 'seen') {
         const { state: actors } = await session.state(actorsReducer)
-        const seen = author.records === false ? null : actorSeen(author.actor, actors)
+        const seen = actorSeen(author.actor, actors)
         if (seen) await session.append(seen)
         return { message: null }
       }
@@ -802,7 +818,7 @@ function build(options: A2Options, binding: BoardBinding) {
           return ref(found.id)
         }
         const write = { kind: 'edit' as const, id: ref(found.id), channel: found.channel, re: found.re === null ? null : ref(found.re), text: body.text }
-        if (!found.deleted && !(asAuthor && found.by.principal !== body.author.id)) await checkSource(caller, principal.id, body.source)
+        if (!found.deleted && !(asAuthor && found.by.actor !== author.author.actor)) await checkSource(caller, principal.id, body.source)
         return { message: await commit(write) }
       }
       if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor, revision: body.revision })
@@ -1047,15 +1063,6 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   /**
-   * Whether a sync's writes keep the board's record of the platform users they're by (name and
-   * avatar), which every channel shows: this board's own sync's, and those of one that may sync in every
-   * channel. Anyone else's still carry their author, and leave the record as it is.
-   */
-  function recordsActors(caller: Caller, principal: Granted) {
-    return ownSync(caller) || principal.access.everywhere('sync')
-  }
-
-  /**
    * The caller, when it may sync somewhere: what every sync route needs. `records`: what it does
    * keeps sync's records (imports, receipts, its inbox, links), which only an integration does,
    * never a caller narrowed with `x-board-can`.
@@ -1143,7 +1150,7 @@ function build(options: A2Options, binding: BoardBinding) {
         const found = id === null || id === 0 ? null : await reads.message(id)
         if (!found || found.deleted || !principal.access.readable(found.channel)) return { ...link, message: null }
         const snapshot = {
-          author: actors.byId[found.by.actor]?.name ?? found.by.actor,
+          author: shownOf(actors.byId[found.by.actor]) ?? found.by.actor,
           text: found.text,
           createdAt: found.createdAt,
           files: found.attachments.map((file) => ({ name: file.name, url: null })),

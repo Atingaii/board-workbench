@@ -22,6 +22,7 @@ import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableErr
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
+import { actorParts, platformProfile, shownName } from '../contract/profiles.ts'
 
 /** An event as sync gets it: a board event's view, with the message as it was before for a label change. */
 export type SyncEvent = BoardEventView & { before?: MessageView }
@@ -40,8 +41,11 @@ export type SyncHost = {
   client(platform: { author: ExternalAuthor; key: string } & EventSource, trigger: string): BoardClient
 }
 
-/** The actors sync renders with: who each is. */
-type Actors = { byId: Record<string, Actor> }
+/**
+ * The actors sync renders with: who each is, and who this sync is on its board (`principal`), whose
+ * platform users it may mention natively. Null when the board didn't say.
+ */
+type Actors = { byId: Record<string, Actor>; principal: string | null }
 
 /** `files`: a message with files may have no text. */
 const clampText = (raw: string, files = false) => {
@@ -195,11 +199,24 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 
   const find = (query: Protocol['syncFind']['input'], signal?: AbortSignal) => call('syncFind', query, signal)
 
+  /** Who this sync is on its board, asked once: the board's own sync on a local board, or this deployment on one elsewhere. */
+  let principal: Promise<string> | null = null
+  function principalNow(): Promise<string> {
+    if (principal) return principal
+    const asked = call('me', {}).then((me) => me.principal)
+    principal = asked
+    asked.catch(() => {
+      if (principal === asked) principal = null
+    })
+    return asked
+  }
+
   /** The actors sync renders with, as the board has them now. */
   async function actorsNow(): Promise<Actors> {
-    const { actors } = await call('actors', {})
-    const state: Actors = { byId: {} }
-    for (const actor of actors) state.byId[actor.id] = { id: actor.id, kind: actor.kind, handle: actor.handle, name: actor.name, avatar: actor.avatar }
+    const [{ actors }, me] = await Promise.all([call('actors', {}), principalNow().catch(() => null)])
+    const state: Actors = { byId: {}, principal: me }
+    for (const actor of actors)
+      state.byId[actor.id] = { id: actor.id, kind: actor.kind, handle: actor.handle, name: actor.name, avatar: actor.avatar, ...(actor.via ? { via: { ...actor.via } } : {}) }
     return state
   }
 
@@ -365,7 +382,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       const copy = id === null ? null : await messageOf(id)
       if (copy && !copy.deleted && copy.channel === channel) {
         resolved.push({ url: link.url, message: copy.id, unavailable: null, snapshot: {
-          author: copy.author?.name ?? copy.by.actor,
+          author: copy.author ? shownName(copy.author) : copy.by.actor,
           text: copy.text, createdAt: copy.createdAt,
           files: copy.attachments.map((file) => ({ name: file.name, url: null })),
         } })
@@ -646,8 +663,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         } else {
           if (platform.singleReaction) {
             const emoji = canonicalEmoji(event.emoji)
+            // Its reactions are by the user, or on a board elsewhere, by this sync's profile of them.
+            const as = new Set([author.id, `${await principalNow()}+${author.id}`])
             for (const [held, actors] of Object.entries((await messageOf(id))?.reactions ?? {}))
-              if (actors.includes(author.id) && !(event.added && held === emoji))
+              if (actors.some((actor) => as.has(actor)) && !(event.added && held === emoji))
                 await call('syncImport', { op: 'react', author, from: key, origin, emoji: held, remove: true })
           }
           if (!platform.singleReaction || event.added) await call('syncImport', { op: 'react', author, from: key, origin, emoji: event.emoji, remove: !event.added })
@@ -690,45 +709,53 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   // --- outbound: board → platforms --------------------------------------------------
 
   /**
-   * A message's text for a platform: each mention it resolved reads natively where the
-   * actor is the platform's own, and as their plain name anywhere else. A handle it
+   * A message's text for a platform, through entry `key`: each mention it resolved reads natively
+   * where the actor is that platform's own, and as their plain name anywhere else. A handle it
    * didn't resolve goes out as written.
    */
-  function textFor(platform: SyncProvider, message: MessageView, actors: Actors, text = message.text): string {
+  function textFor(key: string, message: MessageView, actors: Actors, text = message.text): string {
     const mentioned = message.mentions.map((id) => actors.byId[id]).filter((actor) => actor !== undefined)
-    return replaceMentions(text, (token, written) => {
+    return replaceMentions(text, (token) => {
       const actor =
         token.kind === 'actor'
           ? mentioned.find((candidate) => candidate.id === token.actor)
           : mentioned.find((candidate) => candidate.handle.toLowerCase() === token.handle)
-      if (actor) return nativeMention(platform, actor.id, actors) ?? actor.name
+      if (actor) return nativeMention(key, actor.id, actors) ?? actor.name
       return null
     })
   }
 
-  /** How `platform` mentions an actor: natively when it's the platform's own account, or null. */
-  function nativeMention(platform: SyncProvider, actor: string, actors: Actors): string | null {
+  /**
+   * How entry `key`'s platform mentions an actor: natively when it's one of the platform's own
+   * users, or null. A platform user another principal's sync speaks for is that sync's word, so
+   * only that sync, under the key it imported them through, mentions them natively.
+   */
+  function nativeMention(key: string, actor: string, actors: Actors): string | null {
     const account = actors.byId[actor]
-    return account ? platform.mention(account) : null
+    if (!account) return null
+    const { principal, profile } = actorParts(actor)
+    const user = platformProfile(profile)
+    if (user === null) return platformOf(key).mention(account)
+    if (principal !== actors.principal || user.key !== key) return null
+    return platformOf(key).mention({ ...account, id: profile! })
   }
 
   /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
   function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): { markdown: string; as?: ProviderSender } {
     const actor = actors.byId[message.by.actor]
-    let name = actor?.name ?? message.by.actor
-    if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
+    let name = actor ? shownName(actor) : message.by.actor
     // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
-    if (message.from) name = `${name} (${entries[message.from]?.platform ?? message.by.actor.slice(0, message.by.actor.indexOf(':'))})`
+    if (message.from) name = `${name} (${entries[message.from]?.platform ?? (platformProfile(message.by.profile)?.key ?? message.by.actor).split(':')[0]})`
     const platform = platformOf(key)
     const body = (renderer ?? ((input) => platform.render(input)))(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
       author: actor ? { ...actor } : null,
-      mentionOf: (id: string) => nativeMention(platform, id, actors),
+      mentionOf: (id: string) => nativeMention(key, id, actors),
       label: name,
       target,
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    const markdown = textFor(platform, message, actors, body)
+    const markdown = textFor(key, message, actors, body)
     // An agent's message can carry its own name and picture where the platform shows a sender per message.
     return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } } : { markdown }
   }

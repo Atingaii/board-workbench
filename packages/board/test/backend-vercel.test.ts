@@ -113,7 +113,7 @@ describe('vercel()', () => {
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'skipped',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'skipped',
-      "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
+      "sync: keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
       "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'skipped',
       'sync: hands a sync each message change as a match of its @sync watcher': 'skipped',
       'sync: keeps noSync on a post and a reply, so sync sends neither': 'passed',
@@ -1047,7 +1047,7 @@ describe('vercel()', () => {
     const api = fakeMessageboard()
     const report = await conformance(handleOn(api, 'project:prj_pong:production'), { withCan: narrowedOn(api, 'project:prj_pong:production') })
     expect(Object.fromEntries(report.checks.filter((check) => check.group === 'sync').map((check) => [check.name, check.status]))).toEqual({
-      "keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'passed',
+      "keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced": 'passed',
       "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
       'hands a sync each message change as a match of its @sync watcher': 'passed',
       'keeps noSync on a post and a reply, so sync sends neither': 'passed',
@@ -1274,6 +1274,76 @@ describe('vercel()', () => {
       ['message.edited', null],
       ['message.deleted', 'slack'],
     ])
+  })
+
+  it("shows a project's import as the platform user through that project, in its environment, as the API names them", async () => {
+    const api = fakeMessageboard()
+    const preview = handleOn(api, 'project:prj_pong:preview')
+    await preview.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const malte = { id: 'slack:user:U_MALTE', handle: 'malte', name: 'Malte', avatar: null, isBot: false }
+    await preview.syncImport({ op: 'post', author: malte, from: 'slack', channel: 'general', text: 'ship it', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+    const julian = handleOn(api)
+    await julian.post('general', { text: 'on the board' })
+    const { messages } = await julian.messages({ channel: 'general' })
+    expect(messages.map((message) => [message.text, message.by, message.author])).toEqual([
+      [
+        'ship it',
+        { actor: 'vercel:project:prj_pong:preview+slack:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack:user:U_MALTE', session: null },
+        { id: 'vercel:project:prj_pong:preview+slack:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' } },
+      ],
+      ['on the board', { actor: 'vercel:user:u_jb', principal: 'vercel:user:u_jb', profile: null, session: null }, expect.not.objectContaining({ via: expect.anything() })],
+    ])
+    expect((await julian.actors()).find((actor) => actor.id.endsWith('+slack:user:U_MALTE'))).toMatchObject({ name: 'Malte', via: { name: 'pong', environment: 'preview' } })
+    // A profile name covers that agent of anyone's, but a platform user is only ever themselves.
+    expect((await julian.messages({ channel: 'general', by: 'slack:user:U_MALTE' })).messages).toEqual([])
+  })
+
+  it('shows an import as the platform user alone, as before, from an API that names them so', async () => {
+    const api = fakeMessageboard({ externalImports: true })
+    const preview = handleOn(api, 'project:prj_pong:preview')
+    await preview.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const malte = { id: 'slack:user:U_MALTE', handle: 'malte', name: 'Malte', avatar: null, isBot: false }
+    await preview.syncImport({ op: 'post', author: malte, from: 'slack', channel: 'general', text: 'ship it' })
+    const [message] = (await handleOn(api).messages({ channel: 'general' })).messages
+    expect([message!.by, message!.author]).toEqual([
+      { actor: 'slack:user:U_MALTE', principal: 'slack:user:U_MALTE', profile: null, session: null },
+      { id: 'slack:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null },
+    ])
+  })
+
+  it("mentions a platform user natively only from the sync that speaks for them, under the key it imported them through", async () => {
+    const api = fakeMessageboard()
+    const s = fakePlatform('slack')
+    // The documented renderer: a root mentions its owner where the platform can.
+    const owner = render(({ message, label, mentionOf }) => {
+      const who = message.labels.owner ? mentionOf(message.labels.owner) : null
+      return who ? `${message.text} · ${who}` : `**${label}**: ${message.text}`
+    }, channels({ C1: 'general' }))
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: s.adapter }, owner) },
+    })
+    // A preview held the key first and spoke for "Ada" under it, then let it go.
+    const preview = handleOn(api, 'project:prj_pong:preview')
+    await preview.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    await preview.syncImport({ op: 'seen', author: { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false } })
+    await preview.register({ url: null, watch: {}, sync: [] })
+    // Production's own Slack brings Ada in under the same key.
+    await pong.fetch(new Request(`${PONG_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'hi', user: 'U_ADA', name: 'Ada' }) }))
+    const julian = handleOn(api)
+    await vi.waitFor(async () => expect((await julian.messages({ channel: 'general' })).messages).toHaveLength(1))
+    expect((await julian.actors()).map((actor) => actor.id).filter((id) => id.endsWith('+slack:user:U_ADA')).sort()).toEqual([
+      'vercel:project:prj_pong:preview+slack:user:U_ADA',
+      'vercel:project:prj_pong:production+slack:user:U_ADA',
+    ])
+    await julian.post('general', { text: 'yours', labels: { owner: 'vercel:project:prj_pong:production+slack:user:U_ADA' } })
+    await julian.post('general', { text: 'not yours', labels: { owner: 'vercel:project:prj_pong:preview+slack:user:U_ADA' } })
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await vi.waitFor(() =>
+      expect(s.channelPosts.map((post) => JSON.parse(post.text).markdown).sort()).toEqual(['**Julián Benegas**: not yours', 'yours · <@U_ADA>']),
+    )
   })
 
   it("syncs Slack through the engine from its first webhook, a file as an attachment on the board, and a board reply back to Slack", async () => {

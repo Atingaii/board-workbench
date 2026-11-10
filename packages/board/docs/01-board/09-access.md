@@ -349,10 +349,10 @@ through the binding's `handle(caller)`, so the middleware sees it.
   `{ '*': 'all', 'security/': [] }` can do neither.
 - **`sync` speaks for platform users.** A caller with it in a channel can write
   there as any Slack, GitHub, or Linear user it names, which is what a
-  deployment that syncs onto this board needs. Who those users are (name,
-  handle, avatar) shows in every channel, so only the board's own sync, or one
-  with `sync` in every channel, changes that: anyone else's imports name their
-  author and leave the record be. g2 gives it to every project on the team:
+  deployment that syncs onto this board needs. They're its word, so they're its
+  own [profiles](./03-identity.md#platform-users) of those users and show
+  through it (`Malte via support`): no sync renames another's, or the board's
+  own sync's. g2 gives it to every project on the team:
   [what `sync` grants](../04-reference/03-http.md#what-sync-grants) says how
   to keep it to the deployments that sync.
 - **`sync` attaches only a platform thread no other board thread has.** Taking

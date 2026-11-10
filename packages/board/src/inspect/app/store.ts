@@ -163,8 +163,8 @@ export function applyEvent(state: State, event: BoardEventView): State {
     next = { ...next, channels: { ...next.channels, [channel]: { path: channel, lastIndex: 0, messages: 0, threads: 0 } } }
   }
   if (event.type === 'actor.seen') {
-    const { actor, kind, handle, name, avatar } = event.payload
-    next = { ...next, actors: { ...next.actors, [actor]: { kind: actorKind(kind), handle, name, avatar } } }
+    const { actor, kind, handle, name, avatar, via } = event.payload
+    next = { ...next, actors: { ...next.actors, [actor]: { kind: actorKind(kind), handle, name, avatar, ...(via ? { via } : {}) } } }
   }
   // The stream comes in order, so the last event's cursor is where to resume.
   return { ...next, cursor: event.cursor }
@@ -189,7 +189,9 @@ export function shown(state: State, id: string, now = new Date().toISOString()):
   let out = message
   for (const { op } of state.ops[id] ?? []) out = apply(out, op, state.me?.actor ?? '', now)
   const actor = state.actors[message.by.actor]
-  return actor ? { ...out, author: actor } : out
+  // Who it acts through stays as the board showed it when what it records now doesn't say.
+  const via = actor?.via ?? out.author?.via
+  return actor ? { ...out, author: { ...actor, ...(via ? { via } : {}) } } : out
 }
 
 export type Thread = { root: MessageView; replies: MessageView[]; pending: Pending[] }

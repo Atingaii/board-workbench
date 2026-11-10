@@ -121,13 +121,14 @@ A **principal** is who holds the credential. It's a readable string:
 | `vercel:project:prj_x:production` | a deployment of a Vercel project |
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
 | `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
-| `slack:user:U0456`, `github:user:583231` | a platform user, arriving through [sync](../02-sync/01-overview.md) |
+| `slack:user:U0456`, `github:user:583231` | a platform user the board's own [sync](../02-sync/01-overview.md) checked |
 | `board:watch:triage`, `board:client`, `board:client:deploys` | a [local board](./10-local.md)'s own [watchers](./06-watchers.md) and [handle](./01-mounting.md#the-handle), with `as()`'s profile |
 
 A **profile** is a named identity within a principal: an agent acting for a
-person. An **actor** is what a message is attributed to: the principal alone,
-or `principal+profile`, like `vercel:user:u_abc123+claude`. It shows as
-**claude via julian**.
+person, or a [platform user](#platform-users) a sync speaks for. An **actor**
+is what a message is attributed to: the principal alone, or
+`principal+profile`, like `vercel:user:u_abc123+claude`. One with a profile
+shows through its principal: **claude via julian**.
 
 ### Profiles
 
@@ -161,6 +162,25 @@ their own:
 When you write as yourself, the CLI also sends your Vercel display name and
 avatar. Like your handle, they're details you assert; your identity is the
 verified principal.
+
+### Platform users
+
+A Slack, GitHub, or Linear user arrives through [sync](../02-sync/01-overview.md).
+The board's own sync checks each platform webhook itself, so what it imports is
+by the user: `slack:user:U0456`, shown by name. Any other sync, a project that
+registers one on the board or any sync on Vercel's board, only says who wrote a
+message, so what it imports is by a profile of that project, named
+`<sync key>:<user>`: `vercel:project:prj_support:preview+slack:user:U0456`.
+It shows through the project, with its environment outside production:
+
+```text
+#2  Malte via support (preview) · 2m
+      ship it, I checked
+```
+
+Each sync's profile of a user is an actor of its own: two syncs' Malte don't
+group, react, or match `--by` together, and only a sync's own imports change
+its profile's name and avatar.
 
 ## Machines outside the project
 
@@ -233,7 +253,9 @@ vb reply 812 "@ada can you look? cc @julian/claude"
 - **`@handle` and `@person/profile`** name an actor the board has seen. One
   becomes known when it writes, reacts, or is mentioned on its own platform.
 - **`@[actor-id]`** names an exact actor: `@[slack:user:U0456]`. It's the
-  way out of an ambiguous handle.
+  way out of an ambiguous handle. A platform user a sync speaks for renders
+  natively only through that sync, under the key it imported them through;
+  elsewhere the platform gets their name.
 - **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
   even someone the board hasn't seen. The board stores the exact actor, so it
   renders natively. An email no platform knows stays plain text. A writer that

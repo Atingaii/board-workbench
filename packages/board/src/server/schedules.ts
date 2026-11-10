@@ -19,7 +19,7 @@ import { badRequest, HttpError, notFound } from './errors.ts'
 import { authorizePost, deploymentIdentity, type Identity, type WriteContext } from './writes.ts'
 import type { WriteOrigin } from './origin.ts'
 import { DroppedError } from './middleware.ts'
-import { indexOf, ref, scheduleRef } from './feed.ts'
+import { indexOf, ref, scheduleRef, viaOfRecord } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 import { storedPrincipal } from './registry.ts'
 
@@ -150,6 +150,7 @@ export const createdBy = (schedule: Schedule, identity: { principal: Pick<Grante
 
 export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleView => {
   const author = actors.byId[schedule.as.actor.id] ?? schedule.as.actor
+  const via = viaOfRecord({ id: schedule.as.actor.id, handle: author.handle, via: 'via' in author ? author.via : undefined })
   return {
     id: scheduleRef(schedule.id),
     channel: schedule.channel,
@@ -168,7 +169,7 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
     state: schedule.canceled ? 'canceled' : schedule.next === null ? 'done' : 'pending',
     canceled: schedule.canceled,
     by: schedule.as.author,
-    author: { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar },
+    author: { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(via ? { via } : {}) },
     createdAt: schedule.createdAt,
   }
 }

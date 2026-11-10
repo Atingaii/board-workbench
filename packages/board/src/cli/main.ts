@@ -936,8 +936,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         result({ ...me, board: url, source })
         return 0
       }
-      const name = me.profile !== null ? `${me.name} via ${me.handle.split('/')[0]}` : me.name
-      out(`${name} (${me.actor})`)
+      out(`${who(me)} (${me.actor})`)
       const rows: [string, string][] = [['board', url]]
       if (source) rows.push(['source', source])
       if (me.expiresAt) {
@@ -1018,7 +1017,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'actors': {
       const actors = await client().actors()
       if (flags.json) return result({ actors }), 0
-      for (const actor of actors) out(`@${actor.handle}  ${actor.name}  ${actor.id}`)
+      for (const actor of actors) out(`@${actor.handle}  ${actorName(actor)}  ${actor.id}`)
       return 0
     }
 

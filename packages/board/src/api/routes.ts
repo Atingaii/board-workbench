@@ -18,6 +18,7 @@ import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINK
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
+import type { Via } from '../contract/profiles.ts'
 import type { AccessSummary, Can as AccessCan, Permission, WrittenCan } from '../server/access.ts'
 
 /**
@@ -629,8 +630,12 @@ export type TokenView = {
   parent: string | null
 }
 
-/** `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow. */
-export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'>
+/**
+ * `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow.
+ * `via` is who one with a profile acts through: an agent's person or project, or the principal whose sync speaks for a
+ * platform user (`Malte via www (preview)`).
+ */
+export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via'>
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
 export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version' | 'revision'> & {
   id: string
@@ -747,6 +752,8 @@ export type Me = {
   name: string
   avatar: string | null
   profile: string | null
+  /** Who you act through, writing with a profile: `claude via julian`. */
+  via?: Via
   session: string | null
   expiresAt: string | null
   /** What you may do in each channel pattern, implications included: `{ '*': [...every permission] }` is full access. */

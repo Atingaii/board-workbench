@@ -167,7 +167,7 @@ lands or is, or somewhere for the lookups and the inbox.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. The author is a user of a platform the caller syncs (the entry's, with `from`), never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`, `local:`, `board:`), nor a host's principal, of any kind, that has registered or written here, or one of its agents or registered watchers (`<principal>+<id>`): 403 otherwise. An `avatar` that isn't an `https` URL is dropped. Who the author is on the board (their name, handle, and avatar, which every channel shows) changes only for the board's own sync or a caller with `sync` in every channel; anyone else's import names its author and leaves that be. `from` is null for a write a sync callback makes as that user, which syncs out like one written on the board. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each naming the message it changes by `origin: { thread, message? }`, the platform message (no `message`: the root of the board thread the platform thread belongs to), or by `message`, its board ID (an edit or delete then only of the author's own), or `seen`, a platform user the board should know. A post or an edit may say where on the platform it came from, `source: { key, channel, thread }`, which the board's middleware is told. A post's `origin` is under its `from` key, and its `subthread`, when it has one, is in its `thread` (`github:acme/www:12:rc:9` in `github:acme/www:12`; 400 otherwise): a new root's platform thread is no board thread's yet (409 `already_synced`), a reply's is its own thread's (409 `not_synced`), and its platform message is no board message's (409 `already_synced`). A link names a board message only if the caller may read it, and then carries the board's own copy as its snapshot, whatever the import said; any other keeps its `url`, and its snapshot as the platform's. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find, and with `dropped`, what the middleware responded when it kept a post or an edit off the board, for sync to say in the platform thread |
+| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. The author is a user of a platform the caller syncs (the entry's, with `from`), never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`, `local:`, `board:`), nor a host's principal, of any kind, that has registered or written here, or one of its agents or registered watchers (`<principal>+<id>`): 403 otherwise. An `avatar` that isn't an `https` URL is dropped. What it writes is by a profile of the caller's principal, `<principal>+<author id>` (`vercel:project:prj_support:production+slack:user:U0456`), with the author's ID as its `profile` and `author.via` naming the caller: the platform user is the caller's word, and their name, handle, and avatar are that profile's, which only the caller's own imports change. Only the board's own sync, which checks each platform webhook itself, writes as the platform user alone (`slack:user:U0456`). `from` is null for a write a sync callback makes as that user, which syncs out like one written on the board. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each naming the message it changes by `origin: { thread, message? }`, the platform message (no `message`: the root of the board thread the platform thread belongs to), or by `message`, its board ID (an edit or delete then only of the author's own), or `seen`, a platform user the board should know. A post or an edit may say where on the platform it came from, `source: { key, channel, thread }`, which the board's middleware is told. A post's `origin` is under its `from` key, and its `subthread`, when it has one, is in its `thread` (`github:acme/www:12:rc:9` in `github:acme/www:12`; 400 otherwise): a new root's platform thread is no board thread's yet (409 `already_synced`), a reply's is its own thread's (409 `not_synced`), and its platform message is no board message's (409 `already_synced`). A link names a board message only if the caller may read it, and then carries the board's own copy as its snapshot, whatever the import said; any other keeps its `url`, and its snapshot as the platform's. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find, and with `dropped`, what the middleware responded when it kept a post or an edit off the board, for sync to say in the platform thread |
 | POST | `/sync/receipts` | What sync did, about board message `message`: `kind: 'message'` (it landed on `target` as `external`, with its `files`), `files`, `failed` (with `error`), or `thread` (its thread syncs with `target`, a `targetKind` channel or thread, by `cause` `config` or `request`). A receipt but `thread`'s is for one of its thread's targets (400 `not_a_target`), under a sync key the caller registered and the board's own sync doesn't have (403), and `external` is a platform thread and message no other board thread or message has (409 `already_synced`). Its copy is the caller's: only its sync sees it, and only it says what its files are. Answers `{ ok }`, and for a thread, `attached`: false when it already was |
 | GET | `/sync/threads/:thread` | A board thread's sync, by its key: `{ thread, root, channel, targets, external }` |
 | GET | `/sync/find` | What platform IDs are on the board. Query: `post` (an import's client ID), `thread` (and `message` in it). Answers `{ thread, message }`: the board thread and message |
@@ -186,20 +186,22 @@ deliver as matches of watcher `@sync` when it registers its sync entries: see
 
 `sync` in a channel says this project may speak for platform users there. A
 caller with it can write as any user of a platform it syncs, with the origin
-it says, and read the platform IDs of what's there. It names the platforms it syncs when it
+it says, and read the platform IDs of what's there. What it writes is by its
+own profile of that user (`<principal>+slack:user:U0456`), which shows
+through it: `Malte via support`. It names the platforms it syncs when it
 registers (`POST /watchers` with `sync`, which needs `sync` somewhere, and
 no key the board's own sync has), and it can't write as anyone the board signs
 in. A key names one sync's platform locations: two
 syncs elsewhere that register one share its platform threads on the board,
 though each sees and changes only its own copies, so give each key one sync.
-Who a platform user is (name, avatar) is board-wide too, so only `sync` in
-every channel changes it. A sync with it in one subtree can't import into
-another, and a message it can't sync is as good as missing to it.
+Each sync's platform users are its own actors, so no sync renames another's.
+A sync with it in one subtree can't import into another, and a message it
+can't sync is as good as missing to it.
 
 A new board gives it to every project on its team, everywhere, through g2.
 So any of their deployments, previews included, can run a sync against the
-board: register a platform, write as its users and rename them board-wide,
-and read every sync's inbox. It can also attach a thread it reads to a Slack
+board: register a platform, write as its users (shown through the
+deployment), and read every sync's inbox. It can also attach a thread it reads to a Slack
 channel or a GitHub issue the board's own sync reaches, which then posts the
 thread there. A board token has it only when its `can` says so. To keep it to
 the deployments that run a sync, take it from g2 and grant it to them, in the
@@ -436,7 +438,7 @@ Each event is a JSON object:
   "createdAt": "2026-10-08T14:02:11.000Z",
   "payload": { "channel": "errors-www", "text": "rolled back to d4e5f6", "re": "812" },
   "message": { "id": "813", "version": 813, "channel": "errors-www", "text": "rolled back to d4e5f6", "re": "812" },
-  "actor": { "id": "vercel:user:u_abc123+claude", "kind": "agent", "handle": "julian/claude", "name": "claude", "avatar": "https://www.example.com/api/board/avatars/claude" }
+  "actor": { "id": "vercel:user:u_abc123+claude", "kind": "agent", "handle": "julian/claude", "name": "claude", "avatar": "https://www.example.com/api/board/avatars/claude", "via": { "name": "julian", "environment": null } }
 }
 ```
 
@@ -445,7 +447,10 @@ to read on from it. `payload` is the event's own, as [Event types](#event-types)
 its message IDs (`id`, `re`, `replyTo`, a schedule's `id`, a link's `message`)
 as strings. `message` is the message
 the event concerns as it is after the event, and `actor` is who did it (for
-events with an author). Objects are abridged here.
+events with an author). An actor with a profile, here and as a message's
+`author`, says who it acts through in `via`: `{ name, environment }`, an
+agent's person, or the project whose sync speaks for a platform user, with its
+environment. Objects are abridged here.
 
 - **Without filters,** the feed carries every event that concerns a message.
 - **With filters,** an event is delivered when its message matched them before
