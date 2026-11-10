@@ -180,11 +180,11 @@ describe('vercel()', () => {
   it('names someone after a read of the names fails, and every message of someone new in one read', async () => {
     const api = fakeMessageboard()
     let failing = true
-    // The list of names answers 503 once.
+    // The list of names fails once.
     const flaky: typeof fetch = async (input, init) => {
       if (failing && new URL(String(input)).pathname.endsWith('/actors')) {
         failing = false
-        return Response.json({ error: { code: 'unavailable', message: 'try again' } }, { status: 503 })
+        return Response.json({ error: { code: 'internal', message: 'boom' } }, { status: 500 })
       }
       return as(api, 'user:u_jb')(input, init)
     }
@@ -1095,7 +1095,7 @@ describe('vercel()', () => {
     const flaky: typeof fetch = async (input, init) => {
       if (failing && init?.method === 'PUT') {
         failing = false
-        return Response.json({ error: { code: 'unavailable', message: 'try again' } }, { status: 503 })
+        return Response.json({ error: { code: 'internal', message: 'boom' } }, { status: 500 })
       }
       return as(api, 'project:prj_pong:production')(input, init)
     }
@@ -2322,5 +2322,85 @@ describe("board tokens on Vercel's API", () => {
     // The project sees what acts as it.
     expect(await ids(pong)).toEqual([parent.token.id, sibling.token.id].sort())
     expect(await raw(api, 'project:prj_pong:production', 'POST', '/boards/brd_test/tokens', { operationId: 'op_2', name: 'ci', can: { 'dev/': ['fly'] } })).toMatchObject({ status: 400, body: { error: { code: 'invalid_scope' } } })
+  })
+})
+
+describe('a request the API puts off', () => {
+  /** Julian on a board whose API answers `refuse(request)`'s response instead of its own, when it gives one. */
+  const throttled = (refuse: (url: URL, init: RequestInit | undefined, answer: () => Promise<Response>) => Promise<Response | null> | Response | null) => {
+    const api = fakeMessageboard()
+    const inner = as(api, 'user:u_jb')
+    const sent: { method: string; path: string; at: number }[] = []
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input))
+      sent.push({ method: init?.method ?? 'GET', path: url.pathname, at: Date.now() })
+      return (await refuse(url, init, () => inner(input, init))) ?? inner(input, init)
+    }
+    return { api, sent, julian: board({ backend: vercel({ team: 'team_test', api: API, fetch, files: api.files }) }) }
+  }
+  const tooMany = (retryAfter = '60') => Response.json({ error: { code: 'rate_limited', message: 'Too many requests' } }, { status: 429, headers: { 'retry-after': retryAfter } })
+  const busy = () => Response.json({ error: { code: 'board_busy', message: 'retry shortly' } }, { status: 503, headers: { 'retry-after': '2' } })
+  const posts = (sent: { method: string; path: string }[]) => sent.filter(({ method, path }) => method === 'POST' && path.endsWith('/threads'))
+  const timers = () => {
+    vi.useFakeTimers()
+    onTestFinished(() => void vi.useRealTimers())
+  }
+
+  it('waits and posts once when the API says 429, well inside the minute it asks for', async () => {
+    timers()
+    let refusals = 2
+    const { julian, sent } = throttled((url, init) => (init?.method === 'POST' && url.pathname.endsWith('/threads') && refusals-- > 0 ? tooMany() : null))
+    const posting = julian.post('dev', { text: 'hi' })
+    // A second, then two, each with up to as much again: both waits are over within six.
+    await vi.advanceTimersByTimeAsync(6000)
+    const { id } = await posting
+    expect(posts(sent)).toHaveLength(3)
+    const { threads } = await julian.threads({ channel: 'dev' })
+    expect(threads.map((thread) => thread.message.id)).toEqual([id])
+  })
+
+  it("doesn't send again before a second has passed", async () => {
+    timers()
+    let refusals = 1
+    const { julian, sent } = throttled((url, init) => (init?.method === 'POST' && url.pathname.endsWith('/threads') && refusals-- > 0 ? tooMany() : null))
+    const posting = julian.post('dev', { text: 'hi' })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(posts(sent)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1001)
+    await posting
+    expect(posts(sent)).toHaveLength(2)
+  })
+
+  it('posts once when the API wrote the message and then answered 503', async () => {
+    timers()
+    let failing = true
+    const { julian } = throttled(async (url, init, answer) => {
+      if (!failing || init?.method !== 'POST' || !url.pathname.endsWith('/threads')) return null
+      failing = false
+      // The write lands, and its answer is lost.
+      await answer()
+      return busy()
+    })
+    const posting = julian.post('dev', { text: 'once' })
+    await vi.advanceTimersByTimeAsync(2000)
+    const { id } = await posting
+    const { threads } = await julian.threads({ channel: 'dev' })
+    expect(threads.map((thread) => thread.message.id)).toEqual([id])
+  })
+
+  it("gives up with the API's own error after five tries", async () => {
+    timers()
+    const { julian, sent } = throttled((url, init) => (init?.method === 'POST' && url.pathname.endsWith('/threads') ? tooMany() : null))
+    const posting = julian.post('dev', { text: 'hi' }).catch((error: unknown) => error)
+    // 1 + 2 + 4 + 8 seconds, each with up to as much again.
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await posting).toMatchObject({ status: 429, code: 'rate_limited' })
+    expect(posts(sent)).toHaveLength(5)
+  })
+
+  it("answers a 503 at once for a write the API couldn't tell it had seen", async () => {
+    const { julian, sent } = throttled((url, init) => (init?.method === 'POST' && url.pathname.endsWith('/complete') ? busy() : null))
+    await expect(julian.upload({ data: new TextEncoder().encode('log'), name: 'a.log' })).rejects.toMatchObject({ status: 503 })
+    expect(sent.filter(({ path }) => path.endsWith('/complete'))).toHaveLength(1)
   })
 })

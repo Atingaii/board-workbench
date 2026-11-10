@@ -298,6 +298,31 @@ const servesNone = () => new HttpError(404, 'not_found', "this board uses Vercel
 
 const apiKind = (kind: ApiActorView['kind']): ActorView['kind'] => (kind === 'app' ? 'workflow' : kind)
 
+/** How many more times a request goes out after the API puts it off. */
+const RETRIES = 4
+/** The first wait before sending again, doubling each time. */
+const RETRY_MS = 1000
+
+/**
+ * How long to wait before sending a put-off request again: a second, doubling each time, with up to
+ * as long again added at random so callers the API put off together don't come back together, and
+ * never past what `Retry-After` asks. The API's 429s ask for a whole minute while its limit refills
+ * all the time, so that's a ceiling, not the wait.
+ */
+function retryWait(attempt: number, retryAfter: string | null): number {
+  const asked = retryAfter !== null && /^\d+$/.test(retryAfter) && Number(retryAfter) > 0 ? Number(retryAfter) * 1000 : Infinity
+  return Math.min(asked, RETRY_MS * 2 ** attempt * (1 + Math.random()))
+}
+
+/** `ms` passing, or `signal` stopping it first. */
+const pause = (ms: number, signal?: AbortSignal) =>
+  ms <= 0 || signal?.aborted
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, ms)
+        signal?.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true })
+      })
+
 /** A UUIDv7, which the API takes as an operation ID. */
 function operationId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16))
@@ -496,7 +521,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return (team ??= given ? Promise.resolve(given) : (environment?.team() ?? Promise.resolve(null)))
   }
 
-  /** One request to the API, as `who`. Its errors are the API's own, with its status and code. */
+  /**
+   * One request to the API, as `who`. Its errors are the API's own, with its status and code. One the
+   * API puts off (429, or a 503) waits and goes again as it was, so a write keeps its operation ID
+   * and lands once.
+   */
   async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | readonly string[] | undefined>; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
     const url = new URL(`${origin}/v1/messageboard${path}`)
     const id = await teamId()
@@ -511,30 +540,39 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (who.profile) headers['x-board-profile'] = who.profile.name
     if (who.profile?.avatar?.startsWith('https://')) headers['x-board-avatar'] = who.profile.avatar
     if (who.session && SESSION.test(who.session)) headers['x-board-session'] = who.session
-    let response: Response
-    try {
-      response = await doFetch(url, {
-        method,
-        headers,
-        redirect: 'error',
-        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-        ...(init.signal ? { signal: init.signal } : {}),
-      })
-    } catch (error) {
-      if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
-      throw new HttpError(502, 'unreachable', `Vercel's API didn't answer: ${error instanceof Error ? error.message : String(error)}`)
+    // A 429 did nothing. A 503 may have: only a request the API can tell it has seen goes again.
+    const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'
+    for (let attempt = 0; ; attempt++) {
+      let response: Response
+      try {
+        response = await doFetch(url, {
+          method,
+          headers,
+          redirect: 'error',
+          ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+          ...(init.signal ? { signal: init.signal } : {}),
+        })
+      } catch (error) {
+        if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
+        throw new HttpError(502, 'unreachable', `Vercel's API didn't answer: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      const text = await response.text()
+      let body: unknown
+      try {
+        body = text ? JSON.parse(text) : undefined
+      } catch {}
+      if (response.ok) return body as T
+      if (attempt < RETRIES && !init.signal?.aborted && (response.status === 429 || (response.status === 503 && repeatable))) {
+        await pause(retryWait(attempt, response.headers.get('retry-after')), init.signal)
+        init.signal?.throwIfAborted()
+        continue
+      }
+      const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
+      // A board token reaches its own board by ID, and none of the team's routes: finding a board by its name or as the team's is one.
+      if (error?.code === 'board_token_scope')
+        throw new HttpError(403, 'board_token_scope', 'a board token reaches only its own board, by its ID.', { hint: 'Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).', origin: 'handle' })
+      throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
     }
-    const text = await response.text()
-    let body: unknown
-    try {
-      body = text ? JSON.parse(text) : undefined
-    } catch {}
-    if (response.ok) return body as T
-    const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
-    // A board token reaches its own board by ID, and none of the team's routes: finding a board by its name or as the team's is one.
-    if (error?.code === 'board_token_scope')
-      throw new HttpError(403, 'board_token_scope', 'a board token reaches only its own board, by its ID.', { hint: 'Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).', origin: 'handle' })
-    throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
   }
 
   /** A request on sync's routes, whose refusals board()'s sync knows only by the board's codes. */
@@ -1286,15 +1324,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     for (const page of pages) after[page.channel.id] = { at: page.next, skip: 0 }
     return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after } }
   }
-
-  /** `ms` passing, or `signal` stopping it first. */
-  const pause = (ms: number, signal: AbortSignal) =>
-    ms <= 0 || signal.aborted
-      ? Promise.resolve()
-      : new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, ms)
-          signal.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true })
-        })
 
   /**
    * Until one of `listed`'s feeds has something after `position` (true), or it's `until` (false). The API's feed is

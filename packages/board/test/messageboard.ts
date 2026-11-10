@@ -353,6 +353,14 @@ function fakeBoard(shared: Shared, boardId: string) {
   const channels: { id: string; name: string }[] = [{ id: 'general', name: 'general' }]
   const threads = new Map<string, Thread>()
   const posts = new Map<string, string>()
+  /** What each post's operation answered, by its caller: the API answers a repeated operation with what it answered first, and writes nothing. */
+  const posted = new Map<string, unknown>()
+  const once = <T,>(actor: Actor, operationId: unknown, write: () => T): T => {
+    if (typeof operationId !== 'string') return write()
+    const key = `${principalId(actor.principal)}|${operationId}`
+    if (!posted.has(key)) posted.set(key, write())
+    return posted.get(key) as T
+  }
   const feeds = new Map<string, Change[]>()
   const actors = new Map<string, ActorView>()
   const attachments = new Map<string, Attachment>()
@@ -1123,6 +1131,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (method === 'POST' && rest === '/threads') {
       const again = repeat(actor, body.clientId)
       if (again) return again
+      return once(actor, body.operationId, () => {
       // By `channel`, its name, it checks `post` there and makes the channel on its first post, as a board does; or by `channelId`.
       if (body.channel !== undefined) tokenMayIn(actor, 'post', String(body.channel))
       const channel = body.channel !== undefined ? (channels.find((c) => c.name === body.channel) ?? makeChannel(body.channel)) : channelAt(body.channelId)
@@ -1132,6 +1141,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       threads.set(thread.id, thread)
       const message = post(actor, thread, body as { text: string; clientId?: string; labels?: Record<string, string>; attachments?: string[]; noSync?: boolean })
       return { thread: showThread(thread), message: show(message) }
+      })
     }
     if ((found = /^\/messages\/([^/]+)$/.exec(rest)) && method === 'GET') {
       const id = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/.exec(decodeURIComponent(found[1]!))
@@ -1221,7 +1231,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
       const again = repeat(actor, body.clientId)
       if (again) return again
-      return { thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; attachments?: string[]; after?: number; noSync?: boolean })) }
+      return once(actor, body.operationId, () => ({ thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; attachments?: string[]; after?: number; noSync?: boolean })) }))
     }
     if ((found = /^\/threads\/([^/]+)\/messages\/(\d+)(\/delete|\/reactions|\/labels)?$/.exec(rest))) {
       const thread = threadAt(found[1]!)
