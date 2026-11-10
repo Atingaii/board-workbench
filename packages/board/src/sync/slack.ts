@@ -779,7 +779,8 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   override async edit(thread: string, message: string, body: ProviderPost) {
     const { as, ...given } = body
     const post = { ...given, markdown: withoutHtml(given.markdown) }
-    const named = as ? await this.sentAs(thread, message, as.name) : false
+    // Only an app that may name a message's sender ever sent one under a name.
+    const named = as && (await this.web().then((web) => !!web && this.canCustomize(web), () => false)) ? await this.sentAs(thread, message, as.name) : false
     await super.edit(thread, message, named && as ? { ...post, markdown: withoutLabel(post.markdown, as.name) } : post)
   }
 

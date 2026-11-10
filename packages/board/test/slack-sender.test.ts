@@ -31,7 +31,7 @@ function slackWith(scopes: string[] | null, existing: { ts: string; username?: s
     conversations: {
       list: async () => ({}),
       info: async () => ({}),
-      replies: async ({ ts }) => ({ messages: existing.filter((m) => m.ts === ts) }),
+      replies: vi.fn(async ({ ts }: { ts: string }) => ({ messages: existing.filter((m) => m.ts === ts) })),
     },
     chat: {
       postMessage: async (args) => {
@@ -83,6 +83,13 @@ describe('messages in Slack', () => {
     await provider.post(thread, 'thread', { markdown, as, files: [{ data: Buffer.from('x'), filename: 'a.txt' }] })
     expect(posted).toEqual([])
     expect(viaAdapter.map((p) => p.message)).toEqual([{ markdown, files: [{ data: Buffer.from('x'), filename: 'a.txt' }] }])
+  })
+
+  it("keep the label on an edit, without asking Slack how it went out, when the app can't name a sender", async () => {
+    const { provider, edits, client } = slackWith(['chat:write'], [{ ts: '1700000000.000200', username: as.name }])
+    await provider.edit(thread, '1700000000.000200', { markdown, as })
+    expect(edits.map((e) => e.message)).toEqual([{ markdown }])
+    expect(client.conversations.replies).not.toHaveBeenCalled()
   })
 
   it('drop the label on an edit only when Slack shows the message under that name', async () => {
