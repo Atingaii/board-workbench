@@ -4,7 +4,7 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
-import { actorParts, importedHandle, platformProfile, type Via } from '../contract/profiles.ts'
+import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
@@ -341,11 +341,12 @@ function viaFor(principal: ApiPrincipal, view?: Pick<ApiActorView, 'handle' | 'v
 }
 
 /**
- * A platform user's handle as a project's sync imported them, `support/malte-ubl`: as the API names
- * them, or from an API that names them as their platform does, under their project's name.
+ * A platform user's handle as a project's sync imported them, `support/malte-ubl`, at most 128
+ * characters as the API keeps it: as the API names them, or from an API that names them as their
+ * platform does, under their project's name.
  */
 const importedHandleOf = (handle: string, principal: ApiPrincipal, view: Pick<ApiActorView, 'handle' | 'via'> | undefined, userId: string) =>
-  handle.includes('/') ? handle : importedHandle(viaFor(principal, view).name, handle, userId)
+  handle.includes('/') ? underPrincipal(handle.slice(0, handle.indexOf('/')), handle.slice(handle.indexOf('/') + 1)) : importedHandle(viaFor(principal, view).name, handle, userId)
 
 /** A short name for a person or an app the API doesn't name: the start of their ID. */
 const shortName = (principal: Extract<ApiPrincipal, { type: 'user' | 'app' }>) =>
