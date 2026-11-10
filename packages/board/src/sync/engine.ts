@@ -823,11 +823,11 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     const markdown = await textFor(key, message, actors, body)
-    // An agent's message can carry its own name and picture where the platform shows a sender per message.
-    return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } } : { markdown }
+    // Where the platform shows a sender per message, every message carries its author's name and picture.
+    return { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } }
   }
 
-  /** An agent's own picture, or for the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
+  /** An author's own picture, or for an agent with the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
   function senderAvatar(message: MessageView, actor: Actor | undefined, actors: Actors): string | null {
     const builtIn = (avatar: string | null | undefined) => !avatar || /\/avatars\/[a-z0-9-]+$/.test(avatar)
     const own = actor?.avatar ?? null

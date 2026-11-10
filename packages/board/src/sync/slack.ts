@@ -708,9 +708,10 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   }
 
   /**
-   * An agent's message goes out under its own name (`clever-lemur via vboard-factory`), and its
-   * picture when it has one Slack can show, instead of the app's, with the text's
-   * `**name**: ` label dropped. Without `chat:write.customize` it posts as the app, label and all.
+   * A message goes out under its author's name (`Julián Benegas`, `clever-lemur via vboard-factory`,
+   * `Malte via support (slack)`), and their picture when it has one Slack can show, instead of the
+   * app's, with the text's `**name**: ` label dropped. Without `chat:write.customize` it posts as
+   * the app, label and all.
    */
   override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
     const { as, ...given } = body
@@ -774,7 +775,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
     return { thread: this.toNative(`${adapter.name}:${channel}:${ts}`), message: ts, files: ids }
   }
 
-  /** An edit keeps the label out only where the message went out under the agent's name. */
+  /** An edit keeps the label out only where the message went out under its author's name. */
   override async edit(thread: string, message: string, body: ProviderPost) {
     const { as, ...given } = body
     const post = { ...given, markdown: withoutHtml(given.markdown) }

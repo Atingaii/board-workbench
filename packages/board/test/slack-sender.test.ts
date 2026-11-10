@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { slack, slackIcon, withoutLabel, type SlackClient } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
+import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
+import { caller, deploymentToken, personToken, testBoard } from './harness.ts'
 
 const thread = 'C1:1700000000.000100'
 const as = { name: 'clever-lemur via vboard-factory', avatar: 'https://cdn.example.com/lemur.png' }
@@ -43,7 +45,7 @@ function slackWith(scopes: string[] | null, existing: { ts: string; username?: s
   return { provider, posted, viaAdapter, edits, client }
 }
 
-describe("an agent's messages in Slack", () => {
+describe('messages in Slack', () => {
   it('go out under its own name, with its picture, and without the name repeated in the text', async () => {
     const { provider, posted, viaAdapter } = slackWith(['chat:write', 'chat:write.customize'])
     const sent = await provider.post(thread, 'thread', { markdown, as })
@@ -76,15 +78,11 @@ describe("an agent's messages in Slack", () => {
     expect(client.auth!.test).toHaveBeenCalledTimes(1)
   })
 
-  it("keep going through the adapter for a person's messages and for files", async () => {
+  it("keep going through the adapter, label and all, with files, which can't go out under a name", async () => {
     const { provider, posted, viaAdapter } = slackWith(['chat:write.customize'])
-    await provider.post(thread, 'thread', { markdown: '**Ada**: hi' })
     await provider.post(thread, 'thread', { markdown, as, files: [{ data: Buffer.from('x'), filename: 'a.txt' }] })
     expect(posted).toEqual([])
-    expect(viaAdapter.map((p) => p.message)).toEqual([
-      { markdown: '**Ada**: hi' },
-      { markdown, files: [{ data: Buffer.from('x'), filename: 'a.txt' }] },
-    ])
+    expect(viaAdapter.map((p) => p.message)).toEqual([{ markdown, files: [{ data: Buffer.from('x'), filename: 'a.txt' }] }])
   })
 
   it('drop the label on an edit only when Slack shows the message under that name', async () => {
@@ -95,6 +93,64 @@ describe("an agent's messages in Slack", () => {
     await provider.edit(thread, '1700000000.000200', { markdown, as })
     await provider.edit(thread, '1700000000.000201', { markdown, as })
     expect(edits.map((e) => e.message)).toEqual([{ markdown: 'on it' }, { markdown }])
+  })
+})
+
+describe('what board copies to Slack', () => {
+  /** A board whose Slack sync mirrors firehose into C1, through an app with these scopes. */
+  function mirrored(scopes: string[]) {
+    const posted: Record<string, unknown>[] = []
+    const client = {
+      conversations: { list: async () => ({}), info: async () => ({}), replies: async () => ({ messages: [] }) },
+      chat: { postMessage: async (args: Record<string, unknown>) => (posted.push(args), { ts: `1700000000.00010${posted.length}` }) },
+      auth: { test: async () => ({ response_metadata: { scopes } }) },
+    }
+    const s = fakePlatform('slack', (adapter) => {
+      withSlackClient(client, false)(adapter)
+      Object.assign(adapter, {
+        formatConverter: { toSlackPayload: (message: { markdown: string }) => ({ markdown_text: message.markdown }) },
+        decodeThreadId: (id: string) => ({ channel: id.split(':')[1], threadTs: id.split(':')[2] ?? '' }),
+      })
+    })
+    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => client as never }, channels({ C1: 'firehose' })) } })
+    return { team, s, posted }
+  }
+
+  /** Julián, his agent, and a Malte support's preview imports through its own Slack key, each posting a thread in firehose. */
+  async function post(team: ReturnType<typeof testBoard>) {
+    const token = await personToken('u_julian')
+    const julian = caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' })
+    const claude = caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'claude', 'x-board-avatar': 'https://example.com/claude.png' })
+    const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
+    const malte = { id: 'slack-eu:user:U_MALTE', handle: 'malte', name: 'Malte', avatar: 'https://example.com/malte.png', isBot: false }
+    expect((await julian('POST', '/messages', { channel: 'firehose', text: 'the deploy is red' })).status).toBe(201)
+    expect((await claude('POST', '/messages', { channel: 'firehose', text: 'looking' })).status).toBe(201)
+    expect((await support('POST', '/sync/imports', { op: 'post', author: malte, from: 'slack-eu', channel: 'firehose', text: 'same for us' })).status).toBe(200)
+  }
+
+  it("go out under their author's name and picture: a person as themselves, and anyone else via the principal they write for", async () => {
+    const { team, s, posted } = mirrored(['chat:write', 'chat:write.customize'])
+    await post(team)
+    await vi.waitFor(() => expect(posted).toHaveLength(3))
+    expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([
+      ['Julián Benegas', 'https://example.com/julian.png', 'the deploy is red'],
+      ['claude via julian', 'https://example.com/claude.png', 'looking'],
+      ['Malte via support (preview) (slack)', 'https://example.com/malte.png', 'same for us'],
+    ])
+    expect(s.channelPosts).toEqual([])
+  })
+
+  it('go out as the app, each labeled with its author, when the app lacks chat:write.customize', async () => {
+    const { team, s, posted } = mirrored(['chat:write'])
+    await post(team)
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(3))
+    expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown)).toEqual([
+      '**Julián Benegas**: the deploy is red',
+      '**claude via julian**: looking',
+      '**Malte via support (preview) (slack)**: same for us',
+    ])
+    expect(posted).toEqual([])
   })
 })
 

@@ -105,8 +105,9 @@ sync: {
 }
 ```
 
-Board messages post as the app. Your Slack account is an actor of its own, and
-a Slack ping comes in as your Slack handle:
+Board messages post to Slack under their author's name (`Julián Benegas`,
+`claude via julian`) when the app has `chat:write.customize`. Your Slack account
+is an actor of its own, and a Slack ping comes in as your Slack handle:
 
 ```bash
 vb tail --mentions @julian             # pings of whoever goes by julian, on Slack or the board

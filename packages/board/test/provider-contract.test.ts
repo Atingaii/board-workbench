@@ -292,20 +292,20 @@ providerContract('Chat SDK bridge', chatFixture)
 providerContract('chatSdk() with no hooks', chatSdkFixture)
 
 describe('who a post is from', () => {
-  it("gives a platform an agent's name and avatar to post under, and nothing for a person", async () => {
+  it("gives a platform every author's name and avatar to post under: a person's, and an agent's through them", async () => {
     const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
     const board = testBoard({ sync: { tickets: provider } })
     const token = await personToken()
-    const person = caller(board.fetch, token)
-    const agent = caller(board.fetch, token, { 'x-board-profile': 'clever-lemur', 'x-board-avatar': 'https://example.com/lemur.png' })
+    const person = caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' })
+    const agent = caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur', 'x-board-avatar': 'https://example.com/lemur.png' })
     await person('POST', '/messages', { channel: 'tickets', text: 'from a person' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
     await agent('POST', '/messages', { channel: 'tickets', text: 'from an agent' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
-    expect(provider.posts[0]!.body.as).toBeUndefined()
-    const as = provider.posts[1]!.body.as
-    expect(as).toEqual({ name: expect.stringMatching(/^clever-lemur via /), avatar: 'https://example.com/lemur.png' })
-    expect(provider.posts[1]!.body.markdown).toBe(`**${as!.name}**: from an agent`)
+    expect(provider.posts.map((post) => [post.body.as, post.body.markdown])).toEqual([
+      [{ name: 'Julián Benegas', avatar: 'https://example.com/julian.png' }, '**Julián Benegas**: from a person'],
+      [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png' }, '**clever-lemur via julian**: from an agent'],
+    ])
   })
 
   it("gives an agent with the board's built-in avatar its person's Vercel avatar", async () => {

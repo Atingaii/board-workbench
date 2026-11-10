@@ -207,7 +207,7 @@ sync: {
 | `receive(key, request, emit)` | Authenticates the request, then emits normalized `{ event, raw, dedupe }` records, and answers what the platform expects. |
 | `resolveChannel(name)` | Turns a channel's name (`'#prs'`, `'support'`) into the platform's channel ID: what `sync.resolve` and `channels` use. Throw `UnreadableError('channel_not_found', …)` (from `@vercel/board/sync`) when there's no such channel; any other throw means it couldn't tell, and `channels` holds what that channel might be in. |
 | `resolveTarget(target)` | Turns a sync target into `{ target, channel, kind }`, where `kind` is `channel` or `thread`. |
-| `post(target, kind, body)` | Posts `body` (`{ markdown, files?, as? }`) and returns `{ thread, message, files? }`. |
+| `post(target, kind, body)` | Posts `body` (`{ markdown, files?, as? }`) and returns `{ thread, message, files? }`. `as`, which sync sends with every message, is who it's from, `{ name, avatar }`, for a platform that shows a sender per message; `markdown` opens with `**name**: ` unless a renderer left it out. |
 | `event(context)` | Builds the typed envelope sync functions read as `sync.event`, usually `envelope(…)` parsed by an `eventSchema`. |
 
 **IDs.** Incoming locations (`channel`, `thread`, `subthread`) carry the entry's key
