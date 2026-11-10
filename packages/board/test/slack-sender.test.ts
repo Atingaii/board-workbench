@@ -3,7 +3,7 @@ import { createSlackAdapter } from '@chat-adapter/slack'
 import { slack, slackIcon, slackUsername, withoutLabel, type SlackClient } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
-import { caller, deploymentToken, personToken, testBoard } from './harness.ts'
+import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import type { CallerRequest, HostPrincipal } from '../src/access/index.ts'
 
 /** A host's own verifier, which names Julián and support's preview deployment by their tokens. */
@@ -126,7 +126,7 @@ describe('what board copies to Slack', () => {
    * A board whose Slack sync mirrors firehose into C1, through an app with these scopes: one whose
    * host's verifier names who's who, or with `verified: false`, one Vercel logins use.
    */
-  function mirrored(scopes: string[], verified = true) {
+  function mirrored(scopes: string[], verified = true, more: Record<string, ReturnType<typeof slack>> = {}) {
     const posted: Record<string, unknown>[] = []
     const client = {
       conversations: { list: async () => ({}), info: async () => ({}), replies: async () => ({ messages: [] }) },
@@ -140,7 +140,7 @@ describe('what board copies to Slack', () => {
         decodeThreadId: (id: string) => ({ channel: id.split(':')[1], threadTs: id.split(':')[2] ?? '' }),
       })
     })
-    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => client as never }, channels({ C1: 'firehose' })) }, ...(verified ? { authenticate: hostVerifier } : {}) })
+    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => client as never }, channels({ C1: 'firehose' })), ...more }, ...(verified ? { authenticate: hostVerifier } : {}) })
     return { team, s, posted, verified }
   }
 
@@ -203,6 +203,23 @@ describe('what board copies to Slack', () => {
     expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown)).toEqual(['**Julián Benegas**: the deploy is red', '**claude via julian**: looking'])
     // A deployment's OIDC token names its project, which the import shows after `via`.
     expect(posted.map(({ username }) => username)).toEqual(['Malte via support (preview) (slack)'])
+  })
+
+  it("go out as the app, labeled, for the board's own code, what it imports, and its own sync's platform users", async () => {
+    const eu = fakePlatform('slack')
+    const { team, s, posted } = mirrored(['chat:write', 'chat:write.customize'], false, { 'slack-eu': slack({ adapter: eu.adapter }, channels({ C9: 'firehose' })) })
+    const helper = team.as('helper')
+    await helper.post('firehose', 'from the board')
+    await helper.register({ url: null, watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })
+    await helper.syncImport({ op: 'post', author: { id: 'helpdesk:user:U1', handle: 'u1', name: 'U1', avatar: null, isBot: false }, from: 'helpdesk', channel: 'firehose', text: 'imported by the board' })
+    await team.fetch(new Request(`${BOARD_URL}/webhooks/slack-eu`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C9:100', id: '100', text: 'from the other Slack', user: 'U_ADA', name: 'Ada' }) }))
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(3))
+    expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown).sort()).toEqual([
+      '**Ada (slack)**: from the other Slack',
+      '**U1 via helper (slack)**: imported by the board',
+      '**helper**: from the board',
+    ])
+    expect(posted).toEqual([])
   })
 
   it("go out under an agent's name through the project whose OIDC token wrote it, as the factory's agents post", async () => {

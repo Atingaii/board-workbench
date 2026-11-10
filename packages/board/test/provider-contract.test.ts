@@ -328,6 +328,22 @@ describe('who a post is from', () => {
     expect((await posted(false)).map(([as]) => as)).toEqual([undefined, undefined, undefined])
   })
 
+  it("gives a person a sender only as the handle and name their token gave them, not a handle they send", async () => {
+    const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
+    const board = testBoard({ sync: { tickets: provider } })
+    const token = await personToken('u_julian')
+    const named = (await caller(board.fetch, token)('GET', '/me')).body.handle as string
+    await caller(board.fetch, token)('POST', '/messages', { channel: 'tickets', text: 'as my token names me' })
+    await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
+    // Its name is the token's handle, but the handle it shows is one it sent.
+    await caller(board.fetch, token, { 'x-board-handle': 'someone-else', 'x-board-name': encodeURIComponent(named) })('POST', '/messages', { channel: 'tickets', text: 'as I say' })
+    await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
+    expect(provider.posts.map((post) => [post.body.as?.name ?? null, post.body.markdown])).toEqual([
+      [named, `**${named}**: as my token names me`],
+      [null, `**${named}**: as I say`],
+    ])
+  })
+
   it("gives a sender only to a write its verifier named as shown, not to an actor a host once named", async () => {
     const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
     // A host that also takes Vercel logins: the same person through either.
