@@ -253,7 +253,8 @@ Handles are display hints, not reservations:
   lowercased, every run of anything but letters, digits, `.`, `_`, and `-` as
   one `-`, and the ends trimmed, so "Jürgen Ubl" is `support/jurgen-ubl`. When
   nothing is left, it's their ID on the platform, without the sync key, the same
-  way (`T_EU:U0MALTE` is `t_eu-u0malte`).
+  way (`T_EU:U0MALTE` is `t_eu-u0malte`). A handle holds 128 characters, so a
+  longer one is cut to fit, its ends trimmed again.
 
 `vb actors` lists them.
 

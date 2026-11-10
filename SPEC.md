@@ -1130,7 +1130,10 @@ through the sync that speaks for them, under the key it imported them through.
     and `-`, `.`, and `_` trimmed from the ends, so "Jürgen Ubl" is
     `support/jurgen-ubl`. When nothing is left, it's the user's ID on the
     platform without the sync key, the same way: `T_EU:U0MALTE` is
-    `t_eu-u0malte`. A principal's agents and platform users can share a handle
+    `t_eu-u0malte`. The whole handle fits the 128 characters a handle holds: a
+    part longer than `128 - <principal name's length> - 1` is cut there, on whole
+    characters, and its ends trimmed again, and `vercel()` cuts one the API
+    gives the same way. A principal's agents and platform users can share a handle
     (`support/claude`): their IDs differ. Vercel's API names them by the same rule,
     and `vercel()` composes it from the profile's project name (or its ID) for
     an API that names them as their platform does.

@@ -4,7 +4,7 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
-import { actorParts, importedHandle, platformProfile, type Via } from '../contract/profiles.ts'
+import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
@@ -357,11 +357,12 @@ function viaFor(principal: ApiPrincipal, view?: Pick<ApiActorView, 'handle' | 'v
 }
 
 /**
- * A platform user's handle as a project's sync imported them, `support/malte-ubl`: as the API names
- * them, or from an API that names them as their platform does, under their project's name.
+ * A platform user's handle as a project's sync imported them, `support/malte-ubl`, at most 128
+ * characters as the API keeps it: as the API names them, or from an API that names them as their
+ * platform does, under their project's name.
  */
 const importedHandleOf = (handle: string, principal: ApiPrincipal, view: Pick<ApiActorView, 'handle' | 'via'> | undefined, userId: string, project?: string) =>
-  handle.includes('/') ? handle : importedHandle(viaFor(principal, view, project).name, handle, userId)
+  handle.includes('/') ? underPrincipal(handle.slice(0, handle.indexOf('/')), handle.slice(handle.indexOf('/') + 1)) : importedHandle(viaFor(principal, view, project).name, handle, userId)
 
 /**
  * A deployment as board shows it: by its project's name (`project`) in every environment, and named
@@ -379,9 +380,10 @@ function deploymentNamed(principal: Extract<ApiPrincipal, { type: 'project' }>, 
 
 /**
  * Projects' names by ID, from what the actors list says: a deployment's handle, which the API makes its project's
- * name, then what comes before the `/` in one of its profiles' (`support/sync`, its sync's; `support/malte`, a user it
- * imported), then the name the API gives a project on its users (their `via`). An API that names a deployment by its
- * ID (`project:prj_…:production`, `project:prj_…:production/sync`) names its project only there.
+ * name, then what comes before the `/` in one of its agents' (`support/sync`, its sync's), then the name the API gives
+ * a project on its users (their `via`). An API that names a deployment by its ID (`project:prj_…:production`,
+ * `project:prj_…:production/sync`) names its project only there. A platform user's handle names no project: an API
+ * may give the one they have on their platform, slash and all.
  */
 function projectNamesOf(views: Iterable<readonly [string, Pick<ApiActorView, 'handle' | 'via'>]>): Map<string, string> {
   const byHandle = new Map<string, string>()
@@ -390,12 +392,12 @@ function projectNamesOf(views: Iterable<readonly [string, Pick<ApiActorView, 'ha
   for (const [id, found] of views) {
     const principal = principalFrom(id)
     if (principal?.type !== 'project') continue
-    const profiled = actorParts(id).profile !== null
-    if (profiled && found.via?.name) byVia.set(principal.projectId, found.via.name)
+    const { profile } = actorParts(id)
+    if (profile !== null && found.via?.name) byVia.set(principal.projectId, found.via.name)
     if (found.handle.startsWith('project:')) continue
     const slash = found.handle.indexOf('/')
-    if (!profiled) byHandle.set(principal.projectId, found.handle)
-    else if (slash > 0) byProfile.set(principal.projectId, found.handle.slice(0, slash))
+    if (profile === null) byHandle.set(principal.projectId, found.handle)
+    else if (slash > 0 && platformProfile(profile) === null) byProfile.set(principal.projectId, found.handle.slice(0, slash))
   }
   return new Map([...byVia, ...byProfile, ...byHandle])
 }

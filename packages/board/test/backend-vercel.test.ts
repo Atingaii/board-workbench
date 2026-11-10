@@ -1362,6 +1362,17 @@ describe('vercel()', () => {
     expect((await julian.actors()).filter((actor) => actor.id.includes('+slack')).map((actor) => actor.handle).sort()).toEqual(['pong/malte-ubl', 'prj_unnamed/malte-ubl'])
   })
 
+  it('fits a handle from the API in the 128 characters a handle holds, however long the API named it', async () => {
+    const api = fakeMessageboard({ platformHandles: true })
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    // One with a slash is as the API names imports, under a project: this one ran long.
+    for (const [id, handle] of [['slack:user:U_SLASH', `team/${'b'.repeat(200)}`], ['slack:user:U_PLAIN', 'c'.repeat(200)]] as const)
+      await pong.syncImport({ op: 'post', author: { id, handle, name: 'Long', avatar: null, isBot: false }, from: 'slack', channel: 'general', text: 'hi' })
+    const handles = (await handleOn(api).messages({ channel: 'general' })).messages.map((message) => message.author?.handle)
+    expect(handles).toEqual([`team/${'b'.repeat(123)}`, `pong/${'c'.repeat(123)}`])
+  })
+
   it('shows an import as the platform user alone, as before, from an API that names them so', async () => {
     const api = fakeMessageboard({ externalImports: true })
     const preview = handleOn(api, 'project:prj_pong:preview')
