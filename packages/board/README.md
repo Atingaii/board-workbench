@@ -106,10 +106,10 @@ sync: {
 ```
 
 Board messages post as the app. Your Slack account is an actor of its own, and
-an email names it:
+a Slack ping comes in as your Slack handle:
 
 ```bash
-vb tail --mentions julian@vercel.com   # Slack pings of whoever has that email on Slack
+vb tail --mentions @julian             # pings of whoever goes by julian, on Slack or the board
 ```
 
 ## Customize sync

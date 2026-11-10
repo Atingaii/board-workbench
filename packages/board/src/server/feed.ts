@@ -8,6 +8,7 @@ import { hasCriteria } from './watch-spec.ts'
 import { channelsReducer } from '../contract/reducers.ts'
 import { foldActors, foldMessages, iso, type Actor, type ActorsState, type Message, type MessagesState } from '../contract/folds.ts'
 import { actorParts, type Via } from '../contract/profiles.ts'
+import { mentionTerm, mentionTerms } from '../contract/mentions.ts'
 import { own } from '../contract/own.ts'
 import { concernedMessageId } from '../store/project.ts'
 import type { MessageFilter } from '../store/types.ts'
@@ -101,7 +102,8 @@ export const indexOf = (value: string): number | null => (/^(0|[1-9]\d{0,15})$/.
 
 /** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
 export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
-  const { blind, version, revision, schedule, ...shown } = message
+  // A message folded before mentions were text alone keeps the actor IDs they resolved to.
+  const { blind, version, revision, schedule, mentions: _mentions, ...shown } = message as Message & { mentions?: unknown }
   return {
     ...shown,
     ...(blind ? { blind } : {}),
@@ -125,15 +127,38 @@ const actorSet = (value: string, actors: ActorsState): Set<string> =>
   own(actors.byId, value) ? new Set([value]) : new Set(own(actors.byHandle, value.toLowerCase()) ?? [])
 
 /**
- * Who a `--by` or `--mentions` value covers. A person (`julian`) is everyone they
- * are: their own actor, and their agents (`julian/claude`). An agent or a platform
- * actor is just itself.
+ * Who a `--by` value covers. A person (`julian`) is everyone they are: their own
+ * actor, and their agents (`julian/claude`). An agent or a platform actor is just itself.
  */
 export function whoIs(value: string, actors: ActorsState): { actors: Set<string>; principals: Set<string> } {
   const ids = actorSet(value, actors)
   const principals = new Set([...ids].filter((id) => own(actors.byId, id)?.kind === 'person'))
   return { actors: ids, principals }
 }
+
+/** The caller, as `--mentions me` names them: their actor ID and handle. */
+export type Me = { id: string; handle: string }
+
+/**
+ * What a `--mentions` value matches in a message's text (`mentionTerms`): `me` is the caller's handle
+ * and ID. Anyone else is the value as written, and each actor it names, by ID or by handle: their
+ * handle and ID, and a person's agents too (`@julian/claude`, `@[vercel:user:u_1+claude]`).
+ */
+export function mentionFilter(value: string, context: { me: Me | null; actors: ActorsState }): NonNullable<MessageFilter['mentions']> {
+  if (value === 'me') return { terms: context.me === null ? [] : [mentionTerm(context.me.handle), context.me.id], prefixes: [] }
+  const terms = new Set([mentionTerm(value)])
+  const prefixes = new Set<string>()
+  for (const id of actorSet(value, context.actors)) {
+    const actor = own(context.actors.byId, id)!
+    terms.add(id).add(mentionTerm(actor.handle))
+    if (actor.kind === 'person') prefixes.add(`${mentionTerm(actor.handle)}/`).add(`${id}+`)
+  }
+  return { terms: [...terms], prefixes: [...prefixes] }
+}
+
+/** Whether `text` mentions what a `--mentions` filter matches. */
+const mentionsIn = (text: string, filter: NonNullable<MessageFilter['mentions']>) =>
+  mentionTerms(text).some((term) => filter.terms.includes(term) || filter.prefixes.some((prefix) => term.startsWith(prefix)))
 
 /** Whether `author` is one of `who`: its actor, or an agent of one of its people. */
 const covers = (who: { actors: Set<string>; principals: Set<string> }, actor: string, principal?: string) =>
@@ -155,7 +180,7 @@ const hasLabel = (labels: Record<string, string>, [key, values]: LabelFilter) =>
  */
 export function compileFilter(
   filters: ParsedFilters,
-  context: { me: string | null; actors: ActorsState; messages?: MessagesState; access: Access },
+  context: { me: Me | null; actors: ActorsState; messages?: MessagesState; access: Access },
 ): (message: Message | undefined) => boolean {
   const { access } = context
   const text = filters.text?.toLowerCase()
@@ -165,13 +190,7 @@ export function compileFilter(
   const by = filters.by === undefined ? null : whoIs(filters.by, context.actors)
   // A ref that names nothing on this board matches nothing, as in the tables.
   const re = filters.re === undefined ? undefined : (indexOf(filters.re) ?? -1)
-  // `me` is the caller's own actor.
-  const mentions =
-    filters.mentions === undefined
-      ? null
-      : filters.mentions === 'me'
-        ? new Set(context.me === null ? [] : [context.me])
-        : whoIs(filters.mentions, context.actors).actors
+  const mentions = filters.mentions === undefined ? null : mentionFilter(filters.mentions, context)
   return (message) => {
     if (!message || !access.readable(message.channel)) return false
     if (channel !== undefined) {
@@ -181,7 +200,7 @@ export function compileFilter(
     }
     if (re !== undefined && message.id !== re && message.re !== re) return false
     if (by !== null && !covers(by, message.by.actor, message.by.principal)) return false
-    if (mentions !== null && !message.mentions.some((id) => mentions.has(id))) return false
+    if (mentions !== null && !mentionsIn(message.text, mentions)) return false
     if (filters.from !== undefined && (message.from ?? 'board') !== filters.from) return false
     if (text !== undefined && !message.text.toLowerCase().includes(text)) return false
     if (labels.length > 0) {
@@ -205,8 +224,8 @@ export function readableFilter(filter: MessageFilter, known: Iterable<string>, a
   return { ...rest, channels: [...known].filter((path) => within(path) && access.readable(path)) }
 }
 
-/** The filters as the tables take them: handles resolved to who they cover, `me` to the caller. */
-export function toMessageFilter(filters: ParsedFilters, context: { me: string | null; actors: ActorsState }): MessageFilter {
+/** The filters as the tables take them: handles resolved to who they cover, mentions to the terms they match. */
+export function toMessageFilter(filters: ParsedFilters, context: { me: Me | null; actors: ActorsState }): MessageFilter {
   const out: MessageFilter = {}
   const channel = filters.channel
   if (channel !== undefined)
@@ -217,11 +236,7 @@ export function toMessageFilter(filters: ParsedFilters, context: { me: string | 
     const who = whoIs(filters.by, context.actors)
     out.by = { actors: [...who.actors], principals: [...who.principals] }
   }
-  if (filters.mentions !== undefined)
-    out.mentions =
-      filters.mentions === 'me'
-        ? context.me === null ? [] : [context.me]
-        : [...whoIs(filters.mentions, context.actors).actors]
+  if (filters.mentions !== undefined) out.mentions = mentionFilter(filters.mentions, context)
   if (filters.from !== undefined) out.from = filters.from
   if (filters.text !== undefined) out.text = filters.text.toLowerCase()
   if (filters.label?.length) out.labels = filters.label.map(([key, values]) => ({ key, values }))
@@ -296,7 +311,8 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
 
 /** An event's payload as clients see it: the message IDs in it are refs. */
 function payloadView(payload: Record<string, unknown>, links: LinkView[] | undefined): Record<string, unknown> {
-  const shown: Record<string, unknown> = { ...payload }
+  // A post or an edit from before mentions were text alone carries the actor IDs they resolved to.
+  const { mentions: _mentions, ...shown }: Record<string, unknown> = payload
   for (const key of ['id', 're', 'replyTo'] as const) if (typeof shown[key] === 'number') shown[key] = ref(shown[key])
   const schedule = shown.schedule as { id: number; n: number } | undefined
   if (schedule) shown.schedule = { id: scheduleRef(schedule.id), n: schedule.n }
@@ -415,7 +431,7 @@ export type FeedOptions = {
   after: number | undefined
   filters: ParsedFilters
   all: boolean
-  me: string | null
+  me: Me | null
   actors: ActorsState
   /** What the subscriber may read; an open stream keeps what it had when it opened. */
   access: Access

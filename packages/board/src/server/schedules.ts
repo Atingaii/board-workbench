@@ -13,8 +13,6 @@ import { authorize, type Access } from './access.ts'
 import { wroteAs, type Granted, type Known, type Principal } from './auth.ts'
 import { actorsReducer } from '../contract/reducers.ts'
 import type { ActorsState } from '../contract/folds.ts'
-import { replaceMentions } from '../contract/mentions.ts'
-import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
 import { authorizePost, deploymentIdentity, type Identity, type WriteContext } from './writes.ts'
 import type { WriteOrigin } from './origin.ts'
@@ -407,7 +405,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       /** The body, with `re` as the log index it names. */
       body: Omit<ScheduleBodyOutput, 're'> & { re?: number | undefined },
       attachments: Attachment[],
-    ): Promise<{ schedule: ScheduleView; unknownMentions?: string[] }> {
+    ): Promise<{ schedule: ScheduleView }> {
       if (!writes) throw new Error('schedules used before the board bound them')
       if (!options.scheduler) throw new HttpError(501, 'no_scheduler', "this board has no scheduler, so it can't send later")
       const now = Date.now()
@@ -426,12 +424,6 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       if (until !== null && until < first) throw badRequest('the schedule stops before its first send')
       if (first > now + MAX_AHEAD_MS || (until !== null && until > now + MAX_AHEAD_MS))
         throw badRequest('a schedule reaches at most a year out: its first send and its stop')
-
-      // Mentions fail now, where the person scheduling sees it, not at send time.
-      // A handle nobody has stays plain text, and they hear about it now too.
-      const { state: known } = await writes.session.state(actorsReducer)
-      const withoutEmails = replaceMentions(body.text, (t) => (t.kind === 'actor' && t.actor.includes('@') ? t.actor : null))
-      const { unknown } = resolveMentions(withoutEmails, known, identity.actor, false, identity.principal.access.readsAll)
 
       let channel = body.channel
       let re: number | null = null
@@ -467,9 +459,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       const created = state.byId[row!.index]!
       if (created.next !== null) await arm('first', created.id, created.sent, created.next)
       const { state: actors } = await writes.session.state(actorsReducer)
-      const schedule = scheduleView(created, actors)
-      // Which handles matched no one says which ones exist: only for a caller that reads the channel.
-      return unknown.length && identity.principal.access.readable(channel!) ? { schedule, unknownMentions: unknown } : { schedule }
+      return { schedule: scheduleView(created, actors) }
     },
 
     /**

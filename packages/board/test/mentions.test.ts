@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { extractMentions } from '../src/contract/mentions.ts'
-import type { ActorsState } from '../src/contract/folds.ts'
-import { resolveMentions } from '../src/server/actors.ts'
+import type { ActorsState, Message } from '../src/contract/folds.ts'
+import { compileFilter } from '../src/server/feed.ts'
+import { FULL_ACCESS } from '../src/server/access.ts'
 
 describe('extractMentions', () => {
   it('finds handles and profile handles in prose, in order', () => {
@@ -31,14 +32,16 @@ describe('extractMentions', () => {
   })
 })
 
-describe('resolveMentions', () => {
+describe('a mentions filter', () => {
   const nobody: ActorsState = { byId: {}, byHandle: {} }
+  const message = (text: string) => ({ id: 1, channel: 'dev', text, re: null }) as Message
 
   it('takes names every object has as names nobody has', () => {
-    expect(resolveMentions('thanks @constructor', nobody)).toEqual({ mentions: [], unknown: ['constructor'] })
-    for (const actor of ['constructor', 'toString', '__proto__'])
-      expect(() => resolveMentions(`cc @[${actor}]`, nobody)).toThrow(`unknown actor @[${actor}]`)
-    // Platform text never fails a write: an import with them goes through.
-    expect(resolveMentions('@constructor @[constructor] @[__proto__]', nobody, undefined, true)).toEqual({ mentions: [], unknown: [] })
+    const matcher = (name: string) => compileFilter({ mentions: name }, { me: null, actors: nobody, access: FULL_ACCESS })
+    for (const name of ['constructor', 'toString', 'valueOf']) {
+      const matches = matcher(name)
+      expect([matches(message(`thanks @${name}`)), matches(message(`cc @[${name}]`)), matches(message('thanks @someone'))], name).toEqual([true, true, false])
+    }
+    expect([matcher('__proto__')(message('cc @[__proto__]')), matcher('__proto__')(message('cc @[someone]'))]).toEqual([true, false])
   })
 })

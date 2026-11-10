@@ -413,8 +413,7 @@ describe('who an import is by', () => {
     await team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hello', user: 'U_ADA', name: 'Ada' }) }))
     const julian = await julianOn(team.fetch)
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
-    const posted = await julian('POST', '/messages', { channel: 'firehose', text: '@[slack:user:U_ADA] and @[vercel:project:prj_support:preview+slack-eu:user:U_MALTE], have a look' })
-    expect(posted.body.message.mentions).toEqual(['slack:user:U_ADA', 'vercel:project:prj_support:preview+slack-eu:user:U_MALTE'])
+    await julian('POST', '/messages', { channel: 'firehose', text: '@[slack:user:U_ADA] and @[vercel:project:prj_support:preview+slack-eu:user:U_MALTE], have a look' })
     await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text)).toEqual([JSON.stringify({ markdown: '**julian**: <@U_ADA> and Malte, have a look' })]))
   })
 
@@ -496,7 +495,67 @@ describe('platform users, named by sync key', () => {
     const bob = { ...ada, id: 'slack-eu:user:U_BOB', handle: 'bob', name: 'Bob' }
     const id = (await support('POST', '/sync/imports', { op: 'post', author: bob, from: 'slack-eu', channel: 'firehose', text: 'cc @[slack-eu:user:U_ADA]' })).body.message
     const { message } = (await (await julianOn(team.fetch))('GET', `/messages/${id}`)).body as { message: MessageView }
-    expect([message.text, message.mentions]).toEqual(['cc @[vercel:project:prj_support:preview+slack-eu:user:U_ADA]', ['vercel:project:prj_support:preview+slack-eu:user:U_ADA']])
+    expect(message.text).toBe('cc @[vercel:project:prj_support:preview+slack-eu:user:U_ADA]')
+  })
+})
+
+describe('mentions, as sync posts them', () => {
+  const webhook = (team: ReturnType<typeof testBoard>, body: object) =>
+    team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', ...body }) }))
+  const texts = async (as: ReturnType<typeof caller>, query: string) => ((await as('GET', `/messages?${query}`)).body.messages as Read[]).map((m) => m.text)
+
+  it("are text a sync granted one channel can't make fail, or mean its own user, anywhere else", async () => {
+    const s = fakePlatform('slack')
+    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
+    await grant(team, 'prj_support', { 'support/': 'all' })
+    const support = caller(team.fetch, await supportToken())
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })).status).toBe(200)
+    // Support may sync only support/, and imports a user who goes by julian.
+    const squatter = { id: 'helpdesk:user:U_X', handle: 'julian', name: 'Not Julian', avatar: null, isBot: false }
+    expect((await support('POST', '/sync/imports', { op: 'post', author: squatter, from: 'helpdesk', channel: 'support/x', text: 'hi' })).status).toBe(200)
+    const julian = await julianOn(team.fetch)
+    const posted = await julian('POST', '/messages', { channel: 'firehose', text: '@julian look' })
+    expect([posted.status, posted.body.message?.text]).toEqual([201, '@julian look'])
+    expect(await texts(julian, 'mentions=me')).toEqual(['@julian look'])
+    // The board's own Slack has no julian, so it leaves the handle as written.
+    await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text)).toEqual([JSON.stringify({ markdown: '**julian**: @julian look' })]))
+  })
+
+  it("are text two syncs' imports of one person don't make ambiguous", async () => {
+    const s = fakePlatform('slack')
+    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
+    const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'production'))
+    const web = caller(team.fetch, await deploymentToken('web', 'prj_web', 'production'))
+    for (const [as, key, user] of [[support, 'helpdesk', 'U_M1'], [web, 'webchat', 'U_M2']] as const) {
+      expect((await as('POST', '/watchers', { watch: {}, sync: [{ key, platform: 'slack' }] })).status).toBe(200)
+      const malte = { id: `${key}:user:${user}`, handle: 'malte', name: 'Malte', avatar: null, isBot: false }
+      expect((await as('POST', '/sync/imports', { op: 'post', author: malte, from: key, channel: 'support', text: 'hi' })).status).toBe(200)
+    }
+    const julian = await julianOn(team.fetch)
+    const posted = await julian('POST', '/messages', { channel: 'firehose', text: '@malte have a look' })
+    expect([posted.status, posted.body.message?.text]).toEqual([201, '@malte have a look'])
+    expect(await texts(julian, 'mentions=malte')).toEqual(['@malte have a look'])
+    await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text)).toEqual([JSON.stringify({ markdown: '**julian**: @malte have a look' })]))
+  })
+
+  it("go out natively for the one of a sync's users with the handle, or of several, the one who wrote in the thread", async () => {
+    const s = fakePlatform('slack')
+    const team = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
+    const julian = await julianOn(team.fetch)
+    await webhook(team, { threadId: 'slack:C1:100', id: '100', text: 'deploys are slow', user: 'U_ADA', name: 'Ada' })
+    await webhook(team, { threadId: 'slack:C1:200', id: '200', text: 'checkout is down', user: 'U_M1', name: 'Malte' })
+    await webhook(team, { threadId: 'slack:C1:300', id: '300', text: 'search is down', user: 'U_M2', name: 'Malte' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(3))
+    const [, checkout, search] = await read(julian, 'firehose')
+    await julian('POST', '/messages', { re: checkout!.id, text: '@ada and @malte, have a look' })
+    await julian('POST', '/messages', { re: search!.id, text: '@malte too' })
+    await julian('POST', '/messages', { channel: 'firehose', text: '@malte, both of you' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(2))
+    expect(s.posts.map((post) => [post.threadId, post.text])).toEqual([
+      ['slack:C1:200', JSON.stringify({ markdown: '**julian**: <@U_ADA> and <@U_M1>, have a look' })],
+      ['slack:C1:300', JSON.stringify({ markdown: '**julian**: <@U_M2> too' })],
+    ])
+    await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text)).toEqual([JSON.stringify({ markdown: '**julian**: @malte, both of you' })]))
   })
 })
 

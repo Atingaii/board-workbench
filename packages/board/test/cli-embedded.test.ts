@@ -103,11 +103,10 @@ describe('the embedded CLI', () => {
     expect(await capture(() => app.run(['--nope']))).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --nope for vercel board\.\n[\s\S]*    vercel board --help\n$/) })
   })
 
-  it('hands failures and warnings to the app that runs it, to show as its own', async () => {
+  it('hands failures to the app that runs it, to show as its own', async () => {
     for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
     const failures: [unknown, { json: boolean }][] = []
-    const warned: unknown[] = []
-    const app = createApp({ appName: 'vercel board', onError: (failure, mode) => void failures.push([failure, mode]), onWarning: (warning) => void warned.push(warning) })
+    const app = createApp({ appName: 'vercel board', onError: (failure, mode) => void failures.push([failure, mode]) })
     expect(await capture(() => app.run(['read', '99999']))).toEqual({ code: 1, stdout: '', stderr: '' })
     expect(await capture(() => app.run(['read', '99999', '--json']))).toEqual({ code: 1, stdout: '', stderr: '' })
     expect(failures).toEqual([
@@ -117,13 +116,6 @@ describe('the embedded CLI', () => {
     // Misuse, with how to recover as a command it can run.
     expect(await capture(() => app.run(['raed', 'dev']))).toMatchObject({ code: 2, stderr: '' })
     expect(failures.at(-1)![0]).toMatchObject({ class: 'usage', reason: 'unknown_command', next: [{ argv: ['vercel', 'board', '--help'] }] })
-    const posted = await capture(() => app.run(['post', 'warned', 'ping @nobody-here']))
-    expect(posted).toMatchObject({ code: 0, stderr: '' })
-    expect(warned).toEqual([{ reason: 'unknown_mention', message: '@nobody-here matches no one on the board, so it stays plain text and notifies no one.' }])
-    // With --json, the warning is the result's, and the app hears nothing.
-    const json = await capture(() => app.run(['post', 'warned', 'ping @nobody-here', '--json']))
-    expect(JSON.parse(json.stdout)).toMatchObject({ outcome: 'posted', warnings: [{ reason: 'unknown_mention' }] })
-    expect(warned).toHaveLength(1)
   })
 
   it("asks for the app's login and team only when a request needs them, and reaches that team's board with them", async () => {

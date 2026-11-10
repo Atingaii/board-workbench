@@ -86,7 +86,7 @@ export function apply(message: MessageView, op: Op, me: string, now: string): Me
     case 'edit':
       return { ...message, text: op.text, editedAt: now }
     case 'delete':
-      return { ...message, deleted: true, text: '', reactions: {}, mentions: [] }
+      return { ...message, deleted: true, text: '', reactions: {} }
     case 'label': {
       const labels = { ...message.labels, ...op.set }
       for (const key of op.unset) delete labels[key]

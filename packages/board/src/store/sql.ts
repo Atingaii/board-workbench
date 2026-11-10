@@ -2,6 +2,7 @@ import type { BoardEvent } from '../contract/events.ts'
 import { setOwn } from '../contract/own.ts'
 import type { ExternalCopy, Message, SyncedThread } from '../contract/folds.ts'
 import { externalMessageKey } from '../contract/external.ts'
+import { mentionTerms } from '../contract/mentions.ts'
 import { concernedMessageId, project, projectSync, syncReads, type Before, type Change, type SyncChange } from './project.ts'
 import type { MessageFilter, MessageTables, Page, ThreadSummary } from './types.ts'
 
@@ -93,7 +94,10 @@ export function ddl(): string[] {
  */
 const clean = (value: string) => value.replaceAll('\u0000', '').toWellFormed()
 
-/** A mention's term. Label keys start with a letter or digit, so it's never a label's. */
+/**
+ * A mention's term, each one as the text has it (`mentionTerms`). Label keys start with a letter or
+ * digit, so it's never a label's. A board's tables from before keep the actor IDs its mentions resolved to.
+ */
 const MENTION = '@'
 /** An attachment's term, the same way. */
 const ATTACHMENT = '^'
@@ -141,11 +145,15 @@ function clauses(filter: MessageFilter, p: Params): string[] {
     out.push(either.length ? `(${either.join(' or ')})` : '1 = 0')
   }
   if (filter.mentions) {
-    out.push(
-      filter.mentions.length
-        ? `exists (select 1 from board_terms t where t.message_id = m.id and t.term = '${MENTION}' and t.value in (${p.list(filter.mentions)}))`
-        : '1 = 0',
-    )
+    const { terms, prefixes } = filter.mentions
+    const either = [
+      ...(terms.length ? [`t.value in (${p.list(terms)})`] : []),
+      ...prefixes.map((prefix) => {
+        const at = `cast(${p.add(prefix)} as text)`
+        return `substr(t.value, 1, length(${at})) = ${at}`
+      }),
+    ]
+    out.push(either.length ? `exists (select 1 from board_terms t where t.message_id = m.id and t.term = '${MENTION}' and (${either.join(' or ')}))` : '1 = 0')
   }
   if (filter.from !== undefined) out.push(`coalesce(m.from_key, 'board') = ${p.add(filter.from)}`)
   if (filter.text !== undefined) out.push(`m.text_lower like ${p.add(`%${likeEscape(filter.text)}%`)} escape '\\'`)
@@ -248,7 +256,7 @@ export function sqlTables(db: Db): MessageTables {
         m && change.message!.terms
           ? [
               ...Object.entries(m.labels).map(([key, value]) => [key, clean(value)] as const),
-              ...[...new Set(m.mentions)].map((actor) => [MENTION, clean(actor)] as const),
+              ...mentionTerms(m.text).map((term) => [MENTION, clean(term)] as const),
               ...[...new Set(m.attachments.map((file) => file.id))].map((id) => [ATTACHMENT, clean(id)] as const),
             ]
           : null,

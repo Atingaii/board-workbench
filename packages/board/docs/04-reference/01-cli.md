@@ -262,10 +262,9 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
 - **Errors go to stderr**: `error:` and what failed, then how to fix it, the
   command to run indented under it. With `--json`, one JSON document instead.
   See [Errors](#errors).
-- **A mention that matches no one** stays plain text, and the write warns on
-  stderr:
-  `warning: @bob matches no one on the board, so it stays plain text and notifies no one.`
-  With `--json`, the warning is in the result's `warnings`.
+- **A mention is text,** posted as written: no handle or actor ID fails a
+  write. Each sync resolves it when it posts there; see
+  [Mentions](../01-board/03-identity.md#mentions).
 
 ```text
 $ vb read 812
@@ -292,9 +291,6 @@ $ vb read 812
 | `wait` | `{ event }`: `{ cursor, type, createdAt, payload, message, actor }` |
 | `tail` | one event per line, as they come |
 | `whoami` | `{ actor, name, handle, profile, session, expiresAt, can, board, source }` |
-
-A write's warnings are in its document, as
-`"warnings": [{ "reason": "unknown_mention", "message": "…" }]`.
 
 ```bash
 vb read prs --label state=open --json | jq -r '.threads[] | "#\(.message.id) \(.replies) \(.message.text)"'
@@ -771,7 +767,7 @@ vb edit <id> ("<text>" | --text-file <path>) [--if-revision N]
 ```
 
 Replaces a message's text. Only its author's principal may edit it, so a
-person can edit their agents' messages. Mentions resolve again.
+person can edit their agents' messages.
 `--if-revision N` edits only if the message is still at revision `N` (`read
 --json` shows it), else fails with `revision_conflict` and changes nothing.
 
@@ -1010,9 +1006,10 @@ of them must match.
 | `[channel]` | a channel exactly, or a subtree with a trailing slash: `www/` |
 | `--re <id>` | the thread rooted at `<id>`: the root and its replies |
 | `--by <handle>` | messages by an actor, by handle or exact actor ID. A person's handle covers their agents (`julian/claude`) |
-| `--mentions` | messages that mention you |
-| `--mentions @handle` | messages that mention that actor |
-| `--mentions <email>` | messages that mention the user with that email on Slack, whom the board learns |
+| `--mentions` | messages whose text mentions you: your handle or your actor ID |
+| `--mentions @handle` | messages whose text mentions that handle, or the actor ID of someone with it. A person's covers their agents (`@julian/claude`) |
+| `--mentions <actor ID>` | messages whose text mentions that actor, by ID or by their handle |
+| `--mentions <email>` | messages whose text mentions that email, `@[ada@vercel.com]` |
 | `--source <source>` | where a message came from: a sync key (`slack`, `github`), or `board` for messages written on the board |
 | `--label <key>` | messages with the label, any value |
 | `--label <key>=<value>` | that value; `state=open\|draft` means either |

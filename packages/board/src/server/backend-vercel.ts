@@ -725,7 +725,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       thread: message.threadId,
       labels: labelsOf(message),
       reactions: message.deletedAt === undefined ? await reactors(who, message) : {},
-      mentions: [],
       by: authorOf(message.createdBy),
       noSync: message.noSync ?? false,
       origin: originOf(message.origin),
@@ -1063,11 +1062,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     switch (change.type) {
       case 'message.posted':
         type = 'message.posted'
-        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: message.noSync, mentions: [], by, origin: message.origin, from: message.from, attachments: message.attachments, links: message.links }
+        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: message.noSync, by, origin: message.origin, from: message.from, attachments: message.attachments, links: message.links }
         break
       case 'message.edited':
         type = 'message.edited'
-        payload = { ...base, text: message.text, mentions: [], by, from }
+        payload = { ...base, text: message.text, by, from }
         break
       case 'message.deleted':
         type = 'message.deleted'

@@ -2,7 +2,6 @@ import { own } from '../contract/own.ts'
 import type { ActorsState, Actor } from '../contract/folds.ts'
 import { toStorable, type Author } from '../contract/schemas.ts'
 import type { Via } from '../contract/profiles.ts'
-import { extractMentions } from '../contract/mentions.ts'
 import { parseCan } from './access.ts'
 import type { Claims, Principal } from './auth.ts'
 import { badRequest } from './errors.ts'
@@ -12,8 +11,6 @@ export const KNOWN_AGENTS = ['fx', 'claude', 'codex', 'grok', 'pi'] as const
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 const HANDLE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
-/** An actor ID starts with where it's from: `vercel:user:u_abc123+claude`, `slack:user:U0456`, `board:client`. */
-const isActorId = (id: string) => id.length <= 256 && /^[^\s:]+:\S+$/.test(id)
 
 export type ResolvedActor = {
   author: Author
@@ -147,50 +144,4 @@ export function actorSeen(seen: Actor, known: ActorsState, host = false) {
       ...(host ? { host: true as const } : {}),
     },
   }
-}
-
-/**
- * Resolves prose mentions to actor IDs. A `@handle` names the one actor the board
- * has seen with it; `@[actor-id]` names one directly. A handle nobody has stays
- * plain text and comes back in `unknown`, so the writer can be told. A handle
- * several actors share, or an `@[actor-id]` the board doesn't know, fails the
- * write. `lenient` is for platform text: no mention fails it, and one that
- * doesn't resolve stays plain text. Without `candidates`, an ambiguous mention
- * doesn't list who it could be: a caller that can't read every channel can't
- * list actors either.
- */
-export function resolveMentions(
-  text: string,
-  known: ActorsState,
-  pending?: Actor,
-  lenient = false,
-  candidates = true,
-): { mentions: string[]; unknown: string[] } {
-  const resolved: string[] = []
-  const unknown: string[] = []
-  const add = (id: string) => {
-    if (!resolved.includes(id)) resolved.push(id)
-  }
-  const fail = (error: Error) => {
-    if (!lenient) throw error
-  }
-  for (const token of extractMentions(text)) {
-    if (token.kind === 'actor') {
-      if ((isActorId(token.actor) && own(known.byId, token.actor)) || pending?.id === token.actor) add(token.actor)
-      else fail(badRequest(`unknown actor @[${token.actor}]`, 'unknown_mention'))
-      continue
-    }
-    const ids = new Set(own(known.byHandle, token.handle) ?? [])
-    if (pending && pending.handle.toLowerCase() === token.handle) ids.add(pending.id)
-    if (ids.size === 1) add([...ids][0]!)
-    else if (ids.size === 0) unknown.push(token.handle)
-    else if (!candidates) fail(badRequest(`ambiguous mention @${token.handle}: use @[actor-id]`, 'ambiguous_mention'))
-    else {
-      const options = [...ids]
-        .map((id) => `@[${id}] (${own(known.byId, id)?.name ?? pending?.name ?? id})`)
-        .join(' or ')
-      fail(badRequest(`ambiguous mention @${token.handle}: use ${options}`, 'ambiguous_mention'))
-    }
-  }
-  return { mentions: resolved, unknown: lenient ? [] : unknown }
 }

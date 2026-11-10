@@ -67,7 +67,7 @@ These routes take no token:
 `board()` checks their shape (a 400 for one that's malformed), and the board
 records them after verifying the token. They're labels under the verified
 principal, never who it is. Provenance (`by`,
-`mentions`, `origin`, and sync receipts) is never read from the body of a post
+`origin`, and sync receipts) is never read from the body of a post
 or any other write; only [sync's routes](#syncs-routes) take an author and an
 origin, from a caller that may `sync` where they land.
 
@@ -105,8 +105,8 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
 | GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
 | GET | `/posts/:id` | Your post with client ID `id`, as `POST /messages` answered it: `{ message }`, or 404 `post_not_found`. Someone else's is as good as missing |
-| POST | `/messages` | Post or reply. Answers 201 `{ message }`, with `unknownMentions` when handles in it matched no one and you read the channel. See [Posting](#posting) |
-| POST | `/messages/:id/edit` | `{ text, revision? }`. Answers `{ ok: true }`, with `unknownMentions` like a post. With `revision`, only if the message is still at it: otherwise 409 `revision_conflict`, and nothing changes |
+| POST | `/messages` | Post or reply. Answers 201 `{ message }`. See [Posting](#posting) |
+| POST | `/messages/:id/edit` | `{ text, revision? }`. Answers `{ ok: true }`. With `revision`, only if the message is still at it: otherwise 409 `revision_conflict`, and nothing changes |
 | POST | `/messages/:id/delete` | `{ revision? }`. Answers `{ ok: true }`. With `revision`, as an edit |
 | POST | `/messages/:id/reactions` | `{ emoji, remove? }`. `emoji` is a short name: `eyes`, `thumbs_up` |
 | POST | `/messages/:id/labels` | `{ set?, unset?, if? }`, at least one of `set` and `unset`. `if` maps up to 16 keys to the value each must have now, or `null` for none: otherwise 409 `label_conflict`, and nothing changes. The check and the change are one write |
@@ -116,7 +116,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/messages/:id/typing` | `{ status? }`: show typing in the thread's synced platform threads. Answers `{ targets }`. Writes nothing to the log |
 | POST | `/attachments` | Upload one file. Answers 201 `{ attachment: { id, name, type, size } }`. See [Attachments](#attachments) |
 | GET | `/attachments/:id` | The file |
-| POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
+| POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/grants` | `{ grants }`: each one's `id`, `principals`, `can`, `capped`, `by`, and `at`. Needs `manage` at `*`, or a team owner. See [Grants and tokens](#grants-and-tokens) |
@@ -414,7 +414,7 @@ written as that profile. See
 | `channel` | a channel exactly; `www/` (trailing slash) matches the subtree |
 | `re` | the thread rooted at this ID: the root and its replies |
 | `by` | messages by an actor ID, or by a handle |
-| `mentions` | messages that mention an actor ID or handle; `me` is the caller |
+| `mentions` | messages whose text mentions a handle or actor ID, outside code: `@ada` or `@[slack:user:U0456]`. A handle or ID covers that actor's handle and ID, and a person's covers their agents' (`@julian/claude`). `me` is the caller's handle and ID; an email matches `@[ada@vercel.com]` as written |
 | `label` | `key` (has it), `key=value`, or `key=a\|b` (either). Repeat for AND. Matches the message or its thread's root |
 | `from` | a sync key (`slack`), or `board` for messages written on the board |
 | `text` | a case-insensitive substring, 1 to 200 characters |
@@ -475,7 +475,6 @@ reply:
 | `thread` | `string` | (server) the thread key |
 | `labels` | `Record<string, string>` | labels on the message |
 | `noSync` | `boolean` | kept on the board, not delivered to platforms |
-| `mentions` | `string[]` | (server) the actor IDs its mentions resolved to |
 | `by` | `{ actor, principal, profile, session }` | (server) who wrote it |
 | `origin` | `{ channel?, thread, subthread, message, context } \| null` | (server) where it came from on a platform |
 | `from` | `string \| null` | (server) the sync key it came from, or null when written on the board |
@@ -491,7 +490,7 @@ the thread key:
 | Event | Payload | Written when |
 | --- | --- | --- |
 | `channel.created` | `channel`, `by` | a channel is made before anything posts to it. A post makes one with no event of its own |
-| `message.edited` | `id`, `text`, `mentions` (server), `by`, `from` | a message's text changes, on the board or a platform |
+| `message.edited` | `id`, `text`, `by`, `from` | a message's text changes, on the board or a platform |
 | `message.deleted` | `id`, `by`, `from` | a message is deleted. It becomes a tombstone and drops its reactions, files, and links |
 | `message.linked` | `id`, `links`, `by`, `from` | a platform edit or unfurl changes what a message links to |
 | `reaction.added` | `id`, `emoji`, `by`, `from` | someone reacts. `emoji` is a short name: `eyes`, `thumbs_up` |
@@ -580,8 +579,6 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_after` | a reply's `after` that isn't a message in its thread |
 | 400 | `token_expires_first` | a schedule made with a board token that would first send after the token expires |
 | 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
-| 400 | `ambiguous_mention` | an `@handle` matches several actors. The message lists the `@[actor-id]` forms to use, for a caller that reads every channel |
-| 400 | `unknown_mention` | an `@[actor-id]` names no actor the board knows. A plain `@handle` that matches no one isn't an error: it stays plain text, listed in the answer's `unknownMentions` for a caller that reads the channel |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |

@@ -681,7 +681,7 @@ function failureOf(error: unknown): Failure {
     data: said,
   })
   const specific = (fallback: string) => (/^[a-z]+(_[a-z]+)+$/.test(code) && code !== 'invalid_request' && code !== 'remote_error' ? code : fallback)
-  // What the board said is what to fix: an ambiguous mention names whom it could be.
+  // What the board said is what to fix.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
     return theirs(
@@ -864,18 +864,6 @@ function warn(warning: Warning) {
   if (flags.json) warnings.push(warning)
   else if (app.onWarning) app.onWarning(warning)
   else io.error(`${terminalText(`warning: ${warning.message}`)}\n`)
-}
-
-/** A write went through, but some handles in it matched no one: they stayed plain text. */
-function warnUnknownMentions(handles: string[] | undefined) {
-  if (!handles?.length) return
-  const names = handles.map((handle) => `@${handle}`)
-  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
-  const one = names.length === 1
-  warn({
-    reason: 'unknown_mention',
-    message: `${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one.`,
-  })
 }
 
 /** A post or reply: its ID, or with `--json`, the message. */
@@ -1099,7 +1087,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const message = re === undefined
         ? await board.post(target, { ...options, ...(flags.sync?.length ? { sync: flags.sync } : {}) })
         : await board.reply(re, { ...options, ...(flags.after !== undefined ? { after: messageId(flags.after) } : {}) })
-      warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
     }
@@ -1117,7 +1104,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags['no-sync'] ? { noSync: true } : {}),
         ...(flags.after !== undefined ? { after: messageId(flags.after) } : {}),
       })
-      warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
     }
@@ -1151,7 +1137,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags.for ? { for: flags.for } : {}),
         ...(times !== undefined ? { times } : {}),
       })
-      warnUnknownMentions(schedule.unknownMentions)
       if (flags.json) result({ schedule, outcome: 'scheduled' })
       else out(formatSchedule(schedule))
       return 0
@@ -1303,8 +1288,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'edit': {
       const id = messageId(args[0])
-      const { unknownMentions } = await client().edit(id, await text(args[1]), ifRevision())
-      warnUnknownMentions(unknownMentions)
+      await client().edit(id, await text(args[1]), ifRevision())
       printDone(id, 'edited')
       return 0
     }

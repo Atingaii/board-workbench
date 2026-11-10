@@ -10,9 +10,9 @@ import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { type Actor, type ExternalCopy, type Message } from '../contract/folds.ts'
 import { shownName } from '../contract/profiles.ts'
-import { replaceMentions } from '../contract/mentions.ts'
+import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
-import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
+import type { Discovery, InboxEntry, Me } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
@@ -29,7 +29,7 @@ import { compileWatcher, createWatchers, ID, registrantSession } from './watch.t
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
-import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
+import { authorizeMessage, authorizeOwn, authorizePost, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
 import { SYNC_ACTOR, type WriteOrigin } from './origin.ts'
 import { isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
@@ -135,10 +135,6 @@ function selfIdentity(caller: SelfCaller): Identity {
 
 /** An actor's name as people see it, with who it acts through: `Malte via www (preview)`. */
 const shownOf = (actor: Actor | undefined) => (actor ? shownName({ name: actor.name, via: viaOfRecord(actor) }) : undefined)
-
-/** A schedule as its creator sees it where it can't read: its text as a blind writer's message's is. */
-const blindSchedule = (schedule: ScheduleView, access: Access, own: string): ScheduleView =>
-  access.readable(schedule.channel) ? schedule : { ...schedule, text: blindText(schedule.text, own) }
 
 /**
  * A platform user, writing through sync: full access, and each write still proved against the
@@ -316,7 +312,7 @@ function build(options: A2Options, binding: BoardBinding) {
     return { filter: readableFilter(filter, Object.keys(state), access), through: index }
   }
 
-  /** Who wrote, was mentioned, or reacted in the channels `access` reads, a page at a time. */
+  /** Who wrote, was mentioned by actor ID (`@[actor-id]`), or reacted in the channels `access` reads, a page at a time. */
   async function actorsIn(access: Access): Promise<Set<string>> {
     const ids = new Set<string>()
     const { filter } = await readable({}, access)
@@ -324,7 +320,7 @@ function build(options: A2Options, binding: BoardBinding) {
       const { messages } = await reads.messages(filter, { limit: 500, ...(before !== undefined ? { before } : {}) })
       for (const message of messages) {
         ids.add(message.by.actor)
-        for (const id of message.mentions) ids.add(id)
+        for (const token of extractMentions(message.text)) if (token.kind === 'actor' && !isEmail(token.actor)) ids.add(token.actor)
         for (const reactors of Object.values(message.reactions)) for (const id of reactors) ids.add(id)
       }
       if (messages.length < 500) return ids
@@ -376,7 +372,7 @@ function build(options: A2Options, binding: BoardBinding) {
       throw badRequest('id: sync:… IDs are what sync imports, under the principal that imports them')
     const attachments = await attachmentsFor(principal, body.attachments)
     const { schedule } = caller.origin
-    const { unknownMentions, ...message } = await writePost(writes, {
+    const message = await writePost(writes, {
       attachments,
       identity,
       proofs,
@@ -388,10 +384,10 @@ function build(options: A2Options, binding: BoardBinding) {
       id: body.id,
       sync: body.sync,
       after: afterAt(body.after),
-      // A schedule's send, which only this board's own schedules make: a handle that's ambiguous since it was checked stays plain text.
-      ...(schedule && !fromRequest(caller) ? { schedule, lenientMentions: true } : {}),
+      // A schedule's send, which only this board's own schedules make.
+      ...(schedule && !fromRequest(caller) ? { schedule } : {}),
     })
-    return { message, ...(unknownMentions ? { unknownMentions } : {}) }
+    return { message }
   }
 
   /**
@@ -452,7 +448,7 @@ function build(options: A2Options, binding: BoardBinding) {
     async actors(caller) {
       const { principal, actor } = (await identityOf(caller))
       const { state, index } = await session.state(actorsReducer)
-      // A reader of every channel sees everyone; anyone else, who wrote, was mentioned, or reacted where they read, and themselves.
+      // A reader of every channel sees everyone; anyone else, who wrote, was mentioned by ID, or reacted where they read, and themselves.
       let seen: ((id: string) => boolean) | null = null
       if (!principal.access.readsAll) {
         const ids = await actorsIn(principal.access)
@@ -472,7 +468,7 @@ function build(options: A2Options, binding: BoardBinding) {
     async messages(caller, query) {
       const { principal, actor } = (await identityOf(caller))
       const { state: actors } = await session.state(actorsReducer)
-      const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
+      const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors }), principal.access)
       const { messages, position } = await reads.messages(filter, {
         ...(query.before !== undefined ? { before: cursorAt(query.before) } : {}),
         ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
@@ -484,7 +480,7 @@ function build(options: A2Options, binding: BoardBinding) {
     async threads(caller, query) {
       const { principal, actor } = (await identityOf(caller))
       const { state: actors } = await session.state(actorsReducer)
-      const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
+      const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors }), principal.access)
       const { threads, position } = await reads.threads(filter, {
         ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
         limit: query.limit ?? 50,
@@ -523,8 +519,8 @@ function build(options: A2Options, binding: BoardBinding) {
     async edit(caller, { id, text, revision }) {
       const identity = await identityOf(caller)
       const authorized = await authorizeOwn(writes, identity, messageAt(id), 'edit')
-      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text, revision })
-      return { ok: true as const, ...(unknownMentions ? { unknownMentions } : {}) }
+      await writeEdit(writes, { identity, authorized, text, revision })
+      return { ok: true as const }
     },
     async delete(caller, { id, revision }) {
       const identity = (await identityOf(caller))
@@ -560,12 +556,10 @@ function build(options: A2Options, binding: BoardBinding) {
         root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
       }
       const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, { principal, actor })
-      return { schedules: (await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
+      return { schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible) }
     },
     async cancelSchedule(caller, { id }) {
-      const identity = await identityOf(caller)
-      const answer = await schedules.cancel(identity, scheduleAt(id))
-      return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
+      return schedules.cancel(await identityOf(caller), scheduleAt(id))
     },
     grants: async (caller) => access.grants(await identityOf(caller)),
     createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
@@ -659,7 +653,7 @@ function build(options: A2Options, binding: BoardBinding) {
       const { principal, actor } = (await identityOf(caller))
       const after = query.after !== undefined ? cursorAt(query.after) : undefined
       const { state: actors } = await session.state(actorsReducer)
-      const feed = { session, reads, after, filters: query, all: query.all ?? false, me: actor.id, actors, access: principal.access }
+      const feed = { session, reads, after, filters: query, all: query.all ?? false, me: { id: actor.id, handle: actor.handle }, actors, access: principal.access }
       const { events, cursor } = await pollFeed(feed, (query.wait ?? 0) * 1000, signal)
       return { events, cursor: ref(cursor) }
     },
@@ -795,7 +789,6 @@ function build(options: A2Options, binding: BoardBinding) {
             // Its platform message is the copy of the sync that imported it.
             ...(body.origin && !ownSync(caller) ? { importedBy: principal.id } : {}),
             after: afterAt(body.after),
-            lenientMentions: true,
             attachments,
             links: await linksOf(principal, body.links),
           })

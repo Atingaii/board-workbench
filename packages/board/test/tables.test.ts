@@ -45,6 +45,8 @@ const SEEN = [
 ] as const
 const CHANNELS = ['dev', 'dev/sub', 'dev_x', 'ops', 'constructor']
 const WORDS = ['PR', '#1', 'fix', 'Bug', 'deploy', 'ÉCLAIR', 'naïve', '100%', 'a_b', 'shipit']
+/** Mentions as people write them, by handle, actor ID, or email, and one in code that doesn't count. */
+const MENTIONS = ['@bo', '@ADA', '@ada/claude', '@sam', '@constructor', '@[vercel:user:u_bo]', '@[vercel:user:u_ada+claude]', '@[slack:user:U1]', '@[Bo@Vercel.com]', '`@bo`']
 const FILES = ['f_one', 'f_two', 'f_three', 'f_four']
 const LABELS: Record<string, string>[] = [{ kind: 'bug' }, { kind: 'feature' }, { pr: '1' }, { pr: '2' }, { 'tag.x': 'y' }, { constructor: 'x' }]
 
@@ -59,8 +61,9 @@ function history(seed: number, length: number): BoardEvent[] {
     events.push({ index: events.length + 1, id, type, payload, createdAt: new Date(at).toISOString() } as unknown as BoardEvent)
   }
   for (const seen of SEEN) push('actor.seen', seen)
-  const text = () => Array.from({ length: 1 + Math.floor(r.next() * 4) }, () => r.pick(WORDS)).join(' ')
+  const text = () => Array.from({ length: 1 + Math.floor(r.next() * 4) }, () => (r.chance(0.15) ? r.pick(MENTIONS) : r.pick(WORDS))).join(' ')
   const labels = () => (r.chance(0.5) ? { ...r.pick(LABELS), ...(r.chance(0.3) ? r.pick(LABELS) : {}) } : {})
+  // A log from before mentions were text alone has the actor IDs they resolved to: nothing reads them now.
   const mentions = () => (r.chance(0.3) ? [r.pick(AUTHORS).actor] : [])
   const files = () => [...new Set([r.pick(FILES), r.pick(FILES)])].map((id) => ({ id, name: `${id}.png`, type: 'image/png', size: 1 }))
   while (events.length < length) {
@@ -162,6 +165,11 @@ const FILTERS: ParsedFilters[] = [
   { by: 'sam' },
   { mentions: 'bo' },
   { mentions: 'me' },
+  { mentions: 'ada' },
+  { mentions: 'ada/claude' },
+  { mentions: 'vercel:user:u_bo' },
+  { mentions: 'bo@vercel.com' },
+  { mentions: 'nobody' },
   { from: 'board' },
   { from: 'slack' },
   { text: 'pr #1' },
@@ -212,7 +220,7 @@ function conformance(open: () => Promise<MessageTables>) {
     const events = history(seed, 400)
     const tables = await applied(events)
     const { messages, actors } = fold(events)
-    const me = 'vercel:user:u_bo'
+    const me = { id: 'vercel:user:u_bo', handle: 'bo' }
     for (const filters of FILTERS) {
       const matches = compileFilter(filters, { me, actors, messages, access: FULL_ACCESS })
       const filter = toMessageFilter(filters, { me, actors })
@@ -306,7 +314,7 @@ function conformance(open: () => Promise<MessageTables>) {
     const by = AUTHORS[0]
     const labels = Object.fromEntries(Array.from({ length: 11_000 }, (_, i) => [`k${i}`, 'v']))
     const events = [
-      { type: 'message.posted', id: 'p', payload: { channel: 'dev', text: 'many', re: null, replyTo: null, thread: 'p', labels: {}, noSync: false, mentions: [], by, origin: null, from: null } },
+      { type: 'message.posted', id: 'p', payload: { channel: 'dev', text: 'many', re: null, replyTo: null, thread: 'p', labels: {}, noSync: false, by, origin: null, from: null } },
       { type: 'labels.changed', id: 'l', payload: { id: 1, thread: 'p', by, set: labels, unset: [] } },
     ].map((event, i) => ({ ...event, index: i + 1, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString() }) as unknown as BoardEvent)
     const tables = await applied(events)
@@ -321,8 +329,8 @@ function conformance(open: () => Promise<MessageTables>) {
     const by = AUTHORS[0]
     const odd = 'a\u0000b \ud800 c\udc00'
     const events = [
-      { type: 'message.posted', id: `p${odd}`, payload: { channel: 'dev', text: `naïve ${odd}`, re: null, replyTo: null, thread: `p${odd}`, labels: { kind: odd }, noSync: false, mentions: [], by, origin: { channel: 'slack:C9', thread: `slack:C9:${odd}`, subthread: null, message: `${odd}.0`, context: null }, from: 'slack' } },
-      { type: 'message.posted', id: 'r', payload: { channel: 'dev', text: odd, re: 1, replyTo: null, thread: `p${odd}`, labels: {}, noSync: false, mentions: [], by, origin: null, from: null } },
+      { type: 'message.posted', id: `p${odd}`, payload: { channel: 'dev', text: `naïve ${odd}`, re: null, replyTo: null, thread: `p${odd}`, labels: { kind: odd }, noSync: false, by, origin: { channel: 'slack:C9', thread: `slack:C9:${odd}`, subthread: null, message: `${odd}.0`, context: null }, from: 'slack' } },
+      { type: 'message.posted', id: 'r', payload: { channel: 'dev', text: odd, re: 1, replyTo: null, thread: `p${odd}`, labels: {}, noSync: false, by, origin: null, from: null } },
       { type: 'labels.changed', id: 'l', payload: { id: 1, thread: `p${odd}`, by, set: { tag: odd }, unset: [] } },
       { type: 'thread.synced', id: 's', payload: { thread: `p${odd}`, target: `slack:C1:${odd}`, cause: 'request', by } },
       { type: 'message.synced', id: 'd', payload: { id: 2, thread: `p${odd}`, target: `slack:C1:${odd}`, external: { thread: `slack:C1:${odd}`, message: `${odd}.9` } } },
@@ -376,7 +384,7 @@ describe("a message's version", () => {
   it('is the last event that changed it, and an event that changes nothing writes nothing', () => {
     const state: MessagesState = { byId: {}, replies: {} }
     foldMessages(state, { ...event(5, 'message.posted', {}), payload: {
-      channel: 'dev', text: 'hi', re: null, replyTo: null, thread: 'e5', labels: {}, noSync: false, mentions: [], by, origin: null, from: null,
+      channel: 'dev', text: 'hi', re: null, replyTo: null, thread: 'e5', labels: {}, noSync: false, by, origin: null, from: null,
     } } as BoardEvent)
     expect(state.byId[5]!.version).toBe(5)
     const react = event(6, 'reaction.added', { emoji: 'eyes', by, from: null })
@@ -402,7 +410,7 @@ describe('the SQL tables', () => {
     const by = AUTHORS[0]
     const at = (index: number) => new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString()
     const events = [
-      { type: 'message.posted', id: 'p', payload: { channel: 'dev', text: 'secret', re: null, replyTo: null, thread: 'p', labels: {}, noSync: false, mentions: [], by, origin: null, from: null } },
+      { type: 'message.posted', id: 'p', payload: { channel: 'dev', text: 'secret', re: null, replyTo: null, thread: 'p', labels: {}, noSync: false, by, origin: null, from: null } },
       { type: 'message.deleted', id: 'd', payload: { id: 1, thread: 'p', by, from: null } },
       { type: 'labels.changed', id: 'l', payload: { id: 1, thread: 'p', by, set: { kind: 'bug' }, unset: [] } },
     ].map((event, i) => ({ ...event, index: i + 1, createdAt: at(i) }) as unknown as BoardEvent)

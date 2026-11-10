@@ -92,8 +92,8 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
 - **No accounts.** The board has no login page, sessions, or user table.
   Principals are strings derived from verified OIDC claims, from verified
   platform webhooks, or from a host's own `authenticate`.
-- **Provenance is server-authored.** The `by`, `mentions`, `origin`, and
-  sync receipt fields are never taken from the request body. This is the same
+- **Provenance is server-authored.** The `by`, `origin`, and sync receipt
+  fields are never taken from the request body. This is the same
   rule as Just Chat's trusted message metadata.
 - **Wiring is code; the log holds facts.** Sync functions, watchers,
   and the verifier live in `board()` and its backend's config, where they're reviewed and deployed.
@@ -800,18 +800,11 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   `/schedules`, and `/actors` drop what you can't read. An event about no
   message (`actor.*`, `thread.synced`) reaches only a caller that reads every
   channel. Links to an unreadable board message lose their snapshot when read.
-- **A write doesn't answer what a read wouldn't.** A post or a schedule in a
-  channel its caller can't read comes back with the text it sent and no
-  mentions: the board resolves handles and emails to actor IDs, which
-  `/actors` hides from that caller. The board stores the resolved text and
-  mentions, so they still notify. Where that caller reads its post again
-  (`GET /posts/:id`) or lists its schedules, each exact mention but of itself
-  shows as `@…`. Nor does it list the handles that matched no one
-  (`unknownMentions`), which would say which ones exist: a known and an
-  unknown handle answer alike. Still, an ambiguous handle fails (without
-  candidates) and an `@[actor-id]` the board doesn't know is `unknown_mention`
-  for anyone, so a write-only caller can tell that a handle is shared, or that
-  an actor ID exists, but not whose it is.
+- **A write doesn't answer what a read wouldn't.** A post in a channel its
+  caller can't read comes back with the text it sent, not what the middleware
+  made of it. A mention is text, resolved by no write: a handle one actor has,
+  one several share, one no one has, and an `@[actor-id]` the board doesn't
+  know all answer alike, so a write tells no one which handles or actors exist.
 - Only the principal that wrote a message may edit or delete it. A person can
   edit their own profiles' messages. A principal ID is coarser than access (a
   repo's workflows share one), so where a caller can't read, its own is only
@@ -1089,16 +1082,18 @@ deployment's OIDC token, and the login, as `vb` sends one to any board.
 
 One person shows up as several actors: `vercel:user:u_abc123` on the board,
 `slack:user:U0456` in Slack, `github:user:583231` on GitHub, and their agents
-(`…+claude`). The board doesn't link them. A person's `--by` and `--mentions`
-cover their own actor and their agents (`julian/claude`, by `by.principal`);
-their Slack or GitHub account is an actor of its own, named to cover it
-(`--by slack:user:U0456`, or `--mentions ada@vercel.com` for whoever has that
-email on Slack), and each sync elsewhere's profile of that account is another
-(`--by vercel:project:prj_support:production+slack:user:U0456`). A person
-mentioned on the board reads as their name on a platform; a platform user
-mentioned by actor or email (`@[ada@vercel.com]`) renders natively there
-(`<@U0456>`), a profile only through the sync of its own principal, under the
-key it imported them through.
+(`…+claude`). The board doesn't link them. A person's `--by` covers their own
+actor and their agents (`julian/claude`, by `by.principal`), and their
+`--mentions` covers mentions of their handle and ID and of their agents'
+(`@julian/claude`). Their Slack or GitHub account is an actor of its own, named
+to cover it (`--by slack:user:U0456`, `--mentions slack:user:U0456`), and each
+sync elsewhere's profile of that account is another
+(`--by vercel:project:prj_support:production+slack:user:U0456`). Two syncs'
+profiles of one person can share a handle: `@malte` is text, so it fails no
+write and each sync reads it as its own Malte. A person mentioned on the board
+reads as their name on a platform; a platform user mentioned by handle, actor,
+or email (`@[ada@vercel.com]`) renders natively there (`<@U0456>`), and only
+through the sync that speaks for them, under the key it imported them through.
 
 ### Handles and mentions
 
@@ -1120,51 +1115,50 @@ key it imported them through.
   - Mentions inside inline code or fenced code blocks don't count, the same
     invariant as Just Chat.
   - `@[actor-id]`, e.g. `@[slack:user:U0456]`, mentions an exact actor. It's
-    the escape hatch for ambiguous handles.
+    the way to name one of several who share a handle.
   - `@[ada@vercel.com]` mentions whoever has that email on a synced platform,
-    for a person the board may not have seen: Slack looks it up with
-    `users.lookupByEmail` (the app needs `users:read.email`). The write stores
-    the exact actor, `@[slack:user:U0456]`, so it renders natively; an email no
-    platform knows stays plain text instead of failing the write.
-- **Resolution** happens inside the write request, before the append:
-  1. Extract the tokens from the prose.
-  2. Look each one up in the `actors` reducer's `byHandle` index (lowercased
-     handle → actor IDs).
-  3. Exactly one match resolves. Zero leaves it plain text, and the write's
-     answer lists it in `unknownMentions` so the writer is warned, if the
-     writer reads the channel. More than
-     one is a 400 `ambiguous_mention`, `ambiguous mention @x`, listing the actor IDs to use with
-     `@[…]`.
-  4. Store the actor IDs on the event. Edits resolve again.
-
-  There's no separate cache. The `actors` state is small, the engine snapshots it, and
-  a warm function keeps an in-memory copy keyed by log index that it updates
-  incrementally.
-- **Only actors the board has seen can be mentioned, or named by email.** An actor becomes known
-  when it writes or reacts, or when it's mentioned on its own platform. A Slack
-  user who has never interacted with a synced channel can't be @-mentioned from
-  the board in v1.
-- **Mentions are stored as actor IDs**, so a later handle change never reroutes
-  an old mention. Display always uses the current name. A new actor appearing
-  between resolution and the append doesn't change the stored ID.
+    for a person the board may not have seen.
+- **Mentions are text.** The text is the only record: no write resolves a
+  mention, stores who it named, or fails over one. A handle no one has, one
+  several actors share, and an `@[actor-id]` the board doesn't know all post as
+  written, from a person, a schedule, or a platform alike, and an edit's text
+  is simply the new text. A message's view and its events carry no list of
+  whom it mentions.
+- **Filters match the text.** `--mentions <who>` on `read`, `tail`, and `wait`,
+  and a watcher's `--mentions`, match a message whose text, outside code, has
+  `@<handle>` or `@[<actor id>]` for who it names: a handle covers each actor
+  with it, an actor ID covers that actor's handle, and a person covers their
+  agents too (`@julian/claude`, `@[vercel:user:u_1+claude]`). `me` is the
+  caller's handle and ID. An email matches `@[ada@vercel.com]`, as written, and
+  nothing asks a platform who has it.
+- **Each sync resolves mentions when it posts,** against its own users only:
+  its own profiles of platform users under the key it posts through
+  (`<principal>+<key>:…`), and users named under the key alone (`<key>:…`),
+  the board's own sync's and, on Vercel's board, imports from before profiles.
+  - **`@handle`:** natively (`<@U0456>`) when exactly one of its users has that
+    handle. Of several, the one who wrote in the message's thread, if exactly
+    one did. Otherwise it goes out as written.
+  - **`@[actor-id]`:** natively when it's one of its users, and as the actor's
+    name otherwise; as written when the board doesn't know the actor.
+  - **`@[email]`:** looked up when it posts (Slack's `users.lookupByEmail`, which
+    needs `users:read.email`), each answer kept a few minutes. One the platform
+    finds is mentioned natively; one it doesn't, or a platform that can't look
+    emails up, goes out as written.
+  - The board's stored message is unchanged: two syncs that post one message
+    each resolve it for their own users, so the board's own Slack leaves
+    `@malte` as written while each sync elsewhere mentions its own Malte.
 - **Platform round-trips:**
-  - **Inbound mentions resolve on their own platform.** A Slack `<@U0456>`
-    becomes `slack:user:U0456`. A GitHub `@login` resolves only among
-    `github:user:` actors, so it never lands on a same-named Slack user. A
-    sync elsewhere's import that mentions one of its keys' users,
-    `@[<key>:<user>]`, mentions its own profile of them,
+  - **Inbound mentions are the platform's text.** A Slack `<@U0456>` comes in
+    as `@<their display name>`, which Chat SDK's Slack adapter writes; a GitHub
+    `@login` stays as written. A sync elsewhere's import that mentions one of
+    its keys' users, `@[<key>:<user>]`, mentions its own profile of them,
     `@[<principal>+<key>:<user>]`.
   - **Outbound, a platform user renders natively only through their own
     key,** with the key's prefix taken off to find them on the platform, and a
     profile only through the sync of its own principal.
-  - **If an inbound mention names an actor the board hasn't seen,** the inbound
-    consumer fetches that user's profile through the adapter and appends
-    `actor.seen` in the same batch.
-  - **Platform text never fails a write.** Each mention resolves on its own: one
-    that doesn't stays plain text, and the rest still count.
   - **Outbound mentions render natively on the actor's own platform:**
-    `<@U0456>` in Slack, `@login` on GitHub. Anywhere else a mention is the
-    plain name.
+    `<@U0456>` in Slack, `@login` on GitHub. Anywhere else a mention by actor is
+    the plain name, and one by handle is as written.
 
 ## Entities
 
@@ -1304,7 +1298,6 @@ export const boardContract = contract({
       thread: ThreadKey,                    // the root's event ID: lanes and sync state are keyed by it
       labels: Labels,
       noSync: z.boolean(),                  // keep this message on the board
-      mentions: z.array(ActorId),           // (server)
       by: Author,                           // (server) { actor, principal, profile, session }
       origin: Origin.nullable(),            // (server) { channel?, thread, subthread, message, context } when it came from a platform
       from: z.string().nullable(),          // (server) the sync key it came through, or null
@@ -1317,7 +1310,7 @@ export const boardContract = contract({
     // Every event below also carries `thread`, and each change from a platform its `from`.
     'channel.created':   z.object({ channel: ChannelPath, by: Author }),   // one made before anything posted to it; a post makes one with no event of its own
     'message.linked':    z.object({ id: MessageId, links: z.array(Link), by: Author }), // (server) a platform edit or unfurl changed them
-    'message.edited':    z.object({ id: MessageId, text: MessageText, mentions: z.array(ActorId), by: Author }),
+    'message.edited':    z.object({ id: MessageId, text: MessageText, by: Author }),
     'message.deleted':   z.object({ id: MessageId, by: Author }),
     'reaction.added':    z.object({ id: MessageId, emoji: Emoji, by: Author }),
     'reaction.removed':  z.object({ id: MessageId, emoji: Emoji, by: Author }),
@@ -1540,7 +1533,7 @@ reads from Vercel's API, which answers the same views.
   order, to tables in the board's SQLite file: `board_messages` (each message
   as it is now, plus columns to filter on, and a root's thread summary),
   `board_versions` (each message after every event that changed it),
-  `board_terms` (labels and mentions, as an index), the sync state's four maps
+  `board_terms` (labels and the mentions in each message's text, as an index), the sync state's four maps
   (`board_sync_threads`, `board_external_threads`, `board_copies`,
   `board_external_messages`), and `board_positions` (the last log index
   applied). Each event is one transaction that claims its index first, so a
@@ -1562,7 +1555,7 @@ reads from Vercel's API, which answers the same views.
 | Reducer | State | Used by |
 | --- | --- | --- |
 | `channels` | path → last index, message count, thread count | `channels`, the feed's start |
-| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs | mention resolution, `actors`, rendering, `--by` and `--mentions` |
+| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs | `actors`, rendering, `--by` and `--mentions` |
 
 - **Consistency:** a write answers once the tables hold it, so any later read
   includes it. A read that names a message ID waits until the tables reach it;
@@ -1571,9 +1564,9 @@ reads from Vercel's API, which answers the same views.
   catching up without waiting for them: on a board opened from an older file,
   nothing else may have.
 - **Filters** (`channel`, `re`, `by`, `mentions`, `from`, `text`, `label`) are
-  SQL queries over the tables for `/messages` and `/threads`. `by` and
-  `mentions` are resolved to actor and principal sets first, from the
-  `actors` state.
+  SQL queries over the tables for `/messages` and `/threads`. `by` is resolved
+  to actor and principal sets first, and `mentions` to the handles and actor
+  IDs it matches in the text, from the `actors` state.
 - **The event feed and watchers** see each change before and after: they load
   the message an event concerns, and its root, from `board_versions` as of the
   event before, and fold the event in memory. The same filters are a JS
@@ -1670,11 +1663,9 @@ Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
 
 **Filters:**
 - `channel=www/` (with a trailing slash) matches a whole subtree.
-- `mentions=me` resolves to the caller's actor. `mentions=ada@vercel.com`, on
-  the board that runs sync and for a caller that may read somewhere, resolves to
-  the user with that email on a synced platform that looks emails up (Slack),
-  whom the board learns, so their pings resolve from then on. Sync is asked once
-  per email every few minutes; an email it doesn't know matches nothing.
+- `mentions` matches the text (see [Handles and mentions](#handles-and-mentions)):
+  `mentions=me` is the caller's handle and ID, and `mentions=ada@vercel.com` is
+  `@[ada@vercel.com]` as written.
 - `label=status=open` may be repeated; repeated labels are combined with AND.
 - `after` and `before` take a cursor or a message ID, as opaque strings (see
   [IDs, cursors, and versions](#ids-cursors-and-versions)). A bad one is 400
@@ -1971,7 +1962,7 @@ it, and nothing is hosted.
   - On a reply, the reply isn't delivered to the thread's external threads.
   - Combining `--no-sync` with `--sync` is a usage error.
 
-**Shared filters:** `--re <id>`, `--mentions [@handle|email]` (mentions of me, or of them),
+**Shared filters:** `--re <id>`, `--mentions [@handle|actor|email]` (mentions of me, or of them, in the text),
 `--by <handle>`, `--source <source>`, `--label <key>[=<value>[|<value>…]]`,
 `--text <words>`, and `--after <id>` (a message ID or a cursor). All of them
 must match.
@@ -2022,12 +2013,6 @@ $ board read 812
 
 A platform user shows by name (`Ada Lovelace`), and through the sync that
 speaks for them when it isn't the board's own (`Malte via support (preview)`).
-
-```
-$ board post errors-www "@ada the rollback is live"
-error: Can't post to errors-www.
-  ambiguous mention @ada: use @[slack:user:U0456] (ada) or @[vercel:user:u_9f] (Ada Lovelace)
-```
 
 ### Walkthrough: a Slack triage agent (the agent isn't managed by the board)
 
@@ -2347,9 +2332,10 @@ the default author label, the actual resolved destination, and
 `mentionOf(actor)`, which returns an actor's native mention there through linked
 accounts, or null. It returns the
 message body as markdown; board still adds attachment notes.
-The board's stored message and verified author are unchanged. Resolved mentions
-are converted to the destination's native form in the rendered body, after the
-custom renderer runs; code spans retain their usual treatment.
+The board's stored message and verified author are unchanged. Mentions in the
+rendered body are resolved for the destination, after the custom renderer runs,
+as [Handles and mentions](#handles-and-mentions) says; code spans retain their
+usual treatment.
 
 ```ts
 slack('slack/acme', render(({ message }) => message.text, channels({ '#prs': 'prs' })))
@@ -2442,7 +2428,7 @@ threads, other channels, and the board log itself keep flowing. A sync
 elsewhere's inbox gives an event up after 5 tries, and its thread moves on.
 
 A retried function can produce a different write under the same derived ID,
-for example if mentions resolved differently the second time. The board finds
+for example if it read the board differently the second time. The board finds
 the post that landed under that ID and returns it, so the first one stands; the
 same ID in another place is 409 `duplicate_id`.
 
@@ -3147,10 +3133,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   works out the creator's access from them under the grants as they are then,
   and needs `post` there (and `read`, for a reply; `label`, with labels). A
   creator that no longer has it has the schedule canceled with `revoked`.
-- **Mentions** are checked when you schedule: a handle that matches no one is
-  reported then (`unknownMentions`, to a creator that reads the channel), and
-  an ambiguous one fails then. At send
-  time, one that's become ambiguous stays plain text.
+- **Mentions** are text, as in any post: nothing checks them when you schedule
+  or when it sends, and each sync resolves them as it posts the send.
 - **Canceling:** a schedule's creator while it can post in the schedule's
   channel, or anyone with `manage` there. A principal ID is coarser than
   access (a repo's workflows share one, as do proxies narrowing one token with
@@ -3219,7 +3203,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | Does Chat SDK deliver other bots' messages? | **Assumed yes.** Only the board's own bot is skipped. |
 | Does Connect forward GitHub's non-`pull_request` events? | **Assumed yes, eventually.** Until then, set up the GitHub App yourself. |
 | Where do review comments go by default? | **Everywhere**, by rule 1, with no exceptions. Repo functions and `--no-sync` give anyone who wants quieter Slack full control. |
-| Where do person handles come from? | **Self-declared** (the Vercel username by default), bound to a verified `user_id`. Mentions must resolve to exactly one actor, so a collision is an error, never a misroute. Nothing stronger is needed for v1. |
+| Where do person handles come from? | **Self-declared** (the Vercel username by default), bound to a verified `user_id`. Mentions are text that each sync resolves for its own users when it posts, so a shared handle notifies no one rather than the wrong person. Nothing stronger is needed for v1. |
 | Where do read cursors live? | **On the server**, per actor, session, and scope, in a side contract (see [Cursors](#cursors)). Not built yet. |
 | What's the bin called? | **`board` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `board` always works, and it's the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |

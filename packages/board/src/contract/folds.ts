@@ -22,7 +22,6 @@ export type Message = {
   thread: string
   labels: Labels
   reactions: Record<string, string[]>
-  mentions: string[]
   by: Author
   noSync: boolean
   /** Where it came from on a platform, if it did. */
@@ -85,7 +84,6 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
         thread: payload.thread,
         labels: { ...payload.labels },
         reactions: {},
-        mentions: payload.mentions,
         by: payload.by,
         noSync: payload.noSync,
         origin: payload.origin,
@@ -107,7 +105,6 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       const message = state.byId[event.payload.id]
       if (!message || message.deleted) return undefined
       message.text = event.payload.text
-      message.mentions = event.payload.mentions
       message.editedAt = iso(event.createdAt)
       return message
     }
@@ -119,7 +116,6 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       message.reactions = {}
       // Labels are state a filter finds: a tombstone in a label's view would still look open.
       message.labels = {}
-      message.mentions = []
       message.attachments = []
       message.links = []
       return message

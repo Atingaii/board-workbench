@@ -14,7 +14,7 @@ import type { Watcher } from '../src/server/watcher.ts'
 import { slack } from '../src/sync/slack.ts'
 import { channels, render } from '../src/sync/fn.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
-import { fakePlatform } from './sync-fixtures.ts'
+import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 
 const API = 'http://localhost'
 
@@ -44,6 +44,7 @@ const ADA = { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } as const
 
 /** The project's own board on Vercel's, as its deployment runs it, with `middleware`: what board() serves is its own code. */
 const PONG_URL = 'https://pong.example/api/board'
+const WEB_URL = 'https://web.example/api/board'
 function pongBoard(api: ReturnType<typeof fakeMessageboard>, middleware: Middleware[] = [], options: { authenticate?: Authenticate } = {}) {
   return board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }), url: PONG_URL, middleware, ...options })
 }
@@ -1361,6 +1362,36 @@ describe('vercel()', () => {
     await vi.waitFor(() =>
       expect(s.channelPosts.map((post) => JSON.parse(post.text).markdown).sort()).toEqual(['**Julián Benegas**: not yours', 'yours · <@U_ADA>']),
     )
+  })
+
+  it("resolves mentions as each project's sync posts, against its own users: two syncs' Maltes, and an email its Slack knows", async () => {
+    const api = fakeMessageboard()
+    const lookupByEmail = vi.fn(async ({ email }: { email: string }) => {
+      if (email !== 'ada@vercel.com') throw new Error('users_not_found')
+      return { user: { id: 'U_ADA', name: 'ada', profile: { display_name: 'ada', real_name: 'Ada' } } }
+    })
+    const client = { conversations: { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }, users: { info: async () => ({}), lookupByEmail } }
+    const pongSlack = fakePlatform('slack', withSlackClient(client, false))
+    const webSlack = fakePlatform('slack')
+    const project = (principal: string, url: string, sync: NonNullable<Parameters<typeof board>[0]>['sync']) =>
+      board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal), files: api.files }), url, basePath: '/api/board', sync })
+    const pong = project('project:prj_pong:production', PONG_URL, { slack: slack({ adapter: pongSlack.adapter, client: async () => client as never }, channels({ C1: 'general' })) })
+    const web = project('project:prj_web:production', WEB_URL, { webchat: slack({ adapter: webSlack.adapter }, channels({ C9: 'general' })) })
+    // Each one's Slack brings in its own Malte.
+    const webhook = (deployment: typeof pong, url: string, key: string, body: object) =>
+      deployment.fetch(new Request(`${url}/webhooks/${key}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', ...body }) }))
+    await webhook(pong, PONG_URL, 'slack', { threadId: 'slack:C1:300', id: '300', text: 'hi', user: 'U_M1', name: 'malte' })
+    await webhook(web, WEB_URL, 'webchat', { threadId: 'slack:C9:400', id: '400', text: 'hej', user: 'U_M2', name: 'malte' })
+    const julian = handleOn(api)
+    await vi.waitFor(async () => expect((await julian.messages({ channel: 'general' })).messages).toHaveLength(2))
+    await julian.post('general', { text: '@malte have a look, cc @[ada@vercel.com]' })
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await web.fetch(new Request(`${WEB_URL}/wake`, { method: 'POST' }))
+    const posted = (platform: typeof pongSlack) => platform.channelPosts.map((post) => JSON.parse(post.text).markdown).filter((text: string) => text.includes('have a look'))
+    await vi.waitFor(() => expect([posted(pongSlack), posted(webSlack)]).toEqual([
+      ['**Julián Benegas**: <@U_M1> have a look, cc <@U_ADA>'],
+      ['**Julián Benegas**: <@U_M2> have a look, cc @[ada@vercel.com]'],
+    ]))
   })
 
   it("syncs Slack through the engine from its first webhook, a file as an attachment on the board, and a board reply back to Slack", async () => {

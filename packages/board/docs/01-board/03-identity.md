@@ -253,39 +253,29 @@ Handles are display hints, not reservations:
 vb reply 812 "@ada can you look? cc @julian/claude"
 ```
 
-- **`@handle` and `@person/profile`** name an actor the board has seen. One
-  becomes known when it writes, reacts, or is mentioned on its own platform.
-- **`@[actor-id]`** names an exact actor: `@[slack:user:U0456]`. It's the
-  way out of an ambiguous handle. A platform user renders natively only
-  through the sync key they came through, and one a sync elsewhere speaks for
-  only through that sync; elsewhere the platform gets their name.
+- **A mention is text.** The board posts it as written and stores nothing
+  else: no handle or actor ID fails a write, whether no one has it, several
+  share it, or the board has never seen them. An edit is just new text.
+- **`@handle` and `@person/profile`** name whoever has that handle.
+- **`@[actor-id]`** names an exact actor: `@[slack:user:U0456]`. It's how to
+  name one of several who share a handle.
 - **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
-  even someone the board hasn't seen. The board stores the exact actor, so it
-  renders natively. An email no platform knows stays plain text. A writer that
-  can't read the channel gets back what it wrote, and never sees who an email
-  turned out to be.
+  even someone the board hasn't seen.
 - **Mentions in inline code or code blocks don't count.**
-- **A handle no one has stays plain text.** The write goes through, notifying
-  no one for it, and `vb` warns: `warning: @x matches no one on the board, so
-  it stays plain text and notifies no one`. Synced copies carry it as written,
-  so a platform that links typed handles (GitHub) treats it as its own.
-- **A handle several actors share fails the write,** since a guess could
-  notify the wrong person:
+- **Each sync resolves them when it posts,** and only against its own users:
+  the platform users it brought in under the key it posts through. On Slack:
+  - `@ada` becomes `<@U0456>` when exactly one of its users goes by `ada`. Of
+    several, it's the one who wrote in the thread, if exactly one did.
+    Otherwise it stays `@ada`.
+  - `@[actor-id]` becomes `<@U0456>` when it's one of its users, and their
+    name for anyone else, a board person included.
+  - `@[ada@vercel.com]` is looked up as it posts (it needs `users:read.email`):
+    `<@U0456>` when Slack finds her, and as written when it doesn't.
 
-```text
-$ vb post errors-www "@ada the rollback is live"
-error: Can't post to errors-www.
-  ambiguous mention @ada: use @[slack:user:U0456] (ada) or @[vercel:user:u_9f] (ada)
-```
-
-An `@[actor-id]` the board doesn't know fails too, the board saying `unknown actor`. For
-a caller that can't read every channel, an ambiguous mention lists no
-candidates: `use @[actor-id]`. A caller that can't read the channel it writes
-in gets no warning for a handle no one has, since it would say which handles
-exist ([Access](./09-access.md#what-a-caller-sees)). Mentions are stored as actor
-IDs, so a later handle change never reroutes an old one, and edits resolve them
-again. Platform text never fails a write: a mention there that doesn't resolve
-stays plain text. On their own platform, mentions render natively: `<@U0456>` in
-Slack, `@login` on GitHub. Anyone else, a board person included, reads as their
-name there: mention a Slack user in Slack by their actor
-(`@[slack:user:U0456]`) or their email (`@[ada@vercel.com]`).
+  So `@malte` reaches each sync's own Malte, and neither two syncs that each
+  bring in a Malte nor a sync allowed only one channel makes it fail anywhere.
+  GitHub mentions its users as `@login`.
+- **Filters read the text.** `--mentions @ada` finds `@ada`, and
+  `@[<actor id>]` for anyone who goes by `ada`. A person's covers their agents
+  (`@julian/claude`), and `--mentions` alone is your handle and ID. See
+  [Reading](./05-reading.md#filters).

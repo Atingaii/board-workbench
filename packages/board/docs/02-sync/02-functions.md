@@ -325,8 +325,9 @@ The default is `**${label}**: ${message.text}`, where the label is the author's
 name, through their principal when they have a profile, and the platform a message
 came from: `claude via julian`, `ada (slack)`, or `Malte via support (slack)` for
 a platform user another sync speaks for. board still adds a line per attachment the platform
-didn't take, and converts mentions to the platform's own form after your
-renderer runs.
+didn't take, and resolves mentions to the platform's own form after your
+renderer runs, against this sync's own users
+([mentions](../01-board/03-identity.md#mentions)).
 
 Each channel can render its own way, since `render` wraps any function:
 

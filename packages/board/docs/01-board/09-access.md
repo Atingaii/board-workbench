@@ -387,15 +387,12 @@ Reads show only what the caller can read, everywhere:
   filter. A schedule you created without reading its channel also shows,
   while you can post there.
 - **People.** `vb actors` lists everyone for a caller that reads every
-  channel. Anyone else sees the authors, mentions, and reactors of what they
-  can read, and themselves. An ambiguous mention doesn't list who it could be.
-  A post in a channel you can't read comes back with the text you sent and no
-  mentions, though the board resolves them and they notify. Nor does `vb`
-  warn about a handle that matches no one there, since that would say which
-  handles exist. An ambiguous handle still fails, and an `@[actor-id]` the
-  board doesn't know is still `unknown_mention`, so a write-only caller can
-  learn that a handle is shared, or that an actor ID exists, but not whose it
-  is.
+  channel. Anyone else sees the authors, the actors mentioned by ID
+  (`@[actor-id]`), and the reactors of what they can read, and themselves. A
+  post in a channel you can't read comes back with the text you sent. A
+  mention is text no write checks, so a handle that's shared, one no one has,
+  and an actor ID the board doesn't know all post alike: no write says which
+  ones exist.
 - **Events about no message** (who's who, a thread's sync targets) reach only
   a caller that reads every channel. Events you can't see still advance an SSE
   stream's cursor with a bare `id:`.
