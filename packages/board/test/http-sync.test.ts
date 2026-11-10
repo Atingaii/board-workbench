@@ -513,6 +513,8 @@ describe("an imported platform user's handle", () => {
     await imported(support, malte, 'one')
     await imported(www, malte, 'two')
     await imported(www, { ...malte, id: 'slack-eu:user:U_SHRUG', handle: '¯\\_(ツ)_/¯', name: 'Shrug' }, 'three')
+    await imported(support, { ...malte, id: 'slack-eu:T_EU:U0JURGEN', handle: 'Jürgen', name: 'Jürgen' }, 'four')
+    await imported(support, { ...malte, id: 'slack-eu:T_EU:U0STAR', handle: '***', name: 'Star' }, 'five')
     // The board's own sync's user is themselves, as Slack names them.
     await team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hi', user: 'U_ADA', name: 'Ada' }) }))
     const julian = await julianOn(team.fetch)
@@ -520,9 +522,11 @@ describe("an imported platform user's handle", () => {
     const actors = (await (await vbOn(team))(['actors'])).stdout.split('\n').filter((line) => line.includes('slack'))
     expect(actors.sort()).toEqual([
       '@Ada  Ada  slack:user:U_ADA',
+      '@support/jurgen  Jürgen via support (preview)  vercel:project:prj_support:preview+slack-eu:T_EU:U0JURGEN',
       '@support/malte-ubl  Malte Ubl via support (preview)  vercel:project:prj_support:preview+slack-eu:user:U_MALTE',
+      '@support/t_eu-u0star  Star via support (preview)  vercel:project:prj_support:preview+slack-eu:T_EU:U0STAR',
       '@www/malte-ubl  Malte Ubl via www  vercel:project:prj_www:production+slack-eu:user:U_MALTE',
-      '@www/u_shrug  Shrug via www  vercel:project:prj_www:production+slack-eu:user:U_SHRUG',
+      '@www/user-u_shrug  Shrug via www  vercel:project:prj_www:production+slack-eu:user:U_SHRUG',
     ])
   })
 

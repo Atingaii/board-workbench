@@ -371,7 +371,7 @@ function actorView(actor: ApiActor, view?: ApiActorView): ActorView & { id: stri
   if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null, verified: true }
   if (profile?.platform) {
     const { userId, platform, key } = profile.platform
-    const handle = importedHandleOf(view?.handle ?? userId.slice(userId.lastIndexOf(':') + 1), principal, view, userId)
+    const handle = importedHandleOf(view?.handle ?? '', principal, view, userId)
     return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view), platform: view?.platform ?? platform ?? key, verified: true }
   }
   const base =

@@ -246,10 +246,11 @@ Handles are display hints, not reservations:
 - **A platform user's** is their login or display name there, for the
   board's own sync. One a sync elsewhere imports is under that project's name,
   in every environment: support's Malte is `support/malte`, and www's
-  `www/malte`. The part after `/` is made typable: lowercased, every run of
-  anything but letters, digits, `.`, `_`, and `-` as one `-`, and the ends
-  trimmed, so "Malte Ubl" is `support/malte-ubl` (their ID on the platform when
-  nothing is left).
+  `www/malte`. The part after `/` is made typable: accents taken off,
+  lowercased, every run of anything but letters, digits, `.`, `_`, and `-` as
+  one `-`, and the ends trimmed, so "Jürgen Ubl" is `support/jurgen-ubl`. When
+  nothing is left, it's their ID on the platform, without the sync key, the same
+  way (`T_EU:U0MALTE` is `t_eu-u0malte`).
 
 `vb actors` lists them.
 
