@@ -3,7 +3,7 @@
 // `user:u_jb`, `app:oac_1`, or `project:prj_pong:production`.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
-import { importedHandle } from '../src/contract/profiles.ts'
+import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -813,7 +813,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         ? { id: body.author.id, principal: { type: 'external', id: body.author.id, syncKey: key } }
         : { id: `${owner}+${body.author.id}`, principal, profile: { name: body.author.id, platform: { key, platform: platformOf(owner, key), userId: String(body.author.id).slice(key.length + 1) } } }
       const via = shared.externalImports ? {} : { via: { name: shared.directory.projects[principal.projectId] ?? null, environment: principal.environment }, platform: platformOf(owner, key) }
-      const handle = shared.externalImports || shared.platformHandles ? body.author.handle : importedHandle(shared.directory.projects[principal.projectId] ?? principal.projectId, body.author.handle, body.author.id)
+      const handle = shared.externalImports || shared.platformHandles ? body.author.handle : importedHandle(shared.directory.projects[principal.projectId] ?? principal.projectId, body.author.handle, userIdOf(body.author.id))
       actors.set(author.id, { id: author.id, kind: 'external', handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), ...via, lastSeenAt: now() })
       if (body.op === 'post') {
         const landed = body.id !== undefined ? importIds.get(`${owner}|${body.id}`) : undefined

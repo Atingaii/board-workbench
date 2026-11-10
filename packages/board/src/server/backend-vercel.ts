@@ -425,7 +425,7 @@ function actorView(actor: ApiActor, view?: ApiActorView, project?: string): Acto
   if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null }
   if (profile?.platform) {
     const { userId, platform, key } = profile.platform
-    const handle = importedHandleOf(view?.handle ?? userId.slice(userId.lastIndexOf(':') + 1), principal, view, userId, project)
+    const handle = importedHandleOf(view?.handle ?? '', principal, view, userId, project)
     return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view, project), platform: view?.platform ?? platform ?? key }
   }
   if (profile) return { id: actor.id, kind: 'agent', handle: profile.name, name: profile.name, avatar: profile.avatar ?? null, via: viaFor(principal, view, project) }

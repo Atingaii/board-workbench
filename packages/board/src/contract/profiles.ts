@@ -12,17 +12,18 @@ export function platformProfile(profile: string | null): { key: string; user: st
 
 /**
  * A platform user's handle as board's mention syntax takes it (`NAME` in `mentions.ts`), so anyone
- * can type it: lowercased, each run of anything but `a-z`, `0-9`, `.`, `_`, and `-` as one `-`, and
- * `-`, `.`, and `_` trimmed from the ends. "Malte Ubl" is `malte-ubl`. One with nothing left is
- * their ID on the platform, the same way (`slack-eu:user:U0456` is `u0456`).
+ * can type it: diacritics taken off (`ü` is `u`), lowercased, each run of anything but `a-z`, `0-9`,
+ * `.`, `_`, and `-` as one `-`, and `-`, `.`, and `_` trimmed from the ends. "Jürgen Ubl" is
+ * `jurgen-ubl`. One with nothing left is their ID on the platform, without the sync key, the same
+ * way: `T_EU:U0MALTE` is `t_eu-u0malte`. Vercel's API names them by the same rule.
  */
-export function typableHandle(handle: string, id: string): string {
-  return typable(handle) || typable(id.slice(id.lastIndexOf(':') + 1)) || typable(id)
+export function typableHandle(handle: string, userId: string): string {
+  return typable(handle) || typable(userId)
 }
 
 /** `typableHandle`'s rule on one value, in a single pass: a trim by regex backtracks on long runs. */
 function typable(value: string): string {
-  const dashed = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+  const dashed = value.normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
   let start = 0
   let end = dashed.length
   while (start < end && '-._'.includes(dashed[start]!)) start++
@@ -30,11 +31,15 @@ function typable(value: string): string {
   return dashed.slice(start, end)
 }
 
+/** A platform user's ID there, without the sync key they came through: `T_EU:U0MALTE` of `slack-eu:T_EU:U0MALTE`. */
+export const userIdOf = (id: string): string => id.slice(id.indexOf(':') + 1)
+
 /**
  * A platform user's handle as a principal's sync imported them: the principal's name (a project's,
- * in every environment), then theirs, typable: `support/malte-ubl`.
+ * in every environment), then theirs, typable: `support/malte-ubl`. `userId` is theirs on the
+ * platform, without the sync key.
  */
-export const importedHandle = (principal: string, handle: string, id: string): string => `${principal}/${typableHandle(handle, id)}`
+export const importedHandle = (principal: string, handle: string, userId: string): string => `${principal}/${typableHandle(handle, userId)}`
 
 /** An actor ID's principal and profile: `vercel:user:u_1+claude` is `vercel:user:u_1` with `claude`. */
 export function actorParts(actor: string): { principal: string; profile: string | null } {

@@ -1125,10 +1125,13 @@ through the sync that speaks for them, under the key it imported them through.
     `support/malte`, in every environment of project `support`. The handle has
     no `@<env>`, which mention syntax can't take; the environment shows only in
     the name (**Malte via support (preview)**). The part after `/` is typable:
-    lowercased, each run of anything but `a-z`, `0-9`, `.`, `_`, and `-` turned
-    into one `-`, and `-`, `.`, and `_` trimmed from the ends, so "Malte Ubl" is
-    `support/malte-ubl`; when nothing is left, it's the user's ID on the
-    platform, the same way (`u0456`). Vercel's API names them by the same rule,
+    diacritics taken off (NFKD, then combining marks removed), lowercased, each
+    run of anything but `a-z`, `0-9`, `.`, `_`, and `-` turned into one `-`,
+    and `-`, `.`, and `_` trimmed from the ends, so "Jürgen Ubl" is
+    `support/jurgen-ubl`. When nothing is left, it's the user's ID on the
+    platform without the sync key, the same way: `T_EU:U0MALTE` is
+    `t_eu-u0malte`. A principal's agents and platform users can share a handle
+    (`support/claude`): their IDs differ. Vercel's API names them by the same rule,
     and `vercel()` composes it from the profile's project name (or its ID) for
     an API that names them as their platform does.
 - **Syntax:**
