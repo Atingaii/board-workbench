@@ -1151,7 +1151,7 @@ through the sync that speaks for them, under the key it imported them through.
   - **`@[email]`:** looked up when it posts (Slack's `users.lookupByEmail`, which
     needs `users:read.email`), each answer kept a few minutes. One the platform
     finds is mentioned natively; one it doesn't, or a platform that can't look
-    emails up, goes out as written.
+    emails up, goes out as the plain email (`ada@vercel.com`).
   - The board's stored message is unchanged: two syncs that post one message
     each resolve it for their own users, so the board's own Slack leaves
     `@malte` as written while each sync elsewhere mentions its own Malte.

@@ -1409,7 +1409,7 @@ describe('vercel()', () => {
     const posted = (platform: typeof pongSlack) => platform.channelPosts.map((post) => JSON.parse(post.text).markdown).filter((text: string) => text.includes('have a look'))
     await vi.waitFor(() => expect([posted(pongSlack), posted(webSlack)]).toEqual([
       ['**Julián Benegas**: <@U_M1> have a look, cc <@U_ADA>'],
-      ['**Julián Benegas**: <@U_M2> have a look, cc @[ada@vercel.com]'],
+      ['**Julián Benegas**: <@U_M2> have a look, cc ada@vercel.com'],
     ]))
   })
 
