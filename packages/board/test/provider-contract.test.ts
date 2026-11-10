@@ -211,7 +211,8 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
       await test.send({ id: 'r3', kind: 'reaction', added: true })
       await test.send({ id: 'r3', kind: 'reaction', added: true })
       await vi.waitFor(() => expect(test.events.map((event) => event.type)).toEqual(['message', 'reaction.added', 'reaction.removed', 'reaction.added']))
-      expect((await test.read())[0]?.reactions).toEqual({ eyes: [test.author] })
+      // The provider names its user on its platform; the board, under the key it came through.
+      expect((await test.read())[0]?.reactions).toEqual({ eyes: [test.author.replace(/^opaque:/, 'tickets:')] })
       expect(new Set(test.events.map((event) => event.id)).size).toBe(4)
     })
 

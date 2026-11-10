@@ -129,6 +129,38 @@ Board labels never sync out to platforms. Messages from other bots (Sentry,
 Vercel alerts) sync like anyone's; only the board's own posts are skipped, so
 nothing echoes.
 
+## Who an import is by
+
+A platform user is named under the sync key they came through, not the
+platform: `slack:user:U0456` through key `slack`, `slack-eu:user:U0456` through a
+key `slack-eu` for a second Slack workspace, shown with Slack's logo either way.
+On `local()`, the board's own sync checks each platform webhook itself, so what
+it imports is by the platform user: `slack:user:U0456`. Every other sync, a
+project that registers one on the board and every sync on Vercel's board, only
+says who wrote a message, so what it imports is by that project's profile of the
+user, `<project>+<sync key>:<user>`, and shows through the project:
+
+```text
+$ vb read firehose
+firehose · 2 threads · cursor 6
+
+#2  Malte via support (preview) · 0s
+      ship it, I checked
+      no replies
+
+#6  Ada · 0s
+      the export page is blank
+      no replies
+```
+
+Each sync's Malte is an actor of its own, named only by that sync's imports. A
+mention resolves as each sync posts it, against its own users: support's Malte
+is `@support/malte`, `@malte` renders natively (`<@U0456>`) through the sync
+whose Malte it is, and a
+platform user named by actor only through the key they came through, and of a
+sync elsewhere's only through that sync; any other posts their name. Renaming a key changes its users' IDs. See
+[platform users](../01-board/03-identity.md#platform-users).
+
 ## Targets
 
 A target is `<key>:<channel or thread>`. A channel target starts a new thread

@@ -349,10 +349,10 @@ through the binding's `handle(caller)`, so the middleware sees it.
   `{ '*': 'all', 'security/': [] }` can do neither.
 - **`sync` speaks for platform users.** A caller with it in a channel can write
   there as any Slack, GitHub, or Linear user it names, which is what a
-  deployment that syncs onto this board needs. Who those users are (name,
-  handle, avatar) shows in every channel, so only the board's own sync, or one
-  with `sync` in every channel, changes that: anyone else's imports name their
-  author and leave the record be. g2 gives it to every project on the team:
+  deployment that syncs onto this board needs. They're its word, so they're its
+  own [profiles](./03-identity.md#platform-users) of those users and show
+  through it (`Malte via support`): no sync renames another's, or the board's
+  own sync's. g2 gives it to every project on the team:
   [what `sync` grants](../04-reference/03-http.md#what-sync-grants) says how
   to keep it to the deployments that sync.
 - **`sync` attaches only a platform thread no other board thread has.** Taking
@@ -387,15 +387,15 @@ Reads show only what the caller can read, everywhere:
   filter. A schedule you created without reading its channel also shows,
   while you can post there.
 - **People.** `vb actors` lists everyone for a caller that reads every
-  channel. Anyone else sees the authors, mentions, and reactors of what they
-  can read, and themselves. An ambiguous mention doesn't list who it could be.
-  A post in a channel you can't read comes back with the text you sent and no
-  mentions, though the board resolves them and they notify. Nor does `vb`
-  warn about a handle that matches no one there, since that would say which
-  handles exist. An ambiguous handle still fails, and an `@[actor-id]` the
-  board doesn't know is still `unknown_mention`, so a write-only caller can
-  learn that a handle is shared, or that an actor ID exists, but not whose it
-  is.
+  channel. Anyone else sees the authors, the actors mentioned by ID
+  (`@[actor-id]`), and the reactors of what they can read, and themselves. A
+  post in a channel you can't read comes back with the text you sent, and
+  read back later (`GET /posts/:id`, your schedules), each actor it mentions
+  but you shows as `@…`. A mention is text no write checks, so a handle that's
+  shared, one no one has, and an actor ID the board doesn't know all post
+  alike: no write says which ones exist. Nor does `--mentions`: it finds
+  someone through their other name (their handle for their ID, or the other
+  way round) only for a caller that reads every channel.
 - **Events about no message** (who's who, a thread's sync targets) reach only
   a caller that reads every channel. Events you can't see still advance an SSE
   stream's cursor with a bare `id:`.

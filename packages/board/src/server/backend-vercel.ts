@@ -4,6 +4,7 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
+import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
@@ -22,8 +23,19 @@ type ApiPrincipal =
   | { type: 'user'; userId: string; clientId?: string }
   | { type: 'app'; clientId: string }
   | { type: 'project'; projectId: string; environment: string }
+  /** An imported message's author as the API named it before platform profiles: the platform user alone. */
   | { type: 'external'; id: string; syncKey: string }
-type ApiActor = { id: string; principal: ApiPrincipal; profile?: { name: string; avatar?: string }; session?: string }
+/**
+ * Who wrote something. An imported message's author is the importing project with a platform profile:
+ * `<project's principal>+<key>:<user>`, its `profile.platform` the sync key, the platform that key was
+ * registered with, and the user's ID there.
+ */
+type ApiActor = {
+  id: string
+  principal: ApiPrincipal
+  profile?: { name: string; avatar?: string; platform?: { key: string; platform?: string; userId: string } }
+  session?: string
+}
 type ApiChannel = { id: string; name: string }
 type ApiThread = {
   id: string
@@ -88,7 +100,19 @@ type ApiSchedule = {
 }
 /** A file on the board: `messageId` once a post carries it. */
 type ApiAttachment = Attachment & { boardId: string; sha256: string; state: 'pending' | 'ready'; messageId?: string }
-type ApiActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'; handle: string; name?: string; avatar?: string }
+/**
+ * On a platform user a project's sync imported, `via` is that project's name, where the API knows it,
+ * and its environment, and `platform` the platform its sync key was registered with.
+ */
+type ApiActorView = {
+  id: string
+  kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'
+  handle: string
+  name?: string
+  avatar?: string
+  via?: { name?: string | null; environment?: string | null }
+  platform?: string
+}
 type ApiChange = {
   type: string
   channelId: string
@@ -292,6 +316,42 @@ function principalId(principal: ApiPrincipal): string {
   return `vercel:project:${principal.projectId}:${principal.environment}`
 }
 
+/** A principal from a board actor ID, `vercel:project:prj_1:preview+slack:user:U1` say, or null for one the API doesn't name. */
+function principalFrom(actor: string): ApiPrincipal | null {
+  const id = actorParts(actor).principal
+  const project = /^vercel:project:([^:]+):([^:]+)$/.exec(id)
+  if (project) return { type: 'project', projectId: project[1]!, environment: project[2]! }
+  if (id.startsWith('vercel:user:')) return { type: 'user', userId: id.slice('vercel:user:'.length) }
+  if (id.startsWith('vercel:app:')) return { type: 'app', clientId: id.slice('vercel:app:'.length) }
+  return null
+}
+
+/**
+ * Who an actor with a profile acts through, as board shows it: a project by the name the API's view
+ * gives it, or its ID, in its environment; a person by their username, which the API puts before an
+ * agent's name in its handle (`julian/claude`); anyone else by a short form of their ID.
+ */
+function viaFor(principal: ApiPrincipal, view?: Pick<ApiActorView, 'handle' | 'via'>): Via {
+  const named = view?.via?.name ?? null
+  if (principal.type === 'project') return { name: named ?? principal.projectId, environment: view?.via?.environment ?? principal.environment }
+  if (principal.type === 'external') return { name: named ?? principal.id, environment: null }
+  const slash = view?.handle.indexOf('/') ?? -1
+  const username = principal.type === 'user' && slash > 0 ? view!.handle.slice(0, slash) : null
+  return { name: named ?? username ?? shortName(principal), environment: null }
+}
+
+/**
+ * A platform user's handle as a project's sync imported them, `support/malte-ubl`, at most 128
+ * characters as the API keeps it: as the API names them, or from an API that names them as their
+ * platform does, under their project's name.
+ */
+const importedHandleOf = (handle: string, principal: ApiPrincipal, view: Pick<ApiActorView, 'handle' | 'via'> | undefined, userId: string) =>
+  handle.includes('/') ? underPrincipal(handle.slice(0, handle.indexOf('/')), handle.slice(handle.indexOf('/') + 1)) : importedHandle(viaFor(principal, view).name, handle, userId)
+
+/** A short name for a person or an app the API doesn't name: the start of their ID. */
+const shortName = (principal: Extract<ApiPrincipal, { type: 'user' | 'app' }>) =>
+  principal.type === 'user' ? `user-${principal.userId.slice(0, 6).toLowerCase()}` : `app-${principal.clientId.slice(0, 6).toLowerCase()}`
+
 const authorOf = (actor: ApiActor): Author => ({
   actor: actor.id,
   principal: principalId(actor.principal),
@@ -302,22 +362,28 @@ const authorOf = (actor: ApiActor): Author => ({
 /** Who cancels a schedule when no one did: the API, once its creator can no longer post it, as a local board's scheduler. */
 const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null }
 
-/** The API names nobody, so an actor's handle is its profile, or a short form of its principal. */
-function actorView(actor: ApiActor): ActorView & { id: string } {
-  const { principal } = actor
+/**
+ * An actor where the API doesn't name them: its handle is its profile, or a short form of its
+ * principal, and one with a profile acts through its principal, as `view` names it if there's one.
+ */
+function actorView(actor: ApiActor, view?: ApiActorView): ActorView & { id: string } {
+  const { principal, profile } = actor
   // A platform user a sync imported, by their ID on the platform until the API names them.
   if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null }
+  if (profile?.platform) {
+    const { userId, platform, key } = profile.platform
+    const handle = importedHandleOf(view?.handle ?? '', principal, view, userId)
+    return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view), platform: view?.platform ?? platform ?? key }
+  }
   const base =
-    principal.type === 'user'
-      ? `user-${principal.userId.slice(0, 6).toLowerCase()}`
-      : principal.type === 'app'
-        ? `app-${principal.clientId.slice(0, 6).toLowerCase()}`
-        : principal.environment === 'production'
-          ? principal.projectId
-          : `${principal.projectId}@${principal.environment}`
-  const handle = actor.profile?.name ?? base
-  const kind = actor.profile ? 'agent' : principal.type === 'user' ? 'person' : principal.type === 'project' ? 'deployment' : 'workflow'
-  return { id: actor.id, kind, handle, name: handle, avatar: actor.profile?.avatar ?? null }
+    principal.type === 'user' || principal.type === 'app'
+      ? shortName(principal)
+      : principal.environment === 'production'
+        ? principal.projectId
+        : `${principal.projectId}@${principal.environment}`
+  const handle = profile?.name ?? base
+  const kind = profile ? 'agent' : principal.type === 'user' ? 'person' : principal.type === 'project' ? 'deployment' : 'workflow'
+  return { id: actor.id, kind, handle, name: handle, avatar: profile?.avatar ?? null, ...(profile ? { via: viaFor(principal, view) } : {}) }
 }
 
 /** A message's labels just before a change, from what they are after it and what it changed. */
@@ -651,8 +717,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     const kind = found && apiKind(found.kind)
     // The API names a project or an app by its ID, and an agent under one after it: board's names say more.
-    if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor)
-    return { id: actor.id, kind, handle: found.handle, name: found.name ?? found.handle, avatar: found.avatar ?? null }
+    if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor, found)
+    const via = actor.profile && actor.principal.type !== 'external' ? { via: viaFor(actor.principal, found) } : {}
+    const platform = found.platform ?? actor.profile?.platform?.platform
+    const user = actor.profile?.platform
+    const handle = user && actor.principal.type !== 'external' ? importedHandleOf(found.handle, actor.principal, found, user.userId) : found.handle
+    return { id: actor.id, kind, handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...via, ...(platform ? { platform } : {}) }
   }
 
   async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
@@ -666,7 +736,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       thread: message.threadId,
       labels: labelsOf(message),
       reactions: message.deletedAt === undefined ? await reactors(who, message) : {},
-      mentions: [],
       by: authorOf(message.createdBy),
       noSync: message.noSync ?? false,
       origin: originOf(message.origin),
@@ -806,7 +875,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }
       for (const id of ids) named.add(id)
     }
-    return (actor) => named.has(actor.id) || named.has(principalId(actor.principal)) || (actor.profile !== undefined && named.has(actor.profile.name))
+    // A profile name covers that agent of anyone's; a platform user a sync imported is only ever themselves.
+    return (actor) => named.has(actor.id) || named.has(principalId(actor.principal)) || (actor.profile !== undefined && !actor.profile.platform && named.has(actor.profile.name))
   }
 
   /**
@@ -1003,11 +1073,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     switch (change.type) {
       case 'message.posted':
         type = 'message.posted'
-        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: message.noSync, mentions: [], by, origin: message.origin, from: message.from, attachments: message.attachments, links: message.links }
+        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: message.noSync, by, origin: message.origin, from: message.from, attachments: message.attachments, links: message.links }
         break
       case 'message.edited':
         type = 'message.edited'
-        payload = { ...base, text: message.text, mentions: [], by, from }
+        payload = { ...base, text: message.text, by, from }
         break
       case 'message.deleted':
         type = 'message.deleted'
@@ -1218,7 +1288,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (by === 'me') return [await actorOf(who)]
     if (by.startsWith('vercel:')) return [by]
     const listed = await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')
-    const named = listed.filter((actor) => actor.handle === by || actor.id.endsWith(`+${by.toLowerCase()}`)).map((actor) => actor.id)
+    const named = listed.filter((actor) => actor.handle === by || (!by.includes(':') && actor.id.endsWith(`+${by.toLowerCase()}`))).map((actor) => actor.id)
     if (named.length === 0) throw new HttpError(400, 'bad_watcher', `--by ${by}: nobody here goes by that yet: name them by their actor ID`)
     return named
   }
@@ -1495,7 +1565,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** An import as the API takes it: a channel by its ID, and a reply's `after` as its sequence in the thread. */
   async function importBody(who: Who, body: Protocol['syncImport']['input']): Promise<Record<string, unknown>> {
-    if (body.op === 'seen') return { op: 'seen', operationId: operationId(), author: platformUser(body.author) }
     const base = { op: body.op, operationId: operationId(), author: platformUser(body.author), ...(body.from !== undefined ? { from: body.from } : {}) }
     if (body.op === 'post') {
       let after: number | undefined
@@ -1597,6 +1666,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { view: named } = found
       // The API names you by your account: your username, and an agent's profile under it.
       const shown = named ? { kind: apiKind(named.kind), handle: named.handle, name: named.name ?? named.handle, avatar: named.avatar ?? null } : actorView(found.actor)
+      const via = found.actor.profile && found.actor.principal.type !== 'external' ? { via: viaFor(found.actor.principal, named) } : {}
       // What these credentials may do, and until when, as the API says; without a word, what any it lets in may.
       return {
         actor: found.actor.id,
@@ -1606,6 +1676,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         name: shown.name,
         avatar: shown.avatar,
         profile: found.actor.profile?.name ?? null,
+        ...via,
         session: found.actor.session ?? null,
         expiresAt: expiryOf(found.expiresAt),
         can: canOf(found.can),
@@ -1625,13 +1696,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async actors(caller, _input, signal) {
       const who = whoOf(caller)
-      const listed = (await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors', {}, signal)).map((actor) => ({
-        id: actor.id,
-        kind: apiKind(actor.kind),
-        handle: actor.handle,
-        name: actor.name ?? actor.handle,
-        avatar: actor.avatar ?? null,
-      }))
+      const listed = (await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors', {}, signal)).map((actor) => {
+        const { profile } = actorParts(actor.id)
+        const principal = profile === null ? null : principalFrom(actor.id)
+        const user = platformProfile(profile)
+        return {
+          id: actor.id,
+          kind: apiKind(actor.kind),
+          handle: principal && user ? importedHandleOf(actor.handle, principal, actor, user.user) : actor.handle,
+          name: actor.name ?? actor.handle,
+          avatar: actor.avatar ?? null,
+          ...(principal ? { via: viaFor(principal, actor) } : {}),
+          ...(actor.platform ? { platform: actor.platform } : {}),
+        }
+      })
       return { actors: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
     },
     async messages(caller, query, signal) {
