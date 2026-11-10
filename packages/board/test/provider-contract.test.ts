@@ -307,10 +307,14 @@ describe('who a post is from', () => {
         caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' }),
         caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur', 'x-board-avatar': 'https://example.com/lemur.png' }),
       ]
+      // What the board's view of each author says as it posts: sync reads the same from `/actors`.
+      const authors: boolean[] = []
       for (const [i, writer] of writers.entries()) {
-        await writer('POST', '/messages', { channel: 'tickets', text: `post ${i}` })
+        const { message } = (await writer('POST', '/messages', { channel: 'tickets', text: `post ${i}` })).body as { message: { author: { verified?: true } } }
+        authors.push(message.author.verified ?? false)
         await vi.waitFor(() => expect(provider.posts).toHaveLength(i + 1))
       }
+      expect(authors).toEqual(verified ? [true, false, true] : [false, false, false])
       return provider.posts.map((post) => [post.body.as, post.body.markdown])
     }
     expect(await posted(true)).toEqual([
