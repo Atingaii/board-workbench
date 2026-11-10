@@ -530,6 +530,17 @@ describe("an imported platform user's handle", () => {
     ])
   })
 
+  it('fits a long one under its project, so the import lands', async () => {
+    const team = testBoard()
+    const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'production'))
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
+    const author = { id: 'slack-eu:user:U_LONG', handle: 'a'.repeat(125), name: 'Long', avatar: null, isBot: false }
+    const imported = await support('POST', '/sync/imports', { op: 'post', author, from: 'slack-eu', channel: 'support', text: 'hi' })
+    expect(imported.status).toBe(200)
+    const { message } = (await (await julianOn(team.fetch))('GET', `/messages/${imported.body.message}`)).body as { message: MessageView }
+    expect(message.author?.handle).toBe(`support/${'a'.repeat(120)}`)
+  })
+
   it("is what mention filters find, and a project's name covers everyone it imported", async () => {
     const team = testBoard()
     const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'production'))

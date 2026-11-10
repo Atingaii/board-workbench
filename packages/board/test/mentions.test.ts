@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { extractMentions } from '../src/contract/mentions.ts'
-import { typableHandle } from '../src/contract/profiles.ts'
+import { importedHandle, typableHandle } from '../src/contract/profiles.ts'
 import type { ActorsState, Message } from '../src/contract/folds.ts'
 import { compileFilter } from '../src/server/feed.ts'
 import { FULL_ACCESS } from '../src/server/access.ts'
@@ -60,5 +60,12 @@ describe("an imported platform user's handle", () => {
     const started = performance.now()
     expect(typableHandle(long, 'user:U_X')).toBe(long)
     expect(performance.now() - started).toBeLessThan(1000)
+  })
+
+  it("fits the 128 characters a handle holds under its principal's name, cut on whole characters with the ends trimmed again", () => {
+    expect(importedHandle('support', 'a'.repeat(125), 'user:U1')).toBe(`support/${'a'.repeat(120)}`)
+    // A cut that ends on a separator trims it off, as the rule does.
+    expect(importedHandle('support', `${'a'.repeat(119)}--b`, 'user:U1')).toBe(`support/${'a'.repeat(119)}`)
+    expect(importedHandle('support', 'Malte Ubl', 'user:U1')).toBe('support/malte-ubl')
   })
 })

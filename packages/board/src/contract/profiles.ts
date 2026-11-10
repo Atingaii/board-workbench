@@ -22,13 +22,28 @@ export function typableHandle(handle: string, userId: string): string {
 }
 
 /** `typableHandle`'s rule on one value, in a single pass: a trim by regex backtracks on long runs. */
-function typable(value: string): string {
-  const dashed = value.normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+const typable = (value: string): string => trimmed(value.normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'))
+
+/** `-`, `.`, and `_` off both ends. */
+function trimmed(value: string): string {
   let start = 0
-  let end = dashed.length
-  while (start < end && '-._'.includes(dashed[start]!)) start++
-  while (end > start && '-._'.includes(dashed[end - 1]!)) end--
-  return dashed.slice(start, end)
+  let end = value.length
+  while (start < end && '-._'.includes(value[start]!)) start++
+  while (end > start && '-._'.includes(value[end - 1]!)) end--
+  return value.slice(start, end)
+}
+
+/** The most characters a handle the board stores has (`Handle` in `schemas.ts`). */
+const HANDLE_MAX = 128
+
+/**
+ * `<principal>/<part>`, at most `HANDLE_MAX` characters: a part too long is cut on whole characters,
+ * and its ends trimmed again.
+ */
+export function underPrincipal(principal: string, part: string): string {
+  const room = HANDLE_MAX - Array.from(principal).length - 1
+  const chars = Array.from(part)
+  return `${principal}/${chars.length <= room ? part : trimmed(chars.slice(0, Math.max(room, 1)).join(''))}`
 }
 
 /** A platform user's ID there, without the sync key they came through: `T_EU:U0MALTE` of `slack-eu:T_EU:U0MALTE`. */
@@ -36,10 +51,10 @@ export const userIdOf = (id: string): string => id.slice(id.indexOf(':') + 1)
 
 /**
  * A platform user's handle as a principal's sync imported them: the principal's name (a project's,
- * in every environment), then theirs, typable: `support/malte-ubl`. `userId` is theirs on the
- * platform, without the sync key.
+ * in every environment), then theirs, typable: `support/malte-ubl`, at most 128 characters. `userId`
+ * is theirs on the platform, without the sync key.
  */
-export const importedHandle = (principal: string, handle: string, userId: string): string => `${principal}/${typableHandle(handle, userId)}`
+export const importedHandle = (principal: string, handle: string, userId: string): string => underPrincipal(principal, typableHandle(handle, userId))
 
 /** An actor ID's principal and profile: `vercel:user:u_1+claude` is `vercel:user:u_1` with `claude`. */
 export function actorParts(actor: string): { principal: string; profile: string | null } {
