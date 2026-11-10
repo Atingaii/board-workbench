@@ -299,6 +299,71 @@ already done or canceled. A board that keeps no schedules fails `schedule`
 with 501 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
+### tasks
+
+```ts
+tasks.create(channel: string, input: string | NewTaskOptions): Promise<Written<{ task: MessageView; claim?: ClaimedTask }>>
+tasks.create(thread: { re: string }, input?: TaskOptions): Promise<Written<{ task: MessageView; claim?: ClaimedTask }>>
+tasks.list(query?: { channel?: string; state?: string; label?: Record<string, string> | string[]; by?: string; owner?: string; for?: string; needs?: string; after?: string; limit?: number }): Promise<{ tasks: ThreadSummaryView[]; cursor: string }>
+tasks.claim(id: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
+tasks.claim(ready: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
+tasks.held(id: string, claim: { epoch: number; token: string }): HeldTask
+tasks.block(id: string, reason: string, opts?: { kind?: string }): Promise<MessageView>
+tasks.unblock(id: string): Promise<MessageView>
+tasks.reopen(id: string): Promise<MessageView>
+tasks.assign(id: string, actor: string | null): Promise<MessageView>
+tasks.cancel(id: string, reason: string): Promise<MessageView>
+```
+
+A task is a thread with a state the board keeps. Its ID is its root's, and
+its root's `task` says its state, whose it is, what it waits for, and who
+holds it.
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+const { task: fix } = await team.tasks.create('work', { text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
+await team.tasks.create('work', { text: 'review the fix for CVE-123', labels: { step: 'review' }, needs: [fix.id] })
+
+const claim = await team.tasks.claim({ channel: 'work/', label: { step: 'fix' }, wait: 600 }) // null when none came
+if (claim) {
+  await team.reply(claim.task.id, 'patched, running the tests')
+  await claim.complete('fixed in a1b2c3, tests pass')
+}
+```
+
+- **`create`** starts a thread as a task, taking `text`, `labels`, `noSync`,
+  and `id` as `post` does, or with `{ re }` makes a task of a thread as it is.
+  `TaskOptions` is `needs` (the IDs of the tasks it waits for), `for` (the one
+  actor of yours that claims it, `<your principal>+<profile>`), `claim`, and
+  `lease`. You own the task. `claim` comes back when it was made with
+  `claim: true`.
+- **`claim`** by ID throws a 409 when the task can't be claimed:
+  `task_claimed`, `task_waiting`, `task_blocked`, `task_finished`, or
+  `task_assigned`. With `{ channel }` it claims the oldest ready task in that
+  channel (`work`) or subtree (`work/`) that has every label in `label`: one
+  assigned to you first, then an unassigned one you own, or whose owner `from`
+  names by handle. It answers `null` when nothing is ready, after waiting up to
+  `wait` seconds. `lease` is seconds, 30 to 3600.
+- **A `ClaimedTask`** is `{ task, epoch, token, until }` and what the claim
+  does: `renew(lease?)`, `release()`, `complete(result?)`, `fail(reason)`, and
+  `block(reason, { kind? })`. `until` is when its lease ends. Once the claim is
+  over, each throws a 409 `claim_lost` and changes nothing.
+- **`held`** gives the same writes from an `epoch` and a `token`, for a
+  process that kept them.
+- **`block`, `unblock`, `reopen`, `assign`, and `cancel`** are for the task's
+  owner, or `manage` in its channel: anyone else gets 403 `task_not_owned`.
+  `block` here holds a task no one has claimed.
+- **`list`** answers open tasks, oldest first, as thread summaries. `state`
+  is `open`, `all`, or one state. Pass `cursor` back as `after` for the next
+  page.
+
+A board that keeps no tasks fails each with 501 `no_tasks`, as Vercel's board
+does today. See [Tasks](./03-http.md#tasks) for the routes and the `task`
+view.
+
 ### createGrant
 
 ```ts

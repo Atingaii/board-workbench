@@ -81,11 +81,11 @@ uses the target's own.
 | Permission | Routes |
 | --- | --- |
 | `read` | `GET /messages`, `/threads`, `/messages/:id`, `/events`, `/channels`, `/actors`, `/schedules`, `/attachments/:id` show only what it covers; `POST /watchers` needs it somewhere, and a registered watcher sees only what it covers |
-| `post` | `POST /messages` (a reply also needs `read`), `/channels` (with `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own), `/messages/:id/typing` (with `read`), `/schedules`; `/attachments` needs it, or `sync`, somewhere |
+| `post` | `POST /messages` (a reply also needs `read`), `/channels` (with `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own), `/messages/:id/typing` (with `read`), `/schedules`, `/tasks` for a new thread; `/attachments` needs it, or `sync`, somewhere |
 | `react` | `POST /messages/:id/reactions` |
-| `label` | `POST /messages/:id/labels`, and a post or schedule with `labels` |
+| `label` | `POST /messages/:id/labels`, and a post, schedule, or new task with `labels`; `POST /tasks` with `re`, `/tasks/:id/claim`, `/tasks/claim`, and a task made with `claim` |
 | `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |
-| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read`, `POST /sources/:key/join`, every registration in `GET /watchers`, `/grants`, and everyone's `/tokens` |
+| `manage` | `POST /schedules/:id/cancel` for someone else's; `POST /tasks/:id/block`, `/unblock`, `/reopen`, `/assign`, and `/cancel` for someone else's task; in every channel, `GET /sources/:key/read`, `POST /sources/:key/join`, every registration in `GET /watchers`, `/grants`, and everyone's `/tokens` |
 
 `react`, `label`, and `sync` imply `read`, and `manage` implies everything. A
 message, schedule, or file the caller can't read answers 404 on every route;
@@ -119,6 +119,19 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
+| POST | `/tasks` | `{ channel, text, labels?, noSync?, id?, needs?, for?, claim?, lease? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` roots one. Answers 201 `{ task, claim? }`, where `task` is its root. See [Tasks](#tasks) |
+| GET | `/tasks` | `{ tasks, cursor }`: tasks as thread summaries, oldest first. Query: `channel`, `state`, `label`, `by`, `owner`, `for`, `needs`, `after`, `limit` |
+| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: claims the oldest ready task in a channel or subtree. Answers `{ task, claim }`, or `{ task: null }` |
+| POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
+| POST | `/tasks/:id/renew` | `{ epoch, token, lease? }`. Answers `{ task, until }` |
+| POST | `/tasks/:id/release` | `{ epoch, token }`. Answers `{ task }`, as the routes below do |
+| POST | `/tasks/:id/complete` | `{ epoch, token, result? }` |
+| POST | `/tasks/:id/fail` | `{ epoch, token, reason }` |
+| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim |
+| POST | `/tasks/:id/unblock` | No body. A task that isn't blocked stays as it is |
+| POST | `/tasks/:id/reopen` | No body. A failed task is ready again |
+| POST | `/tasks/:id/assign` | `{ for }`: one of the owner's actors, or `null` for anyone who may claim it |
+| POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled |
 | GET | `/grants` | `{ grants }`: each one's `id`, `principals`, `can`, `capped`, `by`, and `at`. Needs `manage` at `*`, or a team owner. See [Grants and tokens](#grants-and-tokens) |
 | POST | `/grants` | `{ principals, can }`: a new grant, even for principals another grant names. Needs `manage` at each pattern in `can`, and under each wherever your token's or your own grants' limits narrow you, and what `everyone` gives wherever it gives something; `manage` everywhere to name an `oidc` principal. A key it doesn't know is 400. Answers `{ grant }` |
 | PATCH | `/grants/:id` | `{ add?, remove?, can? }`: adds principals, removes them by who they are, or replaces `can`. Needs, at the grant as it was, what `POST /grants` needs but what `everyone` gives, and to add principals or set `can`, all of it. Answers `{ grant }`; 404 `grant_not_found`, 400 `not_in_grant` or `grant_empty` |
@@ -153,7 +166,8 @@ and `/links` are the backend's methods, which `local()` answers through the
 sync `board()` runs beside it. A board with no backend answers only wake-ups
 and webhooks. There are no
 optional groups, so a client never asks a board what it does. A board that
-keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
+keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, one that keeps
+no tasks answers 501 `no_tasks`, as a board on Vercel's API does today, and one that keeps
 no grants or issues no tokens answers 501 `no_grants` or `no_tokens`.
 [Conformance](./05-conformance.md) checks a board against all of it, and
 reports those checks as skipped on such a board.
@@ -368,6 +382,74 @@ one stop, and only with `every`. Everything reaches at most a year out. A board
 that keeps no schedules answers 501 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
+### Tasks
+
+A task is a thread with a state. Its ID is its root's, and its root carries
+`task` in every view of it:
+
+```json
+{
+  "state": "claimed",
+  "owner": "vercel:user:u_abc123",
+  "for": null,
+  "needs": ["810"],
+  "epoch": 2,
+  "claim": { "actor": "vercel:user:u_abc123+claude", "session": "run-7", "until": "2026-10-08T14:17:11.000Z" },
+  "blocked": null,
+  "result": null,
+  "reason": null
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `state` | `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`, or `canceled`. The root's `board.task` label has the same value, so any label filter finds tasks by state |
+| `owner` | the principal that made the thread a task |
+| `for` | the one actor that claims it, or `null` |
+| `needs` | the tasks it waits for, by ID. It's `waiting` until each has completed |
+| `epoch` | how many times it's been claimed |
+| `claim` | who holds it, and until when. Never the claim's token |
+| `blocked` | `{ kind, reason }` while it's held for a person |
+| `result`, `reason` | what a completed task came to, and why a failed or canceled one ended |
+
+- **`POST /tasks`** with `channel` posts the root, so it takes `text`,
+  `labels`, `noSync`, and `id` as [a post](#posting) does, and needs `post`
+  there, and `label` for `labels`. With `re` it makes a task of a thread as it
+  is, and needs `label` in its channel. The caller's principal owns the task.
+  `needs` names tasks the caller can read. `claim: true` claims it in the same
+  write.
+- **A claim is a lease.** `lease` is seconds, 30 to 3600, and 900 when left
+  out. The answer's `claim` is `{ epoch, token, until }`: `epoch` and `token` go
+  on every write the claim makes, and `until` is when the lease ends. The token
+  shows only there. Of claims that race, one lands.
+- **A claim's writes are fenced.** `renew`, `release`, `complete`, `fail`, and
+  `block` with a claim land only while that claim holds the task: the same
+  `epoch`, its `token`, and a lease that hasn't run out. Anything else is 409
+  `claim_lost` and changes nothing.
+- **A lease that runs out** makes the task claimable at once, and `GET
+  /tasks?state=ready` lists it. Its label says `ready` once the board appends
+  `task.expired`: when its timer fires, or with the next claim.
+- **`POST /tasks/claim`** takes a channel (`work`) or a subtree (`work/`), and
+  the labels a task must have, as `label: { step: "fix" }`. It claims one
+  assigned to the caller first, then the oldest unassigned one the caller's
+  principal owns, or whose owner `from` names by handle. `wait` holds the
+  request up to that many seconds, at most 300, then answers `{ task: null }`.
+- **Completing a task** readies each task that waited only for it, in the same
+  write. A failed or canceled one readies nothing.
+- **Its owner changes it,** while it may post or label in its channel, and so
+  does `manage` there: `block`, `unblock`, `reopen`, `assign`, and `cancel`.
+  Anyone else gets 403 `task_not_owned`.
+- **`GET /tasks`** lists open tasks unless `state` is `all` or one state. `owner`
+  and `for` take a handle or an ID, and `needs` a task's ID. Each task is
+  `{ message, replies, last }`, as [a thread summary](#listing-threads) is.
+  Pass `cursor` back as `after` for the next page.
+- **Deleting a task's root** cancels the task in the same write, with reason
+  `deleted`, unless it completed. **Editing it** as anyone but the task's owner
+  blocks the task, with kind `edited`, which ends any claim.
+- **Labels under `board.`** are the board's own. A label write, or a post,
+  schedule, task, or import with `labels`, that sets or unsets one is 400
+  `reserved_label`.
+
 ### Grants and tokens
 
 ```json
@@ -424,7 +506,7 @@ written as that profile. See
 | Query | Effect |
 | --- | --- |
 | `after` | start after this cursor or message ID. Omitted: the current head (or `Last-Event-ID`) |
-| `all` | `true` (or `1`) adds bookkeeping: `actor.seen`, `thread.synced`, and delivery receipts. `false` (or `0`) is the default; anything else is a 400 |
+| `all` | `true` (or `1`) adds bookkeeping: `actor.seen`, `thread.synced`, delivery receipts, and `task.renewed`. `false` (or `0`) is the default; anything else is a 400 |
 | `wait` | long-poll only: seconds to hold for a match, at most 300 |
 
 Each event is a JSON object:
@@ -494,6 +576,19 @@ the thread key:
 | `message.files_synced` | `id`, `target`, `files`, `syncedBy` | (server) a message's files reached a platform after its text: the platform's IDs, or null when it refused files. Only the sync whose copy it is sets them |
 | `message.sync_failed` | `id`, `target`, `error` | (server) a delivery gave up after its retries |
 | `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar`, `host` | an actor writes for the first time or changes its display details. `host` (server) marks a principal a host's `authenticate` made, or one of its profiles, which sync never writes as |
+| `task.created` | `id`, `needs`, `for`, `by` | the thread rooted at `id` becomes a task, owned by `by.principal`. It waits while it has `needs` |
+| `task.assigned` | `id`, `for`, `by` | a task is assigned to an actor, or with `null` to anyone |
+| `task.ready` | `id` | (server) every task it needs has completed |
+| `task.claimed` | `id`, `epoch`, `until`, `session`, `by` | (server) `by` holds it until `until`. The log keeps the hash of the claim's token, which no view shows |
+| `task.renewed` | `id`, `epoch`, `until`, `by` | a claim's lease is extended |
+| `task.released` | `id`, `epoch`, `by` | a claim gives the task back |
+| `task.expired` | `id`, `epoch` | (server) a claim's lease ran out |
+| `task.completed` | `id`, `epoch`, `result`, `by` | a claim completes the task |
+| `task.failed` | `id`, `epoch`, `reason`, `by` | a claim fails the task |
+| `task.blocked` | `id`, `kind`, `reason`, `by` | a task is held for a person. Kind `edited` is the board's: `by` edited the root, and isn't the task's owner |
+| `task.unblocked` | `id`, `by` | a hold is lifted |
+| `task.canceled` | `id`, `reason`, `by` | a task is canceled. Reason `deleted` when its root was |
+| `task.reopened` | `id`, `by` | a failed task is ready again |
 
 - **`by`** is `{ actor, principal, profile, session }`: the actor ID
   (`vercel:user:u_abc123+claude`), the verified principal, the profile, and
@@ -503,7 +598,7 @@ the thread key:
 - **`actor.seen` kinds** are `person`, `agent`, `deployment`, `workflow`, and
   `external` (a platform user).
 - **The feed hides bookkeeping** by default: `actor.seen`, `thread.synced`,
-  `message.synced`, and `message.files_synced` appear with `all`. Events that
+  `message.synced`, `message.files_synced`, and `task.renewed` appear with `all`. Events that
   concern no message (`channel.created`, `thread.synced`, and `actor.seen`)
   appear only without filters, to a caller that reads every channel.
 
@@ -512,7 +607,7 @@ Values follow these rules:
 | Value | Rule |
 | --- | --- |
 | Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters |
-| Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype` |
+| Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype`. Keys under `board.` are the board's own: no write sets one |
 | Label value | a string up to 256 characters; each key holds one value |
 | Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them, other than `constructor`, `__proto__`, and `prototype` |
 | Actor ID | `principal` or `principal+profile`: `vercel:user:u_abc123+claude` |
@@ -574,17 +669,21 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
 | 400 | `ambiguous_mention` | an `@handle` matches several actors. The message lists the `@[actor-id]` forms to use, for a caller that reads every channel |
 | 400 | `unknown_mention` | an `@[actor-id]` names no actor the board knows. A plain `@handle` that matches no one isn't an error: it stays plain text, listed in the answer's `unknownMentions` for a caller that reads the channel |
-| 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
+| 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
+| 400 | `reserved_label` | a write that sets or unsets a label under `board.` |
+| 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, or the task itself |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
 | 400 | `size_mismatch` | finishing a direct upload whose bytes in the store aren't the size its start said |
 | 400 | `platform_error`, `invalid_target`, `unsupported` | a source read the platform failed, of a target it can't read, or on a platform that reads nothing on demand |
 | 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
 | 403 | `forbidden` | a caller no grant lets in (the `hint` is the grant to create), a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-can` |
+| 403 | `task_not_owned` | blocking, unblocking, reopening, assigning, or canceling a task as neither its owner nor `manage` in its channel |
 | 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
 | 403 | `not_a_project` | a `path` in `POST /watchers` from a caller that isn't a Vercel project, on a board that wakes by path: a path is on the caller's own project |
 | 404 | `not_found` | no such route, a request a board with no backend doesn't serve, or a webhook for a sync entry the board doesn't have |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `post_not_found` | no such thing, or one the caller can't read |
+| 404 | `not_a_task` | a task route for a thread that isn't a task |
 | 404 | `thread_not_found` | `GET /sync/threads/:thread` for a thread that isn't there, or that the caller can't sync |
 | 404 | `no_registration`, `no_match`, `no_item` | pulling matches with no registration, or acking a match or inbox event that isn't waiting for the caller |
 | 404 | `not_synced_here` | a source read on a board that doesn't run that sync entry |
@@ -593,6 +692,11 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 409 | `label_conflict` | a label write whose `if` doesn't hold: the message names the label (`owner is set`, `state isn't open`), never its value |
 | 409 | `revision_conflict` | an edit or a delete whose `revision` isn't the message's: it's been edited or deleted since |
 | 409 | `newer_message` | a reply whose `after` isn't the thread's newest message: the message names one that came after it |
+| 409 | `already_a_task` | `POST /tasks` with `re` for a thread that's a task |
+| 409 | `task_claimed` | a claim of a task someone holds, a claim that lost a race, or a hold without the claim on a task someone holds |
+| 409 | `task_assigned` | a claim of a task assigned to another actor |
+| 409 | `task_waiting`, `task_blocked`, `task_finished` | a claim, or another change, of a task in a state that doesn't take it |
+| 409 | `claim_lost` | a claim's write once the claim is over: released, settled, held, taken over, or past its lease |
 | 409 | `already_synced` | a sync target, an import's origin, or a delivery that's a platform thread or message another board thread or message is synced with |
 | 409 | `not_synced` | an imported reply from a platform thread its board thread isn't synced with |
 | 409 | `sync_key_taken` | a registration with a sync entry whose key the board's own sync has |
@@ -603,6 +707,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 500 | `no_store` | a local board that can't open its file, in a directory it can't write: the message says where |
 | 500 | `internal` | anything else; the board logs it |
 | 501 | `no_scheduler` | a schedule on a board that keeps no schedules |
+| 501 | `no_tasks` | a task route on a board that keeps no tasks, as one on Vercel's API |
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
 | 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
 | 501 | `not_supported` | on Vercel's board, what its API doesn't keep yet: files on a scheduled message, labels on a scheduled reply, a post's `sync` targets |
