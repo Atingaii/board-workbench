@@ -34,6 +34,8 @@ export default defineConfig([
       index: 'src/server/index.default.ts',
       'index.node': 'src/server/index.ts',
       access: 'src/access/index.ts',
+      // `@vercel/board/schemas`: how a board checks a schema, a value, and a message's blocks, with no imports.
+      schemas: 'src/schemas/index.ts',
       conformance: 'src/conformance/index.ts',
       // `@vercel/board/backend-local`: a board kept in this process, Node only.
       'backend-local': 'src/backend-local/index.ts',

@@ -136,6 +136,8 @@ export const options = {
   profile: { type: 'string', value: 'name', description: 'the profile every request with it writes as' },
   session: { type: 'string', value: 'id', description: 'the session every request with it writes from' },
   expires: { type: 'string', value: 'duration', description: 'how long it lives (default: 30d, at most 90d; 1d and 7d on Vercel\'s board)' },
+  schema: { type: 'string', value: 'json|@file', description: 'its JSON Schema: inline, @<file>, or - for stdin' },
+  description: { type: 'string', value: 'text', description: 'what it holds, in a sentence' },
   port: { type: 'string', value: 'N', description: 'the port to listen on' },
   dir: { type: 'string', value: 'dir', description: 'where the board keeps its log (default: .board/)' },
   'no-inspect': { type: 'boolean', description: "don't start the inspector" },
@@ -318,6 +320,42 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   },
   {
     group: 'the board',
+    name: 'schemas',
+    description: 'schemas for structured data: versions that never change',
+    arguments: [],
+    options: [],
+    runsWithoutSubcommand: true,
+    examples: [{ name: 'list the schemas', value: 'schemas' }],
+    subcommands: [
+      {
+        name: 'list',
+        default: true,
+        description: "the built-in schemas, then the board's own",
+        arguments: [],
+        options: [],
+        examples: [{ name: 'list the schemas', value: 'schemas list' }],
+      },
+      {
+        name: 'inspect',
+        description: 'one version, with its JSON Schema',
+        arguments: [{ name: 'schema', required: true, description: 'its ID, as schemas shows it (sandbox@1)' }],
+        options: [],
+        examples: [{ name: 'see what a sandbox event holds', value: 'schemas inspect sandbox@1' }],
+      },
+      {
+        name: 'create',
+        description: 'register a version, for good: the same definition again changes nothing',
+        arguments: [{ name: 'schema', required: true, description: 'its name and version, such as sandbox@1' }],
+        options: [option('schema'), option('description')],
+        examples: [
+          { name: 'register a version from a file', value: "schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'" },
+          { name: 'or inline', value: `schemas create ping@1 --schema '{"type":"object","required":["at"],"properties":{"at":{"type":"string","format":"date-time"}}}'` },
+        ],
+      },
+    ],
+  },
+  {
+    group: 'the board',
     name: 'actors',
     description: 'actors and their handles',
     arguments: [],
@@ -348,10 +386,11 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'post',
     description: 'a new thread in a channel, or with an ID, a reply in its thread',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('label', 'label it', 'k=v'), option('text-file'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
+    options: [option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
     examples: [
       { name: 'start a thread', value: 'post dev "deploys are green again"' },
       { name: 'start a labeled thread', value: 'post dev "checkout times out" --label kind=bug' },
+      { name: 'post data that matches a schema', value: `post deploys --schema sandbox@1 '{"id":"sbx-123","action":"started"}'` },
     ],
   },
   {
@@ -359,7 +398,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'reply',
     description: 'a reply in a thread',
     arguments: [id('the ID of a message in the thread'), text()],
-    options: [option('label', 'label it', 'k=v'), option('text-file'), option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
+    options: [option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
     examples: [
       { name: 'reply in a thread', value: 'reply 812 "on it"' },
       { name: 'reply with a label', value: 'reply 812 "fixed in a1b2c3" --label step=fix' },
@@ -371,7 +410,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'schedule',
     description: 'post later, as you: once (--in or --at), or repeating (--every) until a stop or until canceled',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('text-file'), option('attach'), option('no-sync')],
+    options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('no-sync')],
     examples: [
       { name: 'reply in a thread tomorrow', value: 'schedule 812 "still broken?" --in 1d' },
       { name: 'post every morning', value: 'schedule dev "standup" --at 2026-11-02T09:00:00Z --every 1d' },
@@ -400,7 +439,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'edit',
     description: "change a message's text",
     arguments: [id(), { name: 'text', required: false, description: 'its new text: - reads it from stdin, and it may be left out when you --text-file' }],
-    options: [option('text-file'), option('if-revision')],
+    options: [option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('if-revision')],
     examples: [
       { name: 'fix a typo', value: 'edit 812 "deploys are green again"' },
       { name: 'only if no one changed it since you read it', value: 'edit 812 "step 3 of 5" --if-revision 820' },

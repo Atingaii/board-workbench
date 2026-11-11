@@ -51,6 +51,7 @@ const withCan =
 /** The checks of a caller narrowed with x-board-can, which a run that can't send the header skips. */
 const NARROWED = [
   'narrows a caller to what its x-board-can says',
+  'refuses a caller narrowed with x-board-can a schema, and lets it read them',
   "refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking",
   "refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox",
 ]
@@ -131,13 +132,13 @@ describe('the conformance kit', () => {
     const client = await clientOf(board.fetch)
     const report = await conformance(client, { withToken: withToken(board.fetch), withCan: withCan(board.fetch) })
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
-    expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => check.status)).toEqual(['passed', 'passed', 'passed'])
+    expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => check.status)).toEqual(['passed', 'passed', 'passed', 'passed'])
     expect(skipped(report)).toEqual([NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM])
     expect(tokenUse(report)?.status).toBe('passed')
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'tokens', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'tokens', 'schemas', 'attachments', 'watchers', 'sync'])
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
   })
@@ -146,7 +147,7 @@ describe('the conformance kit', () => {
     const team = testBoard({ scheduler: fakeQueue().scheduler })
     const report = await conformance(team, { withToken: withToken(team.fetch) })
     // The board's own code needs no grant to keep it in what it closes, and no proxy narrows it.
-    expect(skipped(report)).toEqual([[NARROWED[0], NO_CAN], NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM, [NARROWED[1], NO_CAN], [NARROWED[2], NO_CAN]])
+    expect(skipped(report)).toEqual([[NARROWED[0], NO_CAN], NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM, [NARROWED[1], NO_CAN], [NARROWED[2], NO_CAN], [NARROWED[3], NO_CAN]])
     expect((await team.me()).actor).toBe('board:client')
   })
 
@@ -165,6 +166,25 @@ describe('the conformance kit', () => {
     expect(tokenUse(await conformance(await clientOf(board.fetch)))).toMatchObject({ status: 'skipped', detail: "this run can't call the board with a token's secret" })
   })
 
+  it('fails a board that says it made a schema version that was there, or takes another definition for one', async () => {
+    const registers = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith('registers a schema version once'))
+    const plain = testBoard({ scheduler: fakeQueue().scheduler })
+    expect(registers(await conformance(await clientOf(plain.fetch)))).toMatchObject({ status: 'passed' })
+
+    const always = broken(plain.fetch, { body: (text) => text.replace('"created":false', '"created":true') })
+    expect(registers(await conformance(await clientOf(always)))).toMatchObject({ status: 'failed', detail: 'whether registering the same definition again made one: expected false, got true' })
+
+    // A board that answers the version it has when it's sent another definition, as if it were the same.
+    const lenient: Fetch = async (request) => {
+      const response = await plain.fetch(request.clone())
+      if (request.method !== 'POST' || !new URL(request.url).pathname.endsWith('/schemas') || response.status !== 409) return response
+      const { name, version } = await request.json()
+      const kept = await plain.fetch(new Request(`${BOARD_URL}/schemas/${name}@${version}`, { headers: request.headers }))
+      return Response.json({ ...(await kept.json()), created: false })
+    }
+    expect(registers(await conformance(await clientOf(lenient)))).toMatchObject({ status: 'failed', detail: 'another definition for a version that is there: expected 409 schema_immutable, and it succeeded' })
+  })
+
   it('fails a board that ignores x-board-can, and skips its checks where it can\'t send the header', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     // A board that answers as if no proxy narrowed the caller, as one that doesn't read the header does.
@@ -176,6 +196,7 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(board.fetch), { withCan: withCan(ignoring) })
     expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => [check.status, check.detail])).toEqual([
       ['failed', 'what a caller narrowed to read says it may do: expected {"conformance":["read"]}, got {"*":["read","post","react","label","sync","manage"]}'],
+      ['failed', 'registering a schema, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
       ['failed', 'registering watchers, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
       ['failed', 'an import, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
     ])

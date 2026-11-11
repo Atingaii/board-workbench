@@ -43,7 +43,9 @@ const report = await conformance(board({ backend }))
 It goes through a handle, as `vb` and agents do, so a board that passes works
 with them. It writes to one channel, `conformance` (`--channel`, or
 `{ channel }`), with every post kept on the board, labeled with the run's own
-`conformance=<id>`, and deletes what it posted when it's done.
+`conformance=<id>`, and deletes what it posted when it's done. The one schema
+it registers, `conformance@1`, stays: a schema version is never removed, and
+every run registers the same one.
 
 To check that a token does only what its `can` says, it calls the board with
 one it mints, through `withToken(secret)`: a handle on the same board, with
@@ -125,20 +127,22 @@ Then the rest, a group each in the report:
 | `schedules` | schedules a reply a day out, lists it, and cancels it; and keeps a schedule's `noSync`, so its sends stay off every platform |
 | `grants` | grants a project, lists it, and revokes it twice. Makes a second grant for the same principals, adds an app (or without one, a repository) and the project again (joining its environments) by the grant's ID, removes the project whatever its environments, and refuses to remove one it doesn't name (`not_in_grant`) or the last (`grant_empty`). Keeps `can` as written, a pattern with `[]` included. Through `explain`, in `conformance/grants/`: the most specific pattern decides, then the closest principal there, ties add up, `everyone` lets no one in and loses to `all-projects`, and a viewer reads but neither posts nor manages. Names an app and keeps it by client ID, then every app as a group. A token without `manage` changes no grant, and one with it only under `conformance/grants/inner/` only there. A token kept out of a pattern grants no one past it, even once `everyone` is kept out too, and lets no one in while `everyone` gets more than it has somewhere. Skipped when the token can't change the board's grants, when the board mints no tokens (501, 404, or 403), for a caller no grant could keep in a pattern closed to everyone, without a viewer or an app to check (a local board has no apps), for a name the board can't look up, for a member shut out under a lock (a run couldn't lift the lock after), and across teams, which isn't specified yet. The checks that grant to someone besides the project name the `app` in `principals`, or without one the repository. On a board that takes no GitHub or OIDC principal in a grant (400 `unsupported_principal`, as Vercel's API answers), they're skipped without an app, and so is the one that explains for a repository's runs, which nothing lets in |
 | `tokens` | mints a token for an hour that reads the channel, checks its `can` and its expiry, lists it without its secret, and revokes it twice. Then, with another one's secret: `/me` names its minter and only what it may read, it reads the channel and can't post there, and once it's revoked, it's refused with a 401. Skipped where the run's caller mints no tokens (403 `unsupported_principal`: on Vercel's board, anyone but a deployment or a board token) |
+| `schemas` | lists the built-in schemas first and reads `git-commit@1` by its ID, with 404 `schema_not_found` and 400 `invalid_schema_id` for one that isn't there and an ID that names none. Registers `conformance@1`, then again with its keys in another order (`created: false`), and is refused another definition or description for it (409 `schema_immutable`). Is refused a version of a built-in's name (409 `reserved_schema`), and definitions with no object at their root, a `$ref`, a `pattern`, or `uniqueItems` (400 `invalid_schema`). Posts a block of it among prose and one alone, and reads their `blocks` back; one inside a longer fence is text. Is refused a post and an edit whose block doesn't match (400 `invalid_block`), and a post whose block names no schema (400 `schema_not_found`). A caller narrowed to the channel reads them and registers none. The checks that register are skipped for a token that can't |
 | `attachments` | uploads a file, posts it, and downloads it |
 | `watchers` | registers a tail, pulls the match for a post, and acks it. Skipped when the token already has watchers or a sync registered there, since registering replaces them, and on credentials Vercel's API takes no watchers from: anything but a deployment's own, board tokens included (403 `watchers_need_project`) |
 | `sync` | imports a message as a platform user of its own (`conformance:user:<id>`), finds it by its platform IDs, imports it again to the same message, refuses a second root from the same platform thread, records a receipt and reads the copy back, lists where the thread is synced with it, answers 404 for a link no sync there knows, and deletes it. Pushes two events on one platform thread to the sync's inbox, and the first again, then leases them one at a time and in order, each once the one before is acked. Pulls the sync's `@sync` match for a post. Each of these is skipped when the token can't register a sync or `sync` in the channel, or already has watchers or a sync registered. Then, registering nothing: reads a post's and a reply's `noSync` back |
 
 Every board answers all of them: see
 [the whole protocol](./03-http.md#the-whole-protocol). A board may keep no
-schedules, grants, or files, or issue no tokens, and say so: one that answers
+schedules, grants, schemas, or files, or issue no tokens, and say so: one that answers
 one of those groups' checks with a 501 has it skipped, `not kept here`, with
 what the board said. A board that's meant to keep them and doesn't yet answers
 otherwise, and fails: Vercel's boards fail the tokens group until Vercel's API
-keeps tokens. A
+keeps tokens, and a deployment's own credentials fail the schemas group there
+until its API lets a project read its team's schemas. A
 [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own) that
-keeps no grants, schedules, or files answers 501 `no_grants`, `no_scheduler`,
-or `no_files`.
+keeps no grants, schedules, schemas, or files answers 501 `no_grants`,
+`no_scheduler`, `no_schemas`, or `no_files`.
 `vb serve` keeps everything, so it passes every check but four: it has no
 team roles to cap anyone with and no apps, no run can check a member shut out
 under a lock, and grants across teams aren't specified yet.
@@ -148,7 +152,7 @@ under a lock, and grants across teams aren't specified yet.
 ```ts
 type ConformanceReport = {
   url: string
-  checks: { group: 'core' | 'schedules' | 'grants' | 'tokens' | 'attachments' | 'watchers' | 'sync'; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
+  checks: { group: 'core' | 'schedules' | 'grants' | 'tokens' | 'schemas' | 'attachments' | 'watchers' | 'sync'; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
   ok: boolean // nothing failed
 }
 ```

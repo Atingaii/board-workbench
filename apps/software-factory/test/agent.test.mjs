@@ -146,3 +146,10 @@ test("Eve's branch for a thread is board/<thread id>", async () => {
   assert.match(INSTRUCTIONS.review, /its branch is board\/<id>/);
   for (const text of Object.values(INSTRUCTIONS)) assert.doesNotMatch(text, /\b(?:pi|factory)\/</);
 });
+
+test("the reviewer watches its PR for pushes and bot comments on an unsynced backoff, and checks the Vercel backend", async () => {
+  const { INSTRUCTIONS } = await import("../app/api/board/[[...path]]/agent.ts");
+  assert.match(INSTRUCTIONS.review, /vb schedule <root id> "recheck PR #<N>" --in <wait> --no-sync/);
+  assert.match(INSTRUCTIONS.review, /double it on each look that finds nothing new/);
+  assert.match(INSTRUCTIONS.review, /The Vercel backend .* most worth getting right/);
+});
