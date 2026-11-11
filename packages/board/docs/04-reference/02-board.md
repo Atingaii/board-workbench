@@ -357,6 +357,31 @@ await team.revokeToken(token.id)
 
 See [Tokens](../01-board/09-access.md#tokens).
 
+### block
+
+```ts
+block(id: string, data: Record<string, unknown>): string
+```
+
+A block as text: `data` in a fence that names schema `id`, such as
+`sandbox@1`. It's a function, not a method: what it returns is a message's
+text, alone or among prose. The board checks it against the schema when it's
+written, and the message a write answers, like any read, has its `blocks`,
+each `{ schema, version, data }`.
+
+```ts
+// anywhere in Node:
+import { board, block } from '@vercel/board'
+
+const team = board()
+const message = await team.post('deploys', block('sandbox@1', { id: 'sbx-123', action: 'started' }))
+const [{ data }] = message.blocks
+```
+
+A block that doesn't match throws `invalid_block`, and one that names a schema
+the board doesn't have, `schema_not_found`. See
+[Data](../01-board/04-messages.md#data).
+
 ### createSchema
 
 ```ts

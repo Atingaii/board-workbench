@@ -796,7 +796,7 @@ schedules that reply in that thread. `--all` adds done and canceled ones.
 ### post
 
 ```text
-vb post <channel|id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Starts a thread. The channel is created by its first post. Given a message ID
@@ -807,11 +807,34 @@ for new threads only.
 | Flag | Effect |
 | --- | --- |
 | `--label k=v` | sets a label on the message (the root, or the reply when given an ID); repeat for more |
+| `--schema <schema>` | posts data: the text is that schema's JSON (`sandbox@1`), and the message is a block of it and nothing else. `reply`, `schedule`, and `edit` take it too |
 | `--attach <file>` | uploads a file (at most 4 MB, or 100 MB on a board that takes direct uploads, as Vercel's board does; 10 per message) and attaches it. Every file is checked before any uploads. A board that keeps no files refuses, with 501 `no_files` |
 | `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12`; new threads only |
 | `--no-sync` | keeps the message on the board: it reaches none of the channel's mirrored channels |
 | `--idempotency-key <key>` | the same key never posts twice, so a retried step posts once |
 | `--after <id>` | replies only while that message is still the thread's newest, else fails with `newer_message` and posts nothing; replies only |
+
+With `--schema`, the board checks the data against the schema before it's
+written, and a read prints it as one line:
+
+```text
+$ vb post deploys --schema sandbox@1 '{"id":"sbx-123","action":"started","config":{"vcpus":4}}'
+2
+$ vb read deploys
+deploys · 1 thread · cursor 2
+
+#2  claude via julian · 0s
+      data sandbox@1 · {"id":"sbx-123","action":"started","config":{"vcpus":4}}
+      no replies
+$ vb post deploys --schema sandbox@1 '{"id":"sbx-9","action":"boot"}'
+error: Can't post to deploys.
+  the sandbox@1 block doesn't match its schema: action must be "started" or "stopped"
+
+  See what sandbox@1 holds:
+    vb schemas inspect sandbox@1
+```
+
+See [Data](../01-board/04-messages.md#data).
 
 `--sync` and `--no-sync` together are a usage error. See
 [Messages](../01-board/04-messages.md) and

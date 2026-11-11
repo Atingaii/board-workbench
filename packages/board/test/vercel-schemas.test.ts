@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
+import { block } from '../src/contract/blocks.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
 const API = 'http://localhost'
@@ -59,5 +60,46 @@ describe("vercel() and the team's schemas", () => {
     // What the API says of a definition is what the caller hears.
     await expect(handleOn(api).createSchema({ name: 'sandbox', version: 1, schema: { type: 'object', properties: { next: { $ref: '#' } } } })).rejects.toMatchObject({ status: 400, code: 'invalid_schema' })
     await expect(handleOn(api).schema('sandbox@1')).rejects.toMatchObject({ status: 404, code: 'schema_not_found' })
+  })
+
+  it("checks a block before it reaches Vercel's API, which keeps text alone, and reads its blocks out of that text", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    await team.createSchema({ name: 'sandbox', version: 1, schema: SANDBOX })
+    const writes = () => api.requests.filter((request) => request.startsWith('POST') && request.includes('/boards/')).length
+
+    const before = writes()
+    await expect(team.post('deploys', block('sandbox@1', { id: 'sbx-9', action: 'boot' }))).rejects.toMatchObject({ status: 400, code: 'invalid_block' })
+    await expect(team.post('deploys', block('sandbox@2', { id: 'sbx-9', action: 'started' }))).rejects.toMatchObject({ status: 400, code: 'schema_not_found' })
+    // Neither went to the API.
+    expect(writes()).toBe(before)
+
+    const posted = await team.post('deploys', `sandbox sbx-9 started\n\n${block('sandbox@1', { id: 'sbx-9', action: 'started' })}`)
+    expect(posted.blocks).toEqual([{ schema: 'sandbox', version: 1, data: { id: 'sbx-9', action: 'started' } }])
+    expect((await team.thread(posted.id)).message.blocks).toEqual(posted.blocks)
+    await expect(team.edit(posted.id, block('sandbox@1', { id: 'sbx-9' }))).rejects.toMatchObject({ status: 400, code: 'invalid_block' })
+    expect((await team.thread(posted.id)).message.blocks).toEqual(posted.blocks)
+  })
+
+  it("can't check a deployment's block there yet: the API lets no project read the schema it names", async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createSchema({ name: 'sandbox', version: 1, schema: SANDBOX })
+    const deployment = handleOn(api, 'project:prj_pong:production')
+    await expect(deployment.post('deploys', block('sandbox@1', { id: 'sbx-9', action: 'started' }))).rejects.toMatchObject({ status: 403 })
+    // What names no schema posts as ever.
+    expect((await deployment.post('deploys', 'sandbox sbx-9 started')).blocks).toEqual([])
+  })
+
+  it('shows no blocks for what a sync brought in there either', async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createSchema({ name: 'sandbox', version: 1, schema: SANDBOX })
+    const sync = handleOn(api, 'project:prj_pong:production')
+    await sync.register({ url: null, watch: {}, sync: [{ key: 'reviews', platform: 'github' }] })
+    const author = { id: 'reviews:user:9', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
+    const origin = { thread: 'reviews:acme/web:1', subthread: null, message: '1', context: null }
+    const text = block('sandbox@1', { id: 'sbx-9', action: 'started' })
+    const { message } = await sync.syncImport({ op: 'post', author, from: 'reviews', channel: 'deploys', text, origin })
+    // It came through the project's own sync key, so it's a platform's text, whatever it says.
+    expect((await handleOn(api).thread(message!)).message).toMatchObject({ text, from: 'pong/reviews', blocks: [] })
   })
 })

@@ -5,6 +5,7 @@ import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { schemaId } from '../contract/data-schemas.ts'
+import { blocksIn } from '../contract/blocks.ts'
 import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
@@ -922,6 +923,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       revision: message.revision,
       author: await nameOf(who, message.createdBy),
       ...(message.schedule ? { schedule: { id: message.schedule.id, n: message.schedule.n } } : {}),
+      // The API keeps text alone: its blocks are read out of it here, for what was written on the board.
+      blocks: (message.from ?? null) === null && message.deletedAt === undefined ? blocksIn(message.text) : [],
     }
   }
 

@@ -39,6 +39,9 @@ import type { Method, Protocol } from '../api/protocol.ts'
 import type { ExternalAuthor } from '../contract/external.ts'
 import type { Actor } from '../contract/folds.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
+import { findBlocks } from '../contract/blocks.ts'
+import type { SchemaDefinition } from '../contract/data-schemas.ts'
+import { checkValue } from '../contract/data-values.ts'
 import type { SyncEvent } from '../sync/engine.ts'
 import { SYNC, type Caller, type InboxDelivery, type ProtocolMethods, type SelfCaller, type VerifiedCaller } from './backend.ts'
 import type { Board, BoardContext } from './board.ts'
@@ -336,6 +339,51 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     return found
   }
 
+  /** The schemas writes have named, as the backend answered them: a version never changes, so each is read once. */
+  const definitions = new Map<string, Promise<SchemaDefinition>>()
+
+  /**
+   * Checks the blocks `text` carries before it's written, each against the schema its fence names:
+   * a 400 for one that isn't a JSON object, names a schema the board doesn't have, or doesn't match
+   * it. So what a message written on the board shows as its `blocks` always matches. The check is
+   * board()'s, so it reads each schema as board() itself, whoever is writing: every caller's write
+   * is held to the same definition, and gets the same answer.
+   */
+  async function checkBlocks(text: string): Promise<void> {
+    if (!text.includes('json#')) return
+    for (const found of findBlocks(text)) {
+      if (found.problem !== undefined) throw badRequest(found.problem, 'invalid_block')
+      let definition = definitions.get(found.id)
+      if (!definition) {
+        // Shared by every write that names it, so no one request's signal ends it.
+        definition = backend.schema(OWN, { id: found.id }, new AbortController().signal).then(({ schema }) => schema.schema)
+        definitions.set(found.id, definition)
+        definition.catch(() => definitions.delete(found.id))
+      }
+      const schema = await definition.catch((error: unknown) => {
+        if (error instanceof HttpError && error.status === 404) throw badRequest(`the ${found.id} block names a schema this board doesn't have`, 'schema_not_found')
+        throw error
+      })
+      const problem = checkValue(schema, found.data)
+      if (problem !== null) throw badRequest(`the ${found.id} block doesn't match its schema: ${problem}`, 'invalid_block')
+    }
+  }
+
+  /**
+   * Checks a write's blocks, unless board() already knows its caller may not post where it lands:
+   * then the backend's refusal is the answer, not what the text says. A message board() can't find
+   * for the caller is still checked, since one written without reading is its author's to edit.
+   */
+  async function checkWrite(caller: Caller, text: string, where: { channel: string } | { message: string }, signal: AbortSignal): Promise<void> {
+    if (!text.includes('json#')) return
+    const access = accessOf(caller)
+    if (access !== null) {
+      const channel = 'channel' in where ? where.channel : (await lookup(caller, where.message, signal))?.channel
+      if (channel !== undefined && !access.can('post', channel)) return
+    }
+    await checkBlocks(text)
+  }
+
   let middlewareBoard: Board | null = null
   /** Runs the middleware on a write, then `commit`s what it passed on: a `DroppedError` when it drops it. */
   const screen = <W extends Write, T>(write: W, author: Actor, source: WriteSource, commit: (write: W) => Promise<T>): Promise<T> =>
@@ -400,9 +448,10 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   function screenSchedule(caller: Caller, input: Protocol['schedule']['input'], signal: AbortSignal): Promise<Protocol['schedule']['output']> {
     const { channel, re, text, labels, noSync, attachments } = input
     const message = { ...(channel !== undefined ? { channel } : {}), ...(re !== undefined ? { re } : {}), text, ...(labels ? { labels } : {}), ...(noSync !== undefined ? { noSync } : {}), ...(attachments ? { attachments } : {}) }
-    return screenPost(caller, message as Protocol['post']['input'], signal, (screened) =>
-      backend.schedule(caller, { ...input, text: screened.text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal),
-    )
+    return screenPost(caller, message as Protocol['post']['input'], signal, async (screened) => {
+      if (screened.text !== text) await checkBlocks(screened.text)
+      return backend.schedule(caller, { ...input, text: screened.text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal)
+    })
   }
 
   /**
@@ -480,7 +529,15 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * the platform. A retry of one that landed stands.
    */
   async function syncImport(caller: Caller, body: Protocol['syncImport']['input'], signal: AbortSignal): Promise<Protocol['syncImport']['output']> {
-    const send = (patched: Protocol['syncImport']['input']) => backend.syncImport(caller, patched, signal)
+    // What a sync writes on the board itself, as a platform user (`from: null`), is checked as any
+    // write, a sync callback's client's and a sync elsewhere's alike: only what came from a platform
+    // is text the board can't refuse. Checked again when the middleware changed it.
+    const written = (body.op === 'post' || body.op === 'edit') && body.from === null ? body.text : null
+    if (written !== null) await checkBlocks(written)
+    const send = async (patched: Protocol['syncImport']['input']) => {
+      if (written !== null && (patched.op === 'post' || patched.op === 'edit') && patched.text !== written) await checkBlocks(patched.text)
+      return backend.syncImport(caller, patched, signal)
+    }
     if (middleware.length === 0 || caller.origin.via?.kind === 'middleware' || (body.op !== 'post' && body.op !== 'edit')) return send(body)
     const access = accessOf(caller)
     // One that can't import goes as it came, for the backend to say why: no sync, or narrowed with x-board-can.
@@ -541,7 +598,13 @@ export async function createServe(context: BoardContext): Promise<Serve> {
 
   /** A post, with the targets it names resolved once the caller may post and sync there, through the middleware. */
   async function post(caller: Caller, input: Protocol['post']['input'], signal: AbortSignal): Promise<Protocol['post']['output']> {
-    const send = (poster: Caller, body: Protocol['post']['input']) => screenPost(poster, body, signal, (patched) => backend.post(poster, patched, signal))
+    await checkWrite(caller, input.text, input.channel !== undefined ? { channel: input.channel } : { message: input.re! }, signal)
+    const send = (poster: Caller, body: Protocol['post']['input']) =>
+      screenPost(poster, body, signal, async (patched) => {
+        // What the middleware passed on is what's written: checked again when it changed the text.
+        if (patched.text !== input.text) await checkBlocks(patched.text)
+        return backend.post(poster, patched, signal)
+      })
     // Without sync, nothing here calls a platform: its targets only take their shape.
     if (!engine) return send(caller, input.sync?.length ? { ...input, sync: await Promise.all(input.sync.map(resolveTarget)) } : input)
     const allowed = input.sync?.length ? await mayPost(caller, input, signal) : null
@@ -647,12 +710,20 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     switch (name) {
       case 'post':
         return post(caller, input as Protocol['post']['input'], signal)
-      case 'edit':
-        return screenEdit(caller, input as Protocol['edit']['input'], signal, (patched) => backend.edit(caller, patched, signal))
+      case 'edit': {
+        const edit = input as Protocol['edit']['input']
+        await checkWrite(caller, edit.text, { message: edit.id }, signal)
+        return screenEdit(caller, edit, signal, async (patched) => {
+          if (patched.text !== edit.text) await checkBlocks(patched.text)
+          return backend.edit(caller, patched, signal)
+        })
+      }
       case 'syncImport':
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)
       case 'schedule': {
         const body = input as Protocol['schedule']['input']
+        // Checked when it's made, where its author sees it; a send that comes back through here is checked as any post.
+        await checkWrite(caller, body.text, body.channel !== undefined ? { channel: body.channel } : { message: body.re! }, signal)
         return backend.sendsSchedulesHere === false ? screenSchedule(caller, body, signal) : backend.schedule(caller, body, signal)
       }
       case 'inbox': {

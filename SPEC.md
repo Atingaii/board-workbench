@@ -1209,6 +1209,7 @@ through the sync that speaks for them, under the key it imported them through.
 | Label | (message, key) → value | set or unset; each key holds one value |
 | Attachment | 128 random bits, base64url | uploaded once, then carried by one or more messages; never changes |
 | Schema | a name and a version: `sandbox@1` | registered once; never changes, and is never removed |
+| Block | a fence in a message's text that names a schema | written with its message, and checked then; changes and goes with it |
 
 - **Channel paths** are one or more segments matching
   `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
@@ -1325,8 +1326,8 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
 A schema says what a piece of structured data holds: a JSON Schema for an
 object, under a name and a version (`sandbox@1`). The board keeps a registry
 of them, so whoever writes data and whoever reads it agree on its shape
-without sharing code. Nothing reads the registry yet: blocks, JSON in a
-message's text that names its schema, come next.
+without sharing code. A message carries data under one in a
+[block](#blocks).
 
 ```ts
 import { board } from '@vercel/board'
@@ -1394,6 +1395,80 @@ const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one 
   and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: people and apps whose team role is owner,
   member, or developer register, and a project's own credentials and a board
   token reach none of it yet, reads included (403).
+
+### Blocks
+
+A block is data in a message: a JSON object in a code fence whose info string
+names its schema, `json#<name>@<version>`. The text stays the message, so a
+block goes wherever the text goes (the log, `/events`, a platform, as a code
+block), and nothing is kept beside it. A message can say something and carry
+data, or be only its data.
+
+````markdown
+sandbox sbx-123 stopped
+
+```json#sandbox@1
+{ "id": "sbx-123", "action": "stopped" }
+```
+````
+
+```ts
+import { board, block } from '@vercel/board'
+
+const team = board()
+const message = await team.post('deploys', block('sandbox@1', { id: 'sbx-123', action: 'started' }))   // a message that is only its block
+await team.reply(message.id, `it stopped\n\n${block('sandbox@1', { id: 'sbx-123', action: 'stopped' })}`)
+message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', action: 'started' } }]
+```
+
+- **A fence is a block** when it's the message's own: it opens a line at the
+  top level, indented three spaces at most, and its info string is `json#` and
+  a schema's ID. One inside a longer fence is that fence's text. One in a
+  quote or a list item is its container's, as markdown reads them (text right
+  under a quote's or an item's text is still theirs), and ends with it, so a
+  message can show a block, or quote one, without posting it again, and none
+  of them hides a block that follows. `findBlocks` in `src/contract/blocks.ts`
+  is the rule, which board's tests hold to a CommonMark parser's reading of
+  messages made of every kind of line; raw HTML is the one place they part,
+  where a fence is a block to board and HTML to a renderer. `block(id, data)`
+  writes one: a plain function that returns text, to post alone or among
+  prose.
+- **board() checks a write's blocks before the backend sees it,** on every
+  backend: a post, an edit, and a schedule when it's made, and what the
+  middleware passed on when it changed the text. Each block is a JSON object
+  that matches the schema its fence names, which board() reads from the
+  backend's registry once, since a version never changes, and as itself, so
+  every caller's write is held to the same definition whoever may read
+  schemas. A caller board() already knows may not post where the write lands
+  gets the backend's refusal, as for any text, not what its blocks say. One that isn't, or
+  whose fence never closes, is 400 `invalid_block`, saying which field is
+  wrong (`action must be "started" or "stopped"`); one that names a schema
+  the board doesn't have is 400 `schema_not_found`. Nothing is written.
+  `checkValue` in `src/contract/data-values.ts` checks a value against a
+  definition with no code generation, so it runs where a handle does.
+- **A platform's text is never checked.** What a sync imports can't be
+  refused, so it's stored as it came and carries no blocks, whatever it says:
+  blocks go out to platforms, and none come in. The same goes for an edit a
+  sync brings in to a message written on the board: its text is the
+  platform's from then on, and it carries no blocks until it's edited on the
+  board again. What a sync writes on the board itself (an import with `from:
+  null`, a sync callback's client's or a sync elsewhere's) is written on the
+  board, and checked as any write, before the middleware and after. A block's
+  fence is code to whatever reads or rewrites mentions, so its data stays as
+  it was checked.
+- **Reads show the data.** Every message view has `blocks`, each `{ schema,
+  version, data }`, in the order its text has them: read out of the text of a
+  message written on the board, which was checked then, and empty for an
+  imported or a deleted one. `vb read` and `vb tail` print a block as one line
+  where its fence was (`data sandbox@1 · {…}`, its JSON in full), and
+  `--json` has the data, so a program never parses the text.
+- **`--schema <schema>` on `vb post`, `reply`, `schedule`, and `edit`** takes
+  the text as that schema's JSON, from wherever text comes (the argument, `-`,
+  `--text-file`), and writes a message that is only that block.
+- **On Vercel's board** the API keeps text alone and checks nothing yet, so
+  board() does, for what's written through it: a write straight to the API
+  isn't checked, and a deployment's own credentials can't post a block, since
+  the API lets no project read the schema to check it against (403).
 
 ## The local board
 
@@ -1996,9 +2071,9 @@ board actors                                   actors and their handles
 board read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 board read <id>                                one thread; with filters, the root and the replies that match
 
-board post <channel|id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
-board reply <id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
-board schedule <channel|id> ["<text>" | --text-file <path>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
+board post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+board reply <id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
+board schedule <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board tokens [list]                            yours, or with manage, everyone's
@@ -2012,7 +2087,7 @@ board grants create <principal>... --can <pattern=permissions>...   --user, --pr
 board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]...   --can replaces
 board grants explain [<principal>] <channel>   which grant decides, for you or someone else
 board grants revoke <grant>                    e.g. g3
-board edit <id> ("<text>" | --text-file <path>) [--if-revision N]   only if no one has edited or deleted it since revision N
+board edit <id> ("<text>" | --text-file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
 board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
