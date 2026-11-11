@@ -6,6 +6,6 @@ import { otel } from "eve/instrumentation/otel";
 export default otel({
   resource: { "deployment.environment": process.env.VERCEL_ENV ?? "development" },
   tracePolicy: () => ({ emit: true, recordInputs: true, recordOutputs: true }),
-  // A span for each outgoing request (GitHub, Slack, Blob, AI Gateway), which eve leaves off by default.
+  // A span for each outgoing request (GitHub, Slack, the board, AI Gateway), which eve leaves off by default.
   instrumentations: ["fetch"],
 });

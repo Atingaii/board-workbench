@@ -17,21 +17,15 @@ importers:
       '@chat-adapter/slack':
         specifier: ^4.41.1
         version: 4.43.0(ai@7.0.159(zod@4.6.7))(debug@4.4.3)(zod@4.6.7)
-      '@vercel/blob':
-        specifier: ^2.8.0
-        version: 2.8.2
       '@vercel/board':
-        specifier: 0.30.0
-        version: 0.30.0(@chat-adapter/github@4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7))(@chat-adapter/slack@4.43.0(ai@7.0.159(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(@vercel/blob@2.8.2)(@vercel/connect@2.7.0)(@vercel/queue@0.7.0)(chat@4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7))
+        specifier: 0.40.0
+        version: 0.40.0(@chat-adapter/github@4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7))(@chat-adapter/slack@4.43.0(ai@7.0.159(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(@vercel/connect@2.7.0)(chat@4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7))
       '@vercel/connect':
         specifier: ^2.3.4
         version: 2.7.0(@chat-adapter/slack@4.43.0(ai@7.0.159(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(ai@7.0.159(zod@4.6.7))(eve@0.84.1)
       '@vercel/oidc':
         specifier: ^3.8.9
         version: 3.8.10
-      '@vercel/queue':
-        specifier: ^0.7.0
-        version: 0.7.0
       '@vercel/sandbox':
         specifier: ^3.5.1
         version: 3.9.1
@@ -718,25 +712,16 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@vercel/blob@2.8.2':
-    resolution: {integrity: sha512-ZUUWO2VA00r9ZTRtKgH4va7FGOUxUtge2FaRr9WZmeeX2s3C3qVe2tOTLTbv/tkcd+L+ijxaI2eP9S1/mGHc9Q==}
-    engines: {node: '>=20.0.0'}
-
-  '@vercel/board@0.30.0':
-    resolution: {integrity: sha512-d7YZWxehxFTsgkLyBYPrpbrn+o1dct4xk1i1PQxYpNQSDKBi8yve+dJUAGVZWolBR40xHEcPCOaijMAbemTOWw==}
+  '@vercel/board@0.40.0':
+    resolution: {integrity: sha512-FNqmFzRuYJWAB4VPpiMvJ4RihYPSu5DoAiVW9vKV9Vz/3DGaOSiWrHQlSKzSeEk1GecuLEKpBxrAotkViRfdFg==}
     engines: {node: '>=22.18'}
     hasBin: true
     peerDependencies:
       '@chat-adapter/github': ^4.41.1
       '@chat-adapter/linear': ^4.41.1
       '@chat-adapter/slack': ^4.41.1
-      '@upstash/qstash': ^2.11.0
-      '@vercel/blob': ^2.8.0
       '@vercel/connect': ^2.3.4
-      '@vercel/queue': '*'
       chat: ^4.41.1
-      ioredis: ^5.4.0
-      pg: ^8.11.0
     peerDependenciesMeta:
       '@chat-adapter/github':
         optional: true
@@ -744,19 +729,9 @@ packages:
         optional: true
       '@chat-adapter/slack':
         optional: true
-      '@upstash/qstash':
-        optional: true
-      '@vercel/blob':
-        optional: true
       '@vercel/connect':
         optional: true
-      '@vercel/queue':
-        optional: true
       chat:
-        optional: true
-      ioredis:
-        optional: true
-      pg:
         optional: true
 
   '@vercel/cli-config@0.3.1':
@@ -815,15 +790,6 @@ packages:
     resolution: {integrity: sha512-E+duTxv0W8r3qNCGUYxTLt0V0BlLUlrEqxYOu2OoFubIbxwGjwm4wofache+YgU6Sr0MwoAA/vsSrrNrrWjimw==}
     engines: {node: '>= 20'}
 
-  '@vercel/queue@0.7.0':
-    resolution: {integrity: sha512-Mytb/u9LVywI3DG7DC8ndx61JZ2hGktyxQkePwb3MDGj6AHFq6xTdwmfi4T8HGEP1rQ1MlnVJbuCQ3TzmMwiFw==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      '@opentelemetry/api': ^1.0.0
-    peerDependenciesMeta:
-      '@opentelemetry/api':
-        optional: true
-
   '@vercel/sandbox@3.9.1':
     resolution: {integrity: sha512-8/3vqPknI2WrE1Zd4O3LbMFbrD9elCXqCe0JjqSJH+EqsEtBHGafwwxx1raq1kTWvpLLk4lh0bZW9dMy6L5efA==}
 
@@ -866,10 +832,6 @@ packages:
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
 
-  balanced-match@4.0.4:
-    resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
-    engines: {node: 18 || 20 || >=22}
-
   bare-events@2.9.2:
     resolution: {integrity: sha512-AIPKioV7/Y/8KfZ3AAhjPJxLLbY49S64Ym5DakZlUg75qQiTgUq9hEJoEwa4eUezPUlXRy/i5NpsKvo9jgKmoA==}
     peerDependencies:
@@ -885,10 +847,6 @@ packages:
 
   before-after-hook@4.0.0:
     resolution: {integrity: sha512-q6tR3RPqIB1pMiTRMFcZwuG5T8vwp+vUvEG0vuI6B+Rikh5BfPp2fQ82c925FOs+b0lcFQ8CFrL+KbilfZFhOQ==}
-
-  brace-expansion@5.0.12:
-    resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
-    engines: {node: 20 || >=22}
 
   call-bind-apply-helpers@1.0.2:
     resolution: {integrity: sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==}
@@ -1192,15 +1150,8 @@ packages:
     resolution: {integrity: sha512-Ag3wB2o37wslZS19hZqorUnrnzSkpOVy+IiiDEiTqNubEYpYuHWIf6K4psgN2ZWKExS4xhVCrRVfb/wfW8fWJA==}
     engines: {node: '>= 10'}
 
-  is-buffer@2.0.5:
-    resolution: {integrity: sha512-i2R6zNFDwgEHJyQUtJEk0XFi1i0dPFn/oqjK3/vPCcDeJvW5NQ83V8QbicfF1SupOaB0h8ntgBC2YiE7dfyctQ==}
-    engines: {node: '>=4'}
-
   is-electron@2.2.2:
     resolution: {integrity: sha512-FO/Rhvz5tuw4MCWkpMzHFKWD2LsfHzIb7i6MdPYZ/KW7AlxawyLkqdy+jPZP1WubqEADE3O4FUENlJHDfQASRg==}
-
-  is-node-process@1.2.0:
-    resolution: {integrity: sha512-Vg4o6/fqPxIjtxgUH5QLJhwZ7gW5diGCVlXpuUfELC62CuxM1iHcRe51f2W1FDy04Ai4KJkagKjx3XaqyfRKXw==}
 
   is-plain-obj@4.1.0:
     resolution: {integrity: sha512-+Pgi+vMuUNkJyExiMBt5IlFoMyKnr5zhJ4Uspz58WOhBF5QoIZkFyNHIbBAtHwzVAgk5RtndVNsDRN61/mmDqg==}
@@ -1395,14 +1346,6 @@ packages:
   mimic-fn@2.1.0:
     resolution: {integrity: sha512-OqbOk5oEQeAZ8WXWydlu9HJjz9WVdEIvamMCcXmuqUYjTknH/sqsWvhQ3vgwKFRR1HpjvNBKQ37nbJgYzGqGcg==}
     engines: {node: '>=6'}
-
-  minimatch@10.2.6:
-    resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
-    engines: {node: 18 || 20 || >=22}
-
-  mixpart@0.0.6:
-    resolution: {integrity: sha512-CRdXtgfQH2jARmtNmPR0Q7jL20fiESbaYk1b0KvLD0jCdUuemepREtsbd8nbiY6BHV9OGGddAZITNXklupUPUQ==}
-    engines: {node: '>=20.0.0'}
 
   modern-tar@0.7.7:
     resolution: {integrity: sha512-t9VmxaqrmANnEOBhpSDI6HD192Ge48k8vmWqQQL7hSFEqHEYwZbbsu49+aKLWZeRvFs3j1pMhXOqqF4kPlvjkQ==}
@@ -1634,10 +1577,6 @@ packages:
   text-decoder@1.2.7:
     resolution: {integrity: sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ==}
 
-  throttleit@2.1.0:
-    resolution: {integrity: sha512-nt6AMGKW1p/70DF/hGBdJB57B8Tspmbp5gfJ8ilhLnt7kkr2ye7hzD6NVG8GGErk2HWF34igrL2CXmNIkzKqKw==}
-    engines: {node: '>=18'}
-
   toad-cache@3.7.4:
     resolution: {integrity: sha512-m1TdR/rvT7kgGJZhspNtXdsdYk0fddFpJJFlG5s+UkPFo6lkLoZ3YLOaovPYjq1R75NP5JfeTlSHaOsE09peCg==}
     engines: {node: '>=20'}
@@ -1672,10 +1611,6 @@ packages:
 
   undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
-
-  undici@6.29.1:
-    resolution: {integrity: sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==}
-    engines: {node: '>=18.17'}
 
   undici@7.29.0:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
@@ -2296,16 +2231,7 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@vercel/blob@2.8.2':
-    dependencies:
-      '@vercel/oidc': 3.8.10
-      async-retry: 1.3.3
-      is-buffer: 2.0.5
-      is-node-process: 1.2.0
-      throttleit: 2.1.0
-      undici: 6.29.1
-
-  '@vercel/board@0.30.0(@chat-adapter/github@4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7))(@chat-adapter/slack@4.43.0(ai@7.0.159(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(@vercel/blob@2.8.2)(@vercel/connect@2.7.0)(@vercel/queue@0.7.0)(chat@4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7))':
+  '@vercel/board@0.40.0(@chat-adapter/github@4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7))(@chat-adapter/slack@4.43.0(ai@7.0.159(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(@vercel/connect@2.7.0)(chat@4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7))':
     dependencies:
       '@vercel/oidc': 3.8.10
       jose: 6.2.15
@@ -2313,9 +2239,7 @@ snapshots:
     optionalDependencies:
       '@chat-adapter/github': 4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7)
       '@chat-adapter/slack': 4.43.0(ai@7.0.159(zod@4.6.7))(debug@4.4.3)(zod@4.6.7)
-      '@vercel/blob': 2.8.2
       '@vercel/connect': 2.7.0(@chat-adapter/slack@4.43.0(ai@7.0.159(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(ai@7.0.159(zod@4.6.7))(eve@0.84.1)
-      '@vercel/queue': 0.7.0
       chat: 4.43.0(ai@7.0.159(zod@4.6.7))(zod@4.6.7)
 
   '@vercel/cli-config@0.3.1':
@@ -2361,13 +2285,6 @@ snapshots:
       '@vercel/cli-config': 0.3.5
       '@vercel/cli-exec': 1.0.1
       jose: 5.10.0
-
-  '@vercel/queue@0.7.0':
-    dependencies:
-      '@vercel/oidc': 3.8.10
-      minimatch: 10.2.6
-      mixpart: 0.0.6
-      picocolors: 1.1.1
 
   '@vercel/sandbox@3.9.1':
     dependencies:
@@ -2427,17 +2344,11 @@ snapshots:
 
   bail@2.0.2: {}
 
-  balanced-match@4.0.4: {}
-
   bare-events@2.9.2: {}
 
   baseline-browser-mapping@2.11.34: {}
 
   before-after-hook@4.0.0: {}
-
-  brace-expansion@5.0.12:
-    dependencies:
-      balanced-match: 4.0.4
 
   call-bind-apply-helpers@1.0.2:
     dependencies:
@@ -2690,11 +2601,7 @@ snapshots:
 
   ipaddr.js@2.2.0: {}
 
-  is-buffer@2.0.5: {}
-
   is-electron@2.2.2: {}
-
-  is-node-process@1.2.0: {}
 
   is-plain-obj@4.1.0: {}
 
@@ -3062,12 +2969,6 @@ snapshots:
 
   mimic-fn@2.1.0: {}
 
-  minimatch@10.2.6:
-    dependencies:
-      brace-expansion: 5.0.12
-
-  mixpart@0.0.6: {}
-
   modern-tar@0.7.7: {}
 
   ms@2.1.3: {}
@@ -3331,8 +3232,6 @@ snapshots:
     transitivePeerDependencies:
       - react-native-b4a
 
-  throttleit@2.1.0: {}
-
   toad-cache@3.7.4: {}
 
   token-types@6.2.0:
@@ -3377,8 +3276,6 @@ snapshots:
   uint8array-extras@1.6.0: {}
 
   undici-types@8.9.0: {}
-
-  undici@6.29.1: {}
 
   undici@7.29.0: {}
 

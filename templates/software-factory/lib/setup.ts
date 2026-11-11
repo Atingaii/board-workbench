@@ -1,4 +1,4 @@
-import type { MessageView } from "@vercel/board";
+import type { Board, MessageView } from "@vercel/board";
 import { NAME } from "../agent/lib/identity.ts";
 import { githubScope, ownRepo } from "./github.ts";
 
@@ -47,6 +47,8 @@ export type Deps = {
   connect(connector: string, scope?: Scope): Promise<string>;
   /** AI Gateway's balance, in dollars. */
   credits(): Promise<number>;
+  /** What this deployment may do on its board, by channel pattern. Rejects with the board's own error when it can't use it. */
+  access(): Promise<Record<string, readonly string[]>>;
   /** The board's latest messages in a channel, newest last. */
   messages(query: { channel: string; limit: number }): Promise<MessageView[]>;
 };
@@ -64,7 +66,7 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 type Project = { team: string; name: string } | null;
 
 /** The project a token names: its team's slug and its own name, or null when it doesn't read as one. */
-function projectOf(jwt: string): Project {
+export function projectOf(jwt: string): Project {
   try {
     const { owner, project } = JSON.parse(Buffer.from(jwt.split(".")[1] ?? "", "base64url").toString());
     return typeof owner === "string" && typeof project === "string" ? { team: owner, name: project } : null;
@@ -97,9 +99,12 @@ export async function closed(host: string | undefined, request: typeof fetch): P
 
 const SIGN_IN: Fix = { text: "Link this directory and pull its environment, then restart the dev server.", commands: ["vercel link", "vercel env pull"] };
 
+/** Your machine: `vercel env pull` writes VERCEL_ENV=development, so that counts too. */
+export const isLocal = (env: Env) => !env.VERCEL_ENV || env.VERCEL_ENV === "development";
+
 /** Every step, in order. Until this deployment is known to turn strangers away, the rest show only their titles. */
 export async function setup(deps: Deps): Promise<Step[]> {
-  const local = !deps.env.VERCEL_ENV;
+  const local = isLocal(deps.env);
   const token = await deps.oidc().catch(() => null);
   const project = token ? projectOf(token) : null;
   const vercel = await vercelStep(deps, local, project);
@@ -114,8 +119,8 @@ export async function setup(deps: Deps): Promise<Step[]> {
 
 
 /**
- * Deployed, protected, with its storage and AI Gateway. An open production comes back `locked`, so
- * `setup()` shows nothing else until it's closed.
+ * Deployed, protected, on the team's board, with AI Gateway. An open production comes back `locked`,
+ * so `setup()` shows nothing else until it's closed.
  */
 async function vercelStep(deps: Deps, local: boolean, project: Project): Promise<Step> {
   const links = dashboard(project);
@@ -147,19 +152,24 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
       });
     }
     if (!bypass) fix.push({ text: "Add a Protection Bypass for Automation, then redeploy.", link: protection });
+  }
 
-    const { KV_REST_API_URL: url, KV_REST_API_TOKEN: redisToken } = deps.env;
-    const redis = url && redisToken
-      ? await deps
-          .fetch(url, { method: "POST", headers: { authorization: `Bearer ${redisToken}` }, body: JSON.stringify(["PING"]), signal: AbortSignal.timeout(10_000) })
-          .then(async (response) => (((await response.json()) as { result?: string }).result === "PONG" ? "connected" : `answered ${response.status}`), (error: unknown) => `unreachable: ${message(error)}`)
-      : "missing";
-    const blob = deps.env.BLOB_READ_WRITE_TOKEN || deps.env.BLOB_STORE_ID ? "connected" : "missing";
-    rows.push(["redis", redis], ["blob", blob]);
-    if (redis !== "connected") fix.push({ text: "Add Upstash for Redis, then redeploy.", commands: ["vercel integration add upstash/upstash-kv"] });
-    if (blob !== "connected") fix.push({ text: "Add a private Blob store, then redeploy.", link: { href: `${links.base}/stores`, label: "Storage" } });
+  // The board is the team's, in Vercel's API: this project needs to be let in, and to sync.
+  const access = await deps.access().catch((error: unknown) => error);
+  if (access instanceof Error || typeof access !== "object" || access === null) {
+    rows.push(["board", "no access"]);
+    const hint = (access as { hint?: unknown } | null)?.hint;
+    fix.push({ text: `${message(access)}${typeof hint === "string" ? ` ${hint}` : ""}` });
   } else {
-    rows.push(["board", "local, in .a2"]);
+    const syncs = Object.values(access as Record<string, readonly string[]>).some((can) => can.includes("sync"));
+    rows.push(["board", syncs ? "can sync" : "can't sync"]);
+    if (!syncs) {
+      const id = deps.env.VERCEL_PROJECT_ID;
+      fix.push({
+        text: "Let this project sync on the board, so GitHub and Slack reach it.",
+        ...(id ? { commands: [`npx @vercel/board grants create --project ${id} --environment ${deps.env.VERCEL_ENV ?? "production"} --can '*=read,post,react,label,sync'`] } : {}),
+      });
+    }
   }
 
   const balance = await deps.credits().catch((error: unknown) => error);
@@ -174,7 +184,7 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
 
   return step("vercel", {
     status: fix.length ? "todo" : "done",
-    summary: fix.length ? "" : local ? "Running locally." : "Protected, with storage and AI Gateway.",
+    summary: fix.length ? "" : local ? "Running locally." : "Protected, on the team's board, with AI Gateway.",
     rows,
     ...(fix.length ? { fix } : {}),
   });
@@ -188,7 +198,7 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
   const own = ownRepo(deps.env);
   const token = await deps.connect(connector).catch((error: unknown) => error);
   if (typeof token !== "string") {
-    if (!deps.env.VERCEL_ENV && !deps.env.VERCEL_OIDC_TOKEN) return step("github", { status: "todo", summary: "", fix: [SIGN_IN] });
+    if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("github", { status: "todo", summary: "", fix: [SIGN_IN] });
     if (token instanceof Error && token.name === "ConnectorInstallationRequiredError") {
       return step("github", { status: "todo", summary: "", fix: [{ text: `Install ${connector}'s app on your repos, this one included.` }] });
     }
@@ -259,7 +269,7 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   const channel = wanted.join(", ");
   const token = await deps.connect(connector).catch((error: unknown) => error);
   if (typeof token !== "string") {
-    if (!deps.env.VERCEL_ENV && !deps.env.VERCEL_OIDC_TOKEN) return step("slack", { optional: true, status: "todo", summary: "", fix: [SIGN_IN] });
+    if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("slack", { optional: true, status: "todo", summary: "", fix: [SIGN_IN] });
     // The board already syncs through this connector, and picks it up within a minute of its attach: no redeploy.
     return step("slack", {
       optional: true,
@@ -306,8 +316,14 @@ async function tryStep(deps: Deps): Promise<Step> {
   return step("try", { status: "waiting", summary: "", fix: [{ text: "Open an issue on one of its repos, or post on the board: open it with the command below." }] });
 }
 
+/** What the checks ask the board, as this deployment. */
+export const boardDeps = (board: Board): { access: Deps["access"]; messages: Deps["messages"] } => ({
+  access: async () => (await board.me()).can,
+  messages: async (query) => (await board.messages(query)).messages,
+});
+
 /** The checks' real dependencies, loaded only when the launcher runs. */
-export async function liveDeps(read: Deps["messages"], synced: Synced): Promise<Deps> {
+export async function liveDeps(board: { access: Deps["access"]; messages: Deps["messages"] }, synced: Synced): Promise<Deps> {
   const [{ getVercelOidcToken }, { getToken }, { gateway }] = await Promise.all([
     import("@vercel/oidc"),
     import("@vercel/connect"),
@@ -320,6 +336,7 @@ export async function liveDeps(read: Deps["messages"], synced: Synced): Promise<
     oidc: () => getVercelOidcToken(),
     connect: (connector, scope) => getToken(connector, { subject: { type: "app" }, ...(scope ? { authorizationDetails: scope } : {}) }),
     credits: async () => Number((await gateway.getCredits()).balance),
-    messages: read,
+    access: board.access,
+    messages: board.messages,
   };
 }

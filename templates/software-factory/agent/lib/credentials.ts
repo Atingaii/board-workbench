@@ -4,10 +4,11 @@ import type { SandboxNetworkPolicy } from "eve/sandbox";
 import type { ToolContext } from "eve/tools";
 import { githubScope, threadRepos } from "../../lib/github";
 import { environment } from "../sandbox";
+import { factory } from "../../app/api/board/[[...path]]/factory.ts";
 import type { BoardTask } from "./board";
-import { BOARD, NAME } from "./identity";
+import { NAME } from "./identity.ts";
 import { stale } from "./tokens";
-import { agentBoard } from "./vb-tool";
+import { agentBoard } from "./vb-tool.ts";
 
 // Real credentials go in the sandbox's network policy, which adds them on the way out. Anything the
 // sandbox runs can use them, so each is the least the thread needs.
@@ -35,8 +36,8 @@ export function policy(tokens: { github: string | null }): NetworkPolicy {
  * A GitHub token for this thread's repos only (`threadRepos`), through the connector the board named:
  * code run from one repo's PR can't reach the app's other repos. Null without a repo or a connector.
  */
-async function githubToken(getToken: typeof import("@vercel/connect").getToken, board: BoardTask, boardToken: string, bypass: string | undefined) {
-  const root = await agentBoard(board.thread, { token: async () => boardToken, bypass })
+async function githubToken(getToken: typeof import("@vercel/connect").getToken, board: BoardTask) {
+  const root = await agentBoard(factory)
     .thread(board.thread)
     .then((view) => view.message)
     .catch(() => null);
@@ -63,10 +64,8 @@ export async function give(ctx: Pick<ToolContext, "getSandbox">, board: BoardTas
   const now = Date.now();
   if (!force && !stale(given.get().until, now)) return;
   const sandbox = await ctx.getSandbox(environment);
-  const [{ getToken }, { getVercelOidcToken }] = await Promise.all([import("@vercel/connect"), import("@vercel/oidc")]);
-  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-  const boardToken = await getVercelOidcToken({ audience: BOARD });
-  const github = await githubToken(getToken, board, boardToken, bypass);
+  const { getToken } = await import("@vercel/connect");
+  const github = await githubToken(getToken, board);
   await sandbox.setNetworkPolicy(policy({ github }) as SandboxNetworkPolicy);
   const git = await sandbox.run({
     command: `git config --global user.name ${JSON.stringify(NAME)} && git config --global user.email ${GIT_EMAIL}`,

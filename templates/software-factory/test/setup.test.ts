@@ -15,17 +15,14 @@ const PRODUCTION = {
   VERCEL_PROJECT_PRODUCTION_URL: "factory.acme.dev",
   VERCEL_GIT_REPO_OWNER: "acme",
   VERCEL_GIT_REPO_SLUG: "factory",
+  VERCEL_PROJECT_ID: "prj_factory",
   VERCEL_AUTOMATION_BYPASS_SECRET: "bypass",
-  KV_REST_API_URL: "https://redis.test",
-  KV_REST_API_TOKEN: "redis-token",
-  BLOB_READ_WRITE_TOKEN: "blob-token",
 };
 
 type Routes = Record<string, (init?: RequestInit, url?: string) => Response>;
 
 const ROUTES: Routes = {
   "https://factory.acme.dev/icon.svg": () => new Response("", { status: 401 }),
-  "https://redis.test": () => json({ result: "PONG" }),
   "https://api.github.com/installation/repositories": () =>
     json({ total_count: 2, repositories: [{ full_name: "acme/factory" }, { full_name: "acme/web" }] }),
   "https://api.github.com/graphql": () => json({ data: { viewer: { login: "acme-factory" } } }),
@@ -37,7 +34,7 @@ const notFound = (connector: string) =>
 
 
 const message = (id: string, profile: string | null, re: string | null = null) =>
-  ({ id, re, by: { principal: "p", profile, session: null, actor: "a" }, createdAt: "2026-11-03T00:00:00.000Z" }) as never;
+  ({ id, re, by: { principal: "p", profile, actor: "a" }, createdAt: "2026-11-03T00:00:00.000Z" }) as never;
 
 function fake(options: { env?: Record<string, string | undefined>; routes?: Routes; deps?: Partial<Deps> } = {}) {
   const requests: string[] = [];
@@ -61,6 +58,8 @@ function fake(options: { env?: Record<string, string | undefined>; routes?: Rout
     // Every connector but Slack's, which a test connects when it needs one.
     connect: async (connector) => (connector.startsWith("slack/") ? notFound(connector) : "app-token"),
     credits: async () => 5,
+    // What a new board gives every project on the team.
+    access: async () => ({ "*": ["read", "post", "react", "label", "sync"] }),
     messages: async () => [message("12", null), message("13", "factory", "12")],
     ...options.deps,
   };
@@ -109,11 +108,11 @@ test("GitHub says nothing more when every repo the app is on comes in", async ()
   assert.equal(github!.summary, "Works on 1 repo, its own code included.");
 });
 
-test("an open production shows only how to protect it, and asks nothing of GitHub, Redis, or the board", async () => {
+test("an open production shows only how to protect it, and asks nothing of GitHub or the board", async () => {
   let read = false;
   const { deps, requests } = fake({
     routes: { "https://factory.acme.dev/icon.svg": () => new Response("<svg/>", { status: 200 }) },
-    deps: { messages: async () => ((read = true), []) },
+    deps: { messages: async () => ((read = true), []), access: async () => ((read = true), {}) },
   });
   const steps = await setup(deps);
   assert.deepEqual(statuses(steps), { vercel: "todo", github: "locked", slack: "locked", try: "locked" });
@@ -148,12 +147,31 @@ test("a protected production without an automation bypass isn't ready, but shows
   assert.equal(github!.status, "done");
 });
 
-test("without Redis, the Vercel step says how to add it, and nothing calls Redis", async () => {
-  const { deps, requests } = fake({ env: { ...PRODUCTION, KV_REST_API_URL: undefined, KV_REST_API_TOKEN: undefined } });
-  const { vercel } = byId(await setup(deps));
+test("a project the board hasn't let in sees the board's own words, and its way out", async () => {
+  // What board() throws for a project with no grant: the message, and the command that grants it.
+  const refused = Object.assign(new Error("this project has no access to the team's board (prj_factory, production)."), {
+    code: "board_not_granted",
+    hint: "Grant it: vb grants create --project prj_factory --environment production --can '*=read,post,react,label'",
+  });
+  const { vercel } = byId(await setup(fake({ deps: { access: () => Promise.reject(refused) } }).deps));
   assert.equal(vercel!.status, "todo");
-  assert.deepEqual(commands(vercel!), ["vercel integration add upstash/upstash-kv"]);
-  assert.ok(!requests.some((url) => url.startsWith("https://redis.test")));
+  assert.deepEqual(vercel!.rows?.find(([label]) => label === "board"), ["board", "no access"]);
+  assert.equal(
+    vercel!.fix?.[0]?.text,
+    "this project has no access to the team's board (prj_factory, production). Grant it: vb grants create --project prj_factory --environment production --can '*=read,post,react,label'",
+  );
+});
+
+test("a project that can't sync is told how to be let, since GitHub and Slack wouldn't reach the board", async () => {
+  const { vercel } = byId(await setup(fake({ deps: { access: async () => ({ "*": ["read", "post", "react", "label"] }) } }).deps));
+  assert.equal(vercel!.status, "todo");
+  assert.deepEqual(vercel!.rows?.find(([label]) => label === "board"), ["board", "can't sync"]);
+  assert.deepEqual(commands(vercel!), ["npx @vercel/board grants create --project prj_factory --environment production --can '*=read,post,react,label,sync'"]);
+});
+
+test("sync in one channel pattern is enough for the Vercel step", async () => {
+  const { vercel } = byId(await setup(fake({ deps: { access: async () => ({ "*": ["read"], "dev/": ["read", "post", "sync"] }) } }).deps));
+  assert.equal(vercel!.status, "done");
 });
 
 test("a GitHub connector that isn't attached says how to create and attach it, a command per box", async () => {

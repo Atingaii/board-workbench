@@ -21,17 +21,28 @@ pnpm test        # node --test, with Node's type stripping
 pnpm build
 ```
 
+- **The board is the team's, in Vercel's API.** `board()` with no backend: Vercel keeps its
+  messages, files, and schedules, and this deployment keeps nothing. It runs the board's sync and
+  its watcher, woken through `app/api/board/[[...path]]/route.ts`. Production is on the team's
+  default board; a dev server or a preview is on one named `factory-dev`.
 - **Each setting lives where it's used.** The board's sync is all in
-  `app/api/board/[[...path]]/route.ts`: its connectors, which channel each repo's PRs and issues
+  `app/api/board/[[...path]]/factory.ts`: its connectors, which channel each repo's PRs and issues
   come into (`repoChannels`; this repo's own go to `dev/factory`), and which Slack channels it
   mirrors. The agent's model, instructions, sandbox, tools, and skills are in `agent/`.
 - **Instructions are for every turn, skills for some.** `agent/lib/instructions.ts` holds the
   judgment every turn needs, with a line pointing at each skill; a procedure the agent needs only
   sometimes (reviewing, reproducing a bug, seeing a PR through, demos) is a skill in `agent/skills/`.
-- **The board sees the agent only through `wakeAgent` (`agent/lib/wake.ts`), and the agent never
-  imports the board's config.** Its `factory` watcher tails `dev/`, so the agent hears every
-  message in `dev` and under it, and passes the GitHub access each thread gets. The agent's
-  `setup_steps` tool asks the setup page's own `/api/launcher/steps`.
+- **The board sees the agent only through `wakeAgent` (`agent/lib/wake.ts`).** Its `wake` watcher
+  tails `dev/`, so the agent hears every message in `dev` and under it, and passes the GitHub
+  access each thread gets. It hands each wake-up to eve's own channel (`agent/channels/eve.ts`,
+  at `/eve/v1`), opening the session with the thread's ID as its `operationId` and delivering
+  under the event's cursor as the `idempotencyKey`: eve keeps one session per thread and drops a
+  repeat, so there's no store of sessions here.
+- **The agent acts on the board through the factory's own handle** (`agent/tools/vb.ts`), as this
+  deployment under the profile `factory`, so `vb typing` and reads reach Slack through the board's
+  sync. The watcher's ID is not the agent's profile: the board never wakes a watcher for its own
+  writes, and the agent's check-ins must reach it. The agent's `setup_steps` tool asks the setup
+  page's own `/api/launcher/steps`.
 - **The setup checks write nothing.** `lib/setup.ts` checks the deployment against what the board
   route syncs and says what to do. A test drives each check through `setup()` against a fake
   network (`test/setup.test.ts`).
