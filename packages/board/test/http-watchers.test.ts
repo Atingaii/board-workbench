@@ -144,9 +144,13 @@ describe('watchers on a board on http()', () => {
       const scheduled = async () => (await julian('GET', `/schedules?re=${root.id}`)).body.schedules as unknown[]
       while ((await scheduled()).length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
       vi.setSystemTime(Date.now() + 5 * 60_000)
-      await queue.fire()
       const replies = async () => (await julian('GET', `/messages/${root.id}`)).body.replies as { text: string; by: { actor: string } }[]
-      while ((await replies()).length < 2) await new Promise((resolve) => setTimeout(resolve, 5))
+      // The schedule shows before the queue holds its timer, so one fire could find nothing due: fire
+      // until the watcher has answered its check-in, or for 3 seconds, so a watcher that never runs fails below.
+      for (const giveUp = performance.now() + 3_000; (await replies()).length < 2 && performance.now() < giveUp; ) {
+        await queue.fire()
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
       expect((await replies()).map((reply) => [reply.text, reply.by.actor])).toEqual([
         ['check on CI', `${V0}+ci`],
         ['still red', `${V0}+ci`],

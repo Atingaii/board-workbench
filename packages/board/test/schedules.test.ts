@@ -63,13 +63,19 @@ describe('scheduled messages', () => {
     const julian = fresh(board.fetch, 'u_julian', {})
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     const root = (await julian('POST', '/messages', { channel: 'dev', text: 'the build is red' })).body.message
-    await settle()
+    // Once the watcher has scheduled its check-in, the clock moves past it.
+    while (((await julian('GET', `/schedules?re=${root.id}`)).body.schedules as unknown[]).length === 0) await settle()
     expect(ran).toEqual([['message.posted', 'the build is red']])
     vi.setSystemTime(Date.now() + 5 * MINUTE)
-    await queue.fire()
+    const replies = async () => (await julian('GET', `/messages/${root.id}`)).body.replies as { text: string; by: { actor: string } }[]
+    // The schedule shows before the queue holds its timer, so one fire could find nothing due: fire
+    // until the watcher has answered its check-in, or for 3 seconds, so a watcher that never runs fails below.
+    for (const giveUp = performance.now() + 3_000; (await replies()).length < 2 && performance.now() < giveUp; ) {
+      await queue.fire()
+      await settle()
+    }
     await settle()
-    const { replies } = (await julian('GET', `/messages/${root.id}`)).body as { replies: { text: string; by: { actor: string } }[] }
-    expect(replies.map((reply) => [reply.text, reply.by.actor])).toEqual([
+    expect((await replies()).map((reply) => [reply.text, reply.by.actor])).toEqual([
       ['check on CI', 'board:watch:ci'],
       ['still red', 'board:watch:ci'],
     ])
