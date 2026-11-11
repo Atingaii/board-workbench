@@ -3308,9 +3308,11 @@ if (claim) {
 - **Only its owner's edits change what a task says.** Editing the root, which
   only its author can do, changes the task when the author is its owner. When
   anyone else's edit lands (the author of a thread someone else made a task, or
-  a platform edit synced in), the board holds the task: `task.blocked`, kind
-  `edited`, which ends any claim. Its owner reads the new text and unblocks or
-  cancels it. An agent reads the text as it is when it claims.
+  a platform edit synced in) on a task that's `waiting`, `ready`, or `claimed`,
+  the board holds it: `task.blocked`, kind `edited`, which ends any claim. Its
+  owner reads the new text and unblocks or cancels it. A task that's held
+  already stays held as it was, and one that's finished stays finished: an edit
+  never brings work back. An agent reads the text as it is when it claims.
 
 ### States
 
