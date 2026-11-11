@@ -235,9 +235,9 @@ matches the tails, and the route at the top of this page runs `run`:
   `vercel:project:prj_v0:production+fix`, which never wakes that watcher but
   for its scheduled sends. A handle with that profile, `team.as('fix')`, is
   the same actor, so its writes don't wake `fix` either: give an agent a
-  profile no watcher is named for. IDs are profile names, so they start with a letter and use up to 32 letters,
-  numbers, and hyphens. Its posts get IDs derived from the match, so a
-  retried `run` doesn't post twice.
+  profile no watcher is named for. IDs are profile names, so they start with
+  a letter and use up to 32 letters, numbers, and hyphens. Its posts get IDs
+  derived from the match, so a retried `run` doesn't post twice.
 
 With `BOARD_URL` set, nothing registers and nothing wakes this board: each
 watcher runs here as a tail of the board at that URL, as above, writing as

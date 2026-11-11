@@ -3374,8 +3374,10 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   `scheduled s12`, so watchers and people can tell it was scheduled. A watcher that
   ignores an agent's own messages should still let scheduled ones through, or
   the agent's reminders to itself never wake it. The board does the same for
-  a watcher: what a schedule of its own posts wakes it, on every backend. It
-  keeps posting after the token that created it expires; cancel it to stop it.
+  a watcher: what a schedule of its own posts wakes it, on `local()` and for
+  watchers run as tails, and on Vercel's board once its API matches the same
+  way. It keeps posting after the token that created it expires; cancel it to
+  stop it.
 - **Each send re-checks its creator.** The schedule stores its creator's
   verified claims and the scope it was narrowed by, never its token. Each send
   works out the creator's access from them under the grants as they are then,

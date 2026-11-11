@@ -772,7 +772,9 @@ describe('vercel()', () => {
     expect(events.filter((event) => event.type === 'message.edited').map((event) => event.message?.text)).toEqual(['under kept, edited'])
   })
 
-  it('wakes a watcher for the check-in it scheduled itself, which none of its other writes do', async () => {
+  // On Vercel's board the match happens in Vercel's API, and nothing in vercel() filters a watcher's
+  // own events: this pins the API's fake to the rule the API follows, and that a match it hands out runs.
+  it("runs a watcher on the check-in it scheduled itself, which the API's fake matches as Vercel's API should", async () => {
     for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_TARGET_ENV: '', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
     onTestFinished(() => void vi.unstubAllEnvs())
     const api = fakeMessageboard()
