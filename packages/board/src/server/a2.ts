@@ -6,6 +6,7 @@ import { consumer, createServer, type A2Scheduler, type ConsumerContext } from '
 import { boardContract, inboxContract, INBOXES_SESSION, inboxSession, SCHEDULES_SESSION, type InboxEvent } from '../contract/contract.ts'
 import { BOARD_SESSION, type BoardEvent, type BoardEvents } from '../contract/events.ts'
 import { createTrust } from './trust.ts'
+import { createSchemas } from './schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { type Actor, type ExternalCopy, type Message } from '../contract/folds.ts'
@@ -290,6 +291,8 @@ function build(options: A2Options, binding: BoardBinding) {
     explain: (principal, channel) => binding.explain(principal, channel),
     team: async () => (await binding.project()).teamId,
   })
+  // The schema registry, in a session of its own beside the board's.
+  const schemaRegistry = createSchemas({ store: log })
   const inboxes = inboxServer.session(INBOXES_SESSION)
   /** The inboxes this instance knows have an `inbox.opened`, so most pushes write nothing more. */
   const opened = new Set<string>()
@@ -580,6 +583,10 @@ function build(options: A2Options, binding: BoardBinding) {
     tokens: async (caller) => access.tokens(await identityOf(caller)),
     createToken: async (caller, body) => access.createToken(await identityOf(caller), body),
     revokeToken: async (caller, input) => access.revokeToken(await identityOf(caller), input),
+    // Anyone board() let in reads the schemas: they say what anyone posting has to send.
+    schemas: async () => schemaRegistry.schemas(),
+    schema: async (_caller, input) => schemaRegistry.schema(input),
+    createSchema: async (caller, body) => schemaRegistry.createSchema(await identityOf(caller), body),
     async upload(caller, { data, name, type }) {
       const { principal } = (await identityOf(caller))
       // A file is no use until a post or an import carries it, so uploading needs `post` or `sync` somewhere.

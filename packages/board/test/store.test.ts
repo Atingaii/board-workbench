@@ -21,6 +21,7 @@ function message(id: number, overrides: Partial<MessageView> = {}): MessageView 
     noSync: false,
     origin: null,
     from: null,
+    blocks: [],
     createdAt: '2026-10-01T00:00:00.000Z',
     editedAt: null,
     deleted: false,

@@ -131,6 +131,7 @@ One package, `@vercel/board`, with subpath exports:
 | --- | --- | --- |
 | `@vercel/board` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
 | `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; `resolveActor()`; `compileAccess()`, `union()`, `FULL_ACCESS`, and `DEFAULT_CAN`; `parseCan()` and `CAN_MAX`, which read `x-board-can` as the board does; and the permission types | server |
+| `@vercel/board/schemas` | How a board keeps schemas and reads blocks, as plain functions that import nothing: `checkDefinition()` and `checkValue()`, which check a definition and a value against one; `canonical()`, by which two definitions are the same version; `findBlocks()` and `block()`, which read and write a message's blocks; `parseSchemaId()`; and `BUILT_IN_SCHEMAS`. For a server that keeps a board itself, as Vercel's API does | isomorphic |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `INSPECTOR_PAGE` names the inspector's page (name, version, path, SHA-256) for that CLI to fetch and hand to `createApp()` as `inspectorPage`, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `@vercel/board/backend-local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
@@ -392,11 +393,14 @@ The backend picks them; the protocol only says their shape:
   registered watchers, sync's records, and `/events`. There are no optional
   groups, and discovery lists none. A backend may keep no schedules, tasks, or
   files, and says so with a 501 (`no_scheduler`, `no_tasks`, `no_files`), which
-  the kit reports as not kept here.
+  the kit reports as not kept here; one that keeps no schemas answers 501
+  `no_schemas`.
 - **`@vercel/board/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
   at a time in the report (`core`, `schedules`, `tasks`, `attachments`,
   `watchers`, `sync`). It writes to one channel, every post kept on the board and labeled
-  with the run, and deletes what it posted. A check the board answers with a
+  with the run, and deletes what it posted. Its `schemas` group registers one
+  version, `conformance@1`, the same on every run, which stays: a version is
+  never removed. A check the board answers with a
   501 in `schedules`, `tasks`, or `attachments` is `skipped`, with the detail `not kept
   here: <the board's message>`; one that would replace the caller's own
   registration is skipped too. `vb conformance` runs it as the CLI's identity,
@@ -1207,6 +1211,8 @@ through the sync that speaks for them, under the key it imported them through.
 | Label | (message, key) → value | set or unset; each key holds one value |
 | Attachment | 128 random bits, base64url | uploaded once, then carried by one or more messages; never changes |
 | Task | its root message's ID: a thread with a state, not an entity of its own | a thread made a task, then claimed, released, blocked, completed, failed, canceled, or reopened (see [Tasks](#tasks)) |
+| Schema | a name and a version: `sandbox@1` | registered once; never changes, and is never removed |
+| Block | a fence in a message's text that names a schema | written with its message, and checked then; changes and goes with it |
 
 - **Channel paths** are one or more segments matching
   `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
@@ -1319,6 +1325,157 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
 - **`vb inspect` shows them:** images and video inline, in a fixed frame so
   loading one doesn't move the page, and other files as chips that download.
   Its composer attaches files, or takes them pasted.
+
+### Schemas
+
+A schema says what a piece of structured data holds: a JSON Schema for an
+object, under a name and a version (`sandbox@1`). The board keeps a registry
+of them, so whoever writes data and whoever reads it agree on its shape
+without sharing code. A message carries data under one in a
+[block](#blocks).
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+const { schema, created } = await team.createSchema({
+  name: 'sandbox',
+  version: 1,
+  description: 'What a sandbox did.',
+  schema: { type: 'object', required: ['id', 'action'], properties: { id: { type: 'string' }, action: { enum: ['started', 'stopped'] } } },
+})
+const schemas = await team.schemas()            // the built-ins, then the board's own
+const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one that isn't there
+```
+
+- **A version never changes, and is never removed.** Registering one that's
+  there with the same definition (its JSON Schema, whatever order its keys
+  come in, and its description) answers it with `created: false`; another
+  definition is 409 `schema_immutable`. A change is the next version, which
+  the caller names: the board assigns none. Of two that register one version
+  at once, one makes it.
+- **A name** is up to 80 lowercase letters, numbers, and `._-`, starting with
+  a letter, and a version a whole number from 1 to 99,999. A view is `{ id,
+  name, version, description, schema, builtIn, by, at }`, `by` and `at` null
+  for a built-in.
+- **Every board has the built-ins,** `git-commit@1` (`sha`, `title`) and
+  `vercel-deployment@1` (`url`, and `gitSha` when it has one), as Vercel's API
+  has them. They list first, and their names are reserved: a version of one is
+  409 `reserved_schema`.
+- **A definition is structural JSON Schema.** It describes an object (`"type":
+  "object"` at its root) with `type`, `properties`, `required`,
+  `additionalProperties`, `items` (one schema for every item), `enum`, `const`,
+  `oneOf`, `anyOf`, `allOf`, `not`, the length, count, and number bounds,
+  `multipleOf`, `format` (`date-time`, `date`, `time`, `email`, `uri`, `uuid`,
+  `hostname`, `ipv4`, `ipv6`), and `title`, `description`, and `$schema`. So it
+  says unions, optional fields, and enums. Anything else is 400
+  `invalid_schema`: no `$ref`, no `pattern`, no `uniqueItems`, and no keyword
+  of the caller's own, so checking a value costs its size times the schema's.
+  Both are bounded: 32 KB of JSON, 512 nodes (each `enum` and `const` value
+  counts), 64 subschemas, 16 levels. A board registers 500 versions at most
+  (400 `too_many_schemas`). `checkDefinition` in `src/contract/data-schemas.ts`
+  is the rule, from plain data.
+- **The body is strict:** a key `POST /schemas` doesn't know is 400
+  `invalid_request`, never dropped, since what the board kept could never be
+  changed.
+- **Anyone the board lets in reads the schemas,** whatever its channels: they
+  hold no message, and say what a writer has to send. Registering takes
+  `manage` at `*`, as listing grants does, since a schema is the whole
+  board's. So a person does by default, a token only when its `can` gives it
+  `manage` everywhere, and another project's deployments don't: g2 gives them
+  read, post, react, label, and sync.
+- **On each backend:** `local()` keeps them on its log, in a session of their
+  own, `schemas`, beside `board`, so none reaches the message tables,
+  `/events`, watchers, or sync. `http()` forwards them to the board it uses.
+  `vercel()` maps them to the team's registry in Vercel's API (`/schemas`,
+  each write with an `operationId`), which every board on the team shares, and
+  adapts its views: `createdAt` in milliseconds is `at`, `createdBy` is `by`,
+  and the team's own list by name and then version as a number, where the API
+  lists them by ID as text. The API doesn't say whether a registration made
+  the version, so `vercel()` reads it first: `created` is whether it was
+  missing then, and of two that register one version at once there, both may
+  say they made it, though the registry keeps one. The API checks a definition more strictly than `checkDefinition`:
+  it also refuses a `required` name its schema's `properties` don't declare,
+  and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: people and apps whose team role is owner,
+  member, or developer register, and a project's own credentials and a board
+  token reach none of it yet, reads included (403).
+
+### Blocks
+
+A block is data in a message: a JSON object in a code fence whose info string
+names its schema, `json#<name>@<version>`. The text stays the message, so a
+block goes wherever the text goes (the log, `/events`, a platform, as a code
+block), and nothing is kept beside it. A message can say something and carry
+data, or be only its data.
+
+````markdown
+sandbox sbx-123 stopped
+
+```json#sandbox@1
+{ "id": "sbx-123", "action": "stopped" }
+```
+````
+
+```ts
+import { board, block } from '@vercel/board'
+
+const team = board()
+const message = await team.post('deploys', block('sandbox@1', { id: 'sbx-123', action: 'started' }))   // a message that is only its block
+await team.reply(message.id, `it stopped\n\n${block('sandbox@1', { id: 'sbx-123', action: 'stopped' })}`)
+message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', action: 'started' } }]
+```
+
+- **A fence is a block** when it's the message's own: it opens a line at the
+  top level, indented three spaces at most, and its info string is `json#` and
+  a schema's ID. One inside a longer fence is that fence's text. One in a
+  quote or a list item is its container's, as markdown reads them (text right
+  under a quote's or an item's text is still theirs), and ends with it, so a
+  message can show a block, or quote one, without posting it again, and none
+  of them hides a block that follows. `findBlocks` in `src/contract/blocks.ts`
+  is the rule, which board's tests hold to a CommonMark parser's reading of
+  messages made of every kind of line; raw HTML is the one place they part,
+  where a fence is a block to board and HTML to a renderer. `block(id, data)`
+  writes one: a plain function that returns text, to post alone or among
+  prose.
+- **board() checks a write's blocks before the backend sees it,** on every
+  backend: a post, an edit, and a schedule when it's made, and what the
+  middleware passed on when it changed the text. Each block is a JSON object
+  that matches the schema its fence names, which board() reads from the
+  backend's registry once, since a version never changes, and as itself, so
+  every caller's write is held to the same definition whoever may read
+  schemas. A caller board() already knows may not post where the write lands
+  gets the backend's refusal, as for any text, not what its blocks say. One that isn't, or
+  whose fence never closes, is 400 `invalid_block`, saying which field is
+  wrong (`action must be "started" or "stopped"`); one that names a schema
+  the board doesn't have is 400 `schema_not_found`. Nothing is written.
+  `checkValue` in `src/contract/data-values.ts` checks a value against a
+  definition with no code generation, so it runs where a handle does.
+  `@vercel/board/schemas` exports both rules, with `checkDefinition`, for a
+  server that keeps a board itself to check a write as board() does.
+- **A platform's text is never checked.** What a sync imports can't be
+  refused, so it's stored as it came and carries no blocks, whatever it says:
+  blocks go out to platforms, and none come in. The same goes for an edit a
+  sync brings in to a message written on the board: its text is the
+  platform's from then on, and it carries no blocks until it's edited on the
+  board again. What a sync writes on the board itself (an import with `from:
+  null`, a sync callback's client's or a sync elsewhere's) is written on the
+  board, and checked as any write, before the middleware and after. A block's
+  fence is code to whatever reads or rewrites mentions, so its data stays as
+  it was checked.
+- **Reads show the data.** Every message view has `blocks`, each `{ schema,
+  version, data }`, in the order its text has them: read out of the text of a
+  message written on the board, which was checked then, and empty for an
+  imported or a deleted one. `vb read` and `vb tail` print a block as one line
+  where its fence was (`data sandbox@1 · {…}`, its JSON in full), and
+  `--json` has the data, so a program never parses the text.
+- **`--schema <schema>` on `vb post`, `reply`, `schedule`, and `edit`** takes
+  the text as that schema's JSON, from wherever text comes (the argument, `-`,
+  `--text-file`), and writes a message that is only that block.
+- **On Vercel's board** the API keeps text alone and checks nothing yet, so
+  board() does, for what's written through it: a write straight to the API
+  isn't checked, and a deployment's own credentials can't post a block, since
+  the API lets no project read the schema to check it against (403).
 
 ## The local board
 
@@ -1684,6 +1841,9 @@ status.
 | GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
 | POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
+| GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |
+| GET | `/schemas/:id` | One version, by `name@version`: `{ schema }`. 400 `invalid_schema_id`, 404 `schema_not_found` |
+| POST | `/schemas` | `{ name, version, description?, schema }`: registers a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition; another is 409 `schema_immutable`, a built-in's name 409 `reserved_schema`, and a definition the board won't keep 400 `invalid_schema` |
 | POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }`, or 501 `no_files` on a board that keeps none |
 | GET | `/attachments/:id` | The file, with a token like any read. Sandboxed (`content-security-policy: sandbox`); only images, MP4/WebM video, and plain text display inline, everything else downloads |
 | POST | `/messages/:id/edit` | `{ text }` |
@@ -1920,20 +2080,23 @@ board actors                                   actors and their handles
 board read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 board read <id>                                one thread; with filters, the root and the replies that match
 
-board post <channel|id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
-board reply <id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
-board schedule <channel|id> ["<text>" | --text-file <path>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
+board post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+board reply <id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
+board schedule <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board tokens [list]                            yours, or with manage, everyone's
 board tokens create <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]   prints the secret, once
 board tokens revoke <token>                    e.g. t12; it and every token minted with it
+board schemas [list]                           the built-in schemas, then the board's own
+board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
+board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
 board grants [list]                            the board's grants; needs manage at *
 board grants create <principal>... --can <pattern=permissions>...   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
 board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]...   --can replaces
 board grants explain [<principal>] <channel>   which grant decides, for you or someone else
 board grants revoke <grant>                    e.g. g3
-board edit <id> ("<text>" | --text-file <path>) [--if-revision N]   only if no one has edited or deleted it since revision N
+board edit <id> ("<text>" | --text-file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
 board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
@@ -3631,8 +3794,8 @@ board that keeps none.
   on retry.
 - Typed data on a task: a task has no `data` field, and its `result` is text.
   Its text and labels carry what it needs, and a typed record (a commit, a
-  pull request's state, an outcome) belongs in its thread, as a block in a
-  message, once the board has those.
+  pull request's state, an outcome) belongs in its thread, as a
+  [block](#blocks) in a message.
 
 ### Open
 

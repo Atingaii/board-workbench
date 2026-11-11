@@ -1,9 +1,11 @@
 import type { Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView, type TokenView } from '../api/routes.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type ThreadSummaryView, type TokenView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
+import { schemaId } from '../contract/data-schemas.ts'
+import { blocksIn } from '../contract/blocks.ts'
 import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
@@ -37,6 +39,8 @@ type ApiActor = {
   session?: string
 }
 type ApiChannel = { id: string; name: string }
+/** A schema version in the team's registry: a built-in's `createdAt` is 0, and it has no `createdBy`. */
+type ApiSchema = { id: string; name: string; version: number; description?: string; schema: Record<string, unknown>; builtIn: boolean; createdAt: number; createdBy?: ApiActor }
 type ApiThread = {
   id: string
   channelId: string
@@ -340,6 +344,17 @@ const iso = (ms: number) => new Date(ms).toISOString()
 const grantFrom = (grant: GrantView): GrantView => ({ ...grant, at: expiryOf(grant.at) })
 /** A token as the API answers it, its times in milliseconds, as the protocol has them. */
 const tokenFrom = (token: TokenView): TokenView => ({ ...token, at: expiryOf(token.at) ?? token.at, expiresAt: expiryOf(token.expiresAt) ?? token.expiresAt })
+/** A schema the API keeps, as the protocol shows it. */
+const schemaFrom = (schema: ApiSchema): SchemaView => ({
+  id: schema.id,
+  name: schema.name,
+  version: schema.version,
+  description: schema.description ?? null,
+  schema: schema.schema,
+  builtIn: schema.builtIn,
+  by: schema.createdBy?.id ?? null,
+  at: schema.builtIn ? null : iso(schema.createdAt),
+})
 const idAt = (threadId: string, sequence: number) => `msg_${threadId.slice('thr_'.length)}_${sequence}`
 
 /** Where a message ID points: its thread and its place in it. Null for one that isn't a message's. */
@@ -908,6 +923,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       revision: message.revision,
       author: await nameOf(who, message.createdBy),
       ...(message.schedule ? { schedule: { id: message.schedule.id, n: message.schedule.n } } : {}),
+      // The API keeps text alone: its blocks are read out of it here, for what was written on the board.
+      blocks: (message.from ?? null) === null && message.deletedAt === undefined ? blocksIn(message.text) : [],
     }
   }
 
@@ -2226,6 +2243,32 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async revokeToken(caller, { id }, signal) {
       const who = whoOf(caller)
       return api<Protocol['revokeToken']['output']>(who, 'POST', await onBoard(who, `/tokens/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
+    },
+    // Schemas are the team's in the API: every board on it shares one registry.
+    async schemas(caller, _input, signal) {
+      const who = whoOf(caller)
+      const schemas = (await all<ApiSchema>(who, '/schemas', 'schemas', {}, signal)).map(schemaFrom)
+      // The API lists a team's own by their IDs as text, so sandbox@10 before sandbox@2: by name, then version, as every board lists them.
+      const order = (schema: SchemaView) => (schema.builtIn ? 0 : 1)
+      return { schemas: schemas.sort((a, b) => order(a) - order(b) || (a.builtIn ? 0 : a.name < b.name ? -1 : a.name > b.name ? 1 : a.version - b.version)) }
+    },
+    async schema(caller, { id }, signal) {
+      const who = whoOf(caller)
+      const { schema } = await api<{ schema: ApiSchema }>(who, 'GET', `/schemas/${encodeURIComponent(id)}`, signal ? { signal } : {})
+      return { schema: schemaFrom(schema) }
+    },
+    async createSchema(caller, input, signal) {
+      const who = whoOf(caller)
+      // The API answers the schema whether or not this made it, so that's whether it was there before.
+      const there = await api(who, 'GET', `/schemas/${encodeURIComponent(schemaId(input.name, input.version))}`, signal ? { signal } : {}).then(
+        () => true,
+        (error: unknown) => {
+          if (error instanceof HttpError && error.code === 'schema_not_found') return false
+          throw error
+        },
+      )
+      const { schema } = await api<{ schema: ApiSchema }>(who, 'POST', '/schemas', { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      return { schema: schemaFrom(schema), created: !there }
     },
     async schedule(caller, input, signal) {
       if (input.attachments?.length) throw notSupported('files on scheduled messages')
