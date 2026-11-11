@@ -347,7 +347,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'post',
-    brief: '[--label k=v]... [--attach file]...  (text - reads stdin)',
+    brief: '[--label k=v]... [--attach file]...',
     description: 'a new thread in a channel, or with an ID, a reply in its thread',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
     options: [option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
