@@ -20,6 +20,8 @@ export type Task = {
   state: TaskState
   /** The principal that made the thread a task. */
   owner: string
+  /** The actor it did that as: itself, or one of its profiles, which is held to the tasks it made. No view shows it. */
+  maker: string
   /** The one actor that claims it, or null when anyone who may does. */
   for: string | null
   /** The tasks it waits for, by their roots' IDs. */
@@ -206,7 +208,7 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       // A thread becomes a task once, at its root, while the root is there.
       if (!message || message.deleted || message.re !== null || message.task) return undefined
       const { needs, by } = event.payload
-      message.task = { state: needs.length > 0 ? 'waiting' : 'ready', owner: by.principal, for: event.payload.for, needs: [...needs], epoch: 0, claim: null, blocked: null, result: null, reason: null }
+      message.task = { state: needs.length > 0 ? 'waiting' : 'ready', owner: by.principal, maker: by.actor, for: event.payload.for, needs: [...needs], epoch: 0, claim: null, blocked: null, result: null, reason: null }
       return labeled(message)
     }
     case 'task.assigned':

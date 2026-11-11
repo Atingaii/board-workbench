@@ -11,7 +11,7 @@ import { authorize, type Access, type Permission } from './access.ts'
 import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
 import { indexOf, ref, toMessageFilter, view, whoIs } from './feed.ts'
 import type { MessageFilter, ThreadSummary } from '../store/types.ts'
-import { appendFrom, authorizeMessage, movedOn, seenFor, untilApplied, type Along, type Events, type Identity, type WriteContext } from './writes.ts'
+import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type Events, type Identity, type WriteContext } from './writes.ts'
 
 /** The longest lease this board gives, in seconds: what a claim asks for past it comes back as this. */
 export const LEASE_CAP_S = 3600
@@ -203,16 +203,18 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     })
 
   /**
-   * Whether the caller changes a task as its owner: `manage` in its channel, or the owner's
-   * principal while it may still write there. A principal ID is coarser than access (a proxy
-   * narrows one token with `x-board-can`), so one narrowed to reading doesn't cancel its
-   * principal's tasks.
+   * Whether the caller changes a task as its owner: `manage` in its channel, or the owner while it
+   * may still write there. A principal ID is coarser than access (a proxy narrows one token with
+   * `x-board-can`), so one narrowed to reading doesn't cancel its principal's tasks. And a
+   * principal's profiles share its credential (a sandbox's agent writes as one), so, as with a
+   * message, a profile changes only the tasks it made, and the principal itself any of them:
+   * otherwise one profile would assign itself what was another's.
    */
   function owns(identity: Identity, root: Root) {
-    const { access, id } = identity.principal
+    const { access } = identity.principal
     if (access.can('manage', root.channel)) return
-    if (root.task.owner === id && (access.can('post', root.channel) || access.can('label', root.channel))) return
-    throw new HttpError(403, 'task_not_owned', `#${root.id} is someone else's task: its owner, or manage in ${root.channel}, changes it`)
+    if (ownedBy(root.task, identity) && (access.can('post', root.channel) || access.can('label', root.channel))) return
+    throw new HttpError(403, 'task_not_owned', `#${root.id} is someone else's task: its owner as itself, the profile that made it, or manage in ${root.channel}, changes it`)
   }
 
   /** Refuses a write whose claim is over: released, settled, held, taken over, or past its lease. It never says who holds the task now. */

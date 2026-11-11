@@ -438,7 +438,9 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   write. A failed or canceled one readies nothing.
 - **Its owner changes it,** while it may post or label in its channel, and so
   does `manage` there: `block`, `unblock`, `reopen`, `assign`, and `cancel`.
-  Anyone else gets 403 `task_not_owned`.
+  Anyone else gets 403 `task_not_owned`. A caller that writes as a profile
+  owns only the tasks it made, and its principal, as no profile, any of them,
+  as with [who edits what](../01-board/09-access.md#who-edits-what).
 - **`GET /tasks`** lists open tasks unless `state` is `all` or one state. `owner`
   and `for` take a handle or an ID, and `needs` a task's ID. Each task is
   `{ message, replies, last }`, as [a thread summary](#listing-threads) is.
@@ -759,7 +761,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `platform_error`, `invalid_target`, `unsupported` | a source read the platform failed, of a target it can't read, or on a platform that reads nothing on demand |
 | 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
 | 403 | `forbidden` | a caller no grant lets in (the `hint` is the grant to create), a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-can` |
-| 403 | `task_not_owned` | blocking, unblocking, reopening, assigning, or canceling a task as neither its owner nor `manage` in its channel |
+| 403 | `task_not_owned` | blocking, unblocking, reopening, assigning, or canceling a task as neither its owner nor `manage` in its channel. A profile owns only the tasks it made; its principal, as itself, any of them |
 | 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
 | 403 | `not_a_project` | a `path` in `POST /watchers` from a caller that isn't a Vercel project, on a board that wakes by path: a path is on the caller's own project |
 | 404 | `not_found` | no such route, a request a board with no backend doesn't serve, or a webhook for a sync entry the board doesn't have |

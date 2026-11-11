@@ -2,7 +2,7 @@ import { derivedId } from '../client/ids.ts'
 import { ALONG_MAX, type BoardEvent } from '../contract/events.ts'
 import type { Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
-import { foldMessages, type ActorsState, type Channel, type Message, type MessagesState } from '../contract/folds.ts'
+import { foldMessages, type ActorsState, type Channel, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { own } from '../contract/own.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
 import { EDITED_HOLD, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
@@ -71,6 +71,13 @@ function verifiedAs({ principal, author, actor }: Identity): boolean {
  */
 const authored = (message: Message, identity: Identity) =>
   message.by.principal === identity.principal.id && (platformProfile(identity.author.profile) === null || message.by.actor === identity.author.actor)
+
+/**
+ * Whether `identity` is a task's owner, to change it or what it says: the principal that made it a
+ * task, as itself, or as the profile it made it as. Another of its profiles isn't: they share a
+ * credential, and nothing else keeps one's work from another.
+ */
+export const ownedBy = (task: Pick<Task, 'owner' | 'maker'>, identity: Pick<Identity, 'principal' | 'actor'>) => wroteAs(identity, { principal: task.owner, actor: task.maker })
 
 const messageNotFound = (id: number) => () => notFound(`message not found: #${id}`, 'message_not_found')
 
@@ -629,7 +636,7 @@ const EDITED = 'its text was edited by someone who does not own the task'
 function heldByEdit(root: Message | undefined, editor: Identity): Events {
   const task = root?.task
   // A platform user is never the owner, even one the owner's own sync speaks for: they write as its profile.
-  const owner = task?.owner === editor.principal.id && editor.principal.kind !== 'external'
+  const owner = task !== undefined && ownedBy(task, editor) && editor.principal.kind !== 'external'
   if (!root || root.deleted || !task || owner) return []
   if (task.state !== 'waiting' && task.state !== 'ready' && task.state !== 'claimed') return []
   return [{ type: 'task.blocked', payload: { id: root.id, thread: root.thread, kind: EDITED_HOLD, reason: EDITED, by: editor.author } }]

@@ -380,6 +380,8 @@ if (claim) {
   process that kept them.
 - **`block`, `unblock`, `reopen`, `assign`, and `cancel`** are for the task's
   owner, or `manage` in its channel: anyone else gets 403 `task_not_owned`.
+  A handle that writes as a profile (`team.as('fixer')`) owns only the tasks
+  it made. The principal itself owns what any of its profiles made.
   `block` here holds a task no one has claimed.
 - **`list`** answers open tasks, oldest first, as thread summaries. `state`
   is `open`, `all`, or one state. Pass `cursor` back as `after` for the next

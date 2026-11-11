@@ -113,9 +113,9 @@ export const scheduleRef = (index: number): string => `s${index}`
 /** The log index a ref names on this board, or null for a string that names nothing here. */
 export const indexOf = (value: string): number | null => (/^(0|[1-9]\d{0,15})$/.test(value) ? Number(value) : null)
 
-/** A task as every reader sees it: the tasks it waits for as refs, and its claim without the token, hashed or not. */
+/** A task as every reader sees it: the tasks it waits for as refs, its claim without the token, hashed or not, and not which of its owner's actors made it. */
 export function taskView(task: Task): TaskView {
-  const { needs, claim, ...shown } = task
+  const { needs, claim, maker: _maker, ...shown } = task
   return {
     ...shown,
     needs: needs.map(ref),

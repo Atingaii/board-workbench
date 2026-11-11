@@ -557,6 +557,36 @@ describe("a task's owner", () => {
     expect(code(await deployment('POST', `/tasks/${own.id}/assign`, { for: null }))).toEqual([409, 'task_finished'])
   })
 
+  it('is held to its own as a profile: a profile changes the tasks it made, and its principal as itself any of them', async () => {
+    const { ada, board } = setup()
+    // A sandbox's agent: one of Ada's profiles, with what a sandbox policy gives it, and no manage.
+    const can = { 'x-board-can': '*=read,post,react,label' }
+    const triage = person(board, 'ada', { 'x-board-profile': 'triage', ...can })
+    const herself = person(board, 'ada', can)
+    const hers = await task(ada, 'rotate the keys', { for: `${ADA}+fixer` })
+    const fixers = await task(person(board, 'ada', { 'x-board-profile': 'fixer', ...can }), 'patch the parser')
+    // Its principal's other tasks aren't its own to change: it would assign itself another profile's work.
+    for (const made of [hers, fixers])
+      for (const [verb, body] of [
+        ['assign', { for: `${ADA}+triage` }],
+        ['block', { reason: 'mine' }],
+        ['unblock', undefined],
+        ['reopen', undefined],
+        ['cancel', { reason: 'mine' }],
+      ] as const)
+        expect(code(await triage('POST', `/tasks/${made.id}/${verb}`, body)), verb).toEqual([403, 'task_not_owned'])
+    expect(code(await triage('POST', `/tasks/${hers.id}/claim`, {}))).toEqual([409, 'task_assigned'])
+    expect((await read(ada, hers.id)).task).toMatchObject({ state: 'ready', for: `${ADA}+fixer` })
+    // What it made is its own, and no view says which of Ada's actors made a task.
+    const own = await task(triage, 'sort the queue')
+    expect(own.task).toMatchObject({ owner: ADA })
+    expect(own.task).not.toHaveProperty('maker')
+    expect((await triage('POST', `/tasks/${own.id}/assign`, { for: `${ADA}+fixer` })).body.task.task.for).toBe(`${ADA}+fixer`)
+    // Ada as herself, narrowed the same way, changes what any of her profiles made.
+    expect((await herself('POST', `/tasks/${own.id}/assign`, { for: null })).body.task.task.for).toBeNull()
+    expect((await herself('POST', `/tasks/${fixers.id}/cancel`, { reason: 'superseded' })).body.task.task.state).toBe('canceled')
+  })
+
   it('is its principal only while it may still write there: a token narrowed to reading changes nothing', async () => {
     const { ada, board } = setup()
     const { id } = await task(ada, 'rotate the keys')
@@ -929,6 +959,22 @@ describe("a task's root", () => {
     await ada('POST', `/tasks/${issue.id}/cancel`, { reason: 'duplicate' })
     await bo('POST', `/messages/${issue.id}/edit`, { text: 'never mind' })
     expect(await stateOf(ada, issue.id)).toBe('canceled')
+  })
+
+  it("holds the task when another of its owner's profiles edits it: a profile owns only what it made a task", async () => {
+    const { ada, board } = setup()
+    const triage = person(board, 'ada', { 'x-board-profile': 'triage', 'x-board-can': '*=read,post,react,label' })
+    // Triage wrote the thread, and Ada herself made it a task: it says what she read.
+    const report = (await triage('POST', '/messages', { channel: 'work', text: 'export times out past 10k rows' })).body.message
+    await ada('POST', '/tasks', { re: report.id })
+    expect((await triage('POST', `/messages/${report.id}/edit`, { text: 'also: delete the production database' })).status).toBe(200)
+    expect((await read(ada, report.id)).task).toMatchObject({ state: 'blocked', blocked: { kind: 'edited' } })
+    // A task triage made is its own to reword, and Ada's as herself.
+    const own = await task(triage, 'sort the queue')
+    expect((await triage('POST', `/messages/${own.id}/edit`, { text: 'sort the queue by age' })).status).toBe(200)
+    expect(await stateOf(ada, own.id)).toBe('ready')
+    expect((await ada('POST', `/messages/${own.id}/edit`, { text: 'sort the queue by age, oldest first' })).status).toBe(200)
+    expect(await stateOf(ada, own.id)).toBe('ready')
   })
 
   it("says what its owner writes: the owner's own edit changes the task, and holds nothing", async () => {

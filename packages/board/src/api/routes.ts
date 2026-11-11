@@ -734,7 +734,7 @@ export type SchemaView = {
  * A task, on its root: its state (the root's `board.task` label too), whose it is, what it waits
  * for, and who holds it until when. A claim's token shows nowhere but in the answer that made it.
  */
-export type TaskView = Omit<Task, 'needs' | 'claim'> & {
+export type TaskView = Omit<Task, 'needs' | 'claim' | 'maker'> & {
   /** The tasks it waits for, by their IDs. */
   needs: string[]
   /** Who holds it. One whose `until` has passed is over: the task is claimable, and `ready` once the board says so. */

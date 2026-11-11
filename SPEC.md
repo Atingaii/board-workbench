@@ -3466,7 +3466,10 @@ if (claim) {
   for anyone else). A claimed task is held through its claim alone. A
   principal ID is coarser than access (a proxy narrows one token with
   `x-board-can`), so the owner changes it only while it may still `post` or
-  `label` there, as it had to, to make it.
+  `label` there, as it had to, to make it. And a principal's profiles share
+  its credential, so, as with a message, a profile changes only the tasks it
+  made, and the principal itself, as no profile, any of them: a sandboxed
+  agent can't assign itself what another profile was given.
 - **Anyone with `label` in its channel may claim it,** the owner's agents and
   a teammate's alike, so a team works one queue. A task's state is its root's
   `board.task` label, and working it changes that state, which is what `label`
@@ -3512,9 +3515,10 @@ if (claim) {
   (`task.canceled`, reason `deleted`), and the tombstone drops its labels,
   `board.task` among them.
 - **Only its owner's edits change what a task says.** Editing the root, which
-  only its author can do, changes the task when the author is its owner. When
-  anyone else's edit lands (the author of a thread someone else made a task, or
-  a platform edit synced in) on a task that's `waiting`, `ready`, or `claimed`,
+  only its author can do, changes the task when the author is its owner: the
+  principal itself, or the profile that made it a task. When
+  anyone else's edit lands (the author of a thread someone else made a task,
+  another of the owner's profiles, or a platform edit synced in) on a task that's `waiting`, `ready`, or `claimed`,
   the board holds it: `task.blocked`, kind `edited`, which ends any claim. Its
   owner reads the new text and unblocks or cancels it. A task that's held
   already stays held as it was, and one that's finished stays finished: an edit
