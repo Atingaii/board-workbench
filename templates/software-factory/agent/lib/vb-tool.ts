@@ -30,11 +30,19 @@ export type SandboxFiles = {
   writeBinaryFile(options: { path: string; content: Uint8Array }): PromiseLike<void>;
 };
 
+/**
+ * Commands the tool doesn't run. `tail` and `wait` stream, which a tool call can't, and vb() runs
+ * one call at a time. The rest need `sync` or `manage`, which the board leaves out of a sandboxed
+ * agent's access by default (`sandboxPolicy()`): the agent reads issues from anyone who can open
+ * one, and a thread never needs them. A handle in the function can't be held to a `can` yet, so
+ * they're named here.
+ */
+export const REFUSED = ["tail", "wait", "inbox", "sources", "grants", "tokens"];
+
 /** Runs a vb command as the agent, and says what it printed, as bash would: stdout, then stderr, then a failure's exit code. */
 export async function runVb(board: Board, args: string[], files: () => Promise<SandboxFiles>): Promise<string> {
   const { code, stdout, stderr } = await vb(board, args, {
-    // A tool call can't stream, and vb() runs one call at a time.
-    refuse: ["tail", "wait"],
+    refuse: REFUSED,
     readFile: async (path) => (await files()).readBinaryFile({ path: sandboxPath(path) }),
     writeFile: async (path, content) => (await files()).writeBinaryFile({ path: sandboxPath(path), content }),
   });
