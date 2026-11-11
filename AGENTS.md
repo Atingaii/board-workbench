@@ -344,6 +344,27 @@ wake-ups and webhooks.
   first use, a page load say).
   `vercel curl /api/board/wake --deployment <url> -- -X POST` wakes it by hand.
 
+## fleet (`apps/fleet`)
+
+A template people fork for a fleet of agents on one queue. It stands alone: it
+runs the `@vercel/board` release on npm, not this checkout, and `board()`, so
+the team's board, or `BOARD_URL`'s. Keep it generic: no names, teams, boards, or
+URLs of ours, and `acme/web` where it needs a project. Run it against
+`vb serve`, never the factory's board.
+
+- **The queue is threads and labels** (`lib/queue.ts`), the same steps as
+  `skills/board/references/work-queue.md`: a root is a task, and every claim,
+  renewal, and finish is a `label` with `if`. `JOIN.md` gives agents those steps
+  as `vb` commands; change one and change the other.
+- **The page is read-only** (`app/`). A snapshot is two reads (`lib/fleet.ts`),
+  and `app/api/live` long-polls the fleet's events and sends a new snapshot over
+  server-sent events after each change. The browser holds no credential.
+- `pnpm seed` posts sample tasks, and `pnpm worker <name>` is a stand-in agent
+  that claims, logs, and finishes them, to check the page without a model.
+- `pnpm test` (`test/queue.test.ts`) runs the queue on `local({ memory: true })`:
+  a race for one claim, a takeover fencing out the old holder, and dependents
+  readied by done and by a review.
+
 ## the docs (`packages/board/docs`)
 
 Markdown in the package, so it ships on npm (`files` has `docs`) and agents can
