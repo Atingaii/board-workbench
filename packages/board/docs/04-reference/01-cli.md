@@ -1023,7 +1023,8 @@ vb wait [channel|id] [filters] [--after <id>] [--timeout 30m]
 
 Blocks until the next matching event, prints it, and exits 0. After the event
 it prints the command that waits on from there (`next: vb wait dev --after
-1291`), so a loop misses nothing between two waits. On timeout it prints
+1291`: the run as typed, its `--as`, `--url` and filters included), so a loop
+misses nothing between two waits. On timeout it prints
 `error: Nothing matched within 30m.` on stderr, with why a wait comes back
 empty and the `read` that shows what is there, and exits 1
 (`reason: "timeout"`). `--after` defaults to the current head; pass a message

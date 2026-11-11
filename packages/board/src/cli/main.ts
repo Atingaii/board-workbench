@@ -23,7 +23,7 @@ import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, 
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
 import { commandHelp, commandPath, rootHelp } from './help.ts'
-import { closest, exitCode, failureDocument, formatFailure, type Failure, type Recovery, type Warning } from './failure.ts'
+import { closest, commandLine, exitCode, failureDocument, formatFailure, type Failure, type Recovery, type Warning } from './failure.ts'
 
 /** A failure this run says in its own words: what a command throws to stop with it. */
 export class Failed extends Error {
@@ -505,19 +505,6 @@ function filters(channel?: string): Filters & { after?: string } {
     ...(flags.text ? { text: flags.text } : {}),
     ...(flags.after !== undefined ? { after: flags.after.replace(/^#/, '') } : {}),
   }
-}
-
-/** The filters this run was given, as the words that give them again: for the command an output says to run next. */
-function filterWords(): string[] {
-  const quoted = (value: string) => (/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`)
-  return [
-    ...(flags.re ? ['--re', flags.re.replace(/^#/, '')] : []),
-    ...(flags.by ? ['--by', quoted(flags.by)] : []),
-    ...(flags.mentions ? (flags.mentions === 'me' ? ['--mentions'] : ['--mentions', quoted(flags.mentions)]) : []),
-    ...(flags.label ?? []).flatMap((label) => ['--label', quoted(label)]),
-    ...(flags.source ? ['--source', quoted(flags.source)] : []),
-    ...(flags.text ? ['--text', quoted(flags.text)] : []),
-  ]
 }
 
 /**
@@ -1134,7 +1121,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}${page.threads.length ? '\n' : ''}`)
       if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
       // The cursor is where this read stopped: the next command is the one that reads on from it.
-      out(`\nnew since then: ${[...cli(), 'read', ...(target ? [target] : []), ...filterWords(), '--after', String(page.cursor)].join(' ')}`)
+      // It's this run as typed, its board, identity and filters included, from where it stopped.
+      out(`\nnew since then: ${commandLine(rerunWithout(['--after'], '--after', String(page.cursor)))}`)
       return 0
     }
 
@@ -1524,7 +1512,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       // A bare number is seconds, as `timeout 30` and `sleep 30` are: the client's own bare number is milliseconds.
       const timeout = /^\d+$/.test(flags.timeout ?? '') ? `${flags.timeout}s` : (flags.timeout ?? '30m')
       // A message's ID where a channel goes is its thread: a channel of that name would never answer.
-      const thread = args[0] !== undefined && /^#|^\d+$|^msg_/.test(args[0]) && flags.re === undefined ? args[0] : undefined
+      const thread = args[0] !== undefined && isMessageRef(args[0]) && flags.re === undefined ? args[0] : undefined
       // Its thread is its root's, and what's wanted is what comes after it: an answer already there is one.
       const root = thread === undefined ? undefined : (await client().thread(messageId(thread))).message.id
       const waitsOn = root === undefined ? filters(args[0]) : { ...filters(), re: root, ...(flags.after === undefined ? { after: messageId(thread!) } : {}) }
@@ -1539,7 +1527,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           reason: 'timeout',
           message: `Nothing matched within ${timeout}.`,
           // What was already there when it started never matches: the commonest reason a wait comes back empty.
-          details: [flags.after === undefined ? 'wait sees only what arrives after it starts. For what is already there, read, or pass --after <id>.' : `Nothing came after ${flags.after}.`],
+          details: [waitsOn.after === undefined ? 'wait sees only what arrives after it starts. For what is already there, read, or pass --after <id>.' : `Nothing came after ${waitsOn.after}.`],
           next: [{ instruction: 'See what is there now', argv: [...cli(), 'read', ...(thread ?? flags.re ?? args[0] ? [(thread ?? flags.re ?? args[0])!] : [])] }],
         })
       }
@@ -1547,8 +1535,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       else {
         out(formatEvent(event))
         // One event a wait: this is where it stopped, so the next wait misses nothing after it.
-        const words = filterWords().filter((word, at, all) => !(root !== undefined && (word === '--re' || all[at - 1] === '--re')))
-        out(`next: ${[...cli(), 'wait', ...(root === undefined && args[0] ? [args[0]] : []), ...(root !== undefined ? ['--re', root] : []), ...words, '--after', String(event.cursor)].join(' ')}`)
+        // This run as typed, its board, identity and filters included, from where it stopped.
+        out(`next: ${commandLine(rerunWithout(['--after'], '--after', String(event.cursor)))}`)
       }
       return 0
     }

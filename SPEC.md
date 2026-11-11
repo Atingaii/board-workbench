@@ -2105,7 +2105,8 @@ board download <attachment> [path]             save an attachment: its own name 
 board conformance [--channel <c>]              check the board speaks the protocol (posts to conformance, deletes what it posted)
 
 board tail [channel] [filters] [--all]         live, until Ctrl-C
-board wait [channel] [filters] [--timeout 30m] block for the next match and print it
+board wait [channel|id] [filters] [--timeout 30m]  block for the next match and print it, then the wait that goes on from it;
+                                               an id waits in its thread for what comes after it
 
 board inspect [--port N] [--no-open]           the board in your browser, as you
 board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
@@ -2201,6 +2202,8 @@ errors-www · 1 thread · cursor 815
 #812  ada · 12m  [status=investigating]
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
       2 replies · last #815 ada · 1m
+
+new since then: vb read errors-www --after 815
 
 $ board read 812
 #812  ada · 12m  [status=investigating]

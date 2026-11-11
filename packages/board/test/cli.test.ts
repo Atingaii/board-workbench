@@ -441,7 +441,7 @@ describe('cli', () => {
 
     const read = await vb(['read', 'open-work', '--limit', '1'])
     expect(read).toMatchObject({ code: 0, stderr: '' })
-    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\nnew since then: vb read open-work --after \\d+\n$`))
+    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\nnew since then: vb read open-work --limit 1 --after \\d+\n$`))
 
     const all = await vb(['read', 'open-work'])
     expect(all.stdout).toContain(`#${second}  u_julian`)
@@ -572,16 +572,6 @@ describe('cli', () => {
     // It says why a wait comes back empty, and what reads what's already there.
     expect(timedOut.stderr).toMatch(/^error: Nothing matched within 300ms\.\n {2}wait sees only what arrives after it starts\.[^\n]*\n/)
     expect(timedOut.stderr).toContain(`vb read ${id}`)
-    // A message's ID where the channel goes waits in its thread, and a bare number is seconds.
-    const byId = vb(['wait', id, '--timeout', '10'])
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    await vb(['reply', id, 'first!'])
-    const got = await byId
-    expect(got.code).toBe(0)
-    expect(got.stdout).toMatch(new RegExp(`first!\nnext: vb wait --re ${id} --after \\d+\n$`))
-    const timedOutJson = await vb(['wait', '--re', id, '--timeout', '300ms', '--json'])
-    expect(timedOutJson).toMatchObject({ code: 1, stdout: '' })
-    expect(failure(timedOutJson)).toMatchObject({ status: 'error', reason: 'timeout' })
 
     const waiting = vb(['wait', '--re', id, '--timeout', '10s', '--json'])
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -590,6 +580,25 @@ describe('cli', () => {
     expect(answered.code).toBe(0)
     expect(JSON.parse(answered.stdout).event.message.text).toBe('me!')
   })
+
+  it("waits in a message's thread for what comes after it, given its ID where the channel goes", async () => {
+    const id = (await vb(['post', 'questions', 'anyone?'])).stdout.trim()
+    // A bare number is seconds: 900ms would have passed before the reply.
+    const byId = vb(['wait', id, '--as', 'bot', '--timeout', '10'])
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    await vb(['reply', id, 'first!'])
+    const got = await byId
+    expect(got.code).toBe(0)
+    // What it prints next is the run as typed, from where it stopped: who it ran as included.
+    expect(got.stdout).toMatch(new RegExp(`first!\nnext: vb wait ${id} --as bot --timeout 10 --after \\d+\n$`))
+    // An answer that is already there comes back at once, and with none, it says after what.
+    expect((await vb(['wait', id, '--timeout', '1'])).stdout).toContain('first!')
+    const reply = JSON.parse((await vb(['read', id, '--json'])).stdout).replies[0].id
+    const none = await vb(['wait', id, '--after', reply, '--timeout', '300ms'])
+    expect(none).toMatchObject({ code: 1, stderr: expect.stringMatching(new RegExp(`^error: Nothing matched within 300ms\\.\n {2}Nothing came after ${reply}\\.\n`)) })
+    // A channel whose name only looks like an ID is still a channel, as read takes it.
+    expect((await vb(['wait', 'msg_updates', '--timeout', '300ms'])).stderr).toMatch(/^error: Nothing matched within 300ms\.\n {2}wait sees only what arrives after it starts\./)
+  }, 20_000)
 
   it('attaches files, shows them, and downloads them', async () => {
     const dir = await tmp('board-files-')

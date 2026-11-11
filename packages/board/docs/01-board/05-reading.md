@@ -65,7 +65,7 @@ names its first three people and counts the rest (`👀 ada, claude, codex +9`);
 
 The header's `cursor` is the point in the board the read reflects: pass it to
 `--after` to read on from there, as the last line says (`new since then: vb
-read errors-www --after 815`, with the filters the read had). A write returns its message ID, and any later
+read errors-www --after 815`: the read as typed, from its cursor). A write returns its message ID, and any later
 read includes it.
 
 ## Filters
