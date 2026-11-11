@@ -8,7 +8,7 @@ import { schemaId } from '../contract/data-schemas.ts'
 import { blocksIn } from '../contract/blocks.ts'
 import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
-import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
+import { compileAccess, parseCan, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { fileName, mediaType } from '../contract/files.ts'
 import { badRequest, HttpError, json, notFound } from './errors.ts'
@@ -211,7 +211,6 @@ export type VercelEnvironment = {
   sandbox(url: string, token: string | undefined): Promise<Record<string, string>>
 }
 
-/** Who a request to the API is from, beside its credentials: a label it shows, never who it is. */
 /** Who a call to the API is: the profile it writes as, and the `can` a handle's `as()` narrowed it to, sent as `x-board-can`. */
 type Who = { profile: { name: string; avatar?: string } | null; can?: string }
 
@@ -2343,6 +2342,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async typing(caller, { id, status }, signal) {
       if (!binding || binding.sync.length === 0) return { targets: [] }
       const { message, replies } = await methods.message(caller, { id }, signal)
+      // Typing is a reply about to come: a narrowed handle needs `post` where the thread is, as on a board of its own.
+      if ('self' in caller && caller.can !== undefined && !compileAccess(parseCan(caller.can)).can('post', message.channel))
+        throw new HttpError(403, 'forbidden', `this handle can't post in ${message.channel}`)
       return { targets: await binding.typing([message, ...replies], status) }
     },
     // A source is read, and joined, with the app of the sync that runs it here.

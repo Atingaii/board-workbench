@@ -124,4 +124,12 @@ describe("as(profile, { can }) on a team's board in Vercel's API", () => {
     await expect(team.as('fixer', { can: 'all' }).readSource('slack', 'CKIT')).rejects.toMatchObject({ status: 403 })
     await expect(team.as('fixer', { can: 'all' }).joinSource('slack', 'CKIT')).rejects.toMatchObject({ status: 403 })
   })
+
+  it('shows typing only where its can posts, since typing is a reply about to come', async () => {
+    const api = fakeMessageboard()
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }), sync: slackSync() })
+    const root = await team.post('dev', 'a thread')
+    await expect(team.as('fixer', { can: { 'dev/': ['read'] } }).typing(root.id, 'looking')).rejects.toMatchObject({ status: 403 })
+    await team.as('fixer', { can: DEV }).typing(root.id, 'looking')
+  })
 })
