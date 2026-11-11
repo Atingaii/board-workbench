@@ -5,12 +5,11 @@ import type { Protocol } from '../api/protocol.ts'
 import { LEASES_SESSION, leasesContract, type LeaseEvents } from '../contract/contract.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import { foldMessages, type Message, type MessagesState, type Task } from '../contract/folds.ts'
-import { own } from '../contract/own.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { OPEN_TASK_STATES, TASK_LABEL, type TaskState } from '../contract/schemas.ts'
 import { authorize, type Access, type Permission } from './access.ts'
 import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
-import { indexOf, ref, toMessageFilter, verifiedRecord, view, whoIs } from './feed.ts'
+import { indexOf, ref, toMessageFilter, view, whoIs } from './feed.ts'
 import type { MessageFilter, ThreadSummary } from '../store/types.ts'
 import { appendFrom, authorizeMessage, movedOn, seenFor, untilApplied, type Along, type Events, type Identity, type WriteContext } from './writes.ts'
 
@@ -49,6 +48,18 @@ const finished = (task: Task) => task.state === 'completed' || task.state === 'f
 
 /** Whether `value` is shaped like an ID, `<where it's from>:<who>`, as every principal's and actor's is. What it names is a credential's to say, never a client's. */
 const isId = (value: string) => /^[^\s:]+:\S+$/.test(value)
+
+/** Waits `ms`, or until `signal` aborts, whichever is first. */
+const paused = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener('abort', done, { once: true })
+  })
 
 /** The profile part of an actor ID, as the board writes one: lowercase. */
 const PROFILE = /^[a-z][a-z0-9-]{0,31}$/
@@ -311,22 +322,19 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
   }
 
   /**
-   * The owners a claim's `from` names: the principal with that ID, or whoever the board verified
-   * under that handle. A task's text is instructions for whoever claims it, so whose it takes is
-   * never a name its holder picked: a handle a client sent names no one, and neither does one the
-   * board hasn't seen, so the claim says so instead of waiting for tasks that can't come. An ID
-   * names its principal whether or not the board has seen it write as itself: one that only ever
-   * wrote through a profile owns its tasks all the same.
+   * The owner a claim's `from` names: the principal with that ID. A task's text is instructions for
+   * whoever claims it, so whose it takes is never a handle's to say: a handle is how someone shows,
+   * and several can show the same, one a client picked and one a credential gave alike (two projects
+   * on different teams share a name). An ID is one principal's alone, whether or not the board has
+   * seen it write as itself: one that only ever wrote through a profile owns its tasks all the same.
    */
-  async function ownersFrom(value: string): Promise<string[]> {
-    const { state: actors } = await writes().session.state(actorsReducer)
-    const verified = (own(actors.byHandle, value.toLowerCase()) ?? []).filter((id) => verifiedRecord(own(actors.byId, id) ?? {}))
-    if (verified.length > 0 || isId(value)) return [value, ...verified]
-    throw badRequest(`from: this board hasn't verified anyone as ${value}, and a handle its holder picked names no owner: name them by ID`, 'invalid_from')
+  function ownerFrom(value: string): string {
+    if (isId(value)) return value
+    throw badRequest(`from: ${value} is a handle, which several can share: name the owner by ID`, 'invalid_from')
   }
 
   /** A claim of the oldest ready task there that the caller takes, or null when there's none now. */
-  async function claimNext(identity: Identity, input: Protocol['claimReadyTask']['input']): Promise<{ root: Message; claim: TaskClaim } | null> {
+  async function claimNext(identity: Identity, input: Protocol['claimReadyTask']['input'], signal: AbortSignal): Promise<{ root: Message; claim: TaskClaim } | null> {
     const ctx = writes()
     const { principal, actor } = identity
     const subtree = input.channel.endsWith('/')
@@ -339,7 +347,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     if (filter.channels?.length === 0) return null
     // Whose tasks it takes: its own, and those of the owners it names.
     const owners = new Set([principal.id])
-    for (const value of input.from ?? []) for (const id of await ownersFrom(value)) owners.add(id)
+    for (const value of input.from ?? []) owners.add(ownerFrom(value))
     const seen = seenFor(identity, (await ctx.session.state(actorsReducer)).state)
     const token = newToken()
     const read: { taken: { root: Root; claim: TaskClaim } | null } = { taken: null }
@@ -360,7 +368,8 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
         if (task.for === null && pool === null && owners.has(task.owner)) pool = root
       }
       const root = mine ?? pool
-      if (!root) return { position, events: [] }
+      // A caller that stopped waiting takes nothing: a task claimed for no one would sit out its lease.
+      if (!root || signal.aborted) return { position, events: [] }
       const { events, claim } = claiming(root, root.task, identity, input.lease, token)
       read.taken = { root, claim }
       return { position, events: seen ? [seen, ...events] : events }
@@ -526,10 +535,12 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     async claimReady(identity: Identity, input: Protocol['claimReadyTask']['input'], signal: AbortSignal): Promise<Protocol['claimReadyTask']['output']> {
       const deadline = Date.now() + (input.wait ?? 0) * 1000
       for (let pause = 100; ; pause = Math.min(pause * 2, 1000)) {
-        const next = await claimNext(identity, input)
+        // Looked at again before every try: the caller may have gone while this waited.
+        if (signal.aborted) return { task: null }
+        const next = await claimNext(identity, input, signal)
         if (next) return { task: await shown(identity, next.root), claim: next.claim }
-        if (Date.now() >= deadline || signal.aborted) return { task: null }
-        await new Promise((resolve) => setTimeout(resolve, Math.min(pause, Math.max(0, deadline - Date.now()))))
+        if (Date.now() >= deadline) return { task: null }
+        await paused(Math.min(pause, Math.max(0, deadline - Date.now())), signal)
       }
     },
 

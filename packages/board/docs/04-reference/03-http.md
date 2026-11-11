@@ -435,8 +435,7 @@ A task is a thread with a state. Its ID is its root's, and its root carries
 - **`POST /tasks/claim`** takes a channel (`work`) or a subtree (`work/`), and
   the labels a task must have, as `label: { step: "fix" }`. It claims one
   assigned to the caller first, then the oldest unassigned one the caller's
-  principal owns, or whose owner `from` names, by ID or by a handle the board
-  verified. `wait` holds the
+  principal owns, or whose owner `from` names by ID. `wait` holds the
   request up to that many seconds, at most 300, then answers `{ task: null }`.
 - **Completing a task** readies each task that waited only for it, in the same
   write. A failed or canceled one readies nothing.
@@ -681,7 +680,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
 | 400 | `reserved_label` | a write that sets or unsets a label under `board.` |
 | 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, or the task itself |
-| 400 | `invalid_from` | a claim whose `from` names no ID the board knows and no handle it verified: a handle someone's client sent names no owner |
+| 400 | `invalid_from` | a claim whose `from` names an owner by handle: several can share one, so `from` takes IDs |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
 | 400 | `size_mismatch` | finishing a direct upload whose bytes in the store aren't the size its start said |

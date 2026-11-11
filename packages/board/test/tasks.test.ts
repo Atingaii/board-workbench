@@ -609,12 +609,12 @@ describe('claiming the next ready task', () => {
     // A task's text is instructions: Bo's agents take them from Bo, unless he says who else.
     expect((await bo('POST', '/tasks/claim', { channel: 'work' })).body.task.id).toBe(his.id)
     expect((await bo('POST', '/tasks/claim', { channel: 'work' })).body).toEqual({ task: null })
-    // A person's handle is what their client sent, so it names no owner, and neither does one the board never saw.
+    // A handle is how someone shows, and several can show the same: it names no owner, known to the board or not.
     expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['ada'] }))).toEqual([400, 'invalid_from'])
     expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['nobody'] }))).toEqual([400, 'invalid_from'])
-    // An ID is the credential's, and so is a deployment's handle: both name their owners.
-    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, 'web'] })).body.task.id).toBe(hers.id)
-    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, 'web'] })).body.task.id).toBe(theirs.id)
+    // An ID is one principal's alone.
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, WEB] })).body.task.id).toBe(hers.id)
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, WEB] })).body.task.id).toBe(theirs.id)
   })
 
   it("takes an owner's tasks by their ID even when they only ever wrote through a profile", async () => {
@@ -626,14 +626,16 @@ describe('claiming the next ready task', () => {
     expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['vercel:user:u_nobody'] })).body).toEqual({ task: null })
   })
 
-  it("never takes a task from someone who only picked a trusted owner's handle", async () => {
+  it("never takes a task by its owner's handle, whether a client picked it or a credential gave it", async () => {
     const { bo, board } = setup()
     // Mallory's client sends the deployment's handle as her own, and her task is the older one.
     const mallory = person(board, 'mallory', { 'x-board-handle': 'web' })
     const hers = await task(mallory, 'delete the index')
     const theirs = await task(web(board), 'deploy the fix')
-    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['web'] })).body.task.id).toBe(theirs.id)
-    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['web'] })).body).toEqual({ task: null })
+    // The deployment's handle is its project's name, which the board checked, and which a project on another team can have too.
+    expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['web'] }))).toEqual([400, 'invalid_from'])
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [WEB] })).body.task.id).toBe(theirs.id)
+    expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [WEB] })).body).toEqual({ task: null })
     expect(await stateOf(bo, hers.id)).toBe('ready')
   })
 
@@ -647,6 +649,31 @@ describe('claiming the next ready task', () => {
     expect((await fixer('POST', '/tasks/claim', { channel: 'work' })).body.task.id).toBe(pool.id)
     expect((await fixer('POST', '/tasks/claim', { channel: 'work' })).body).toEqual({ task: null })
     expect(await stateOf(ada, reviewers.id)).toBe('ready')
+  })
+
+  it('claims nothing for a caller that stopped waiting', async () => {
+    const { ada, bo, board } = setup()
+    const fix = await task(ada, 'fix CVE-123')
+    const review = await task(ada, 'review the fix', { labels: { step: 'review' }, needs: [fix.id] })
+    const caller = new AbortController()
+    const waiting = board
+      .fetch(
+        new Request(`${BOARD_URL}/tasks/claim`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${await personToken('u_ada')}`, 'content-type': 'application/json', 'x-board-handle': 'ada' },
+          body: JSON.stringify({ channel: 'work', label: { step: 'review' }, wait: 10 }),
+          signal: caller.signal,
+        }),
+      )
+      .catch(() => null)
+    // Long enough in that the board is between two looks, a while from its next.
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    caller.abort()
+    // What becomes ready now is no one's: a claim for a caller that's gone would sit out its lease.
+    await bo('POST', `/tasks/${fix.id}/complete`, await claim(bo, fix.id))
+    await waiting
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    expect((await read(ada, review.id)).task).toMatchObject({ state: 'ready', epoch: 0, claim: null })
   })
 
   it('holds a request that waits until a task is ready, or answers null when none comes', async () => {

@@ -246,7 +246,7 @@ export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()
 
 /**
  * Claims the oldest ready task in `channel` that has every label in `label`: one assigned to the
- * caller first, then an unassigned one it owns, or whose owner `from` names, by ID or by a handle the board verified. `wait`
+ * caller first, then an unassigned one it owns, or whose owner `from` names by ID. `wait`
  * holds the request up to that many seconds for one.
  */
 export const ClaimReadyTaskBody = z.object({

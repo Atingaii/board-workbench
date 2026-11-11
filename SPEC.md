@@ -3324,10 +3324,10 @@ if (claim) {
   from its owner.
 - **Taking someone else's task is a choice.** A task's text is instructions
   for whoever claims it, so `claim --ready` takes only the caller's own tasks
-  unless `--from` names the owners it takes instructions from: each by ID, or
-  by a handle the board verified. A handle its holder's client sent is
-  anyone's to pick, so it names no owner (400 `invalid_from`): where people's
-  handles come from their CLI, `--from` takes their IDs. Text a
+  unless `--from` names the owners it takes instructions from, each by ID. A
+  handle is how someone shows, and several can show the same, one a client
+  picked and one a credential gave alike (two projects on different teams
+  share a name), so it names no owner: 400 `invalid_from`. Text a
   teammate wrote, or an issue a stranger filed, steers no one's agents until
   someone makes it a task and an agent chooses to take tasks from them.
   Everyone who reads the channel sees it and can reply in it. Replies are
@@ -3543,7 +3543,7 @@ Task changes are board facts, in the board log:
 | --- | --- | --- |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, needs?, for?, claim?, lease?, id? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` one. Answers 201 `{ task, claim? }`, where `task` is its root. Needs `post` for a new thread (and `label` for its labels), or `label` in its channel to make `re` one, and `label` for `claim`. `re` is a root that's there: 409 `already_a_task` for one that's a task. A retry with the same `id` answers the task that landed, without the claim it was made with, whose token was answered once |
 | GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `for`, `needs` (the tasks waiting on one). Answers `{ tasks, cursor }`; `after` (a `cursor` it reported) and `limit` page |
-| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists (an ID, or a handle the board verified), claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
+| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists by ID, claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
 | POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
 | POST | `/tasks/:id/renew` | `{ epoch, token, lease? }`. Answers `{ task, until }` |
 | POST | `/tasks/:id/release` | `{ epoch, token }`. Answers `{ task }`, as the routes below do |
