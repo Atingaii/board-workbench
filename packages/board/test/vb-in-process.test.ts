@@ -6,12 +6,14 @@ import { personToken, testBoard, BOARD_URL } from './harness.ts'
 
 // vb() on a handle over HTTP to an in-process board: the CLI's commands, output, and exit codes,
 // with files from its options. The CLI itself runs through the same code (cli*.test.ts).
-async function handle() {
+// With `stall.on`, its board never answers, whatever the request's signal says, and `stall.seen` keeps those requests.
+async function handle(stall: { on: boolean; seen: Request[] } = { on: false, seen: [] }) {
   const served = testBoard()
   const token = await personToken('u_ada', BOARD_URL)
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
     request.headers.set('authorization', `Bearer ${token}`)
+    if (stall.on) return stall.seen.push(request), new Promise<never>(() => {})
     return served.fetch(request)
   }) as typeof globalThis.fetch
   return board({ backend: http(BOARD_URL, { fetch }) }).as(null)
@@ -87,6 +89,34 @@ describe('vb()', () => {
     expect(await vb(team, ['channels'])).toMatchObject({ code: 0, stdout: 'no channels yet\n' })
     for (const command of ['whoami', 'serve', 'hooks', 'inspect'])
       expect(await vb(team, [command])).toMatchObject({ code: 2, stderr: expect.stringMatching(new RegExp(`${command} isn't available in-process`)) })
+  })
+
+  it("ends any command's requests with its signal, and runs the next call", async () => {
+    const stall = { on: false, seen: [] as Request[] }
+    const team = await handle(stall)
+    const id = (await vb(team, ['post', 'dev', 'before the outage', '--no-sync'])).stdout.trim()
+    stall.on = true
+    // A deadline bounds a read the board never answers: 1, and the call after it runs.
+    const read = vb(team, ['read', id, '--json'], { signal: AbortSignal.timeout(50) })
+    const next = vb(team, ['read', id, '--json'])
+    const timedOut = await read
+    expect(timedOut).toMatchObject({ code: 1, stdout: '' })
+    expect(JSON.parse(timedOut.stderr)).toMatchObject({ reason: 'timeout' })
+    expect(stall.seen.length).toBeGreaterThan(0)
+    expect(stall.seen.every((request) => request.signal.aborted)).toBe(true)
+    stall.on = false
+    expect(JSON.parse((await next).stdout).message.text).toBe('before the outage')
+    // Stopped any other way, it's canceled (130), and a write says it may have landed.
+    stall.on = true
+    const controller = new AbortController()
+    const reply = vb(team, ['reply', id, 'on it', '--no-sync', '--json'], { signal: controller.signal })
+    setTimeout(() => controller.abort(), 20)
+    const stopped = await reply
+    expect(stopped.code).toBe(130)
+    expect(JSON.parse(stopped.stderr)).toMatchObject({ reason: 'canceled', hint: expect.stringMatching(/may have happened/) })
+    stall.on = false
+    // A signal that never fires changes nothing.
+    expect(await vb(team, ['read', 'dev', '--text', 'outage'], { signal: new AbortController().signal })).toMatchObject({ code: 0, stdout: expect.stringMatching(/^dev · 1 thread/) })
   })
 
   it('attaches and downloads through its readFile and writeFile, and - reads its stdin', async () => {
