@@ -1137,7 +1137,15 @@ through the sync that speaks for them, under the key it imported them through.
     Vercel's API names it too, and a deployment outside production shows as
     `support (preview)`, its environment in its name only; on Vercel's board,
     where nothing names its project, its ID (`prj_support`,
-    `prj_support@preview`). A principal a local board stored before, as a
+    `prj_support@preview`). A project's environments share the handle on
+    purpose, since a deployment's handle is its project: `@support`,
+    `--mentions support`, and `--by support` match every environment's
+    deployments, and a deployment's `--mentions me` (its handle and ID)
+    matches a mention of any of them. One environment's is named by its actor
+    ID, which holds the environment: `@[vercel:project:prj_support:preview]`,
+    `--by vercel:project:prj_support:preview`, or, where its handle holds it
+    (`prj_support@preview`), by that handle (`--by prj_support@preview`). A
+    principal a local board stored before, as a
     schedule's creator or a token's minter, keeps the handle it had
     (`support@preview`), and still shows through `support`. A schedule made
     before keeps the actor its creator's client named (`x-board-handle`,

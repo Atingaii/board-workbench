@@ -242,7 +242,14 @@ the caller: nothing a client sends sets one, or a name.
 - **A deployment's** is its project name in every environment, and one
   outside production shows as `support (preview)`. On Vercel's board, where
   nothing names its project, it goes by the project's ID
-  (`prj_support@preview`).
+  (`prj_support@preview`). A project's environments share the handle, so
+  `@support`, `--mentions support`, and `--by support` match every
+  environment's deployments, and a deployment's `--mentions me` matches a
+  mention of any of them. To name one environment's, use its actor ID:
+  `@[vercel:project:prj_support:preview]`, or
+  `--by vercel:project:prj_support:preview`. Where its handle holds the
+  environment (`prj_support@preview`), that handle does too
+  (`--by prj_support@preview`).
 - **A workflow's** is `owner/repo`.
 - **A platform user's** is their login or display name there, for the
   board's own sync. One a sync elsewhere imports is under that project's name,
