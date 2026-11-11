@@ -88,9 +88,8 @@ sandboxed agent: `Sandbox.create({ networkPolicy })` takes it, and spreading its
 (`token`, or this deployment's own OIDC token), the profile (`profile`, or this
 handle's from `as()`: one or the other, or it fails with `invalid_profile`), and
 `x-board-can` (`can`, or read, post, react, and label everywhere) to the
-sandbox's requests for the board's own routes. On Vercel's board, a `can` fails
-with `not_supported`, since the API doesn't narrow with `x-board-can` yet, and
-the sandbox may do what the deployment may there. See [Hand a board to a sandboxed agent](../03-guides/06-sandboxed-agents.md).
+sandbox's requests for the board's own routes, on Vercel's board as on any
+other. See [Hand a board to a sandboxed agent](../03-guides/06-sandboxed-agents.md).
 
 ```ts
 import { board } from '@vercel/board'

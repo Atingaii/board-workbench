@@ -5,6 +5,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
 import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
 import { parseProfileHeader } from '../src/contract/profile-header.ts'
+import { compileAccess, parseCan } from '../src/server/access.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -19,6 +20,13 @@ type Actor = {
   session?: string
   /** The board token the request came with: it acts as `principal`, narrowed, on its own board. */
   token?: Minted
+  /**
+   * What it may do at most, past what grants give its principal: its board token's `can`, and the
+   * `x-board-can` it sent where the API reads that, the one narrowed by the other.
+   */
+  can?: Minted['can']
+  /** It sent an `x-board-can` the API holds it to: never its principal's integration, so no watchers or sync's records. */
+  narrowed?: true
 }
 /** A board token, as Vercel's API keeps it: one board's, minted by a deployment or another token. */
 type Minted = {
@@ -136,7 +144,7 @@ const samePrincipal = (a: Principal, b: Principal) => principalId(a) === princip
  * them today; `protocol` reads them as board's protocol has it: the profile and its avatar in one
  * structured `x-board-profile`, and the other two refused.
  */
-function actorOf(request: Request, tokens: Record<string, string> = {}, minted: Minted | null = null, protocol = false): Actor {
+function actorOf(request: Request, tokens: Record<string, string> = {}, minted: Minted | null = null, protocol = false, enforcesCan = false): Actor {
   const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
   const token = tokens[bearer] ?? bearer
   const [type, id, environment] = token.split(':')
@@ -168,6 +176,18 @@ function actorOf(request: Request, tokens: Record<string, string> = {}, minted: 
       }
     }
   }
+  // A proxy that holds the credential narrows it; the board token's own can narrows it too.
+  const header = enforcesCan ? request.headers.get('x-board-can') : null
+  let narrowedTo: Minted['can'] | undefined
+  if (header !== null) {
+    try {
+      const sent = parseCan(header)
+      narrowedTo = (minted ? compileAccess(minted.can as never).narrow(sent) : compileAccess(sent)).summary() as Minted['can']
+    } catch (error) {
+      throw new Refused(400, 'invalid_scope', (error as Error).message)
+    }
+  }
+  const can = narrowedTo ?? minted?.can
   const base = principalId(principal)
   return {
     id: name ? `${base}+${name.toLowerCase()}` : base,
@@ -175,6 +195,8 @@ function actorOf(request: Request, tokens: Record<string, string> = {}, minted: 
     ...(name ? { profile: { name, ...(avatar ? { avatar } : {}) } } : {}),
     ...(session ?? minted?.session ? { session: (session ?? minted?.session)! } : {}),
     ...(minted ? { token: minted } : {}),
+    ...(can ? { can } : {}),
+    ...(narrowedTo ? { narrowed: true as const } : {}),
   }
 }
 
@@ -333,7 +355,7 @@ const APPS: Record<string, string> = { oac_1: 'ship', oac_2: 'deploy' }
 const whoOf = (actor: Actor): Who => {
   // A platform user a sync imported makes no requests of their own.
   if (actor.principal.type === 'external') throw new Refused(403, 'forbidden')
-  const limit = actor.token ? { limit: actor.token.can as NonNullable<Who['limit']> } : {}
+  const limit = actor.can ? { limit: actor.can as NonNullable<Who['limit']> } : {}
   return actor.principal.type === 'user'
     ? { kind: 'user', userId: actor.principal.userId, ...limit }
     : actor.principal.type === 'project'
@@ -546,12 +568,13 @@ function fakeBoard(shared: Shared, boardId: string) {
   }
   /** The same, by the channel's name, which needn't exist yet. */
   function tokenMayIn(actor: Actor, permission: string, name: string) {
-    if (!actor.token) return
+    const { can } = actor
+    if (!can) return
     const parts = name.split('/')
     const candidates = [name, ...parts.map((_, i) => `${parts.slice(0, parts.length - i).join('/')}/`), '*']
-    const pattern = candidates.find((candidate) => Object.hasOwn(actor.token!.can, candidate))
-    const grant = pattern === undefined ? [] : actor.token.can[pattern]!
-    if (!(grant === 'all' || grant.includes(permission))) throw new Refused(403, 'forbidden', `This token may not ${permission} in ${name}.`)
+    const pattern = candidates.find((candidate) => Object.hasOwn(can, candidate))
+    const grant = pattern === undefined ? [] : can[pattern]!
+    if (!(grant === 'all' || grant.includes(permission))) throw new Refused(403, 'forbidden', `This ${actor.token ? 'token' : 'caller'} may not ${permission} in ${name}.`)
   }
 
   /** `uploader` is who must have uploaded its files: the caller, which for an import is the sync's project, not the platform user it posts as. */
@@ -1492,6 +1515,12 @@ export function fakeMessageboard(
      */
     protocolProfile?: boolean
     /**
+     * A caller is held to the `x-board-can` it sends, as Vercel's API holds one once it reads the header: within what its
+     * grants (and its board token's `can`) give, and never its principal's integration, so its watchers and sync's
+     * records are 403. Without it, as the API answered before: it ignores the header.
+     */
+    enforcesCan?: boolean
+    /**
      * Sync's records aren't kept apart, as board can't take for granted of an API it doesn't run: a thread's binding goes
      * to every registrant that syncs its key, another project's included, and `syncThread` lists every target of a thread.
      */
@@ -1551,7 +1580,7 @@ export function fakeMessageboard(
     if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
     if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
     const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-    const actor = actorOf(request, options.tokens, tokens.authenticate(bearer), options.protocolProfile ?? false)
+    const actor = actorOf(request, options.tokens, tokens.authenticate(bearer), options.protocolProfile ?? false, options.enforcesCan ?? false)
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method
     requests.push(`${method} ${path}`)
@@ -1613,6 +1642,8 @@ export function fakeMessageboard(
     // A board token is one board's: any other is none to it.
     if (!onBoard || !board || !mayUse(actor, board) || (actor.token && actor.token.boardId !== board.id)) throw new Refused(404, 'board_not_found')
     const rest = onBoard[2] ?? ''
+    // A narrowed caller is never its principal's integration: a narrowed register would replace its registration.
+    if (actor.narrowed && /^\/(watchers|sync|inbox)(\/|$)/.test(rest)) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't use its principal's watchers or sync's records.")
     if (method === 'GET' && rest === '') return { board: show(board) }
     // A board's own me: what the team's says, within what this board's grants give the caller.
     if (method === 'GET' && rest === '/me') {

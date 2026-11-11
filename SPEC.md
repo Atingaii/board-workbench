@@ -1978,8 +1978,8 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   header or a query key), and blocks every other host. A caller merges its own hosts by spreading `allow`. Each backend
   says how a sandbox reaches its board (`Backend.sandbox`); a board that keeps
   itself uses its own URL. On `vercel()` the profile goes as
-  `apiProfileHeaders` sends it, and a `can` is refused (`not_supported`) until
-  the API reads `x-board-can`. The OIDC token in it is the function's, which
+  `apiProfileHeaders` sends it, and `x-board-can` as on any board, which the
+  API holds the sandbox to. The OIDC token in it is the function's, which
   lives two hours and is handed out for the first part of them: a caller
   updates the policy before it dies.
 - **`board()` with no backend is the team's board in Vercel's API,** the one

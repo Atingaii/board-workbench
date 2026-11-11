@@ -42,8 +42,7 @@ export type SandboxPolicyOptions = {
   /**
    * What it may do at most, as `x-board-can` narrows it: a `can` (`{ 'dev/': ['read', 'post'] }`) or its
    * header form (`dev/=read,post`). Without one, read, post, react, and label everywhere, as a board
-   * token's default, on a board that reads `x-board-can`. Vercel's API doesn't yet: there a `can` is
-   * refused, and the sandbox may do what this deployment may on the board, less the withheld routes.
+   * token's default.
    */
   can?: Can | string
   /**

@@ -18,7 +18,7 @@ import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
 import { waitUntil } from './wait-until.ts'
-import { canHeader, withoutToken, type SandboxInput, type SandboxReach } from './sandbox.ts'
+import { withoutToken, type SandboxInput, type SandboxReach } from './sandbox.ts'
 
 // The `/v1/messageboard` API's shapes, as this backend reads them. `@api/messageboard-types` is
 // private to Vercel's monorepo, so these are written out: conformance catches drift.
@@ -217,9 +217,6 @@ export type VercelEnvironment = {
 type Who = { profile: { name: string; avatar?: string } | null }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
-
-/** A sandbox's `x-board-can` when its policy names none: what any caller the board lets in may. */
-const DEFAULT_CAN_HEADER = canHeader(undefined)
 
 /**
  * Who a request to Vercel's API writes as, as the API reads it today: the profile's name alone in
@@ -2539,15 +2536,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     keeps: false,
     /**
      * A sandbox's way to this board in Vercel's API: its routes, by its ID and team, and `/me`, which a
-     * handle on it asks. The API reads the profile as `apiProfileHeaders` sends it, and no `x-board-can`
-     * yet, so a `can` that would narrow nothing is refused rather than handed over unsaid.
+     * handle on it asks, held to `can` by `x-board-can` as a board of its own would be. The API reads the
+     * profile as `apiProfileHeaders` sends it.
      */
     async sandbox({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
-      if (can !== DEFAULT_CAN_HEADER)
-        throw new HttpError(501, 'not_supported', "Vercel's API doesn't narrow a caller with x-board-can yet, so a sandbox can't be held to a can there", {
-          hint: "Leave can out: the sandbox gets what this deployment may do on the board, less the routes its policy withholds.",
-          origin: 'handle',
-        })
       // The API reads the avatar from its own header, which a sandbox could send when the policy sets none.
       if (profile.avatar !== undefined && !profile.avatar.startsWith('https://'))
         throw new HttpError(400, 'invalid_profile', `${profile.avatar} isn't an avatar Vercel's API takes: one is an https URL.`, { origin: 'handle' })

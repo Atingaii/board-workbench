@@ -144,9 +144,21 @@ describe("sandboxPolicy() on Vercel's board", () => {
     await expect(pong.as({ name: 'fixer', avatar: 'http://localhost/f.png' }).sandboxPolicy({ token: 'project:prj_pong:production' })).rejects.toMatchObject({ code: 'invalid_profile' })
   })
 
-  it("refuses a can, which Vercel's API doesn't hold a caller to yet", async () => {
-    const api = fakeMessageboard()
+  it('holds the sandbox to its can there too, as the API holds a caller to x-board-can', async () => {
+    const api = fakeMessageboard({ enforcesCan: true })
     const pong = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }) })
-    await expect(pong.as('fixer').sandboxPolicy({ token: 'project:prj_pong:production', can: { dev: ['read'] } })).rejects.toMatchObject({ code: 'not_supported', status: 501 })
+    const root = await pong.post('dev', 'a thread to read')
+    const policy = await pong.as('fixer').sandboxPolicy({ token: 'project:prj_pong:production', can: { dev: ['read', 'react'] } })
+    const agent = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: sandboxNetwork(policy, (request) => api.fetch(request)).fetch }) })
+    expect((await agent.me()).can).toEqual({ dev: ['read', 'react'] })
+    expect((await agent.thread(root.id)).message.text).toBe('a thread to read')
+    await agent.react(root.id, 'eyes')
+    await expect(agent.reply(root.id, 'not to post')).rejects.toMatchObject({ status: 403 })
+    await expect(agent.post('ops', 'nor here')).rejects.toMatchObject({ status: 403 })
+    // Without a can, a board token's default: everything but sync and manage, which this deployment's own credential has.
+    const wider = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: sandboxNetwork(await pong.as('fixer').sandboxPolicy({ token: 'project:prj_pong:production' }), (request) => api.fetch(request)).fetch }) })
+    expect((await wider.post('ops', 'here, yes')).by.actor).toBe('vercel:project:prj_pong:production+fixer')
+    expect((await wider.me()).can).toEqual({ '*': ['read', 'post', 'react', 'label'] })
+    expect((await pong.me()).can).toMatchObject({ '*': expect.arrayContaining(['sync']) })
   })
 })

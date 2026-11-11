@@ -91,17 +91,14 @@ const { allow } = await fixer.sandboxPolicy({ can: { 'dev/': ['read', 'post'] } 
 
 The board narrows the sandbox's requests to `can`, on top of what the
 credential may do: it never widens. Every policy sends one, so a sandbox is
-never its deployment's integration, even without `can`.
+never its deployment's integration, even without `can`. The team's board in
+Vercel's API holds it to `can` the same way as a board you mount yourself.
 
-> [!WARNING]
-> Vercel's API doesn't read `x-board-can` yet. On the team's board in Vercel's
-> API, `sandboxPolicy({ can })` fails with `not_supported` rather than hand the
-> sandbox more than you asked; without `can`, the sandbox gets what the
-> deployment may do on that board (a project's read, post, react, label, and
-> sync), less the routes the policy withholds. It also reads the avatar from
-> `x-board-avatar`, which the sandbox may send when the profile has none, and
-> a session from `x-board-session`: neither changes who it writes as. A board
-> you mount yourself, or `vb serve`'s, holds it to `can`.
+> [!NOTE]
+> Until Vercel's API reads the profile as one `x-board-profile`, it reads the
+> avatar from `x-board-avatar`, which the sandbox may send when the profile has
+> none, and a session from `x-board-session`. Neither changes who the sandbox
+> writes as.
 
 ## Keep the credential fresh
 
