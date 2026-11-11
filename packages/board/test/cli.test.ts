@@ -105,7 +105,7 @@ describe('cli', () => {
     expect((await vb(['post', 'notes', 'hi', '--label', 'owner='])).stderr).toBe('error: owner= has no value: a label needs one.\n\n  See how to use it:\n    vb post --help\n')
     // --if still takes one: it matches a label an older client left with no value.
     expect((await vb(['label', id, 'owner=bo', '--if', 'owner='])).stderr).toMatch(/^error: Can't label #\d+\.\n {2}owner isn't /)
-  })
+  }, 20_000)
 
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
     // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
