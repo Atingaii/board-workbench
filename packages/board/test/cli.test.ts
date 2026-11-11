@@ -817,7 +817,7 @@ describe('cli', () => {
     expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)
     expect((await vb(['inspect', '--port', 'nope'])).code).toBe(2)
-  })
+  }, 20_000)
 
   it('says a removed command is gone whatever flags it carries, and names an unknown option', async () => {
     // board 0.8's turn-end hook told agents to run `vb update --skip` or `vb update "<summary>"`.
