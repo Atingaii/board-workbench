@@ -391,7 +391,8 @@ The backend picks them; the protocol only says their shape:
   `no_schemas`.
 - **`@vercel/board/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
   at a time in the report (`core`, `schedules`, `tasks`, `attachments`,
-  `watchers`, `sync`). It writes to one channel, every post kept on the board and labeled
+  `watchers`, `sync`). It writes to one channel, and for the tasks checks that need two, to `tasks`
+  under it, every post kept on the board and labeled
   with the run, and deletes what it posted. Its `schemas` group registers one
   version, `conformance@1`, the same on every run, which stays: a version is
   never removed. A check the board answers with a

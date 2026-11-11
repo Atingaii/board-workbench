@@ -73,6 +73,7 @@ describe("vercel()'s tasks", () => {
       "fences what a claim does: once it's over, its writes are lost and change nothing": 'passed',
       'holds a task until the tasks it needs complete, which a failed or canceled one never does': 'passed',
       'refuses a prerequisite that was canceled, which can never complete, and takes one that failed': 'passed',
+      'lists the tasks that wait for one in the channel a list names, or its subtree, and no other': 'passed',
       'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed': 'passed',
       'holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'passed',
       'keeps a task assigned to a profile for that actor alone': 'passed',
@@ -80,6 +81,7 @@ describe("vercel()'s tasks", () => {
       'lets a profile change only the tasks it made, and its principal all of them': "skipped: this run can't call the board with headers of its own",
       // This run sends no x-board-can: the kit's run with headers, in backend-vercel.test.ts, checks it.
       'takes label in its channel to claim a task: a caller narrowed to reading and posting claims none': "skipped: this run can't call the board with an x-board-can header",
+      "takes read in a prerequisite's channel to wait for it: a caller narrowed out of it makes no task that needs it": "skipped: this run can't call the board with an x-board-can header",
       'claims the oldest ready task in a channel or its subtree that has the labels asked for, and waits for one': 'passed',
       'shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token': 'passed',
       'keeps labels under board. its own: a label write or a post that sets one is refused': 'passed',

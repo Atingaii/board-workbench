@@ -71,6 +71,7 @@ const NO_HEADERS = "this run can't call the board with headers of its own"
 const NARROWED = [
   'narrows a caller to what its x-board-can says',
   'takes label in its channel to claim a task: a caller narrowed to reading and posting claims none',
+  "takes read in a prerequisite's channel to wait for it: a caller narrowed out of it makes no task that needs it",
   'refuses a caller narrowed with x-board-can a schema, and lets it read them',
   "refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking",
   "refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox",
@@ -170,7 +171,7 @@ describe('the conformance kit', () => {
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
     expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
-    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 15 }, () => 'passed'))
+    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 17 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
     // Every task it made went with its root: none is left open, and none still wears a state.
@@ -189,14 +190,15 @@ describe('the conformance kit', () => {
       OWN_PROFILES,
       [TASKS_OWNED, NO_HEADERS],
       [NARROWED[1], NO_CAN],
+      [NARROWED[2], NO_CAN],
       NO_ROLES,
       NO_APPS,
       ...GRANTS_NARROWED.map((name) => [name, NO_CAN]),
       LOCKED_OUT,
       CROSS_TEAM,
-      [NARROWED[2], NO_CAN],
       [NARROWED[3], NO_CAN],
       [NARROWED[4], NO_CAN],
+      [NARROWED[5], NO_CAN],
     ])
     expect((await team.me()).actor).toBe('board:client')
   })
@@ -225,6 +227,34 @@ describe('the conformance kit', () => {
     }
     expect(owns(await conformance(await clientOf(strict), { withHeaders: withHeaders(board.fetch) }))).toMatchObject({ status: 'failed', detail: expect.stringContaining('only the author can edit a message') })
   })
+
+  it("fails a board that lists what waits for a task from every channel, or lets a caller wait for one it can't read", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const find = (report: Awaited<ReturnType<typeof conformance>>, name: string) => report.checks.find((check) => check.name === name)
+    // One whose list of what waits for a task looks past the channel it was asked for, to every one its caller reads.
+    const everywhere = broken(board.fetch, {
+      request: (url) => {
+        if (url.pathname.endsWith('/tasks') && url.searchParams.has('needs') && !url.searchParams.get('channel')?.endsWith('/')) url.searchParams.delete('channel')
+      },
+    })
+    expect(find(await conformance(await clientOf(everywhere)), 'lists the tasks that wait for one in the channel a list names, or its subtree, and no other')).toMatchObject({
+      status: 'failed',
+      detail: expect.stringMatching(/^the tasks that wait for one, in conformance: expected \["(\d+)"\], got \["\1","\d+"\]$/),
+    })
+    // And one that checks a prerequisite against what its caller's credential reads, not what the caller was narrowed to.
+    const unheld: Fetch = async (request) => {
+      if (request.method !== 'POST' || !new URL(request.url).pathname.endsWith('/tasks') || !('needs' in ((await request.clone().json()) as object))) return board.fetch(request)
+      const headers = new Headers(request.headers)
+      headers.delete('x-board-can')
+      return board.fetch(new Request(request, { headers }))
+    }
+    expect(find(await conformance(await clientOf(board.fetch), { withCan: withCan(unheld) }), "takes read in a prerequisite's channel to wait for it: a caller narrowed out of it makes no task that needs it")).toMatchObject({
+      status: 'failed',
+      detail: "a task that needs one its caller can't read: expected 400 invalid_needs, and it succeeded",
+    })
+    // What the kit made there went with the run.
+    expect((await board.tasks.list({ channel: 'conformance/', state: 'open' })).tasks).toEqual([])
+  }, 60_000)
 
   it("fails a board that lets a profile change its principal's tasks or another profile's, or holds no task when a profile edits its thread", async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
@@ -281,6 +311,7 @@ describe('the conformance kit', () => {
     expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => [check.status, check.detail])).toEqual([
       ['failed', 'what a caller narrowed to read says it may do: expected {"conformance":["read"]}, got {"*":["read","post","react","label","sync","manage"]}'],
       ['failed', 'a claim by a caller without label in its channel: expected 403 forbidden, and it succeeded'],
+      ['failed', "a task that needs one its caller can't read: expected 400 invalid_needs, and it succeeded"],
       ['failed', 'registering a schema, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
       ['failed', 'registering watchers, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
       ['failed', 'an import, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
@@ -413,7 +444,7 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(taskless))
     expect(report.ok).toBe(true)
     const tasks = report.checks.filter((check) => check.group === 'tasks')
-    expect(tasks).toHaveLength(15)
+    expect(tasks).toHaveLength(17)
     // The one that needs no task route is about labels, which a board has either way.
     expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
     expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
@@ -437,6 +468,7 @@ describe('the conformance kit', () => {
     expect(failed(await conformance(await clientOf(noNeeds)))).toEqual([
       ['holds a task until the tasks it needs complete, which a failed or canceled one never does', 'a task that needs one that has not completed: expected "waiting", got "ready"'],
       ['refuses a prerequisite that was canceled, which can never complete, and takes one that failed', 'a task that needs a canceled one: expected 400 invalid_needs, and it succeeded'],
+      ['lists the tasks that wait for one in the channel a list names, or its subtree, and no other', expect.stringMatching(/^what the task in the channel needs: expected \["\d+"\], got \[\]$/)],
       // It never waits, so nothing says it became ready: its feed has no task.ready.
       [
         'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed',
@@ -486,7 +518,7 @@ describe('the conformance kit', () => {
     expect(await grantIds()).toEqual(before)
   })
 
-  it('makes every grant inside conformance/grants/, and no channel but the one it posts in', async () => {
+  it('makes every grant inside conformance/grants/, and no channel but the two it posts in', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const patterns: string[] = []
     // Every grant write it sends, by itself or narrowed with x-board-can, refused or not.
@@ -498,7 +530,7 @@ describe('the conformance kit', () => {
     expect(report.ok).toBe(true)
     expect(patterns.length).toBeGreaterThan(20)
     expect(patterns.filter((pattern) => !pattern.startsWith('conformance/grants/'))).toEqual([])
-    expect((await board.channels()).map((channel) => channel.path)).toEqual(['conformance'])
+    expect((await board.channels()).map((channel) => channel.path)).toEqual(['conformance', 'conformance/tasks'])
   })
 
   it('refuses principals that are its own before it writes anything, which the checks would change under it', async () => {

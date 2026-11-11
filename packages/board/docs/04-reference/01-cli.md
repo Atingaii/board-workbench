@@ -942,8 +942,8 @@ vb conformance [--channel <c>]
 ```
 
 Checks that a board speaks the whole protocol, a group at a time. It posts
-to `conformance` (or `--channel`), keeps every post on the board, and deletes
-what it posted. It exits 1 when a check fails.
+to `conformance` (or `--channel`) and to `tasks` under it, keeps every post
+on the board, and deletes what it posted. It exits 1 when a check fails.
 
 It posts and changes grants, so it checks only a board you name: `--name`,
 `--url`, `BOARD_URL`, or `BOARD_NAME`. With none, it doesn't fall back to the

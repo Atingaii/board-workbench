@@ -9,7 +9,8 @@ import type { Board } from '../server/board.ts'
  * Checks that a board speaks the protocol, through a handle on it (`conformance(board())`), as
  * `vb` and agents use it: every board answers all of it. A board may keep no schedules, tasks, or
  * files, and says so with a 501, which the kit reports as not kept here. It writes to one channel
- * (`conformance` by default), keeps every post on the board, and deletes what it posted. The one
+ * (`conformance` by default), and for the tasks checks that need two, to `tasks` under it, keeps
+ * every post on the board, and deletes what it posted. The one
  * schema it registers, `conformance@1`, stays: a schema version is never removed.
  */
 
@@ -386,6 +387,24 @@ async function task(ctx: Context, text: string, options: TaskOptions & { labels?
   const made = await ctx.board.tasks.create(ctx.channel, { text, labels: { ...ctx.labels, ...labels }, noSync: true, ...rest })
   ctx.posted.push(made.task.id)
   return made
+}
+
+/**
+ * The second channel the tasks checks make tasks in, `conformance/tasks`: the same for every run, so
+ * a run leaves no channel behind.
+ */
+const besideOf = (ctx: Context) => `${ctx.channel}/tasks`
+
+/** A task of this run's in that channel, or null when the run may not post there. */
+async function taskBeside(ctx: Context, text: string, options: TaskOptions = {}) {
+  try {
+    const made = await ctx.board.tasks.create(besideOf(ctx), { text, labels: ctx.labels, noSync: true, ...options })
+    ctx.posted.push(made.task.id)
+    return made
+  } catch (error) {
+    if (error instanceof BoardError && error.status === 403) return null
+    throw error
+  }
 }
 
 /** A task's state, as its thread reads now. */
@@ -998,6 +1017,26 @@ const CHECKS: Check[] = [
   },
   {
     group: 'tasks',
+    name: 'lists the tasks that wait for one in the channel a list names, or its subtree, and no other',
+    run: async (ctx) => {
+      const beside = besideOf(ctx)
+      const { task: first } = await task(ctx, 'conformance: a prerequisite two channels wait for')
+      const { task: here } = await task(ctx, 'conformance: a task that waits for it, in the channel', { needs: [first.id] })
+      alike(here.task?.needs, [first.id], 'what the task in the channel needs')
+      const made = await taskBeside(ctx, 'conformance: a task that waits for it, in another channel', { needs: [first.id] })
+      if (!made) return `this token can't post in ${beside}`
+      const there = made.task
+      const waiting = async (channel?: string) => (await ctx.board.tasks.list({ needs: first.id, ...(channel !== undefined ? { channel } : {}) })).tasks.map((listed) => listed.message.id)
+      // A list may trail a write by a moment: once the board's own has both, each channel's is read as it is.
+      await soon(async () => show(await waiting()) === show([here.id, there.id]), 'the tasks that wait for one, on the whole board, should be the two that do')
+      alike(await waiting(ctx.channel), [here.id], `the tasks that wait for one, in ${ctx.channel}`)
+      alike(await waiting(beside), [there.id], `the tasks that wait for one, in ${beside}`)
+      alike(await waiting(`${beside}/`), [there.id], `the tasks that wait for one, under ${beside}/`)
+      alike(await waiting(`${ctx.channel}/`), [here.id, there.id], `the tasks that wait for one, under ${ctx.channel}/`)
+    },
+  },
+  {
+    group: 'tasks',
     name: 'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed',
     run: async (ctx) => {
       const { task: first } = await task(ctx, 'conformance: a prerequisite that completes first')
@@ -1142,6 +1181,35 @@ const CHECKS: Check[] = [
       await rejects(narrowed.tasks.claim(root.id), 403, 'forbidden', 'a claim by a caller without label in its channel')
       await rejects(narrowed.tasks.claim({ channel: ctx.channel, label: ctx.labels }), 403, 'forbidden', 'a claim of the next ready task by a caller without label in that channel')
       same(await taskState(ctx, root.id), 'ready', 'the task, after the refused claims')
+    },
+  },
+  {
+    group: 'tasks',
+    name: "takes read in a prerequisite's channel to wait for it: a caller narrowed out of it makes no task that needs it",
+    run: async (ctx) => {
+      const beside = besideOf(ctx)
+      // A board that keeps no tasks says so first, whatever the run can send.
+      const made = await taskBeside(ctx, "conformance: a prerequisite its caller can't read")
+      if (!ctx.withCan) return NO_CAN
+      if (!made) return `this token can't post in ${beside}`
+      const unread = made.task
+      const { task: read } = await task(ctx, 'conformance: a prerequisite its caller reads')
+      // It posts on the whole board and reads only the channel: the prerequisite's is closed to it.
+      const narrowed = ctx.withCan(`*=post;${ctx.channel}=read,post,label`)
+      const starting = narrowed.tasks.create(ctx.channel, { text: "conformance: needs a task its caller can't read", labels: ctx.labels, noSync: true, needs: [unread.id] }).then((started) => {
+        ctx.posted.push(started.task.id)
+        return started
+      })
+      await rejects(starting, 400, 'invalid_needs', "a task that needs one its caller can't read")
+      const plain = await narrowed.post(ctx.channel, { text: "conformance: a thread that would need a task its caller can't read", labels: ctx.labels, noSync: true })
+      ctx.posted.push(plain.id)
+      await rejects(narrowed.tasks.create({ re: plain.id }, { needs: [unread.id] }), 400, 'invalid_needs', "making a thread a task that needs one its caller can't read")
+      same((await ctx.board.thread(plain.id)).message.task, undefined, 'the thread, after it was refused as a task')
+      alike((await ctx.board.tasks.list({ needs: unread.id })).tasks.map((listed) => listed.message.id), [], "the tasks that wait for the one its caller can't read")
+      // One it reads is a prerequisite, as for anyone.
+      const waits = await narrowed.tasks.create(ctx.channel, { text: 'conformance: needs a task its caller reads', labels: ctx.labels, noSync: true, needs: [read.id] })
+      ctx.posted.push(waits.task.id)
+      same(waits.task.task?.state, 'waiting', 'a task that needs one its caller reads')
     },
   },
   {
