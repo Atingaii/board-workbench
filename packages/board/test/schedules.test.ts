@@ -114,7 +114,7 @@ describe('scheduled messages', () => {
   it('keep sending after a deploy: a timer an earlier deployment armed goes only to it', async () => {
     // A schedule from before, whose first send waits on the earlier deployment's queue.
     const store = memory()
-    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
     await createServer({ contract: schedulesContract, store: store.log }).session(SCHEDULES_SESSION).append({
       type: 'schedule.created',
       payload: {
@@ -145,7 +145,7 @@ describe('scheduled messages', () => {
   it('keep sending after a deploy when a schedule has already sent: its next send is armed, not its first', async () => {
     // A daily schedule from before that sent once, its second send waiting on the earlier deployment's queue.
     const store = memory()
-    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
     const before = createServer({ contract: schedulesContract, store: store.log }).session(SCHEDULES_SESSION)
     await before.append({
       type: 'schedule.created',

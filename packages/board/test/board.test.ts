@@ -76,9 +76,34 @@ describe('auth', () => {
     expect(body.actors).toContainEqual(expect.objectContaining({ id: 'vercel:user:u_ada+claude', kind: 'agent' }))
   })
 
+  it('shows no session on what an older board wrote with one: a message, its event, and its author', async () => {
+    const store = memory()
+    const by = { actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude', session: 'claude-1' }
+    const older = createServer({ contract: contract({ name: 'board', events: { ...boardEvents, 'message.posted': boardEvents['message.posted'].extend({ by: z.unknown() }) } }), store: store.log }).session(BOARD_SESSION)
+    await older.append({ type: 'actor.seen', payload: { actor: by.actor, kind: 'agent', handle: 'julian/claude', name: 'claude', avatar: null } })
+    await older.append({ type: 'message.posted', id: 'old-post', payload: { channel: 'dev', text: 'from a session', re: null, replyTo: null, thread: 'old-post', labels: {}, noSync: true, by, origin: null, from: null } })
+
+    const julian = caller(testBoard({ store }).fetch, await personToken())
+    // A write brings the board's tables up to the log.
+    await julian('POST', '/messages', { channel: 'elsewhere', text: 'now' })
+    const [message] = (await julian('GET', '/messages?channel=dev')).body.messages
+    expect(message).toMatchObject({ text: 'from a session' })
+    expect(message.by).toEqual({ actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' })
+    const { events } = (await julian('GET', '/events?channel=dev&after=0')).body
+    expect(events.map((event: { payload: { by: unknown } }) => event.payload.by)).toEqual([{ actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' }])
+  })
+
+  it('refuses x-board-session, naming what replaces it', async () => {
+    const { fetch } = testBoard()
+    const claude = caller(fetch, await personToken(), { 'x-board-profile': 'claude', 'x-board-session': 'claude-1' })
+    const { status, body } = await claude('POST', '/messages', { channel: 'dev', text: 'hi' })
+    expect([status, body.error]).toEqual([400, { code: 'invalid_request', message: 'x-board-session is gone: who writes is the principal and its profile, so leave it out, or write as a profile with x-board-profile' }])
+    expect((await caller(fetch, await personToken())('GET', '/messages?channel=dev')).body.messages).toEqual([])
+  })
+
   it('reads a log an older board wrote events in that board no longer has: account links', async () => {
     const store = memory()
-    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
     const older = createServer({
       contract: contract({
         name: 'board',

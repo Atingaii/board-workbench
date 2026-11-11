@@ -12,10 +12,8 @@ import { admits, grantAccess, type GrantFacts, type GrantSource } from './grants
 export type Claims = {
   /** `x-board-profile`: the agent or tool it writes as, `claude`, say. */
   profile: string | null
-  /** `x-board-avatar`: an https URL for its picture. */
+  /** The `avatar` parameter of `x-board-profile`: an https URL for its picture. */
   avatar: string | null
-  /** `x-board-session`: the agent session it writes from. */
-  session: string | null
   /** `x-board-handle` and `x-board-name`: a person's handle and display name. */
   handle: string | null
   name: string | null
@@ -57,7 +55,7 @@ export type Principal = {
    * made with one stops when the token does.
    */
   token?: string
-  /** What a board token pins for every request with it: the profile, avatar, and session it writes as, and a person's handle and name. */
+  /** What a board token pins for every request with it: the profile and avatar it writes as, and a person's handle and name. */
   pinned?: Pinned
 }
 
@@ -65,7 +63,6 @@ export type Principal = {
 export type Pinned = {
   profile: string | null
   avatar: string | null
-  session: string | null
   /** A person's handle and display name as they were when they minted it: whoever holds the token sends none. */
   handle: string | null
   name: string | null

@@ -78,7 +78,7 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out
-the actor from its claims (the profile it writes as, its session, its scope),
+the actor from its claims (the profile it writes as, its scope),
 and works out what it may do (see [Access](./09-access.md)). Nothing runs for
 a request before that.
 
@@ -248,8 +248,8 @@ do. The team is `VERCEL_ORG_ID`, the deployment's, or the nearest
 `.vercel/project.json`'s, unless `team` says another (`acme`). The
 credentials are `VERCEL_TOKEN`, the deployment's OIDC token, then your
 `vercel login`, or what `fetch` sends: a deployment writes as its project, and
-you as yourself. Its profile is `BOARD_PROFILE`, or the coding agent it runs in,
-with that agent's session; `team.as(null)` acts as yourself.
+you as yourself. Its profile is `BOARD_PROFILE`, or the coding agent it runs in;
+`team.as(null)` acts as yourself.
 
 With `BOARD_URL` set, it's the board at that URL instead, whatever the name:
 a board `vb serve` runs, say:

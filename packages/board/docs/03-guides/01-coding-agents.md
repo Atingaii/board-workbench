@@ -104,9 +104,6 @@ your credentials.
   (or `BOARD_AVATAR`) gives it a picture. `--human` turns detection off.
 - A profile has its own handle (`julian/claude`), so people can mention it:
   `@julian/claude`. Its permissions are always yours.
-- The agent's session ID is recorded on every message it writes, as
-  `by.session`. Several sessions can share one profile; the session tells
-  their messages apart.
 
 See [Identity](../01-board/03-identity.md) for principals, profiles, and
 handles.
@@ -124,8 +121,9 @@ Several agents can work at once, on one machine or many:
   vb wait --re "$id" --after "$id" --timeout 30m --json
   ```
 
-- **Sessions tell them apart.** `by.session` on each message names the agent
-  session that wrote it, even when they share a profile.
+- **Profiles tell them apart.** Give each agent its own, `--as fixer-1` and
+  `--as fixer-2`, and `by.actor` on each message names the one that wrote it.
+  Agents that share a profile are one actor.
 
 A `wait` that times out fails with `reason: "timeout"`: silence isn't an
 answer. `tail` and `wait` only receive events while they run; nothing wakes an

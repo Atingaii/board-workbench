@@ -746,10 +746,12 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   profile, the principal by its project's name (and environment outside
   production) on Vercel's board, and by its handle or ID elsewhere. Profile names
   match case-insensitively, so `Claude` and `claude` are the same actor, and the
-  spelling supplied is the one displayed. Runtime session IDs are recorded as
-  metadata on each message, not as part of the identity. They do scope read
-  cursors, so two parallel agent tasks don't consume each other's unread
-  messages (see [Cursors](#cursors)).
+  spelling supplied is the one displayed. There are no sessions: who writes
+  is the principal and its profile, and whatever is kept per writer (a token's
+  pins, a post's client ID, read cursors once they're built) is kept per
+  actor. Two parallel agents that need to keep apart write as two profiles.
+  `x-board-session` is refused with 400, and a log from before keeps a session
+  on each `by` it wrote, which no view shows.
 
 **Authorization in v1:**
 
@@ -1030,9 +1032,9 @@ await team.revokeToken(token.id)
   narrowed caller. A person's tokens outlive
   their access to the board's project, as their schedules do, since the board
   can't tell they left: `manage` lists and revokes everyone's.
-- **It may pin a profile (with its avatar) and a session,** which every
-  request with it writes as: a request's own profile, avatar, and session
-  give way to them. Without them, a request labels itself as with any token,
+- **It may pin a profile (with its avatar),** which every request with it
+  writes as: a request's own profile gives way to it. Without one, a request
+  labels itself as with any token,
   so `vb` in a coding agent writes as that agent under the minter. A person's
   handle and name are the minter's, as their CLI sent them when they minted
   it. One that pins a profile owns only what was written as it: editing,
@@ -1494,7 +1496,7 @@ export const boardContract = contract({
       thread: ThreadKey,                    // the root's event ID: lanes and sync state are keyed by it
       labels: Labels,
       noSync: z.boolean(),                  // keep this message on the board
-      by: Author,                           // (server) { actor, principal, profile, session }
+      by: Author,                           // (server) { actor, principal, profile }
       origin: Origin.nullable(),            // (server) { channel?, thread, subthread, message, context } when it came from a platform
       from: z.string().nullable(),          // (server) the sync key it came through, or null
       attachments: z.array(Attachment).max(10).optional(), // (server) { id, name, type, size }, as the board stored them
@@ -1775,25 +1777,21 @@ reads from Vercel's API, which answers the same views.
 
 > [!NOTE]
 > Not built. No route, handle method, or CLI flag reads or moves a stored
-> cursor today (`since`, `/cursors`, `--since last`, `--no-session`): a reader
+> cursor today (`since`, `/cursors`, `--since last`): a reader
 > keeps the `cursor` a read reports and passes it back as `after`. This section
 > is the design.
 
 "What's new since I last looked" is stored on the server, per reader, so agents
 in throwaway sandboxes don't lose their place.
 
-- **Key:** a cursor is identified by three things:
-  - the actor
-  - the runtime session, when one is detected
+- **Key:** a cursor is identified by two things:
+  - the actor: two agents that keep their own place write as two profiles
   - the scope: a channel path, `mentions`, or `*` for the whole board
-
-  `--no-session` drops the session part, so every session of the actor shares
-  one cursor.
-- **Storage:** a separate contract, `board-cursors`, with one session
+- **Storage:** a separate contract, `board-cursors`, with one A2 session
   per actor (`cursors:<actor>`) and one event type:
-  `cursor.moved { scope, session, index }`.
+  `cursor.moved { scope, index }`.
   - It's kept out of the board log, so reading never adds noise to the log.
-  - A reader only ever writes its own session, so no fan-out is involved.
+  - A reader only ever writes its own actor's, so no fan-out is involved.
   - A cursor only moves forward; a `cursor.moved` with a lower index is
     ignored.
 - **Reading with `since: 'last'`** resolves to the stored cursor for that scope.
@@ -1834,8 +1832,8 @@ status.
 | PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, capped, can }` |
 | POST | `/grants/:id/revoke` | Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
-| GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
-| POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
+| GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, by, at, expiresAt, parent }] }`, never a secret |
+| POST | `/tokens` | `{ name, can?, profile?, avatar?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
 | POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
 | GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |
 | GET | `/schemas/:id` | One version, by `name@version`: `{ schema }`. 400 `invalid_schema_id`, 404 `schema_not_found` |
@@ -1884,8 +1882,8 @@ Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
   the name alone in `x-board-profile` and the avatar in `x-board-avatar`, which
   the API reads today, from one function (`apiProfileHeaders`) until it reads
   the header as the protocol has it.
-- `x-board-session` is sent as the runtime session, and the server records it
-  after verifying the token.
+- `x-board-session` is refused with 400 `invalid_request`: who writes is the
+  principal and its profile. `vercel()` sends none.
 - `x-board-can` narrows the token's access for that request (see
   [Authorization](#principals-profiles-actors)). It never widens it.
 
@@ -1939,9 +1937,9 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   may do.
 - **Who it acts as depends on the backend.** On `vercel()` and over `http()`
   it's whoever its credentials say, with the profile `BOARD_PROFILE` or the
-  detected agent picks and that agent's session; `as(profile)` acts with
-  another (`<principal>+<profile>`), and `as(null)` as yourself, outside any
-  session, which is the CLI's `--human`. On `local()` it's the board's own
+  detected agent picks; `as(profile)` acts with another
+  (`<principal>+<profile>`), and `as(null)` as yourself, which is the CLI's
+  `--human`. On `local()` it's the board's own
   code, in-process, with no URL or token: `board:client`, and
   `board:client:<profile>` with `as(profile)`, so its writes wake watchers and
   sync like anyone's.
@@ -2044,8 +2042,7 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 
 `--avatar` goes with `--as`, and `BOARD_AVATAR` with `BOARD_PROFILE`, which
 replaced `BOARD_AS`: a CLI or handle that finds `BOARD_AS` set refuses to run
-(`renamed_env`) rather than write as the person. A detected agent's session (Claude Code's,
-Codex's, Pi's) is sent with each request and recorded on its writes.
+(`renamed_env`) rather than write as the person.
 
 **Which board.** `--url`, then `--scope`'s or `--name`'s team board in Vercel's API, then
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in
@@ -2094,7 +2091,7 @@ board schedule <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] 
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board tokens [list]                            yours, or with manage, everyone's
-board tokens create <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]   prints the secret, once
+board tokens create <name> [--can <scope>] [--profile <name>] [--expires 30d]   prints the secret, once
 board tokens revoke <token>                    e.g. t12; it and every token minted with it
 board schemas [list]                           the built-in schemas, then the board's own
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
@@ -2196,7 +2193,7 @@ must match.
 - For `tail` and `wait`, `--after` defaults to the current head. `wait`
   prints the first match after it, so a turn-based agent that passes the last
   event's `cursor` as `--after` misses nothing between turns.
-- **`--since last` and `--no-session` aren't built.** They're the CLI's side
+- **`--since last` isn't built.** They're the CLI's side
   of stored cursors ([Cursors](#cursors)): `--since last` would start from your
   cursor for the scope and move it once output is printed.
 
@@ -2208,7 +2205,6 @@ claude via julian (vercel:user:u_abc123+claude)
 board    https://www.example.com/api/board
 source   vercel login
 token    expires in 11h 42m
-session  0f8e2c1a-5b7d-4e3f-9a6c-2d1b8e7f4a90
 ```
 
 ```
@@ -3384,7 +3380,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   `--times N`. A repeat with none runs until it's canceled. The first send, the
   stop, and the repeat reach at most a year out.
 - **As whom:** the creator, as the board resolved them when they scheduled it
-  (profile and session included), so a scheduled message reads like theirs.
+  (profile included), so a scheduled message reads like theirs.
   Each one carries `schedule: { id, n }` (`n` from 0), and `vb read` marks it
   `scheduled s12`, so watchers and people can tell it was scheduled. A watcher that
   ignores an agent's own messages should still let scheduled ones through, or
@@ -3466,7 +3462,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | Does Connect forward GitHub's non-`pull_request` events? | **Assumed yes, eventually.** Until then, set up the GitHub App yourself. |
 | Where do review comments go by default? | **Everywhere**, by rule 1, with no exceptions. Repo functions and `--no-sync` give anyone who wants quieter Slack full control. |
 | Where do person handles come from? | **Self-declared** (the Vercel username by default), bound to a verified `user_id`. Mentions are text that each sync resolves for its own users when it posts, so a shared handle notifies no one rather than the wrong person. Nothing stronger is needed for v1. |
-| Where do read cursors live? | **On the server**, per actor, session, and scope, in a side contract (see [Cursors](#cursors)). Not built yet. |
+| Where do read cursors live? | **On the server**, per actor and scope, in a side contract (see [Cursors](#cursors)). Not built yet. |
 | What's the bin called? | **`board` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `board` always works, and it's the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |

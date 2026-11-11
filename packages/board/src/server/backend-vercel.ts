@@ -36,7 +36,6 @@ type ApiActor = {
   id: string
   principal: ApiPrincipal
   profile?: { name: string; avatar?: string; platform?: { key: string; platform?: string; userId: string } }
-  session?: string
 }
 type ApiChannel = { id: string; name: string }
 /** A schema version in the team's registry: a built-in's `createdAt` is 0, and it has no `createdBy`. */
@@ -205,14 +204,14 @@ export type VercelEnvironment = {
   fetch(): typeof fetch
   /** The team, when the environment says which. */
   team(): Promise<string | null>
-  /** The profile the environment picks (`BOARD_PROFILE`, or the coding agent it runs in), and that agent's session. */
-  profile(): { profile: ProfileOption; session: string | null }
+  /** The profile the environment picks (`BOARD_PROFILE`, or the coding agent it runs in). */
+  profile(): ProfileOption
   /** Whether its fetch sends a board token you set (`BOARD_TOKEN`), whoever made it. */
   boardToken(): boolean
 }
 
 /** Who a request to the API is from, beside its credentials: a label it shows, never who it is. */
-type Who = { profile: { name: string; avatar?: string } | null; session: string | null }
+type Who = { profile: { name: string; avatar?: string } | null }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 
@@ -227,7 +226,6 @@ export function apiProfileHeaders(profile: { name: string; avatar?: string | und
   if (!profile) return {}
   return { 'x-board-profile': profile.name, ...(profile.avatar?.startsWith('https://') ? { 'x-board-avatar': profile.avatar } : {}) }
 }
-const SESSION = /^[A-Za-z0-9_.:-]{1,128}$/
 const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
 /** Whether `value` is a message ID Vercel's API hands out (`msg_<thread>_<n>`): the CLI takes one as a message, even where a channel has its name. */
@@ -481,11 +479,10 @@ const authorOf = (actor: ApiActor): Author => ({
   actor: actor.id,
   principal: principalId(actor.principal),
   profile: actor.profile?.name ?? null,
-  session: actor.session ?? null,
 })
 
 /** Who cancels a schedule when no one did: the API, once its creator can no longer post it, as a local board's scheduler. */
-const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null }
+const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule', profile: null }
 
 /**
  * An actor where the API doesn't name them: its handle is its profile, or a short form of its
@@ -564,7 +561,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       else for (const one of value) url.searchParams.append(name, one)
     }
     const headers: Record<string, string> = { 'content-type': 'application/json', ...apiProfileHeaders(who.profile) }
-    if (who.session && SESSION.test(who.session)) headers['x-board-session'] = who.session
     // A 429 did nothing. A 503 may have: only a request the API can tell it has seen goes again.
     const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'
     for (let attempt = 0; ; attempt++) {
@@ -948,7 +944,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       id: await actorOf(who),
       principal: actor.principal,
       ...(who.profile ? { profile: who.profile } : {}),
-      ...(who.session ? { session: who.session } : {}),
     }
     // Its own files, as far as it can still look them up: the post landed, so one it can't is left out rather than failing it.
     const attachments = (
@@ -1167,7 +1162,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** The actor `who` writes as: the credentials' principal, and its profile, as the API names it. */
   const actorOf = async (who: Who) => `${principalId((await self(who)).actor.principal)}${who.profile ? `+${who.profile.name.toLowerCase()}` : ''}`
 
-  /** Who a caller acts as there: its profile and session, beside this deployment's credentials. */
+  /** Who a caller acts as there: its profile, beside this deployment's credentials. */
   function whoOf(caller: Caller): Who {
     if ('identity' in caller) throw servesNone()
     const named = (profile: ProfileOption): Who['profile'] => {
@@ -1178,11 +1173,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     if (caller.origin.via?.kind === 'client') {
       const asked = 'profile' in caller ? caller.profile : (caller.self ?? undefined)
-      const found = environment?.profile() ?? { profile: null, session: null }
-      if (asked === undefined) return { profile: named(found.profile), session: found.session }
-      return { profile: named(asked), session: asked === null ? null : found.session }
+      return { profile: named(asked === undefined ? (environment?.profile() ?? null) : asked) }
     }
-    return { profile: named(caller.self ?? 'client'), session: null }
+    return { profile: named(caller.self ?? 'client') }
   }
 
   /** A post's client ID, as the API takes one: its own when it fits, a hash of it when it doesn't. */
@@ -1716,7 +1709,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** This deployment's own: what its config's watchers run as. */
-  const deployment: Who = { profile: null, session: null }
+  const deployment: Who = { profile: null }
   /** This board's config's watchers, which run here when the API wakes it. */
   let tails: Record<string, WatcherSpec> = {}
 
@@ -1794,7 +1787,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     here = tailWatchers({
       watchers,
       events: (query, signal) => eventsAs(deployment, query, signal),
-      actorOf: (id) => actorOf({ profile: { name: id }, session: null }),
+      actorOf: (id) => actorOf({ profile: { name: id } }),
       run,
     })
     here.start()
@@ -1907,7 +1900,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const methods: ProtocolMethods = {
     ...unsupported,
     async discovery() {
-      const who = { profile: null, session: null }
+      const who = { profile: null }
       const team = await teamId()
       // A board named by its ID is read, so `whoami` names only one there is and you can reach.
       if (options.board) await api(who, 'GET', await onBoard(who))
@@ -1951,7 +1944,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         avatar: shown.avatar,
         profile: found.actor.profile?.name ?? null,
         ...via,
-        session: found.actor.session ?? null,
         expiresAt: expiryOf(found.expiresAt),
         can: canOf(found.can),
       }

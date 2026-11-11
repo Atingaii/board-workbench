@@ -94,8 +94,6 @@ export type ClientOptions = {
   /** An OIDC token whose audience is the board's URL, or a function returning one. Without one, `fetch` brings the credentials. */
   token?: Resolvable<string>
   profile?: Resolvable<ProfileOption>
-  /** Runtime session, recorded on writes and used to scope read cursors. */
-  session?: Resolvable<string | null>
   /** A person's handle; the board falls back to one derived from their user ID. */
   handle?: Resolvable<string | null>
   /** Your display name, shown when you write as yourself (not as a profile). */
@@ -269,9 +267,6 @@ export function createBoardClient(options: ClientOptions) {
       const person = options.person === undefined ? null : await resolve(options.person)
       if (person?.name) out['x-board-name'] = encodeURIComponent(person.name)
     }
-    // A profile chosen per request isn't this process's runtime session.
-    const session = as !== undefined ? null : options.session === undefined ? null : await resolve(options.session)
-    if (session) out['x-board-session'] = session
     const handle = options.handle === undefined ? null : await resolve(options.handle)
     if (handle) out['x-board-handle'] = handle
     return out

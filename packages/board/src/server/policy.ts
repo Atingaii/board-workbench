@@ -222,12 +222,11 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
   }
 }
 
-/** A board token's pins, over what the request says: its profile and session win, and a person's name is the minter's. */
+/** A board token's pins, over what the request says: its profile wins, and a person's name is the minter's. */
 function pinnedClaims(pinned: Pinned, claims: Claims): Claims {
   return {
     ...claims,
     ...(pinned.profile !== null ? { profile: pinned.profile, avatar: pinned.avatar } : {}),
-    ...(pinned.session !== null ? { session: pinned.session } : {}),
     handle: pinned.handle,
     name: pinned.name,
   }

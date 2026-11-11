@@ -29,8 +29,8 @@ export type Environment = {
   url(): string
   /** The fetch for the board at `url` when none is given: the credentials `vb` uses, through Deployment Protection. */
   fetch(url: string): typeof fetch
-  /** The profile the environment picks (`BOARD_PROFILE`, or the coding agent it runs in), and that agent's session. */
-  profile(): { profile: ProfileOption; session: string | null }
+  /** The profile the environment picks (`BOARD_PROFILE`, or the coding agent it runs in). */
+  profile(): ProfileOption
 }
 
 /** A watcher's or client's name is the profile its writes are by. */
@@ -101,25 +101,23 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   }
 
   /**
-   * The SDK against the remote, as this deployment with `profile`. `quiet` names no session: this
-   * deployment's own code. Otherwise a profile chosen in code keeps the environment's session, and
-   * yourself (`null`) has none. Who the token's holder is, `fetch` says.
+   * The SDK against the remote, as this deployment with `profile`, or the environment's for
+   * `undefined`. Who the token's holder is, `fetch` says.
    */
-  const sdk = (profile: ProfileOption | undefined, quiet: boolean) =>
+  const sdk = (profile: ProfileOption | undefined) =>
     createBoardClient({
       url: remote,
       fetch: doFetch,
-      profile: profile !== undefined ? profile : () => environment?.profile().profile ?? null,
-      session: quiet || profile === null ? null : () => environment?.profile().session ?? null,
+      profile: profile !== undefined ? profile : () => environment?.profile() ?? null,
     })
 
-  const own = sdk(null, true)
+  const own = sdk(null)
   const profiles = new Map<string, BoardClient>()
   /** This deployment as `profile`: a watcher's ID, or the middleware. */
   function asProfile(profile: string): BoardClient {
     if (!PROFILE.test(profile)) throw new HttpError(400, 'invalid_request', `as: ${profile}: profiles start with a letter and use up to 32 letters, numbers, and hyphens`)
     let client = profiles.get(profile)
-    if (!client) profiles.set(profile, (client = sdk(profile, true)))
+    if (!client) profiles.set(profile, (client = sdk(profile)))
     return client
   }
   const holders = new Map<string, BoardClient>()
@@ -127,7 +125,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   function holder(profile: ProfileOption | undefined): BoardClient {
     const key = JSON.stringify(profile ?? (profile === null ? null : '\u0000'))
     let client = holders.get(key)
-    if (!client) holders.set(key, (client = sdk(profile, false)))
+    if (!client) holders.set(key, (client = sdk(profile)))
     return client
   }
 

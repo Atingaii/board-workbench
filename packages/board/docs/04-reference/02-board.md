@@ -58,8 +58,7 @@ as(profile: string | { name: string; avatar?: string } | null): Board
 ```
 
 The handle, acting with `profile`. Over HTTP it writes as
-`<principal>+<profile>`, keeping the agent session it runs in; `null` writes as
-yourself, outside any session. On `local()` it writes as
+`<principal>+<profile>`; `null` writes as yourself. On `local()` it writes as
 `board:client:<profile>`, whose profile uses lowercase letters, numbers, `-`,
 and `_`.
 
@@ -335,15 +334,15 @@ See [Grants](../01-board/09-access.md#grants).
 ### createToken
 
 ```ts
-createToken(input: { name: string; can?: Can; profile?: string; avatar?: string; session?: string; expires?: string }): Promise<{ token: TokenView; secret: string }>
+createToken(input: { name: string; can?: Can; profile?: string; avatar?: string; expires?: string }): Promise<{ token: TokenView; secret: string }>
 tokens(): Promise<TokenView[]>
 revokeToken(id: string): Promise<{ revoked: boolean }>
 ```
 
 `createToken` mints a token that acts as the handle's caller, narrowed to `can`
 (read, post, react, and label everywhere when left out), and
-answers its `secret`, the only time it shows. `profile`, `avatar`, and
-`session` pin what every request with it writes as. It lives 30 days, or
+answers its `secret`, the only time it shows. `profile` and `avatar` pin what
+every request with it writes as. It lives 30 days, or
 `expires`, 90 days at most; on Vercel's board, a day, or `expires`, 7 days at
 most. On `local()`, the handle's own token is the
 board's own code, narrowed. `tokens` lists your live ones, or everyone's with `manage`
@@ -482,7 +481,7 @@ discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, 
 ```
 
 `me()` returns `{ actor, principal, kind, handle, name, avatar, profile,
-session, expiresAt, can }`. `can` maps each channel pattern to what you
+expiresAt, can }`. `can` maps each channel pattern to what you
 may do there, implications included: `{ '*': ['read', 'post', 'react', 'label',
 'sync', 'manage'] }` is everything. `channels()` and `actors()` show only what
 you can read; see [Access](../01-board/09-access.md).

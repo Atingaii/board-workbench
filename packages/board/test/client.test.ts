@@ -249,12 +249,12 @@ describe('board() with no backend', () => {
 
 describe('agent detection', () => {
   it('knows fx, Claude Code, Codex, Grok, and pi, and any agent that sets AI_AGENT', () => {
-    expect(detectAgent({ AI_AGENT: 'fx' })).toEqual({ profile: 'fx', session: null })
-    expect(detectAgent({ AI_AGENT: 'fx', FX_SESSION_ID: 'f1' })).toEqual({ profile: 'fx', session: 'f1' })
-    expect(detectAgent({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1' })).toEqual({ profile: 'claude', session: 's1' })
-    expect(detectAgent({ CODEX_THREAD_ID: 't1' })).toEqual({ profile: 'codex', session: 't1' })
-    expect(detectAgent({ PI_CODING_AGENT: 'true', AI_AGENT: 'pi', PI_SESSION_ID: 'p1' })).toEqual({ profile: 'pi', session: 'p1' })
-    expect(detectAgent({ AI_AGENT: 'OpenCode' })).toEqual({ profile: 'opencode', session: null })
+    expect(detectAgent({ AI_AGENT: 'fx' })).toEqual({ profile: 'fx' })
+    expect(detectAgent({ AI_AGENT: 'fx', FX_SESSION_ID: 'f1' })).toEqual({ profile: 'fx' })
+    expect(detectAgent({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1' })).toEqual({ profile: 'claude' })
+    expect(detectAgent({ CODEX_THREAD_ID: 't1' })).toEqual({ profile: 'codex' })
+    expect(detectAgent({ PI_CODING_AGENT: 'true', AI_AGENT: 'pi', PI_SESSION_ID: 'p1' })).toEqual({ profile: 'pi' })
+    expect(detectAgent({ AI_AGENT: 'OpenCode' })).toEqual({ profile: 'opencode' })
     expect(detectAgent({ AI_AGENT: 'not a name!' })).toBeNull()
     expect(detectAgent({})).toBeNull()
   })

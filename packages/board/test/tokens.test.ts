@@ -43,12 +43,13 @@ describe('tokens', () => {
     expect((await helper('POST', '/messages', { channel: 'ci', text: 'after the revoke' })).status).toBe(403)
   })
 
-  it('writes as the profile and session it pins, whatever a request says', async () => {
+  it('writes as the profile it pins, whatever a request says', async () => {
     const { as, mint } = await setUp()
-    const { secret } = await mint({ name: 'eve-1956', profile: 'clever-lemur', avatar: 'https://example.com/lemur.png', session: 'thread-1956' })
-    const eve = as(secret, { 'x-board-profile': 'claude;avatar="https://evil.example/x.png"', 'x-board-session': 'other', 'x-board-handle': 'someone-else' })
+    const { secret } = await mint({ name: 'eve-1956', profile: 'clever-lemur', avatar: 'https://example.com/lemur.png' })
+    const eve = as(secret, { 'x-board-profile': 'claude;avatar="https://evil.example/x.png"', 'x-board-handle': 'someone-else' })
     const me = (await eve('GET', '/me')).body
-    expect(me).toMatchObject({ actor: 'vercel:user:u_julian+clever-lemur', handle: 'julian/clever-lemur', profile: 'clever-lemur', session: 'thread-1956', avatar: 'https://example.com/lemur.png' })
+    expect(me).toMatchObject({ actor: 'vercel:user:u_julian+clever-lemur', handle: 'julian/clever-lemur', profile: 'clever-lemur', avatar: 'https://example.com/lemur.png' })
+    expect(me).not.toHaveProperty('session')
   })
 
   it('gives what a grant does when can is left out: read, post, react, and label everywhere, never manage', async () => {
@@ -215,11 +216,11 @@ describe('tokens', () => {
 
   it("acts as the board's own code when its handle mints it, narrowed, with the profile it pins", async () => {
     const { board, as } = await setUp()
-    const { secret } = await board.createToken({ name: 'eve-1956', can: { 'dev/': ['read', 'post'] }, profile: 'clever-lemur', session: 'thread-1956' })
+    const { secret } = await board.createToken({ name: 'eve-1956', can: { 'dev/': ['read', 'post'] }, profile: 'clever-lemur' })
     const eve = as(secret)
-    expect((await eve('GET', '/me')).body).toMatchObject({ principal: 'board:client', actor: 'board:client+clever-lemur', session: 'thread-1956', can: { 'dev/': ['read', 'post'] } })
+    expect((await eve('GET', '/me')).body).toMatchObject({ principal: 'board:client', actor: 'board:client+clever-lemur', can: { 'dev/': ['read', 'post'] } })
     const posted = await eve('POST', '/messages', { channel: 'dev', text: 'on it' })
-    expect(posted.body.message.by).toMatchObject({ actor: 'board:client+clever-lemur', principal: 'board:client', session: 'thread-1956' })
+    expect(posted.body.message.by).toEqual({ actor: 'board:client+clever-lemur', principal: 'board:client', profile: 'clever-lemur' })
     expect((await eve('POST', '/messages', { channel: 'ops', text: 'not here' })).status).toBe(403)
   })
 

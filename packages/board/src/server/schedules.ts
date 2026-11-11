@@ -8,7 +8,7 @@ import {
   type ScheduleEvent,
   type ScheduleEvents,
 } from '../contract/contract.ts'
-import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
+import { actorKind, authorView, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { authorize, type Access } from './access.ts'
 import { wroteAs, type Granted, type Known, type Principal } from './auth.ts'
 import { actorsReducer } from '../contract/reducers.ts'
@@ -165,8 +165,8 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
     next: schedule.next === null ? null : new Date(schedule.next).toISOString(),
     last: schedule.last === null ? null : ref(schedule.last),
     state: schedule.canceled ? 'canceled' : schedule.next === null ? 'done' : 'pending',
-    canceled: schedule.canceled,
-    by: schedule.as.author,
+    canceled: schedule.canceled && { ...schedule.canceled, by: authorView(schedule.canceled.by) },
+    by: authorView(schedule.as.author),
     author: { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(via ? { via } : {}) },
     createdAt: schedule.createdAt,
   }

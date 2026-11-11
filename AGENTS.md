@@ -228,9 +228,9 @@ thread rather than starting one.
   found at a turn's start, so it gets them then. The OIDC tokens die with the function's own,
   which Vercel reuses for 90 of its 120 minutes, and GitHub's are asked for with
   30m left, so a long turn renews them as it goes. The policy also pins who Eve
-  is on the board (a profile named for the thread, like `clever-lemur-1956`, and
-  session `thread-<id>`), so watchers can tell a thread's Eve from everyone else.
-  Anyone who can write can send those headers, so `byEve` also needs the
+  is on the board (a profile named for the thread, like `clever-lemur-1956`), so
+  watchers can tell a thread's Eve from everyone else by its actor. Anyone who
+  can write can send that header, so `byEve` also needs the
   factory's production deployment as the principal
   (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Eve's policy adds).
   Its `vb` talks to the production board, the only one a sandbox can reach.

@@ -255,13 +255,12 @@ export const UpdateGrantBody = z
   })
   .refine((body) => body.add !== undefined || body.remove !== undefined || body.can !== undefined, 'name principals to add or remove, or a can')
 
-/** A token acting as the caller: what it may do, and the profile and session every request with it writes as. */
+/** A token acting as the caller: what it may do, and the profile every request with it writes as. */
 export const TokenBody = z.object({
   name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, 'a token name is up to 64 letters, numbers, and ._-'),
   can: Can.optional(),
   profile: z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,31}$/, 'a profile is up to 32 letters, numbers, and hyphens').optional(),
   avatar: z.string().url().max(2048).optional(),
-  session: z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/, 'a session is up to 128 letters, numbers, and _.:-').optional(),
   /** How long it lives: `30d` by default, at most `90d`, and on Vercel's board `1d` by default, at most `7d`. */
   expires: Duration.optional(),
 })
@@ -581,8 +580,8 @@ export type ScheduleView = {
   /** The last message it posted. */
   last: string | null
   state: 'pending' | 'done' | 'canceled'
-  canceled: { by: { actor: string; principal: string; profile: string | null; session: string | null }; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
-  by: { actor: string; principal: string; profile: string | null; session: string | null }
+  canceled: { by: { actor: string; principal: string; profile: string | null }; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
+  by: { actor: string; principal: string; profile: string | null }
   author: ActorView
   createdAt: string
 }
@@ -637,7 +636,6 @@ export type TokenView = {
   /** What it may do now: its minter's access, as the board's rules and grants give it, narrowed by the token's `can`. `{}` once its minter may do nothing. */
   can: AccessSummary
   profile: string | null
-  session: string | null
   /** The actor that minted it, and when. */
   by: string
   at: string
@@ -803,7 +801,6 @@ export type Me = {
   profile: string | null
   /** Who you act through, writing with a profile: `claude via julian`. */
   via?: Via
-  session: string | null
   expiresAt: string | null
   /** What you may do in each channel pattern, implications included: `{ '*': [...every permission] }` is full access. */
   can: AccessSummary

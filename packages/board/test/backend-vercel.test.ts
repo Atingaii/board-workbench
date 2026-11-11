@@ -195,6 +195,22 @@ describe('vercel()', () => {
     expect(fixer.by.actor).toBe('vercel:user:u_jb+fixer')
     expect(sent.at(-1)!.get('x-board-profile')).toBe('fixer')
     expect(sent.at(-1)!.get('x-board-avatar')).toBe('https://example.com/fixer.png')
+    expect(sent.some((headers) => headers.has('x-board-session'))).toBe(false)
+  })
+
+  it("shows no session where the API keeps one, as it did for clients that sent it", async () => {
+    const api = fakeMessageboard()
+    // An older client, which sent its session with every request.
+    const older: typeof fetch = async (input, init) => {
+      const headers = new Headers(init?.headers)
+      headers.set('x-board-session', 'claude-1')
+      return as(api, 'user:u_jb')(input, { ...init, headers })
+    }
+    const root = await board({ backend: vercel({ team: 'team_test', api: API, fetch: older, files: api.files }) }).as('claude').post('dev', { text: 'from a session' })
+    const julian = handleOn(api)
+    const { message } = await julian.thread(root.id)
+    expect(message.by).toEqual({ actor: 'vercel:user:u_jb+claude', principal: 'vercel:user:u_jb', profile: 'claude' })
+    expect((await julian.as('claude').me())).not.toHaveProperty('session')
   })
 
   it('names someone after a read of the names fails, and every message of someone new in one read', async () => {
@@ -1212,7 +1228,7 @@ describe('vercel()', () => {
     // Its team turning Messageboard off stops it as a lost grant does, by no one in particular.
     const off = await pong.schedule({ re: root.id }, { text: 'off', in: '1d' })
     Object.assign(api.schedules.get(off.id)!, { state: 'canceled', nextAt: null, canceled: { at: Date.now(), reason: 'disabled' } })
-    expect((await pong.schedules({ all: true })).find((s) => s.id === off.id)?.canceled).toEqual({ reason: 'revoked', by: { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null } })
+    expect((await pong.schedules({ all: true })).find((s) => s.id === off.id)?.canceled).toEqual({ reason: 'revoked', by: { actor: 'board:schedule', principal: 'board:schedule', profile: null } })
     await expect(handleOn(api, 'user:u_ada').cancelSchedule(off.id)).rejects.toMatchObject({ status: 403, code: 'schedule_not_owned' })
     await expect(pong.cancelSchedule('sch_missing')).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
   })
@@ -1340,10 +1356,10 @@ describe('vercel()', () => {
     expect(messages.map((message) => [message.text, message.by, message.author])).toEqual([
       [
         'ship it',
-        { actor: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack-eu:user:U_MALTE', session: null },
+        { actor: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack-eu:user:U_MALTE' },
         { id: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', kind: 'external', handle: 'pong/malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' }, platform: 'slack', verified: true },
       ],
-      ['on the board', { actor: 'vercel:user:u_jb', principal: 'vercel:user:u_jb', profile: null, session: null }, expect.not.objectContaining({ via: expect.anything() })],
+      ['on the board', { actor: 'vercel:user:u_jb', principal: 'vercel:user:u_jb', profile: null }, expect.not.objectContaining({ via: expect.anything() })],
     ])
     expect((await julian.actors()).find((actor) => actor.id.endsWith('+slack-eu:user:U_MALTE'))).toMatchObject({ name: 'Malte', via: { name: 'pong', environment: 'preview' }, platform: 'slack' })
     // A profile name covers that agent of anyone's, but a platform user is only ever themselves.
@@ -1401,7 +1417,7 @@ describe('vercel()', () => {
     await preview.syncImport({ op: 'post', author: malte, from: 'slack', channel: 'general', text: 'ship it' })
     const [message] = (await handleOn(api).messages({ channel: 'general' })).messages
     expect([message!.by, message!.author]).toEqual([
-      { actor: 'slack:user:U_MALTE', principal: 'slack:user:U_MALTE', profile: null, session: null },
+      { actor: 'slack:user:U_MALTE', principal: 'slack:user:U_MALTE', profile: null },
       { id: 'slack:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null, verified: true },
     ])
   })

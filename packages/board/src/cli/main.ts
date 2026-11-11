@@ -989,7 +989,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const minutes = Math.max(0, Math.round((Date.parse(me.expiresAt) - Date.now()) / 60_000))
         rows.push(['token', `expires in ${Math.floor(minutes / 60)}h ${minutes % 60}m`])
       }
-      if (me.session) rows.push(['session', me.session])
       // Full access says nothing; anything less says what it is, one pattern a row.
       ;(me.can === undefined ? [] : formatAccess(me.can)).forEach((line, index) => rows.push([index === 0 ? 'can' : '', line]))
       const width = Math.max(...rows.map(([subject]) => subject.length))
@@ -1294,7 +1293,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         name,
         ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}),
         ...(flags.profile !== undefined ? { profile: flags.profile } : {}),
-        ...(flags.session !== undefined ? { session: flags.session } : {}),
         ...(flags.expires !== undefined ? { expires: flags.expires } : {}),
       })
       // The secret alone, so it pipes: BOARD_TOKEN=$(vb tokens create widget --can feedback/=post).

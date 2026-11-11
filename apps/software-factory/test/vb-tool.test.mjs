@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BOARD, eveName, eveSession, policy } from "../app/api/board/[[...path]]/harness.ts";
+import { BOARD, eveName, policy } from "../app/api/board/[[...path]]/harness.ts";
 import { callSignal, eveBoard, runVb, SANDBOX_HOME } from "../agent/lib/vb-tool.ts";
 import { caller, deploymentToken, personToken, PROJECT_ID, testBoard } from "../../../packages/board/test/harness.ts";
 
@@ -38,7 +38,6 @@ test("vb tool: writes as the thread's Eve, with the headers vb gets from the net
   const reply = (await eve.thread(root.id)).replies.find((m) => m.id === id);
   assert.equal(reply.text, "on it");
   assert.equal(reply.by.profile, eveName("1419"));
-  assert.equal(reply.by.session, eveSession("1419"));
   assert.equal(reply.by.principal, `vercel:project:${PROJECT_ID}:production`);
   const [rule] = policy("1419", { gateway: "g", board: token, github: "h" }, undefined).allow[new URL(BOARD).host];
   for (const [name, value] of Object.entries(rule.transform[0].headers)) assert.equal(sent.at(-1).get(name), value);

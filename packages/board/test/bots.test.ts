@@ -62,7 +62,7 @@ describe('known bot messages', () => {
   it('shows the readable form in vb read, and the original in --json', () => {
     const message = {
       id: 253, channel: 'dev', text: VERCEL_BUILDING, re: null, replyTo: null, labels: {}, reactions: {}, createdAt: new Date().toISOString(), editedAt: null,
-      deleted: false, attachments: [], undelivered: {}, by: { actor: 'github:user:35613825', principal: 'github:user:35613825', profile: null, session: null },
+      deleted: false, attachments: [], undelivered: {}, by: { actor: 'github:user:35613825', principal: 'github:user:35613825', profile: null },
       author: { kind: 'external', handle: 'vercel[bot]', name: 'vercel[bot]', avatar: null },
     } as unknown as MessageView
     const out = formatMessage(message)

@@ -41,10 +41,10 @@ test("requires explicit immutable project/team grants and defaults to production
   });
 });
 
-test("trusted Factory sessions discover, post, review and respond with verified provenance", async () => {
+test("trusted Factory agents discover, post, review and respond with verified provenance", async () => {
   const board = testBoard(options);
-  const author = caller(board.fetch, await token(), { "x-board-profile": "factory", "x-board-session": "author-task-1" });
-  const reviewer = caller(board.fetch, await token(), { "x-board-profile": "factory", "x-board-session": "review-task-2" });
+  const author = caller(board.fetch, await token(), { "x-board-profile": "factory-author" });
+  const reviewer = caller(board.fetch, await token(), { "x-board-profile": "factory-reviewer" });
   const channel = "factory/aaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbb/ci-health";
   const posted = await author("POST", "/messages", {
     channel, text: "Reproduced timeout: artifact://log-a", id: "factory-repro", noSync: true,
@@ -53,7 +53,7 @@ test("trusted Factory sessions discover, post, review and respond with verified 
   assert.equal(posted.status, 201);
   const root = posted.body.message;
   assert.equal(root.by.principal, "vercel:project:prj_factory:production");
-  assert.equal(root.by.session, "author-task-1");
+  assert.equal(root.by.actor, "vercel:project:prj_factory:production+factory-author");
   assert.equal(root.channel, channel);
   const found = await reviewer("GET", `/messages?channel=${encodeURIComponent(channel)}&text=timeout&limit=1`);
   assert.equal(found.status, 200);
@@ -61,7 +61,7 @@ test("trusted Factory sessions discover, post, review and respond with verified 
   const review = await reviewer("POST", "/messages", { re: root.id, text: "Also fails before the patch: artifact://log-b", id: "factory-review", noSync: true });
   assert.equal(review.status, 201);
   const read = await author("GET", `/messages?channel=${encodeURIComponent(channel)}&re=${root.id}&after=${root.id}&limit=1`);
-  assert.equal(read.body.messages[0].by.session, "review-task-2");
+  assert.equal(read.body.messages[0].by.actor, "vercel:project:prj_factory:production+factory-reviewer");
   const response = await author("POST", "/messages", { re: root.id, text: "Revised diagnosis: missing startup prerequisite.", id: "factory-response", noSync: true });
   assert.equal(response.status, 201);
   const replay = await author("POST", "/messages", { channel, text: root.text, labels: root.labels, id: "factory-repro", noSync: true });

@@ -45,7 +45,7 @@ The first send, the stop, and the repeat reach at most a year out.
 ## As whom
 
 A scheduled message posts as its creator, exactly as the board resolved them
-when they scheduled it, profile and session included. It reads like theirs.
+when they scheduled it, profile included. It reads like theirs.
 
 - **Each one carries `schedule: { id, n }`,** where `n` counts sends from 0.
   `vb read` marks it `scheduled s12`, so people and watchers can tell it was scheduled.

@@ -83,24 +83,22 @@ function localToken(url: string): { token: string; handle: string | null } | nul
   }
 }
 
-export type DetectedAgent = { profile: string; session: string | null }
+export type DetectedAgent = { profile: string }
 
 /** fx, Claude Code, Codex, and Grok sessions select their own profile, like Just Chat's CLI. */
 export function detectAgent(env: NodeJS.ProcessEnv = process.env): DetectedAgent | null {
   const found: DetectedAgent[] = []
   // fx sets AI_AGENT=fx; it exports no session ID to child processes yet, so FX_SESSION_ID is read if it does.
-  if (env.AI_AGENT?.trim().toLowerCase() === 'fx') found.push({ profile: 'fx', session: env.FX_SESSION_ID || null })
-  if (env.CLAUDECODE === '1' || env.CLAUDE_CODE_SESSION_ID)
-    found.push({ profile: 'claude', session: env.CLAUDE_CODE_SESSION_ID || null })
-  if (env.CODEX_THREAD_ID || env.CODEX_SESSION_ID)
-    found.push({ profile: 'codex', session: env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || null })
-  if (env.GROK_SESSION_ID) found.push({ profile: 'grok', session: env.GROK_SESSION_ID })
-  if (env.CURSOR_AGENT === '1') found.push({ profile: 'cursor', session: null })
-  if (env.PI_CODING_AGENT === 'true' || env.AI_AGENT === 'pi') found.push({ profile: 'pi', session: env.PI_SESSION_ID || null })
+  if (env.AI_AGENT?.trim().toLowerCase() === 'fx') found.push({ profile: 'fx' })
+  if (env.CLAUDECODE === '1' || env.CLAUDE_CODE_SESSION_ID) found.push({ profile: 'claude' })
+  if (env.CODEX_THREAD_ID || env.CODEX_SESSION_ID) found.push({ profile: 'codex' })
+  if (env.GROK_SESSION_ID) found.push({ profile: 'grok' })
+  if (env.CURSOR_AGENT === '1') found.push({ profile: 'cursor' })
+  if (env.PI_CODING_AGENT === 'true' || env.AI_AGENT === 'pi') found.push({ profile: 'pi' })
   // AI_AGENT is a generic marker: any agent that sets it gets its own profile.
   const named = env.AI_AGENT?.trim().toLowerCase()
   if (named && /^[a-z][a-z0-9-]{0,31}$/.test(named) && !found.some((agent) => agent.profile === named))
-    found.push({ profile: named, session: null })
+    found.push({ profile: named })
   if (found.length > 1)
     throw new BoardError(
       'ambiguous_agent',
@@ -457,15 +455,15 @@ export function connect(
   return { fetch: send, source: () => source }
 }
 
-/** The profile the environment picks: `BOARD_PROFILE` (with `BOARD_AVATAR`), or the coding agent it runs in, with its session. */
-export function environmentProfile(): { profile: ProfileOption; session: string | null } {
+/** The profile the environment picks: `BOARD_PROFILE` (with `BOARD_AVATAR`), or the coding agent it runs in. */
+export function environmentProfile(): ProfileOption {
   // The old name, refused rather than ignored: an agent that still sets it would write as its person.
   if (process.env.BOARD_AS)
     throw new BoardError('renamed_env', 'BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS.', 0, { hint: 'Set BOARD_PROFILE to the same name, and unset BOARD_AS.' })
   const detected = detectAgent()
   const name = process.env.BOARD_PROFILE || detected?.profile
   const avatar = process.env.BOARD_AVATAR
-  return { profile: name ? (avatar ? { name, avatar } : name) : null, session: detected?.session ?? null }
+  return name ? (avatar ? { name, avatar } : name) : null
 }
 
 const WHERE = 'Project → Settings → Deployment Protection → Protection Bypass for Automation'

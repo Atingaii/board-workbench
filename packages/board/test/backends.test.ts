@@ -84,7 +84,7 @@ describe('board() and its backend', () => {
     expect(calls[0]!.caller).toMatchObject({
       identity: {
         principal: { id: 'vercel:user:u_julian', kind: 'person', scope: 'dev/=read' },
-        author: { actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude', session: null },
+        author: { actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' },
         actor: { id: 'vercel:user:u_julian+claude', kind: 'agent', handle: 'julian/claude', name: 'claude' },
       },
       origin: { via: { kind: 'api' } },

@@ -29,7 +29,7 @@ export type { Identity }
 export function deploymentIdentity(actor: string, handle: string): Identity {
   return {
     principal: { id: actor, kind: 'deployment', handle, access: FULL_ACCESS, expiresAt: null },
-    author: { actor, principal: actor, profile: null, session: null },
+    author: { actor, principal: actor, profile: null },
     actor: { id: actor, kind: 'deployment', handle, name: handle, avatar: null },
   }
 }
@@ -277,7 +277,7 @@ export async function landedFor(ctx: WriteContext, identity: Identity, landed: M
 export const blindText = (text: string, own: string) => replaceMentions(text, (token) => (token.kind === 'actor' && token.actor !== own ? '@…' : null))
 
 const sameAuthor = (a: Author, b: Author) =>
-  a.actor === b.actor && a.principal === b.principal && a.profile === b.profile && a.session === b.session
+  a.actor === b.actor && a.principal === b.principal && a.profile === b.profile
 
 async function commitPost(
   ctx: WriteContext,

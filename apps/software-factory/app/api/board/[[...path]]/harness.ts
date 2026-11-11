@@ -14,8 +14,6 @@ export const AGENT_BROWSER = "0.38.2";
 export const FFMPEG_STATIC = "5.2.0";
 export const SANDBOX_USER = "vercel-sandbox";
 
-export const eveSession = (thread: string) => `thread-${thread}`;
-
 const ADJECTIVES = [
   "amber", "brave", "brisk", "calm", "clever", "cosmic", "crisp", "dapper",
   "eager", "fuzzy", "gentle", "glad", "golden", "humble", "jolly", "keen",
@@ -132,7 +130,6 @@ export function eveHeaders(thread: string, token: string, bypass: string | undef
   return {
     authorization: `Bearer ${token}`,
     "x-board-profile": profileHeader(eveName(thread), eveAvatar(thread)),
-    "x-board-session": eveSession(thread),
     ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
   };
 }

@@ -17,7 +17,7 @@ function message(id: number, overrides: Partial<MessageView> = {}): MessageView 
     thread: `t${id}`,
     labels: {},
     reactions: {},
-    by: { actor: ME, principal: 'vercel:user:u_julian', profile: null, session: null },
+    by: { actor: ME, principal: 'vercel:user:u_julian', profile: null },
     noSync: false,
     origin: null,
     from: null,
@@ -92,7 +92,7 @@ describe('the inspector store', () => {
       cursor,
       type: 'channel.created',
       createdAt: '',
-      payload: { channel, by: { actor: ME, principal: ME, profile: null, session: null } },
+      payload: { channel, by: { actor: ME, principal: ME, profile: null } },
     })
     let state = store.applyEvent(start, created('dev/alerts', '2'))
     expect(state.channels['dev/alerts']).toEqual({ path: 'dev/alerts', lastIndex: 0, messages: 0, threads: 0 })
@@ -134,7 +134,7 @@ describe('the inspector store', () => {
     // Someone else's identical message isn't yours.
     state = store.applyEvent(
       state,
-      postedEvent(message(18, { text: 'five', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null, session: null } })),
+      postedEvent(message(18, { text: 'five', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null } })),
     )
     expect(state.pending.map((p) => p.key)).toEqual(['k2'])
   })

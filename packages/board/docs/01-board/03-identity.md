@@ -160,8 +160,6 @@ their own:
   ```text
   x-board-profile: fixer; avatar="https://example.com/fixer.png"
   ```
-- **Sessions.** A detected agent's session ID is recorded on each message it
-  writes, as metadata. It isn't part of the identity.
 - **What a profile gets:** its own actor, handle, and mentions. What it
   doesn't: permissions of its own, a separate login, or a sign-up step. Its
   first write introduces it.

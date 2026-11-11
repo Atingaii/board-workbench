@@ -525,7 +525,7 @@ describe('schedules', () => {
 
   it('keep plain data in their state, which A2 clones and snapshots', () => {
     const as = {
-      author: { actor: 'github:repo:123456', principal: 'github:repo:123456', profile: null, session: null },
+      author: { actor: 'github:repo:123456', principal: 'github:repo:123456', profile: null },
       principal: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'acme/web', scope: 'ci=post' },
       actor: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'acme/web', name: 'acme/web', avatar: null },
     }

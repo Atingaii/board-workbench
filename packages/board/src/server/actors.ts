@@ -28,7 +28,9 @@ export function claimsOf(headers: Headers): Claims {
   if (headers.get('x-board-avatar') !== null)
     throw badRequest('x-board-avatar is the avatar parameter of x-board-profile now: send x-board-profile: <name>;avatar="<url>"', 'invalid_profile')
   const { profile, avatar } = profileOf(headers.get('x-board-profile'))
-  const session = headers.get('x-board-session')?.trim().slice(0, 200) || null
+  // Sessions are gone: who writes is a principal and a profile. Refused, so a client that still sends one hears so.
+  if (headers.get('x-board-session') !== null)
+    throw badRequest('x-board-session is gone: who writes is the principal and its profile, so leave it out, or write as a profile with x-board-profile', 'invalid_request')
   const handle = headers.get('x-board-handle')?.trim().toLowerCase() || null
   if (handle !== null && !HANDLE.test(handle)) throw badRequest(`invalid handle: ${handle}`)
   // A display name, URI-encoded so any language fits in a header.
@@ -51,7 +53,7 @@ export function claimsOf(headers: Headers): Claims {
     } catch (error) {
       throw badRequest((error as Error).message, 'invalid_scope')
     }
-  return { profile, avatar, session, handle, name, scope }
+  return { profile, avatar, handle, name, scope }
 }
 
 /** `x-board-profile`'s profile and avatar, checked: a 400 for a header that isn't one. */
@@ -91,7 +93,7 @@ export function resolveActor(principal: Principal, claims: Claims, audience: str
     ...(profile === null ? {} : { via: viaOf({ id: principal.id, handle: baseHandle }) }),
   }
   return {
-    author: { actor: id, principal: principal.id, profile, session: claims.session },
+    author: { actor: id, principal: principal.id, profile },
     actor,
   }
 }

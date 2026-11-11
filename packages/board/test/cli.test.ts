@@ -536,7 +536,7 @@ describe('cli', () => {
 
   it('picks up the profile of a detected agent', async () => {
     const { stdout } = await vb(['whoami', '--json'], { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's-1' })
-    expect(JSON.parse(stdout)).toMatchObject({ actor: 'vercel:user:u_julian+claude', session: 's-1' })
+    expect(JSON.parse(stdout)).toMatchObject({ actor: 'vercel:user:u_julian+claude' })
     const human = await vb(['whoami', '--json', '--human'], { CLAUDECODE: '1' })
     expect(JSON.parse(human.stdout)).toMatchObject({ actor: 'vercel:user:u_julian', profile: null })
   })
