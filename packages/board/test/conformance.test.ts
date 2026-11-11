@@ -376,7 +376,7 @@ describe('the conformance kit', () => {
   it('reports tasks as not kept here on a board that answers 501 no_tasks, and writes none of what the group would', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const asked: string[] = []
-    // A board that keeps no tasks, as one on Vercel's API answers today: every task route says so.
+    // A board that keeps no tasks, as a backend of one's own may answer: every task route says so.
     const taskless: Fetch = async (request) => {
       const { pathname } = new URL(request.url)
       if (!/\/tasks(\/|$)/.test(pathname)) return board.fetch(request)

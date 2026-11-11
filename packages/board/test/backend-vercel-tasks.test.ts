@@ -1,0 +1,830 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { board } from '../src/server/index.ts'
+import { vercel } from '../src/backend-vercel/index.default.ts'
+import { conformance } from '../src/conformance/index.ts'
+import type { Caller } from '../src/server/backend.ts'
+import { as, fakeMessageboard } from './messageboard.ts'
+
+// Tasks on Vercel's board: vercel()'s task methods on the fake API's task routes, through the handle.
+
+const API = 'http://localhost'
+type Api = ReturnType<typeof fakeMessageboard>
+type Sent = { method: string; version: number; path: string; query: Record<string, string[]>; body: Record<string, any> | undefined }
+
+/**
+ * A handle on the fake's board through vercel(), as `principal`, and every request it sent the API: its version, and
+ * its path under the board. `can` narrows it with `x-board-can`, as a proxy that holds its credential does.
+ */
+function handleOn(api: Api, principal = 'user:u_jb', { answered: hook, can }: { can?: string; answered?: (request: Sent, response: Response) => Response } = {}) {
+  const sent: Sent[] = []
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init)
+    const url = new URL(request.url)
+    const query: Record<string, string[]> = {}
+    for (const [name, value] of url.searchParams) if (name !== 'teamId') (query[name] ??= []).push(value)
+    const asked: Sent = {
+      method: request.method,
+      version: Number(/^\/v(\d+)\//.exec(url.pathname)?.[1]),
+      path: url.pathname.replace(/^\/v\d+\/messageboard\/boards\/[^/]+/, ''),
+      query,
+      body: request.method === 'GET' ? undefined : ((await request.clone().json().catch(() => undefined)) as Sent['body']),
+    }
+    sent.push(asked)
+    // As it was sent, its headers among it: who it's from beside its credentials. `answered` sees what came back, and may lose it.
+    // In init, where as() reads them: a Request's own headers it would drop.
+    const headers = new Headers(init?.headers)
+    if (can !== undefined) headers.set('x-board-can', can)
+    const answered = as(api, principal)(input, { ...init, headers }).then((response) => (hook ? hook(asked, response) : response))
+    // A request its caller stops ends there, as fetch ends one: the fake goes on with what it was sent.
+    const stopped = new Promise<never>((_, reject) => request.signal.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')), { once: true }))
+    return Promise.race([answered, stopped])
+  }
+  const handle = board({ backend: vercel({ team: 'team_test', api: API, fetch, files: api.files }) })
+  /** The last write it sent: a read of names or channels may follow it. */
+  const wrote = () => sent.filter((request) => request.method !== 'GET').at(-1)!
+  return Object.assign(handle, { sent, wrote, fetchAs: fetch })
+}
+
+const threadOf = (id: string) => `thr_${/^msg_(.+)_1$/.exec(id)![1]}`
+const JULIAN = 'vercel:user:u_jb'
+const ADA = 'vercel:user:u_ada'
+const MINUTE = 60_000
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+describe("vercel()'s tasks", () => {
+  it("passes the conformance kit's tasks on Vercel's API, as a person and as a deployment", async () => {
+    const statuses = async (principal: string) => {
+      const handle = handleOn(fakeMessageboard(), principal)
+      const report = await conformance(handle)
+      // Whatever it asked of a task went to the API's task routes, version 2, and nothing else did: no thread route carries one.
+      const tasks = handle.sent.filter((request) => /\/tasks?(\/|$)/.test(request.path) || request.body?.task !== undefined || 'task' in request.query)
+      expect(tasks.length).toBeGreaterThan(50)
+      expect(tasks.filter((request) => !(request.version === 2 && /^\/tasks(\/|$)/.test(request.path)))).toEqual([])
+      expect(handle.sent.filter((request) => request.version !== 1 && !tasks.includes(request))).toEqual([])
+      return Object.fromEntries(report.checks.filter((check) => check.group === 'tasks').map((check) => [check.name, check.detail === null || check.status === 'passed' ? check.status : `${check.status}: ${check.detail}`]))
+    }
+    const kept = {
+      'starts a thread as a task, or makes one of a thread that was there: it reads as its thread, and board.task finds it': 'passed',
+      'gives a task to one of the claims that race for it, and takes its result': 'passed',
+      'gives a claim the lease it asks for, up to 5 minutes, and says when it ends': 'passed',
+      "fences what a claim does: once it's over, its writes are lost and change nothing": 'passed',
+      'holds a task until the tasks it needs complete, which a failed or canceled one never does': 'passed',
+      'holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'passed',
+      'keeps a task assigned to a profile for that actor alone': 'passed',
+      // This run sends no x-board-can: the kit's run with headers, in backend-vercel.test.ts, checks it.
+      'takes label in its channel to claim a task: a caller narrowed to reading and posting claims none': "skipped: this run can't call the board with an x-board-can header",
+      'claims the oldest ready task in a channel or its subtree that has the labels asked for, and waits for one': 'passed',
+      'shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token': 'passed',
+      'keeps labels under board. its own: a label write or a post that sets one is refused': 'passed',
+    }
+    const edited = 'holds a task when anyone but its owner edits its root, which ends its claim'
+    // A person runs no sync, so nothing imports the platform user whose edit the check needs.
+    expect(await statuses('user:u_jb')).toEqual({ ...kept, [edited]: "skipped: this token can't register a sync here" })
+    // A deployment does: its sync's platform user is a profile of its own project, and still never the task's owner.
+    expect(await statuses('project:prj_pong:production')).toEqual({ ...kept, [edited]: 'passed' })
+  }, 60_000)
+
+  it("finds no task on the thread routes that carried them before: the fake API has only version 2's task routes, as the API does", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const plain = await julian.post('work', 'just a thread')
+    const { task } = await julian.tasks.create('work', { text: 'a task' })
+    const ask = async (method: string, path: string, body?: Record<string, unknown>) => {
+      const response = await as(api, 'user:u_jb')(`${API}${path}${path.includes('?') ? '&' : '?'}teamId=team_test`, { method, ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operationId: crypto.randomUUID(), ...body }) } : {}) })
+      return [response.status, ((await response.json()) as { error?: { code: string } }).error?.code ?? null]
+    }
+    const v1 = '/v1/messageboard/boards/brd_test'
+    const token = 'a'.repeat(43)
+    // What an adapter that still asked the old way would get: nothing made, claimed, or listed.
+    expect(await ask('POST', `${v1}/threads/${threadOf(plain.id)}/task`, {})).toEqual([404, 'not_found'])
+    expect(await ask('POST', `${v1}/threads/${threadOf(task.id)}/task/claim`, { claimToken: token })).toEqual([404, 'not_found'])
+    expect(await ask('POST', `${v1}/threads/task/claim`, { claimToken: token, channel: 'work' })).toEqual([404, 'not_found'])
+    expect(await ask('POST', `${v1}/threads`, { channel: 'work', text: 'a task, the old way', task: {} })).toEqual([400, 'bad_request'])
+    expect(await ask('GET', `${v1}/threads?task=open`)).toEqual([404, 'channel_not_found'])
+    // And the new routes are version 2 alone, which has nothing else.
+    expect(await ask('POST', `${v1}/tasks/${threadOf(task.id)}/claim`, { claimToken: token })).toEqual([404, 'not_found'])
+    expect(await ask('GET', '/v2/messageboard/boards/brd_test/threads?channelId=x')).toEqual([404, 'not_found'])
+    expect(await ask('GET', '/v2/messageboard/me')).toEqual([404, 'not_found'])
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', epoch: 0 })
+    expect((await julian.tasks.list({ state: 'all' })).tasks.map((listed) => listed.message.id)).toEqual([task.id])
+    expect(await ask('POST', `/v2/messageboard/boards/brd_test/tasks/${threadOf(task.id)}/claim`, { claimToken: token })).toMatchObject([200, null])
+  })
+
+  it("keeps a task assigned to a profile for its owner's principal writing as that actor, whatever another principal's ID reads like", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'for the fixer', for: `${JULIAN}+fixer` })
+    // Someone else, whose own ID is the very string the task is for.
+    const other = handleOn(api, 'user:u_jb+fixer')
+    expect(await other.me()).toMatchObject({ actor: `${JULIAN}+fixer`, principal: `${JULIAN}+fixer`, profile: null })
+    await expect(other.tasks.claim(task.id)).rejects.toMatchObject({ status: 409, code: 'task_assigned' })
+    expect(await other.tasks.claim({ channel: 'work', from: [JULIAN] })).toBeNull()
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', epoch: 0 })
+    // Its owner, as that profile, is who it's for: by its ID, or as the next one ready for it.
+    const claim = await julian.as('fixer').tasks.claim({ channel: 'work' })
+    expect(claim?.task).toMatchObject({ id: task.id, task: { state: 'claimed', claim: { actor: `${JULIAN}+fixer` } } })
+    await claim!.release()
+    expect(await julian.as('fixer').tasks.claim(task.id)).toMatchObject({ epoch: 2 })
+  })
+
+  it("holds a profile to the tasks it made, as the API does: its principal's and another profile's are refused, and its principal changes any", async () => {
+    const api = fakeMessageboard()
+    // A deployment manages nothing, so what it changes is what it owns.
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const PONG = 'vercel:project:prj_pong:production'
+    const fixer = pong.as('fixer')
+    const reviewer = pong.as('reviewer')
+    const { task: given } = await reviewer.tasks.create('work', { text: 'review the fix', for: `${PONG}+reviewer` })
+    const { task: principals } = await pong.tasks.create('work', { text: "the deployment's own" })
+
+    // Another profile of the same deployment shares its credential, and takes neither: not by giving itself the task, nor any other owner's change.
+    for (const task of [given, principals]) {
+      await expect(fixer.tasks.assign(task.id, `${PONG}+fixer`), task.text).rejects.toMatchObject({ status: 403, code: 'task_not_owned' })
+      await expect(fixer.tasks.block(task.id, 'mine now'), task.text).rejects.toMatchObject({ status: 403, code: 'task_not_owned' })
+      await expect(fixer.tasks.cancel(task.id, 'mine now'), task.text).rejects.toMatchObject({ status: 403, code: 'task_not_owned' })
+    }
+    await expect(fixer.tasks.claim(given.id)).rejects.toMatchObject({ status: 409, code: 'task_assigned' })
+    expect((await pong.thread(given.id)).message.task).toMatchObject({ state: 'ready', for: `${PONG}+reviewer`, owner: PONG })
+
+    // The profile that made it changes it, and so does its principal, as itself.
+    await reviewer.tasks.block(given.id, 'waiting on the fix')
+    expect((await reviewer.tasks.unblock(given.id)).task?.state).toBe('ready')
+    expect((await pong.tasks.assign(given.id, null)).task?.for).toBeNull()
+    expect((await pong.tasks.cancel(given.id, 'not needed')).task?.state).toBe('canceled')
+
+    // The same owner decides whose edit changes what a task says: a profile's own thread, made a task by another, is held when it edits it.
+    const note = await fixer.post('work', 'bump the base image')
+    await reviewer.tasks.create({ re: note.id })
+    await fixer.edit(note.id, 'bump the base image to 24')
+    expect((await pong.thread(note.id)).message.task).toMatchObject({ state: 'blocked', blocked: { kind: 'edited' } })
+    // And one it made a task itself stays as it is.
+    const own = await fixer.post('work', 'rotate the keys')
+    await fixer.tasks.create({ re: own.id })
+    await fixer.edit(own.id, 'rotate the signing keys')
+    expect((await pong.thread(own.id)).message.task).toMatchObject({ state: 'ready', blocked: null })
+  })
+
+  it("starts a thread as a task in the post's own write, makes one of a thread that's there, and shows each as the board does", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task: fix } = await julian.tasks.create('work', { text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
+    const { task: review } = await julian.tasks.create('work', { text: 'review the fix', needs: [fix.id], for: `${JULIAN}+reviewer` })
+
+    // A task is its root: its ID is the root message's, and it reads as its thread does.
+    expect(fix.id).toMatch(/^msg_[0-9a-f-]{36}_1$/)
+    expect(fix).toMatchObject({ channel: 'work', text: 'fix CVE-123 in acme/web', re: null, labels: { step: 'fix', 'board.task': 'ready' } })
+    expect(fix.task).toEqual({ state: 'ready', owner: JULIAN, for: null, needs: [], epoch: 0, claim: null, blocked: null, result: null, reason: null })
+    // What it waits for is named by its root's ID, as the board names a task, where the API names its thread.
+    expect(review.task).toMatchObject({ state: 'waiting', needs: [fix.id], for: `${JULIAN}+reviewer` })
+    expect(review.labels['board.task']).toBe('waiting')
+
+    // One write each, on the API's route that makes a task: the post's own fields, with what makes it a task beside them.
+    const writes = julian.sent.filter((request) => request.method === 'POST')
+    expect(writes.map((request) => `v${request.version} ${request.path}`)).toEqual(['v2 /tasks', 'v2 /tasks'])
+    const [first, second] = writes
+    expect(first!.body).toEqual({ operationId: expect.any(String), channel: 'work', text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
+    expect(second!.body).toEqual({ operationId: expect.any(String), channel: 'work', text: 'review the fix', needs: [threadOf(fix.id)], for: `${JULIAN}+reviewer` })
+
+    // A thread that's there becomes a task as it is, named to the same route, and its maker owns it whoever wrote it.
+    const ada = handleOn(api, 'user:u_ada')
+    const issue = await ada.post('issues', 'export times out past 10k rows')
+    const adopted = await julian.tasks.create({ re: issue.id }, { needs: [fix.id] })
+    expect(julian.wrote()).toMatchObject({ method: 'POST', version: 2, path: '/tasks' })
+    expect(julian.wrote().body).toEqual({ operationId: expect.any(String), threadId: threadOf(issue.id), needs: [threadOf(fix.id)] })
+    expect(adopted.task).toMatchObject({ id: issue.id, text: 'export times out past 10k rows', by: { principal: ADA }, task: { state: 'waiting', owner: JULIAN, needs: [fix.id] } })
+    expect((await ada.thread(issue.id)).message.task).toMatchObject({ state: 'waiting', owner: JULIAN })
+
+    // Its replies are its thread's, and the thread list and the task list both show it.
+    const reply = await julian.reply(fix.id, 'patched, running the tests')
+    julian.sent.length = 0
+    const listed = (await julian.tasks.list({ channel: 'work' })).tasks
+    expect(listed.map((task) => [task.message.id, task.message.text, task.message.task?.state, task.replies, task.last?.id ?? null])).toEqual([
+      [fix.id, 'fix CVE-123 in acme/web', 'ready', 1, reply.id],
+      [review.id, 'review the fix', 'waiting', 0, null],
+    ])
+    // The API's list answers each task with its root: only a latest reply is read apart.
+    expect(julian.sent.filter((request) => request.path.startsWith('/messages/')).map((request) => request.path)).toEqual([`/messages/${reply.id}`])
+    expect((await julian.messages({ channel: 'work', label: { 'board.task': 'waiting' } })).messages.map((message) => message.id)).toEqual([review.id])
+  })
+
+  it("claims on the API's routes with a token it makes, which no view and no event ever shows", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'migrate the table' })
+    const { cursor } = await julian.poll({ channel: 'work' })
+    const { cursor: everywhere } = await julian.poll({})
+    const claim = await julian.as('claude').tasks.claim(task.id, { lease: 60 })
+
+    // 32 random bytes in base64url, made here: the API keeps its hash, and takes it again on what the claim does.
+    expect(claim.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    const asked = julian.wrote()
+    expect(asked).toMatchObject({ method: 'POST', version: 2, path: `/tasks/${threadOf(task.id)}/claim`, body: { claimToken: claim.token, leaseSeconds: 60 } })
+    expect(claim).toMatchObject({ epoch: 1, task: { id: task.id, labels: { 'board.task': 'claimed' }, task: { state: 'claimed', epoch: 1 } } })
+    // A claim is whose it is and when it ends: no session, as on any board.
+    expect(claim.task.task?.claim).toEqual({ actor: `${JULIAN}+claude`, until: claim.until })
+    expect(Date.parse(claim.until) - Date.now()).toBeGreaterThan(55_000)
+
+    const renewed = await claim.renew(120)
+    expect(julian.wrote()).toMatchObject({ path: `/tasks/${threadOf(task.id)}/renew`, body: { claimToken: claim.token, epoch: 1, leaseSeconds: 120 } })
+    expect(Date.parse(renewed.until) - Date.parse(claim.until)).toBeGreaterThan(55_000)
+    const done = await renewed.complete('migrated')
+    expect(julian.wrote()).toMatchObject({ path: `/tasks/${threadOf(task.id)}/complete`, body: { claimToken: claim.token, epoch: 1, result: 'migrated' } })
+    expect(done.task).toMatchObject({ state: 'completed', result: 'migrated', claim: null, epoch: 1 })
+
+    // Nothing a reader gets has the token: not the thread, the list, or the feed with its bookkeeping.
+    const seen = JSON.stringify([await julian.thread(task.id), await julian.tasks.list({ state: 'all' }), await julian.poll({ channel: 'work', after: cursor, all: true }), await julian.poll({ after: everywhere, all: true })])
+    expect(seen).toContain('"task.claimed"')
+    expect(seen).not.toContain(claim.token)
+    expect(seen).not.toMatch(/"token"|claimToken/)
+  })
+
+  it('gets the lease the API gives: 5 minutes at most, and it asks for 15 when the caller asks for none', async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'a long build' })
+    const asked = Date.now()
+    const hour = await julian.tasks.claim(task.id, { lease: 3600 })
+    expect(julian.wrote().body).toMatchObject({ leaseSeconds: 3600 })
+    // The claim's own word for when it ends is the API's, not what was asked.
+    expect(Date.parse(hour.until) - asked).toBeGreaterThanOrEqual(5 * MINUTE)
+    expect(Date.parse(hour.until) - asked).toBeLessThan(5 * MINUTE + 5000)
+    expect(hour.task.task?.claim?.until).toBe(hour.until)
+    await hour.release()
+
+    const unasked = await julian.tasks.claim(task.id)
+    expect(julian.wrote().body).toMatchObject({ leaseSeconds: 900 })
+    expect(Date.parse(unasked.until) - Date.now()).toBeLessThan(5 * MINUTE + 5000)
+    const renewed = await unasked.renew()
+    expect(julian.wrote().body).toMatchObject({ leaseSeconds: 900 })
+    expect(Date.parse(renewed.until) - Date.now()).toBeLessThan(5 * MINUTE + 5000)
+    // A task made and claimed in one write asks the same way.
+    const made = await julian.tasks.create('work', { text: 'a step of my own', claim: true, lease: 45 })
+    expect(julian.wrote().body!.claim).toEqual({ claimToken: made.claim!.token, leaseSeconds: 45 })
+    expect(made).toMatchObject({ task: { task: { state: 'claimed', epoch: 1 } }, claim: { epoch: 1 } })
+    expect(Date.parse(made.claim!.until) - Date.now()).toBeLessThan(46_000)
+    expect((await julian.tasks.held(made.task.id, made.claim!).complete()).task?.state).toBe('completed')
+  })
+
+  it("takes over a claim whose lease ran out, which nothing writes until a task request sees it, and fences the claim that lost it", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'rotate the keys' })
+    const { cursor } = await julian.poll({ channel: 'work' })
+    const first = await julian.as('claude').tasks.claim(task.id, { lease: 30 })
+    vi.setSystemTime(Date.now() + 31_000)
+
+    // No timer runs there: its label still says claimed, with a lease that's over.
+    const lapsed = (await julian.thread(task.id)).message
+    expect(lapsed).toMatchObject({ labels: { 'board.task': 'claimed' }, task: { state: 'claimed', epoch: 1 } })
+    expect(Date.parse(lapsed.task!.claim!.until)).toBeLessThan(Date.now())
+    // Its own claim's writes are lost all the same, and the error says why.
+    await expect(first.renew()).rejects.toMatchObject({ status: 409, code: 'claim_lost', message: expect.stringContaining('(lease_expired)') })
+
+    const second = await julian.as('codex').tasks.claim(task.id, { lease: 60 })
+    expect(second).toMatchObject({ epoch: 2, task: { task: { state: 'claimed', claim: { actor: `${JULIAN}+codex` } } } })
+    await expect(first.complete('too late')).rejects.toMatchObject({ status: 409, code: 'claim_lost', message: expect.stringContaining('(epoch_changed)') })
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'claimed', epoch: 2, result: null })
+
+    // The takeover wrote the expiry before its own claim, as the board's events, the expiry no one's.
+    const { events } = await julian.poll({ channel: 'work', after: cursor })
+    expect(events.map((event) => [event.type, event.actor?.handle ?? null])).toEqual([
+      ['task.claimed', 'julian/claude'],
+      ['task.expired', null],
+      ['task.claimed', 'julian/codex'],
+    ])
+    expect(events[1]!.payload).toEqual({ id: task.id, thread: task.thread, epoch: 1 })
+    expect(events[2]!.payload).toEqual({ id: task.id, thread: task.thread, epoch: 2, until: second.until, by: { actor: `${JULIAN}+codex`, principal: JULIAN, profile: 'codex' } })
+  })
+
+  it("lets its owner hold a task whose claim's lease ran out: the expiry is written first, in the hold's own write", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'deploy to prod' })
+    const claim = await julian.as('claude').tasks.claim(task.id, { lease: 30 })
+    // While its claim holds it, only that claim holds it for a person.
+    await expect(julian.tasks.block(task.id, 'not this week')).rejects.toMatchObject({ status: 409, code: 'task_claimed' })
+    const { cursor } = await julian.poll({ channel: 'work' })
+    vi.setSystemTime(Date.now() + 31_000)
+
+    // A lease that ran out leaves the task no one's, whatever its label still says: its owner holds it.
+    expect((await julian.thread(task.id)).message.labels['board.task']).toBe('claimed')
+    const held = await julian.tasks.block(task.id, 'not this week', { kind: 'needs_input' })
+    expect(held).toMatchObject({ labels: { 'board.task': 'blocked' }, task: { state: 'blocked', claim: null, epoch: 1, blocked: { kind: 'needs_input', reason: 'not this week' } } })
+    expect(julian.wrote()).toMatchObject({ path: `/tasks/${threadOf(task.id)}/block`, body: { reason: 'not this week', kind: 'needs_input' } })
+    expect(Object.keys(julian.wrote().body!).sort()).toEqual(['kind', 'operationId', 'reason'])
+    const { events } = await julian.poll({ channel: 'work', after: cursor })
+    expect(events.map((event) => [event.type, event.message?.task?.state, event.actor?.handle ?? null])).toEqual([
+      ['task.expired', 'ready', null],
+      ['task.blocked', 'blocked', 'julian'],
+    ])
+    await expect(claim.complete('done')).rejects.toMatchObject({ status: 409, code: 'claim_lost', message: expect.stringContaining('(not_claimed)') })
+
+    // Deleting its root does the same before it cancels the task.
+    const { task: gone } = await julian.tasks.create('work', { text: 'gone soon', claim: true, lease: 30 })
+    const before = (await julian.poll({ channel: 'work' })).cursor
+    vi.setSystemTime(Date.now() + 31_000)
+    await julian.delete(gone.id)
+    expect((await julian.poll({ channel: 'work', after: before })).events.map((event) => [event.type, event.message?.task?.state])).toEqual([
+      ['message.deleted', 'canceled'],
+      ['task.expired', 'ready'],
+      ['task.canceled', 'canceled'],
+    ])
+    expect((await julian.thread(gone.id)).message.task).toMatchObject({ state: 'canceled', reason: 'deleted', claim: null })
+  })
+
+  it("lists by the state the API lists by, where a claim whose lease ran out is ready and never claimed", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task: held } = await julian.tasks.create('work', { text: 'held' })
+    // More lapsed claims than one list writes the expiry of: the rest still read claimed, with a lease that's over.
+    const lapsing: string[] = []
+    for (let n = 0; n < 12; n++) lapsing.push((await julian.tasks.create('work', { text: `lapsing ${n}`, claim: true, lease: 30 })).task.id)
+    vi.setSystemTime(Date.now() + 31_000)
+    await julian.tasks.claim(held.id, { lease: 300 })
+
+    const listed = async (state: 'ready' | 'claimed' | 'open') => (await julian.tasks.list({ channel: 'work', state })).tasks
+    const ready = await listed('ready')
+    expect(ready.map((task) => task.message.id)).toEqual(lapsing)
+    // The list answers each as it is once its claim is over, though a read of the last two still says claimed.
+    expect(ready.map((task) => [task.message.task!.state, task.message.task!.claim, task.message.labels['board.task']])).toEqual(lapsing.map(() => ['ready', null, 'ready']))
+    const unwritten = (await julian.thread(lapsing.at(-1)!)).message
+    expect(unwritten).toMatchObject({ labels: { 'board.task': 'claimed' }, task: { state: 'claimed' } })
+    expect(Date.parse(unwritten.task!.claim!.until)).toBeLessThan(Date.now())
+    expect((await listed('claimed')).map((task) => task.message.id)).toEqual([held.id])
+    expect((await listed('open')).map((task) => task.message.id)).toEqual([held.id, ...lapsing])
+    // Each state is the API's to list: it's asked for as it was asked of the board.
+    const lists = julian.sent.filter((request) => request.method === 'GET' && request.path === '/tasks')
+    expect(lists.map((request) => [request.version, request.query.state, request.query.channel])).toEqual(['ready', 'claimed', 'open'].map((state) => [2, [state], ['work']]))
+  })
+
+  it("fills a list's limit across the API's pages, which come back short, and reads on from its cursor", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const ada = handleOn(api, 'user:u_ada')
+    // Seven tasks under queue/ among 60 on the board: the API's list of a tree reads the board's tasks, 25 a page, and keeps the tree's.
+    const made: string[] = []
+    for (let n = 0; n < 60; n++) {
+      if (n % 9 === 0) made.push((await (n === 27 ? ada : julian).tasks.create('queue', { text: `task ${n}`, labels: { step: n < 30 ? 'fix' : 'review' } })).task.id)
+      else await julian.tasks.create('elsewhere', { text: `another ${n}` })
+    }
+    expect(made).toHaveLength(7)
+
+    const first = await julian.tasks.list({ channel: 'queue/', limit: 4 })
+    expect(first.tasks.map((task) => task.message.id)).toEqual(made.slice(0, 4))
+    // Its first page had three: it read on for the fourth, from the API's own cursor, and no further.
+    const pages = (handle = julian) => handle.sent.filter((request) => request.method === 'GET' && request.path === '/tasks')
+    const readFrom = (handle = julian) => pages(handle).map((request) => [request.query.after?.[0] ?? null, request.query.cursor?.[0] ?? null])
+    expect(readFrom()).toEqual([[null, null], [null, '25']])
+    // Its cursor is the last task it answered: a read after it, in any process, goes on after that task's thread.
+    expect(first.cursor).toBe(made[3])
+    const elsewhere = handleOn(api)
+    const second = await elsewhere.tasks.list({ channel: 'queue/', limit: 4, after: first.cursor })
+    expect(second.tasks.map((task) => task.message.id)).toEqual(made.slice(4))
+    expect(readFrom(elsewhere)).toEqual([[threadOf(made[3]!), null], [null, '53']])
+    // A read that finds nothing more answers the cursor it was given, and what's made later comes after it.
+    const none = await julian.tasks.list({ channel: 'queue/', limit: 4, after: second.cursor })
+    expect(none).toEqual({ tasks: [], cursor: made[6] })
+    const { task: later } = await julian.tasks.create('queue', { text: 'made later', labels: { step: 'review' } })
+    expect((await julian.tasks.list({ channel: 'queue/', after: none.cursor })).tasks.map((task) => task.message.id)).toEqual([later.id])
+    await julian.tasks.cancel(later.id, 'only to read on')
+    // Any message of a task's thread reads on from it, as on any board, and what names no message is no cursor.
+    const note = await julian.reply(made[4]!, 'a note')
+    expect((await julian.tasks.list({ channel: 'queue', after: note.id })).tasks.map((task) => task.message.id)).toEqual(made.slice(5))
+    await expect(julian.tasks.list({ channel: 'queue', after: 'nonsense' })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+    // A list with nothing in it answers a cursor too, which reads from the start.
+    const empty = await julian.tasks.list({ channel: 'nowhere' })
+    expect(empty).toEqual({ tasks: [], cursor: '0' })
+    expect((await julian.tasks.list({ channel: 'queue/', after: empty.cursor, limit: 1 })).tasks.map((task) => task.message.id)).toEqual([made[0]])
+
+    // A task that has left what the list filters by still says where the list goes on.
+    const ready = await julian.tasks.list({ channel: 'queue', state: 'ready', limit: 2 })
+    expect(ready.tasks.map((task) => task.message.id)).toEqual(made.slice(0, 2))
+    const taken = await julian.tasks.claim(made[1]!, { lease: 60 })
+    expect((await julian.tasks.list({ channel: 'queue', state: 'ready', limit: 2, after: ready.cursor })).tasks.map((task) => task.message.id)).toEqual(made.slice(2, 4))
+    await taken.release()
+    // The API's list reads on from a task alone: a thread that isn't one is refused there, where a local board takes any message.
+    const plain = await julian.post('queue', 'not a task')
+    await expect(julian.tasks.list({ channel: 'queue', after: plain.id })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+
+    // What the API doesn't filter by is filtered here: a root's author, a handle, and a choice of a label's values.
+    const ids = async (query: Parameters<typeof julian.tasks.list>[0]) => (await julian.tasks.list({ channel: 'queue', ...query })).tasks.map((task) => task.message.id)
+    expect(await ids({ by: 'ada' })).toEqual([made[3]])
+    expect(await ids({ owner: 'ada' })).toEqual([made[3]])
+    expect(await ids({ owner: ADA })).toEqual([made[3]])
+    expect(pages().at(-1)!.query.owner).toEqual([ADA])
+    expect(await ids({ label: ['step=review'] })).toEqual(made.slice(4))
+    expect(pages().at(-1)!.query.label).toEqual(['step=review'])
+    expect(await ids({ label: ['step=review|fix', 'board.task'] })).toEqual(made)
+    expect(pages().at(-1)!.query.label).toEqual(['step', 'board.task'])
+    // The tasks that wait for one, and those assigned to an actor.
+    const { task: after } = await julian.tasks.create('queue', { text: 'after task 0', needs: [made[0]!], for: `${JULIAN}+fixer` })
+    expect(await ids({ needs: made[0]! })).toEqual([after.id])
+    expect(pages().at(-1)!.query.needs).toEqual([threadOf(made[0]!)])
+    expect(await ids({ for: `${JULIAN}+fixer` })).toEqual([after.id])
+    expect(await ids({ needs: 'no-such-task' })).toEqual([])
+    expect((await julian.tasks.list({ channel: 'nowhere' })).tasks).toEqual([])
+  })
+
+  it("claims the next ready task there: another owner's only when from names them by ID, under a prefix, as far as the API looks", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const ada = handleOn(api, 'user:u_ada')
+    const { task: theirs } = await ada.tasks.create('work/web', { text: "ada's fix", labels: { step: 'fix' } })
+    const { task: mine } = await julian.tasks.create('work/api', { text: 'my fix', labels: { step: 'fix' } })
+    const { task: review } = await julian.tasks.create('work', { text: 'a review', labels: { step: 'review' } })
+
+    // A handle names no owner, on any board: it's refused here, and the API isn't asked.
+    const before = julian.sent.length
+    await expect(julian.tasks.claim({ channel: 'work/', from: ['ada'] })).rejects.toMatchObject({ status: 400, code: 'invalid_from' })
+    expect(julian.sent).toHaveLength(before)
+
+    // The channel alone leaves out what's under it; the prefix takes its own before anyone's it didn't name.
+    expect(await julian.tasks.claim({ channel: 'work', label: { step: 'fix' } })).toBeNull()
+    const own = await julian.tasks.claim({ channel: 'work/', label: { step: 'fix' }, lease: 60 })
+    expect(own?.task.id).toBe(mine.id)
+    expect(julian.wrote()).toMatchObject({ method: 'POST', version: 2, path: '/tasks/claim', body: { channel: 'work/', labels: { step: 'fix' }, claimToken: own!.token, leaseSeconds: 60 } })
+    expect(await julian.tasks.claim({ channel: 'work/', label: { step: 'fix' } })).toBeNull()
+    const taken = await julian.tasks.claim({ channel: 'work/', label: { step: 'fix' }, from: [ADA] })
+    expect(taken?.task).toMatchObject({ id: theirs.id, task: { state: 'claimed', owner: ADA, claim: { actor: JULIAN } } })
+    expect(julian.wrote().body).toMatchObject({ from: [ADA] })
+    // The claim it answers works as any: its token is the one sent.
+    expect((await taken!.complete('fixed')).task?.state).toBe('completed')
+    expect((await julian.tasks.claim({ channel: 'work/' }))?.task.id).toBe(review.id)
+
+    // Past 50 channels under a prefix, the API refuses rather than look at some: its own code, as a 400.
+    for (let n = 0; n < 51; n++) await julian.post(`many/c${n}`, 'x')
+    await expect(julian.tasks.claim({ channel: 'many/' })).rejects.toMatchObject({ status: 400, code: 'channel_tree_too_large' })
+  })
+
+  it('holds a wait as long as the API holds one request, 25 seconds, and the handle asks again until its wait runs out', async () => {
+    vi.useFakeTimers()
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'held by someone', claim: true, lease: 300 })
+    // The backend's own method, asked for longer than the API holds: it asks for 25 seconds, and answers after them.
+    const backend = vercel({ team: 'team_test', api: API, fetch: julian.fetchAs, files: api.files })
+    board({ backend })
+    const started = Date.now()
+    const one = backend.claimReadyTask({ self: null, origin: { via: { kind: 'client', name: null } } } as Caller, { channel: 'work', wait: 300 }, new AbortController().signal)
+    await vi.advanceTimersByTimeAsync(26_000)
+    expect(await one).toEqual({ task: null })
+    expect(Date.now() - started).toBeLessThan(30_000)
+    expect(julian.wrote()).toMatchObject({ path: '/tasks/claim', body: { wait: 25 } })
+
+    // The handle asks again, each time a new operation with a token of its own, until what it was asked to wait is up.
+    julian.sent.length = 0
+    const waiting = julian.tasks.claim({ channel: 'work', wait: 60 })
+    await vi.advanceTimersByTimeAsync(61_000)
+    expect(await waiting).toBeNull()
+    const asks = julian.sent.filter((request) => request.path === '/tasks/claim')
+    expect(asks.map((request) => request.body!.wait)).toEqual([25, 25, 10])
+    expect(new Set(asks.map((request) => request.body!.operationId)).size).toBe(3)
+    expect(new Set(asks.map((request) => request.body!.claimToken)).size).toBe(3)
+
+    // One that becomes ready while it waits is the waiter's: here, a claim whose lease runs out.
+    const held = (await julian.thread(task.id)).message.task!
+    const next = julian.tasks.claim({ channel: 'work', wait: 60, lease: 60 })
+    await vi.advanceTimersByTimeAsync(5000)
+    vi.setSystemTime(Date.parse(held.claim!.until) + 1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect((await next)?.task).toMatchObject({ id: task.id, task: { state: 'claimed', epoch: 2 } })
+  })
+
+  it("takes nothing for a caller that left while it waited, and gives back a claim that landed all the same", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'held for now' })
+    const holder = await julian.tasks.claim(task.id, { lease: 60 })
+    const asks = (handle: typeof julian) => handle.sent.filter((request) => request.path === '/tasks/claim')
+
+    // It leaves while the API waits: the API stops looking there, so the task is no one's once it's ready.
+    const leaving = new AbortController()
+    const waiting = julian.tasks.claim({ channel: 'work', wait: 20 }, { signal: leaving.signal })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    leaving.abort()
+    expect(await waiting.catch(() => null)).toBeNull()
+    // The same operation and token are sent once more, without the wait, for a claim that may have landed: none had.
+    await vi.waitFor(() => expect(asks(julian)).toHaveLength(2))
+    const [first, again] = asks(julian)
+    expect(first!.body).toMatchObject({ wait: 20 })
+    expect(again!.body).toEqual(Object.fromEntries(Object.entries(first!.body!).filter(([name]) => name !== 'wait')))
+    await holder.release()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', claim: null, epoch: 1 })
+    expect(julian.sent.filter((request) => request.path.endsWith('/release'))).toHaveLength(1)
+
+    // A claim the API was already writing when its caller left lands, its answer lost on the way.
+    const gone = new AbortController()
+    let lost = false
+    const cut = handleOn(api, 'user:u_jb', {
+      answered: (request, response) => {
+        if (request.path !== '/tasks/claim' || lost) return response
+        lost = true
+        gone.abort()
+        throw new DOMException('This operation was aborted', 'AbortError')
+      },
+    })
+    expect(await cut.tasks.claim({ channel: 'work', wait: 5 }, { signal: gone.signal }).catch(() => null)).toBeNull()
+    // The same operation and token, sent again, answers that claim, and it's given back with its token.
+    await vi.waitFor(() => expect(cut.wrote()).toMatchObject({ path: `/tasks/${threadOf(task.id)}/release` }))
+    const [landed, retried] = asks(cut)
+    expect(retried!.body).toMatchObject({ operationId: landed!.body!.operationId, claimToken: landed!.body!.claimToken })
+    expect(cut.wrote().body).toMatchObject({ claimToken: landed!.body!.claimToken, epoch: 2 })
+    await vi.waitFor(async () => expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', claim: null, epoch: 2 }))
+  })
+
+  it("shows each task change in the feed as the board's event, built from the task right after it, a renewal only to a read of everything", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const claude = julian.as('claude')
+    const { cursor } = await julian.poll({})
+    const { task: fix } = await julian.tasks.create('work', { text: 'fix it' })
+    const { task: review } = await julian.tasks.create('work', { text: 'review it', needs: [fix.id], for: `${JULIAN}+reviewer` })
+    const claim = await claude.tasks.claim(fix.id, { lease: 60 })
+    const renewed = await claim.renew(90)
+    await renewed.release()
+    const again = await claude.tasks.claim(fix.id, { lease: 60 })
+    await again.complete('fixed in a1b2c3')
+    await julian.tasks.assign(review.id, null)
+    await julian.tasks.block(review.id, 'approve?', { kind: 'awaiting_approval' })
+    await julian.tasks.unblock(review.id)
+    await (await claude.tasks.claim(review.id, { lease: 60 })).fail('no credentials')
+    await julian.tasks.reopen(review.id)
+    await julian.tasks.cancel(review.id, 'not needed')
+
+    const about = (id: string) => ({ id, thread: threadOf(id) })
+    const by = { actor: JULIAN, principal: JULIAN, profile: null }
+    const agent = { actor: `${JULIAN}+claude`, principal: JULIAN, profile: 'claude' }
+    const expected = [
+      ['message.posted', fix.id, null],
+      ['task.created', fix.id, { ...about(fix.id), needs: [], for: null, by }],
+      ['message.posted', review.id, null],
+      ['task.created', review.id, { ...about(review.id), needs: [fix.id], for: `${JULIAN}+reviewer`, by }],
+      ['task.claimed', fix.id, { ...about(fix.id), epoch: 1, until: claim.until, by: agent }],
+      ['task.renewed', fix.id, { ...about(fix.id), epoch: 1, until: renewed.until, by: agent }],
+      ['task.released', fix.id, { ...about(fix.id), epoch: 1, by: agent }],
+      ['task.claimed', fix.id, { ...about(fix.id), epoch: 2, until: again.until, by: agent }],
+      ['task.completed', fix.id, { ...about(fix.id), epoch: 2, result: 'fixed in a1b2c3', by: agent }],
+      ['task.ready', review.id, about(review.id)],
+      ['task.assigned', review.id, { ...about(review.id), for: null, by }],
+      ['task.blocked', review.id, { ...about(review.id), kind: 'awaiting_approval', reason: 'approve?', by }],
+      // What it waited for completed while it was held: it waits again as it's unblocked, and its task.ready follows.
+      ['task.unblocked', review.id, { ...about(review.id), by }],
+      ['task.ready', review.id, about(review.id)],
+      ['task.claimed', review.id, { ...about(review.id), epoch: 1, until: expect.any(String), by: agent }],
+      ['task.failed', review.id, { ...about(review.id), epoch: 1, reason: 'no credentials', by: agent }],
+      ['task.reopened', review.id, { ...about(review.id), by }],
+      ['task.canceled', review.id, { ...about(review.id), reason: 'not needed', by }],
+    ] as const
+    const everything = (await julian.poll({ after: cursor, all: true })).events
+    expect(everything.map((event) => [event.type, event.message?.id, event.type === 'message.posted' ? null : event.payload])).toEqual(expected)
+    const shown = (await julian.poll({ after: cursor })).events
+    expect(shown.map((event) => event.type)).toEqual(expected.map(([type]) => type).filter((type) => type !== 'task.renewed'))
+    // Each carries its root as the change left it, its task and its label among it, and who did it, but for what the board did itself.
+    const at = (type: string, n = 0) => everything.filter((event) => event.type === type)[n]!
+    expect(at('task.claimed').message).toMatchObject({ labels: { 'board.task': 'claimed' }, task: { state: 'claimed', epoch: 1, claim: { until: claim.until } } })
+    expect(at('task.completed').message).toMatchObject({ labels: { 'board.task': 'completed' }, task: { state: 'completed', result: 'fixed in a1b2c3' } })
+    expect(at('task.created', 1).message).toMatchObject({ labels: { 'board.task': 'waiting' }, task: { state: 'waiting', needs: [fix.id] } })
+    expect(at('task.unblocked').message).toMatchObject({ labels: { 'board.task': 'waiting' }, task: { state: 'waiting', blocked: null } })
+    expect(at('task.ready', 1).message).toMatchObject({ labels: { 'board.task': 'ready' }, task: { state: 'ready' } })
+    expect(at('task.claimed').actor).toMatchObject({ id: `${JULIAN}+claude`, handle: 'julian/claude' })
+    expect(at('task.ready').actor).toBeUndefined()
+  })
+
+  it("delivers a task's change to a feed whose label filter its root matched before the change or after it", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task: first } = await julian.tasks.create('work', { text: 'first', labels: { step: 'fix' } })
+    const { task: second } = await julian.tasks.create('work', { text: 'second', labels: { step: 'fix' }, needs: [first.id] })
+    await julian.tasks.create('work', { text: 'another queue', labels: { step: 'review' } })
+    for (const channel of ['work', undefined]) {
+      const { cursor } = await julian.poll({ ...(channel ? { channel } : {}), label: ['step=fix', 'board.task=ready'] })
+      const { task: third } = await julian.tasks.create('work', { text: 'third', labels: { step: 'fix' } })
+      const { task: other } = await julian.tasks.create('work', { text: 'not this queue', labels: { step: 'review' } })
+      const claim = await julian.tasks.claim(third.id, { lease: 60 })
+      await claim.renew()
+      await claim.fail('later')
+      await julian.tasks.cancel(other.id, 'no')
+      const { events } = await julian.poll({ ...(channel ? { channel } : {}), label: ['step=fix', 'board.task=ready'], after: cursor })
+      // It became ready as it was made a task, and was ready before its claim and not after: both show. What fails
+      // it was never ready on either side, and neither was its post, which came before it was a task.
+      expect(events.map((event) => [event.type, event.message?.id]), channel ?? 'every channel').toEqual([
+        ['task.created', third.id],
+        ['task.claimed', third.id],
+      ])
+    }
+    // A waiting task becoming ready is one too.
+    const { cursor } = await julian.poll({ channel: 'work', label: ['board.task=ready'] })
+    await (await julian.tasks.claim(first.id, { lease: 60 })).complete()
+    const { events } = await julian.poll({ channel: 'work', label: ['board.task=ready'], after: cursor })
+    expect(events.map((event) => [event.type, event.message?.id])).toEqual([
+      ['task.claimed', first.id],
+      ['task.ready', second.id],
+    ])
+    // A held task that needs others waits again once its hold is lifted: its task.ready is what shows it ready, as on any board.
+    await julian.tasks.block(second.id, 'approve?')
+    const held = (await julian.poll({ channel: 'work', label: ['board.task=ready'] })).cursor
+    await julian.tasks.unblock(second.id)
+    expect((await julian.poll({ channel: 'work', label: ['board.task=ready'], after: held })).events.map((event) => [event.type, event.message?.id])).toEqual([['task.ready', second.id]])
+  })
+
+  it("wakes a deployment's watcher with a task's change, matched on its root's labels before and after it", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ watch: { ready: { tail: 'work --label board.task=ready' } } })
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'fix it' })
+    const claim = await julian.tasks.claim(task.id, { lease: 60 })
+    await claim.renew()
+    await claim.complete('done')
+    const seen: string[] = []
+    for (let pulled = await pong.matches({}); pulled.length > 0; pulled = await pong.matches({})) {
+      for (const match of pulled) {
+        expect(match.event.message?.id).toBe(task.id)
+        seen.push(match.event.type)
+        await pong.ack(match.id, { lease: match.lease })
+      }
+    }
+    // Made ready, and claimed away from it: a renewal wakes no one, and neither its post nor its completion was ever ready.
+    expect(seen).toEqual(['task.created', 'task.claimed'])
+  })
+
+  it("says what the API refuses in a board's codes and statuses", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const web = handleOn(api, 'project:prj_web:production')
+    const plain = await julian.post('work', 'just a thread')
+    const reply = await julian.reply(plain.id, 'a reply')
+    const { task } = await julian.tasks.create('work', { text: 'a task' })
+    const missing = 'msg_00000000-0000-4000-8000-000000000000_1'
+    const proof = { epoch: 1, token: 'not-a-token-this-backend-made' }
+
+    // A thread that isn't there is a message that isn't, as the board names what it couldn't find.
+    await expect(julian.tasks.claim(missing)).rejects.toMatchObject({ status: 404, code: 'message_not_found' })
+    await expect(julian.tasks.claim('nonsense')).rejects.toMatchObject({ status: 404, code: 'message_not_found' })
+    await expect(julian.tasks.claim(plain.id)).rejects.toMatchObject({ status: 404, code: 'not_a_task' })
+    // A reply names no task: it's refused here, where the API would look for a thread by that name.
+    const before = julian.sent.filter((request) => request.method === 'POST').length
+    await expect(julian.tasks.cancel(reply.id, 'no')).rejects.toMatchObject({ status: 404, code: 'not_a_task' })
+    await expect(julian.tasks.create({ re: reply.id })).rejects.toMatchObject({ status: 400, code: 'invalid_request', message: expect.stringContaining(plain.id) })
+    await expect(julian.tasks.create('work', { text: 'waits for a reply', needs: [reply.id] })).rejects.toMatchObject({ status: 400, code: 'invalid_needs' })
+    expect(julian.sent.filter((request) => request.method === 'POST')).toHaveLength(before)
+
+    await expect(julian.tasks.create({ re: task.id })).rejects.toMatchObject({ status: 409, code: 'already_a_task' })
+    await expect(julian.tasks.create('work', { text: 'waits for a thread', needs: [plain.id] })).rejects.toMatchObject({ status: 400, code: 'invalid_needs' })
+    // The API's 409 for a deleted root is a board's 400.
+    const gone = await julian.post('work', 'gone soon')
+    await julian.delete(gone.id)
+    await expect(julian.tasks.create({ re: gone.id })).rejects.toMatchObject({ status: 400, code: 'message_deleted' })
+    // An assignee that isn't one of its owner's profiles is the API's invalid_for, and a board's invalid_request.
+    await expect(julian.tasks.assign(task.id, `${ADA}+fixer`)).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    expect(julian.wrote()).toMatchObject({ path: `/tasks/${threadOf(task.id)}/assign`, body: { for: `${ADA}+fixer` } })
+    await expect(julian.tasks.assign(task.id, JULIAN)).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    await expect(julian.tasks.create('work', { text: 'for someone else', for: `${ADA}+fixer` })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    // Whoever neither owns it nor manages there.
+    await expect(web.tasks.cancel(task.id, 'mine now')).rejects.toMatchObject({ status: 403, code: 'task_not_owned' })
+    await expect(web.tasks.unblock(task.id)).rejects.toMatchObject({ status: 403, code: 'task_not_owned' })
+
+    // A token no claim here could have is a claim that's lost, never a malformed request.
+    await expect(julian.tasks.held(task.id, proof).complete()).rejects.toMatchObject({ status: 409, code: 'claim_lost', message: expect.stringContaining('(not_claimed)') })
+    expect(julian.wrote().body!.claimToken).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    const claim = await julian.tasks.claim(task.id, { lease: 60 })
+    await expect(julian.tasks.held(task.id, proof).release()).rejects.toMatchObject({ status: 409, code: 'claim_lost', message: expect.stringContaining('(token_mismatch)') })
+    await expect(julian.tasks.claim(task.id)).rejects.toMatchObject({ status: 409, code: 'task_claimed' })
+    await expect(julian.tasks.block(task.id, 'without the claim')).rejects.toMatchObject({ status: 409, code: 'task_claimed' })
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'claimed', epoch: 1 })
+    // Once its owner cancels it, the claim is lost, which is what its holder is told by each of its own writes.
+    await julian.tasks.cancel(task.id, 'superseded')
+    for (const write of [() => claim.complete('done'), () => claim.renew(), () => claim.release(), () => claim.fail('no'), () => claim.block('wait')])
+      await expect(write()).rejects.toMatchObject({ status: 409, code: 'claim_lost', message: expect.stringContaining('(not_claimed)') })
+    await expect(julian.tasks.claim(task.id)).rejects.toMatchObject({ status: 409, code: 'task_finished' })
+    await expect(julian.tasks.cancel(task.id, 'again')).rejects.toMatchObject({ status: 409, code: 'task_finished' })
+    await expect(julian.tasks.block(task.id, 'hold')).rejects.toMatchObject({ status: 409, code: 'task_finished' })
+    await expect(julian.tasks.reopen(task.id)).rejects.toMatchObject({ status: 409, code: 'task_finished' })
+    await expect(julian.tasks.unblock(task.id)).rejects.toMatchObject({ status: 409, code: 'task_finished' })
+    const { task: waiting } = await julian.tasks.create('work', { text: 'waits', needs: [(await julian.tasks.create('work', { text: 'first' })).task.id] })
+    await expect(julian.tasks.claim(waiting.id)).rejects.toMatchObject({ status: 409, code: 'task_waiting' })
+    await julian.tasks.block(waiting.id, 'hold')
+    await expect(julian.tasks.claim(waiting.id)).rejects.toMatchObject({ status: 409, code: 'task_blocked' })
+    const { task: assigned } = await julian.tasks.create('work', { text: 'for the fixer', for: `${JULIAN}+fixer` })
+    await expect(julian.tasks.claim(assigned.id)).rejects.toMatchObject({ status: 409, code: 'task_assigned' })
+    // A failed task is finished until it's reopened: it has no hold to lift.
+    const { task: tried, claim: trying } = await julian.tasks.create('work', { text: 'tried', claim: true })
+    await julian.tasks.held(tried.id, trying!).fail('could not')
+    await expect(julian.tasks.unblock(tried.id)).rejects.toMatchObject({ status: 409, code: 'task_finished' })
+    expect((await julian.tasks.reopen(tried.id)).task?.state).toBe('ready')
+  })
+
+  it("answers a retried create with the task and no claim: the claim was the first request's, whose token still holds it", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const first = await julian.tasks.create('work', { text: 'deploy a1b2c3', id: 'deploy-a1b2c3', claim: true, lease: 60 })
+    expect(first.claim).toMatchObject({ epoch: 1 })
+    const again = await julian.tasks.create('work', { text: 'deploy a1b2c3', id: 'deploy-a1b2c3', claim: true, lease: 60 })
+    expect(again.task.id).toBe(first.task.id)
+    expect(again.claim).toBeUndefined()
+    expect(again.task.task).toMatchObject({ state: 'claimed', epoch: 1 })
+    // The API says whose the claim is: each create is one request, and nothing is written to find out.
+    expect(julian.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks', '/tasks'])
+    expect(Date.parse(first.claim!.until)).toBe(Date.parse(again.task.task!.claim!.until))
+    expect((await julian.tasks.list({ state: 'all' })).tasks).toHaveLength(1)
+    expect((await julian.tasks.held(first.task.id, first.claim!).complete('deployed')).task).toMatchObject({ state: 'completed', result: 'deployed' })
+    // Without a claim, a retry is the same task too.
+    const plain = await julian.tasks.create('work', { text: 'lint', id: 'lint-1' })
+    expect((await julian.tasks.create('work', { text: 'lint', id: 'lint-1' })).task.id).toBe(plain.task.id)
+    // An ID a post landed with that was no task's is another write's, as on any board: the post stays a post.
+    const note = await julian.post('work', { id: 'note-1', text: 'a note' })
+    await expect(julian.tasks.create('work', { text: 'a note', id: 'note-1' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    expect((await julian.thread(note.id)).message.task).toBeUndefined()
+  })
+
+  it("gives a caller that may post but not read its task back as what it asked for, when a retry answers its ID alone", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const { task: first } = await pong.tasks.create('work', { text: 'a task to wait for' })
+    const answers: Promise<unknown>[] = []
+    // The same deployment, narrowed to posting where it can't read, as a sandbox's policy narrows one.
+    const blind = handleOn(api, 'project:prj_pong:production', {
+      can: 'intake=post;work=read',
+      answered: (request, response) => {
+        if (request.method === 'POST' && request.path === '/tasks') answers.push(response.clone().json())
+        return response
+      },
+    })
+    const made = await blind.tasks.create('intake', { text: 'from a form', id: 'form-1', needs: [first.id] })
+    // A retry answers the ID of the task that landed, which it can't read, and nothing else: the task is as it was made.
+    const again = await blind.tasks.create('intake', { text: 'from a form', id: 'form-1', needs: [first.id] })
+    expect(await answers[1]).toEqual({ task: { id: threadOf(made.task.id) } })
+    expect(again.task).toMatchObject({ id: made.task.id, channel: 'intake', text: 'from a form', labels: { 'board.task': 'waiting' }, task: { state: 'waiting', owner: 'vercel:project:prj_pong:production', needs: [first.id], epoch: 0, claim: null } })
+    expect((await pong.thread(made.task.id)).message.task).toMatchObject({ state: 'waiting', needs: [first.id] })
+  })
+
+  it("reads as a board that keeps no tasks where the API's /me says nothing of them, and asks it nothing else", async () => {
+    const api = fakeMessageboard({ tasks: false })
+    const before = handleOn(api)
+    const root = await before.post('dev', 'fix CVE-123')
+    const reply = await before.reply(root.id, 'on it')
+    const proof = { epoch: 1, token: 'secret' }
+    const julian = handleOn(api)
+    for (const [what, attempt] of [
+      ['list', () => julian.tasks.list()],
+      ['create', () => julian.tasks.create('dev', 'a task')],
+      ['create and claim', () => julian.tasks.create('dev', { text: 'a task', claim: true, id: 'once' })],
+      ['create from a thread', () => julian.tasks.create({ re: root.id })],
+      ['claim', () => julian.tasks.claim(root.id)],
+      ['claim the next', () => julian.tasks.claim({ channel: 'dev', wait: 30 })],
+      ['renew', () => julian.tasks.held(root.id, proof).renew()],
+      ['release', () => julian.tasks.held(root.id, proof).release()],
+      ['complete', () => julian.tasks.held(root.id, proof).complete('done')],
+      ['fail', () => julian.tasks.held(root.id, proof).fail('no')],
+      ['block', () => julian.tasks.block(root.id, 'hold')],
+      ['unblock', () => julian.tasks.unblock(root.id)],
+      ['reopen', () => julian.tasks.reopen(root.id)],
+      ['assign', () => julian.tasks.assign(root.id, null)],
+      ['cancel', () => julian.tasks.cancel(root.id, 'no')],
+    ] as const)
+      await expect(attempt(), what).rejects.toMatchObject({ status: 501, code: 'no_tasks' })
+    // Who it is, asked once for its credentials, says whether threads carry tasks: nothing was posted or listed to find out.
+    expect(julian.sent.map((request) => `${request.method} ${request.path}`)).toEqual(['GET /v1/messageboard/me'])
+    expect((await julian.threads({ channel: 'dev' })).threads.map((thread) => [thread.message.id, thread.message.task, thread.last?.id])).toEqual([[root.id, undefined, reply.id]])
+  })
+
+  it("leaves no dependent waiting for good when a completion is cut off: the next task request that sees it readies it", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task: first } = await julian.tasks.create('repair', { text: 'everything waits for this' })
+    // More dependents than a completion readies in its own write, the last three each in a channel of its own.
+    const waiting: string[] = []
+    for (let n = 0; n < 18; n++) waiting.push((await julian.tasks.create(n < 15 ? 'repair' : `repair/late${n}`, { text: `dependent ${n}`, needs: [first.id] })).task.id)
+    const [byClaim, byNext, byList] = waiting.slice(15) as [string, string, string]
+    const state = async (id: string) => (await julian.thread(id)).message.task?.state
+    const { cursor } = await julian.poll({ channel: 'repair/' })
+    api.cutNextCompletion()
+    await (await julian.tasks.claim(first.id, { lease: 60 })).complete()
+    expect(await Promise.all(waiting.map(state))).toEqual([...Array.from({ length: 15 }, () => 'ready'), 'waiting', 'waiting', 'waiting'])
+
+    // A claim of it readies and claims it in one write.
+    expect(await julian.tasks.claim(byClaim, { lease: 60 })).toMatchObject({ epoch: 1, task: { task: { state: 'claimed' } } })
+    // A claim of the next ready one, where nothing is ready, looks at what waits.
+    expect((await julian.tasks.claim({ channel: 'repair/late16', lease: 60 }))?.task.id).toBe(byNext)
+    // And a list that reads what waits writes it as it sees it. One of what's ready reads no waiting task, so it leaves it.
+    expect((await julian.tasks.list({ channel: 'repair/late17', state: 'ready' })).tasks).toEqual([])
+    expect(await state(byList)).toBe('waiting')
+    expect((await julian.tasks.list({ channel: 'repair/late17' })).tasks.map((task) => [task.message.id, task.message.task?.state])).toEqual([[byList, 'ready']])
+    expect(await state(byList)).toBe('ready')
+    const repaired = (await julian.poll({ channel: 'repair/', after: cursor })).events.filter((event) => waiting.slice(15).includes(event.message?.id ?? ''))
+    expect(repaired.map((event) => [event.type, event.message?.id])).toEqual([
+      ['task.ready', byClaim],
+      ['task.claimed', byClaim],
+      ['task.ready', byNext],
+      ['task.claimed', byNext],
+      ['task.ready', byList],
+    ])
+  })
+})

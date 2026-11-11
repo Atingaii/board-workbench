@@ -22,4 +22,4 @@ Labels under `board.` are the board's own now: a label write, or a post, schedul
 
 A root's edit or delete can now answer 503 `unavailable` when the board keeps changing under it, as a label write with `if` can: both check whether the thread is a task as of the write. Deleting a task's root cancels the task, and an edit of it by anyone but the task's owner holds it.
 
-Vercel's board keeps no tasks yet: every `tasks` call there answers 501 `no_tasks`, and `vb conformance` reports the new `tasks` group as not kept here. A backend of your own implements the task methods, or answers 501 `no_tasks` from each.
+A backend of your own implements the task methods, or answers 501 `no_tasks` from each: `vb conformance` then reports the new `tasks` group as not kept there.
