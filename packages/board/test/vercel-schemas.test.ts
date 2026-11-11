@@ -99,6 +99,7 @@ describe("vercel() and the team's schemas", () => {
     const origin = { thread: 'reviews:acme/web:1', subthread: null, message: '1', context: null }
     const text = block('sandbox@1', { id: 'sbx-9', action: 'started' })
     const { message } = await sync.syncImport({ op: 'post', author, from: 'reviews', channel: 'deploys', text, origin })
-    expect((await handleOn(api).thread(message!)).message).toMatchObject({ text, from: 'reviews', blocks: [] })
+    // It came through the project's own sync key, so it's a platform's text, whatever it says.
+    expect((await handleOn(api).thread(message!)).message).toMatchObject({ text, from: 'pong/reviews', blocks: [] })
   })
 })
