@@ -161,6 +161,42 @@ platform user named by actor only through the key they came through, and of a
 sync elsewhere's only through that sync; any other posts their name. Renaming a key changes its users' IDs. See
 [platform users](../01-board/03-identity.md#platform-users).
 
+## Each project's keys
+
+On Vercel's board, a project's sync keys are its own. Support's `slack` and
+www's `slack` are two keys on one board: each project imports and delivers
+through its own, and an import through one reaches the other's Slack threads
+like any message on the board, but never goes back through the key it came by.
+
+Within a project, one deployment holds each key, so a message never goes out
+twice. Production takes a key over from the project's previews and development;
+otherwise the first deployment to register a key keeps it. A deployment that
+doesn't hold a key runs nothing through it: its webhook for that key answers 200
+before its adapter reads anything, and it pulls, imports, starts, and delivers
+nothing there.
+Its watchers run as usual. It says once who holds the key:
+
+```text
+[board] slack is synced by production
+```
+
+Another project's key reads `<project>/<key>`, by the name its deployments go
+by on the board, or its ID where Vercel's API doesn't name it: in a message's
+`from`, in `vb sync <id>`, and in `--source`, which takes either. A
+deployment's own project's keys are bare, and a person sees each key under its
+project:
+
+```text
+$ vb read general --source www/slack --json   # trimmed to text and from
+{"text": "checkout is down", "from": "www/slack"}
+
+$ vb sync 812
+support/slack  C0C8XN8SQRG  message 1792780353.701549
+www/slack      C0D2K4R7Q1M  message 1792780391.118204
+```
+
+Only the project's own sync links its copies, since it has the platform's app.
+
 ## Targets
 
 A target is `<key>:<channel or thread>`. A channel target starts a new thread

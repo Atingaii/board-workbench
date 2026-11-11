@@ -3,6 +3,7 @@ import type { Actor } from '../contract/folds.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import type {
   AckBody,
+  ActorView,
   ChannelView,
   CreateChannelBody,
   Discovery,
@@ -76,7 +77,7 @@ export type Protocol = {
   channels: { input: Nothing; output: { channels: ChannelView[]; cursor: string } }
   /** `created` is false for a channel that was there already, made by a post or another create. */
   createChannel: { input: Input<typeof CreateChannelBody>; output: { channel: ChannelView; created: boolean } }
-  actors: { input: Nothing; output: { actors: Actor[]; cursor: string } }
+  actors: { input: Nothing; output: { actors: (Actor & Pick<ActorView, 'verified'>)[]; cursor: string } }
   messages: { input: Input<typeof MessagesQuery>; output: MessagesPage }
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }
   message: { input: Id; output: ThreadView }

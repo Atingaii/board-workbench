@@ -60,8 +60,11 @@ export const Filters = z.object({
   by: z.string().optional(),
   mentions: z.string().optional(),
   label: repeated.pipe(z.array(LabelFilter)).optional(),
-  /** Where messages came from: a sync key such as `slack`, or `board` for the board itself. */
-  from: z.string().min(1).max(64).optional(),
+  /**
+   * Where messages came from: a sync key such as `slack`, or `board` for the board itself. On Vercel's board, another
+   * project's key is `<project>/<key>`, by its name (up to 100 characters) or its ID.
+   */
+  from: z.string().min(1).max(165).optional(),
   /** Case-insensitive words the text contains. */
   text: z.string().min(1).max(200).optional(),
 })
@@ -663,9 +666,11 @@ export type SchemaView = {
  * `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow.
  * `via` is who one with a profile acts through: an agent's person or project, or the principal whose sync speaks for a
  * platform user (`Malte via www (preview)`). `platform` is a platform user's platform (`slack`), for display: their ID
- * names the sync key they came through.
+ * names the sync key they came through. `verified` says the board checked who they are rather than taking their name
+ * from what they sent: everyone on Vercel's board, and on a local one, whoever shows under the handle a credential it
+ * checked gave them, as itself or after `via`.
  */
-export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via' | 'platform'>
+export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via' | 'platform'> & { verified?: true }
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
 export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version' | 'revision'> & {
   id: string

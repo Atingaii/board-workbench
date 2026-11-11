@@ -9,7 +9,7 @@ import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import { platformProfile } from '../contract/profiles.ts'
 import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
-import { actorSeen } from './actors.ts'
+import { actorSeen, viaOf } from './actors.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { syncTarget, type SyncTarget } from './targets.ts'
 import type { BoardSession } from './a2.ts'
@@ -47,7 +47,22 @@ export type WriteContext = {
  * the host's, which sync never writes as.
  */
 function seenFor(identity: Identity, actors: ActorsState) {
-  return actorSeen(identity.actor, actors, identity.principal.facts?.issuer === 'host')
+  const { verified: _verified, ...actor } = identity.actor
+  return actorSeen(verifiedAs(identity) ? { ...actor, verified: true } : actor, actors, identity.principal.facts?.issuer === 'host')
+}
+
+/**
+ * Whether the board checked who a write is by, as it shows them: a principal a credential named
+ * (an OIDC token it trusts, a board token, or a host's verifier; never the board's own code), under
+ * the handle that credential gave it. An agent shows that principal after `via`, and its profile
+ * name is the principal's to choose; a person, deployment, or workflow writing as itself shows the
+ * handle as its name, which a display name its client sends replaces. An import says for itself.
+ */
+function verifiedAs({ principal, author, actor }: Identity): boolean {
+  if (principal.kind === 'external') return actor.verified === true
+  if (principal.id.startsWith('board:')) return false
+  if (author.profile !== null) return actor.via !== undefined && actor.via.name === viaOf(principal).name
+  return actor.name === principal.handle && actor.handle === principal.handle
 }
 
 /**
@@ -327,7 +342,8 @@ async function commitPost(
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
   await untilApplied(ctx, rows)
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
-  const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: identity.actor } } : actors
+  // The author as the board now records them: a host's principal stays the host's.
+  const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: { ...identity.actor, ...(seen.payload.host ? { host: true as const } : {}), ...(seen.payload.verified ? { verified: true as const } : {}) } } } : actors
   return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent)
 }
 
