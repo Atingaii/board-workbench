@@ -826,7 +826,7 @@ describe('the embedded CLI', () => {
     const help = await capture(() => main(['help'], { name: 'board', commands: local }))
     expect(help.stdout).toMatch(/^usage: board <command> \[options\]      \(also installed as `vb`\)$/m)
     // inspect after wait, serve after them in a section of its own, and then the options every command takes.
-    expect(help.stdout).toMatch(/\n  wait \[channel\|id\][^\n]*\n(?: {4,}[^\n]*\n)*  inspect +the board in your browser[^\n]*\n(?: {4,}[^\n]*\n)*\n  serve +run a board on this machine[\s\S]*local:user:<your OS\s+user>\n\nfilters:/)
+    expect(help.stdout).toMatch(/\n  wait \[channel\|id\] \[filters\] \[--after id\] \[--timeout 10m\][^\n]*\n(?: {4,}[^\n]*\n)*  inspect +the board in your browser[^\n]*\n(?: {4,}[^\n]*\n)*\n  serve +run a board on this machine[\s\S]*local:user:<your OS\s+user>\n\nfilters:/)
   })
 
   it("takes the login the Vercel CLI hands it in VERCEL_AUTH_TOKEN, never a token cached for someone else's", async () => {

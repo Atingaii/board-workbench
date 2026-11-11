@@ -722,7 +722,7 @@ See [Reading](../01-board/05-reading.md).
 ### download
 
 ```text
-vb download <attachment> [path]
+vb download <attachment-id> [path]
 ```
 
 Saves an attachment, by the ID `vb read <id>` shows at the end of its file

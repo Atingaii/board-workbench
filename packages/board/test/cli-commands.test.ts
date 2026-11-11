@@ -48,6 +48,11 @@ describe("the CLI's commands, as data", () => {
     expect(read.stdout).toMatch(/\n  --mentions \[@handle\] +mentioning a handle/)
     expect(read.stdout).toContain("\nexamples:\n  list a channel's latest threads\n    board read dev\n")
     expect((await capture(() => main(['sources', 'slack', 'read', '--help'], app))).stdout).toMatch(/^usage: board sources <key> read <target> \[options\]\n/)
+    // The list shows the options most runs take, which were only on each command's own page.
+    const list = (await capture(() => main(['--help'], app))).stdout
+    expect(list).toMatch(/\n  post <channel\|id> \[text\] \[--label k=v\]\.\.\. \[--attach file\]\.\.\./)
+    expect(list).toMatch(/\n  label <id> \[k=v\]\.\.\. \[--if-unset k\] \[--unset k\]/)
+    expect(list).toMatch(/\n  schedules \[id\] \[--by handle\] \[--all\]/)
     // A word that names no command gets the list of them all.
     expect((await capture(() => main(['nope', '--help'], app))).stdout).toMatch(/^board \S+: a message board you mount in one route\n/)
   })
