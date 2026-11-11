@@ -15,8 +15,6 @@ const GROUPS: { key: Shown; title: string }[] = [
   { key: "done", title: "Done" },
   { key: "canceled", title: "Canceled" },
 ];
-/** Finished groups show their newest few: the page is about what's moving. */
-const FINISHED_SHOWN = 25;
 
 type History = Awaited<ReturnType<typeof thread>>;
 
@@ -127,7 +125,11 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
           {typeof live === "string" ? live : `down: ${live.problem}`}
         </span>
         <span className="counts">
-          <b>{count("working")}</b> working · <b>{count("ready")}</b> ready · <b>{count("review")}</b> in review · <b>{count("done")}</b> done
+          <b>{count("working")}</b> working · <b>{count("ready")}</b> ready · <b>{count("review")}</b> in review · <b>
+            {count("done")}
+            {snap.finishedCapped ? "+" : ""}
+          </b>{" "}
+          done
           {count("stalled") > 0 && (
             <>
               {" · "}
@@ -207,7 +209,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
             {groups.length === 0 && <p className="faint pad">No tasks in {channel ?? snap.fleet}</p>}
             {groups.map((group) => {
               const finished = group.key === "done" || group.key === "canceled";
-              const rows = finished ? group.tasks.slice(0, FINISHED_SHOWN) : group.tasks;
+              const rows = group.tasks;
               return (
                 <div key={group.key} className="group">
                   <h3>
@@ -225,7 +227,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
                       </li>
                     ))}
                   </ul>
-                  {rows.length < group.tasks.length && <p className="faint pad">and {group.tasks.length - rows.length} older</p>}
+                  {finished && snap.finishedCapped && <p className="faint pad">and older ones</p>}
                 </div>
               );
             })}

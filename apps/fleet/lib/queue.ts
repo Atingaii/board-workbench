@@ -59,9 +59,9 @@ export async function renew(board: Board, id: string, token: string): Promise<bo
 
 /**
  * Ends the claim: `done`, `review` for someone to check it, or `ready` to give it back. A done task
- * readies the tasks that waited for it. False: the claim was lost, and nothing changed.
+ * readies the tasks under `scope` that waited for it. False: the claim was lost, and nothing changed.
  */
-export async function finish(board: Board, id: string, token: string, state: "done" | "review" | "ready"): Promise<boolean> {
+export async function finish(board: Board, id: string, token: string, state: "done" | "review" | "ready", scope: string): Promise<boolean> {
   try {
     await board.label(id, {
       set: { "task.state": state },
@@ -72,7 +72,7 @@ export async function finish(board: Board, id: string, token: string, state: "do
     if (lost(error)) return false;
     throw error;
   }
-  if (state === "done") await release(board, id);
+  if (state === "done") await release(board, id, scope);
   return true;
 }
 
@@ -80,7 +80,7 @@ export async function finish(board: Board, id: string, token: string, state: "do
  * A reviewer's verdict. It holds no claim, so it fences on the state: a late review can't overwrite
  * a task someone already moved. False: the task wasn't in review anymore.
  */
-export async function review(board: Board, id: string, verdict: "done" | "ready"): Promise<boolean> {
+export async function review(board: Board, id: string, verdict: "done" | "ready", scope: string): Promise<boolean> {
   try {
     await board.label(id, {
       set: { "task.state": verdict },
@@ -91,18 +91,29 @@ export async function review(board: Board, id: string, verdict: "done" | "ready"
     if (lost(error)) return false;
     throw error;
   }
-  if (verdict === "done") await release(board, id);
+  if (verdict === "done") await release(board, id, scope);
   return true;
 }
 
-/** Readies every blocked task that waited for `id`. A task someone already moved stays as it is. */
-async function release(board: Board, id: string): Promise<void> {
-  const { threads } = await board.threads({ label: { "task.after": id, "task.state": "blocked" } });
-  for (const { message } of threads) {
-    await board
-      .label(message.id, { set: { "task.state": "ready" }, if: { "task.state": "blocked" } })
-      .catch((error: unknown) => {
-        if (!lost(error)) throw error;
-      });
+/** How many dependents one read asks for. A readied task leaves the list, so the next read has the rest. */
+const PAGE = 100;
+
+/**
+ * Readies every blocked task under `scope` (the queue's channels, `fleet/`) that waited for `id`.
+ * The scope keeps the read to the queue: without it, a board lists every channel the caller can
+ * read. A task someone already moved stays as it is.
+ */
+async function release(board: Board, id: string, scope: string): Promise<void> {
+  // Each pass readies what it lists, so the passes end. The cap is for a board that keeps listing them.
+  for (let pass = 0; pass < 50; pass++) {
+    const { threads } = await board.threads({ channel: scope, label: { "task.after": id, "task.state": "blocked" }, limit: PAGE });
+    for (const { message } of threads) {
+      await board
+        .label(message.id, { set: { "task.state": "ready" }, if: { "task.state": "blocked" } })
+        .catch((error: unknown) => {
+          if (!lost(error)) throw error;
+        });
+    }
+    if (threads.length < PAGE) return;
   }
 }

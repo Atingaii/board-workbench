@@ -15,7 +15,7 @@ for (;;) {
   // Someone else's finished work comes first: a review readies what waits for it.
   const reviews = await board.threads({ channel: FLEET, label: { "task.state": "review" } });
   const theirs = reviews.threads.find(({ message }) => message.labels["task.owner"] !== me);
-  if (theirs && (await review(board, theirs.message.id, "done"))) {
+  if (theirs && (await review(board, theirs.message.id, "done", FLEET))) {
     await board.reply(theirs.message.id, "Reviewed: the result holds. Done.");
     console.log(`reviewed ${theirs.message.id}`);
     continue;
@@ -47,7 +47,7 @@ for (;;) {
   }
   await sleep(step);
   const state = Math.random() < 0.5 ? "review" : "done";
-  if (await finish(board, message.id, token, state)) {
+  if (await finish(board, message.id, token, state, FLEET)) {
     await board.reply(message.id, state === "review" ? "Ready for review: the change is verified." : "Done: verified.");
     console.log(`${state} ${message.id}`);
   }

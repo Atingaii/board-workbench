@@ -9,6 +9,9 @@ export const maxDuration = 60;
 /** A connection ends before the function would, and the browser's EventSource opens the next. */
 const ROTATE_MS = 50_000;
 
+/** A busy fleet redraws the page this often at most: a snapshot is several board reads. */
+const REDRAW_MS = 3_000;
+
 export async function GET(request: Request): Promise<Response> {
   const stop = new AbortController();
   request.signal.addEventListener("abort", () => stop.abort());
@@ -25,13 +28,22 @@ export async function GET(request: Request): Promise<Response> {
         const first = await snapshot();
         send("snapshot", first);
         let cursor = first.cursor;
+        let drawn = Date.now();
         while (!stop.signal.aborted) {
           // One long-poll: it answers as soon as something under the fleet changes, or empty after 20 s.
           const page = await team().poll({ channel: FLEET, after: cursor, wait: 20 }, stop.signal);
           cursor = page.cursor;
-          // However many events a page holds, the page is redrawn once. An empty one keeps the connection warm.
-          if (page.events.length > 0) send("snapshot", await snapshot());
-          else send("ping", {});
+          if (page.events.length === 0) {
+            send("ping", {}); // keeps the connection warm
+            continue;
+          }
+          // However many events land, the page is redrawn once, and not sooner than the last redraw
+          // allows. What lands during the wait is in the snapshot, which is read after it.
+          const wait = drawn + REDRAW_MS - Date.now();
+          if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+          if (stop.signal.aborted) break;
+          send("snapshot", await snapshot());
+          drawn = Date.now();
         }
       } catch (error) {
         if (!stop.signal.aborted) send("problem", { message: (error as Error).message });

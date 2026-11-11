@@ -356,14 +356,18 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
   `skills/board/references/work-queue.md`: a root is a task, and every claim,
   renewal, and finish is a `label` with `if`. `JOIN.md` gives agents those steps
   as `vb` commands; change one and change the other.
-- **The page is read-only** (`app/`). A snapshot is two reads (`lib/fleet.ts`),
-  and `app/api/live` long-polls the fleet's events and sends a new snapshot over
-  server-sent events after each change. The browser holds no credential.
+- **The page is read-only** (`app/`). A snapshot (`lib/fleet.ts`) reads the
+  newest messages and the open tasks by state, and the newest 25 finished ones
+  only when a task leaves the open set: on Vercel's board each thread summary
+  costs requests, so nothing in it may grow with every task ever made.
+  `app/api/live` long-polls the fleet's events and sends a snapshot over
+  server-sent events after a change, at most one every 3 seconds. The browser
+  holds no credential.
 - `pnpm seed` posts sample tasks, and `pnpm worker <name>` is a stand-in agent
   that claims, logs, and finishes them, to check the page without a model.
 - `pnpm test` (`test/queue.test.ts`) runs the queue on `local({ memory: true })`:
   a race for one claim, a takeover fencing out the old holder, and dependents
-  readied by done and by a review.
+  readied by done and by a review, 130 of them and only the queue's own.
 
 ## the docs (`packages/board/docs`)
 

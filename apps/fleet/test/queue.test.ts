@@ -59,7 +59,7 @@ test("a task taken over fences out the agent that held it", async () => {
     if: { "task.state": "claimed", "task.claim": old, "task.lease": held["task.lease"]! },
   });
   assert.equal(await renew(board, id, old), false);
-  assert.equal(await finish(board, id, old, "done"), false);
+  assert.equal(await finish(board, id, old, "done", "fleet/"), false);
   const now = await labels(board, id);
   assert.equal(now["task.state"], "claimed");
   assert.equal(now["task.owner"], "grace");
@@ -77,7 +77,7 @@ test("a done task readies the tasks that waited for it, and no others", async ()
 
   const token = await claim(board, first, "ada");
   assert.ok(token);
-  assert.equal(await finish(board, first, token, "done"), true);
+  assert.equal(await finish(board, first, token, "done", "fleet/"), true);
 
   const done = await labels(board, first);
   assert.equal(done["task.state"], "done");
@@ -88,20 +88,37 @@ test("a done task readies the tasks that waited for it, and no others", async ()
   assert.equal((await labels(board, waitsForOther))["task.state"], "blocked");
 });
 
+test("a done task readies all of its dependents, however many, and only the queue's", async () => {
+  const board = fresh();
+  const first = await task(board);
+  const waiting: string[] = [];
+  for (let i = 0; i < 130; i++) waiting.push(await task(board, first));
+  // Another queue on the same board, whose task happens to name this one.
+  const elsewhere = await create(board, "other/fixes", { title: "not this queue's", key: "elsewhere", after: first });
+
+  const token = await claim(board, first, "ada");
+  assert.ok(token);
+  assert.equal(await finish(board, first, token, "done", "fleet/"), true);
+
+  const { threads } = await board.threads({ channel: "fleet/", label: { "task.state": "ready" }, limit: 500 });
+  assert.deepEqual(threads.map(({ message }) => message.id).sort(), [...waiting].sort());
+  assert.equal((await labels(board, elsewhere))["task.state"], "blocked");
+});
+
 test("a task in review readies what waits for it only once a reviewer says done", async () => {
   const board = fresh();
   const first = await task(board);
   const waits = await task(board, first);
   const token = await claim(board, first, "ada");
   assert.ok(token);
-  assert.equal(await finish(board, first, token, "review"), true);
+  assert.equal(await finish(board, first, token, "review", "fleet/"), true);
   assert.equal((await labels(board, first))["task.state"], "review");
   assert.equal((await labels(board, waits))["task.state"], "blocked");
 
-  assert.equal(await review(board, first, "done"), true);
+  assert.equal(await review(board, first, "done", "fleet/"), true);
   assert.equal((await labels(board, first))["task.state"], "done");
   assert.equal((await labels(board, waits))["task.state"], "ready");
-  assert.equal(await review(board, first, "ready"), false, "a second verdict comes too late");
+  assert.equal(await review(board, first, "ready", "fleet/"), false, "a second verdict comes too late");
   assert.equal((await labels(board, first))["task.state"], "done");
 });
 
@@ -110,8 +127,8 @@ test("a review that sends a task back makes it claimable again, by anyone", asyn
   const id = await task(board);
   const token = await claim(board, id, "ada");
   assert.ok(token);
-  await finish(board, id, token, "review");
-  assert.equal(await review(board, id, "ready"), true);
+  await finish(board, id, token, "review", "fleet/");
+  assert.equal(await review(board, id, "ready", "fleet/"), true);
   const back = await labels(board, id);
   assert.equal(back["task.state"], "ready");
   assert.equal(back["task.owner"], undefined);
@@ -123,7 +140,7 @@ test("an agent that gives a task back leaves it ready, with no trace of the clai
   const id = await task(board);
   const token = await claim(board, id, "ada");
   assert.ok(token);
-  assert.equal(await finish(board, id, token, "ready"), true);
+  assert.equal(await finish(board, id, token, "ready", "fleet/"), true);
   const back = await labels(board, id);
   assert.deepEqual(
     { state: back["task.state"], owner: back["task.owner"], claim: back["task.claim"], lease: back["task.lease"] },
