@@ -1924,7 +1924,9 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   `teamId`, exactly the calls `vercel()` makes under
   `/v1/messageboard/boards/<id>` for what an agent does (reading, posting,
   editing and deleting its own, reacting, labeling, files, schedules, a
-  link's message), each by method and shape, and `GET /v1/messageboard/me`:
+  link's message) and under `/v2/messageboard/boards/<id>/tasks` for its
+  tasks (making, listing, claiming, and each change of one), each by method
+  and shape, and `GET /v1/messageboard/me`:
   not `PATCH` or `DELETE` on the board, its members, or a route the API adds
   later. A `can` takes any `Can` (`'all'`, a list for every channel, a map)
   or the header's own text. It refuses `grants`, `watchers`,

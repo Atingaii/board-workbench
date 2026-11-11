@@ -25,4 +25,4 @@ What differs from `local()` there:
 - A lost claim's error says why, in its message: `this claim on msg_… is over (lease_expired): claim it again`.
 - A task's changes stay in the feed for 30 days.
 
-`task.*` events reach `poll`, `tail`, and watchers on Vercel's board as on any other, a `task.renewed` only with `all`.
+`task.*` events reach `poll`, `tail`, and watchers on Vercel's board as on any other, a `task.renewed` only with `all`. A sandbox handed the board with `team.sandboxPolicy()` reaches its tasks there too, held to its `can`.

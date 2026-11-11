@@ -287,6 +287,16 @@ const SANDBOX_ROUTES: readonly SandboxRoute[] = [
   { method: 'POST', path: '/schedules/:id/cancel' },
   { method: 'GET', path: '/sync/linked' },
 ]
+/**
+ * What its task methods call there, under version 2's `/boards/<id>`: making a task, listing them, claiming the next
+ * ready one, and each change of one. A sandbox's policy hands it these and nothing else at that version.
+ */
+const SANDBOX_TASK_ROUTES: readonly SandboxRoute[] = [
+  { method: 'GET', path: '/tasks' },
+  { method: 'POST', path: '/tasks' },
+  { method: 'POST', path: '/tasks/claim' },
+  ...['claim', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'cancel'].map((change) => ({ method: 'POST', path: `/tasks/:task/${change}` })),
+]
 
 /**
  * Who a request to Vercel's API writes as, as the API reads it today: the profile's name alone in
@@ -3031,9 +3041,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = { profile: null }
       const team = await teamId()
       const id = team?.startsWith('team_') ? team : (await self(who)).teamId
-      const url = `${origin}/v1/messageboard${await onBoard(who)}?teamId=${encodeURIComponent(id)}`
+      const board = await onBoard(who)
+      const url = `${origin}/v1/messageboard${board}?teamId=${encodeURIComponent(id)}`
       const credential = environment ? await environment.sandbox(url, token) : token === undefined ? withoutToken(url) : { authorization: `Bearer ${token}` }
-      return { url, headers: { ...credential, ...apiProfileHeaders(profile), 'x-board-can': can }, routes: SANDBOX_ROUTES, reads: ['/v1/messageboard/me'] }
+      return {
+        url,
+        headers: { ...credential, ...apiProfileHeaders(profile), 'x-board-can': can },
+        routes: SANDBOX_ROUTES,
+        reads: ['/v1/messageboard/me'],
+        // Its tasks are the same board's, at version 2 of the API.
+        under: [{ path: `/v2/messageboard${board}`, routes: SANDBOX_TASK_ROUTES }],
+      }
     },
     // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
     sendsSchedulesHere: false,
