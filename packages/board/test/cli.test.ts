@@ -74,7 +74,7 @@ describe('cli', () => {
     expect(await vb(['edit', id, '--text-file', note])).toMatchObject({ code: 0, stderr: '' })
     expect((await read()).message.text).toBe('edited from the file')
     // Text from two places is one too many, and a file that isn't there says so.
-    expect(await vb(['reply', id, 'hi', '--text-file', note])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --text-file with text: pass one or the other\.\n/) })
+    expect(await vb(['reply', id, 'hi', '--text-file', note])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --text-file with text: a message has no title, so its whole text comes from one or the other\.\n/) })
     expect(failure(await vb(['reply', id, '--text-file', join(dir, 'missing.md'), '--json']))).toMatchObject({ reason: 'file_not_found' })
     // One too big to attach says so of the text, not of --attach. Sparse: nothing is written.
     const huge = join(dir, 'huge.log')
@@ -83,6 +83,25 @@ describe('cli', () => {
     expect(await vb(['reply', id, '--text-file', huge])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't use .*huge\.log as the text\. A message's text is at most 10,000 characters\.\n/) })
     expect((await read()).replies).toHaveLength(1)
   }, 20_000)
+
+  it('refuses what a post, a reply, or a label would drop, and says how each is written', async () => {
+    const id = (await vb(['post', 'notes', 'root'])).stdout.trim()
+    const replies = async () => JSON.parse((await vb(['read', id, '--json'])).stdout).replies.length
+    // A label after the text was dropped, and the message posted without it.
+    const label = await vb(['reply', id, 'Friday', 'q=launch'])
+    expect(label).toMatchObject({ code: 2, stdout: '' })
+    expect(label.stderr).toMatch(/^error: q=launch looks like a label, and reply takes labels with --label\.\n/)
+    // So was a second text, a title's body say, and what a filter flag was given.
+    expect((await vb(['post', 'notes', 'title', 'the body'])).stderr).toMatch(/^error: post takes one text, and the body is one too many\./)
+    expect((await vb(['post', 'notes', 'title', '--text', 'the body'])).stderr).toMatch(/^error: --text is a filter for read, tail, and wait\. post takes its text as an argument, in quotes\.\n/)
+    // Stdin is the text's, never an attachment's.
+    expect((await vb(['reply', id, 'see attached', '--attach', '-'])).stderr).toMatch(/^error: Can't attach -: stdin is for the message's text\./)
+    expect(await replies()).toBe(0)
+    // A label with no value still counted as set, and blocked a later --if-unset.
+    const empty = await vb(['label', id, 'owner='])
+    expect(empty).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: owner= has no value\. To remove the label, --unset owner\.\n/) })
+    expect(await vb(['label', id, 'owner=ada', '--if-unset', 'owner'])).toMatchObject({ code: 0 })
+  })
 
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
     // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
