@@ -71,8 +71,9 @@ export function createSchemas(options: { store: Parameters<typeof createServer>[
         const { state, index } = await latest()
         const existing = state.byId[id]
         if (existing) {
-          if (canonical(existing.schema) !== canonical(body.schema) || existing.description !== description)
-            throw new HttpError(409, 'schema_immutable', `${id} is registered with another definition, and a version never changes: register a new version`)
+          // Which part differs, so what `inspect` shows isn't the same as what was sent with no word why.
+          const differs = canonical(existing.schema) !== canonical(body.schema) ? 'definition' : existing.description !== description ? 'description' : null
+          if (differs !== null) throw new HttpError(409, 'schema_immutable', `${id} is registered with another ${differs}, and a version never changes: register a new version`)
           return { schema: view(existing), created: false }
         }
         if (Object.keys(state.byId).length >= SCHEMAS_MAX) throw badRequest(`a board registers at most ${SCHEMAS_MAX} schema versions`, 'too_many_schemas')

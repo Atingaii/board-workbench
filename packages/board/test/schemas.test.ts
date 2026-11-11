@@ -50,6 +50,9 @@ describe('schemas', () => {
     expect(changed).toMatchObject({ status: 409, body: { error: { code: 'schema_immutable' } } })
     const redescribed = await register({ name: 'sandbox', version: 1, description: 'Something else.', schema: SANDBOX })
     expect(redescribed).toMatchObject({ status: 409, body: { error: { code: 'schema_immutable' } } })
+    // It says which part differs: the same JSON Schema with another description isn't "another definition".
+    expect(changed.body.error.message).toContain('another definition')
+    expect(redescribed.body.error.message).toContain('another description')
     // What it was refused changed nothing.
     expect((await julian('GET', '/schemas/sandbox@1')).body.schema).toEqual(made.body.schema)
 
