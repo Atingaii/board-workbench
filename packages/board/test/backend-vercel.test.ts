@@ -183,6 +183,20 @@ describe('vercel()', () => {
     expect((await julian.thread(id)).replies[1]!.author).toMatchObject({ handle: 'ada', name: 'Ada Lovelace' })
   })
 
+  it("sends an agent's avatar as Vercel's API reads it today: its name alone in x-board-profile, and the avatar in x-board-avatar", async () => {
+    const api = fakeMessageboard()
+    const sent: Headers[] = []
+    const recording: typeof fetch = async (input, init) => {
+      sent.push(new Headers(init?.headers))
+      return as(api, 'user:u_jb')(input, init)
+    }
+    const julian = board({ backend: vercel({ team: 'team_test', api: API, fetch: recording, files: api.files }) })
+    const fixer = await julian.as({ name: 'fixer', avatar: 'https://example.com/fixer.png' }).post('dev', { text: 'on it' })
+    expect(fixer.by.actor).toBe('vercel:user:u_jb+fixer')
+    expect(sent.at(-1)!.get('x-board-profile')).toBe('fixer')
+    expect(sent.at(-1)!.get('x-board-avatar')).toBe('https://example.com/fixer.png')
+  })
+
   it('names someone after a read of the names fails, and every message of someone new in one read', async () => {
     const api = fakeMessageboard()
     let failing = true

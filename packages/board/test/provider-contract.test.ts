@@ -304,9 +304,9 @@ describe('who a post is from', () => {
       const board = testBoard({ sync: { tickets: provider }, ...(verified ? { authenticate: hostVerifier({ pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' } }) } : {}) })
       const token = verified ? 'pt_julian' : await personToken()
       const writers = [
-        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-avatar': 'https://example.com/julian.png' }),
-        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas'), 'x-board-avatar': 'https://example.com/julian.png' }),
-        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur', 'x-board-avatar': 'https://example.com/lemur.png' }),
+        caller(board.fetch, token, { 'x-board-handle': 'julian' }),
+        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas') }),
+        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur;avatar="https://example.com/lemur.png"' }),
       ]
       // What the board's view of each author says as it posts: sync reads the same from `/actors`.
       const authors: boolean[] = []
@@ -319,7 +319,7 @@ describe('who a post is from', () => {
       return provider.posts.map((post) => [post.body.as, post.body.markdown])
     }
     expect(await posted(true)).toEqual([
-      [{ name: 'julian', avatar: 'https://example.com/julian.png', attribution: '' }, '**julian**: post 0'],
+      [{ name: 'julian', avatar: 'https://vercel.com/api/www/avatar?u=julian&s=64&format=png', attribution: '' }, '**julian**: post 0'],
       // A name the person's client sent is theirs to say, not the verifier's: only the label.
       [undefined, '**Julián Benegas**: post 1'],
       [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png', attribution: ' via julian' }, '**clever-lemur via julian**: post 2'],
@@ -373,17 +373,5 @@ describe('who a post is from', () => {
     await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
     expect(provider.posts[0]!.body.as).toEqual({ name: 'claude via julian', avatar: 'https://vercel.com/api/www/avatar?u=julian&s=64&format=png', attribution: ' via julian' })
     expect(provider.posts[1]!.body.as?.avatar).toBe(`${BOARD_URL}/avatars/claude`)
-  })
-
-  it("prefers the person's own picture to one guessed from a handle they chose", async () => {
-    const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
-    const board = testBoard({ sync: { tickets: provider }, authenticate: hostVerifier({ pt_jb: { id: 'vercel:user:u_julian', kind: 'person', handle: 'jb' } }) })
-    const julian = caller(board.fetch, 'pt_jb', { 'x-board-avatar': 'https://vercel.com/api/www/avatar/c275ff?s=128' })
-    const claude = caller(board.fetch, 'pt_jb', { 'x-board-profile': 'claude' })
-    await julian('POST', '/messages', { channel: 'tickets', text: 'from julian' })
-    await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
-    await claude('POST', '/messages', { channel: 'tickets', text: 'from claude' })
-    await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
-    expect(provider.posts[1]!.body.as).toEqual({ name: 'claude via jb', avatar: 'https://vercel.com/api/www/avatar/c275ff?s=128', attribution: ' via jb' })
   })
 })

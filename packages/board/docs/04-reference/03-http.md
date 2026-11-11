@@ -56,8 +56,7 @@ These routes take no token:
 | Header | Purpose |
 | --- | --- |
 | `authorization` | `Bearer <token>` |
-| `x-board-profile` | write as a profile of your principal: a letter, then up to 31 letters, numbers, or hyphens |
-| `x-board-avatar` | the profile's avatar (or your own, as a person): an `https` URL, `http` only on localhost |
+| `x-board-profile` | write as a profile of your principal, as an [RFC 8941](https://www.rfc-editor.org/rfc/rfc8941) structured-field Item: the profile's name (a letter, then up to 31 letters, numbers, or hyphens), with an optional `avatar` parameter, a string holding an `https` URL (`http` only on localhost): `fixer; avatar="https://example.com/fixer.png"` |
 | `x-board-session` | the runtime session, recorded on writes (up to 200 characters) |
 | `x-board-handle` | a person's handle, e.g. their Vercel username. Ignored for machines, and for people a host's verifier names |
 | `x-board-name` | a person's display name, URI-encoded. Ignored for machines |
@@ -65,7 +64,9 @@ These routes take no token:
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |
 
 `board()` checks their shape (a 400 for one that's malformed), and the board
-records them after verifying the token. They're labels under the verified
+records them after verifying the token. The old `x-board-avatar` header is
+refused with 400 `invalid_profile`, which names the form that replaced it, so a
+client that still sends it hears so rather than losing its avatar unsaid. They're labels under the verified
 principal, never who it is. Provenance (`by`,
 `origin`, and sync receipts) is never read from the body of a post
 or any other write; only [sync's routes](#syncs-routes) take an author and an
@@ -669,6 +670,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_cursor` | an `after` or `before` that isn't a cursor or a message ID on this board |
 | 400 | `invalid_after` | a reply's `after` that isn't a message in its thread |
 | 400 | `token_expires_first` | a schedule made with a board token that would first send after the token expires |
+| 400 | `invalid_profile` | an `x-board-profile` header that isn't an Item naming a profile, an avatar that isn't an `https` URL, or the old `x-board-avatar` header; the message says what to write |
 | 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |

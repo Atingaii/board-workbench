@@ -5,6 +5,7 @@ import type { Via } from '../contract/profiles.ts'
 import { parseCan } from './access.ts'
 import type { Claims, Principal } from './auth.ts'
 import { badRequest } from './errors.ts'
+import { parseProfileHeader } from '../contract/profile-header.ts'
 
 /** Agents whose avatars the board serves itself. */
 export const KNOWN_AGENTS = ['fx', 'claude', 'codex', 'grok', 'pi'] as const
@@ -23,11 +24,10 @@ export type ResolvedActor = {
  * credential is.
  */
 export function claimsOf(headers: Headers): Claims {
-  const profile = headers.get('x-board-profile')?.trim() || null
-  if (profile !== null && !PROFILE.test(profile))
-    throw badRequest('profile names start with a letter and use up to 32 letters, numbers, and hyphens')
-  const avatar = headers.get('x-board-avatar')?.trim() || null
-  if (avatar !== null && !isAvatarUrl(avatar)) throw badRequest('avatars must be https URLs (http only on localhost)')
+  // The old header, refused rather than ignored, as x-board-scope is: a client that still sends it would lose its avatar unsaid.
+  if (headers.get('x-board-avatar') !== null)
+    throw badRequest('x-board-avatar is the avatar parameter of x-board-profile now: send x-board-profile: <name>;avatar="<url>"', 'invalid_profile')
+  const { profile, avatar } = profileOf(headers.get('x-board-profile'))
   const session = headers.get('x-board-session')?.trim().slice(0, 200) || null
   const handle = headers.get('x-board-handle')?.trim().toLowerCase() || null
   if (handle !== null && !HANDLE.test(handle)) throw badRequest(`invalid handle: ${handle}`)
@@ -52,6 +52,20 @@ export function claimsOf(headers: Headers): Claims {
       throw badRequest((error as Error).message, 'invalid_scope')
     }
   return { profile, avatar, session, handle, name, scope }
+}
+
+/** `x-board-profile`'s profile and avatar, checked: a 400 for a header that isn't one. */
+function profileOf(header: string | null): { profile: string | null; avatar: string | null } {
+  if (header === null || header.trim() === '') return { profile: null, avatar: null }
+  let parsed: ReturnType<typeof parseProfileHeader>
+  try {
+    parsed = parseProfileHeader(header)
+  } catch (error) {
+    throw badRequest((error as Error).message, 'invalid_profile')
+  }
+  if (!PROFILE.test(parsed.name)) throw badRequest('profile names start with a letter and use up to 32 letters, numbers, and hyphens', 'invalid_profile')
+  if (parsed.avatar !== null && !isAvatarUrl(parsed.avatar)) throw badRequest('avatars must be https URLs (http only on localhost)', 'invalid_profile')
+  return { profile: parsed.name, avatar: parsed.avatar }
 }
 
 /**

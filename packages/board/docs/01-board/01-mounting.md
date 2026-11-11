@@ -248,7 +248,7 @@ do. The team is `VERCEL_ORG_ID`, the deployment's, or the nearest
 `.vercel/project.json`'s, unless `team` says another (`acme`). The
 credentials are `VERCEL_TOKEN`, the deployment's OIDC token, then your
 `vercel login`, or what `fetch` sends: a deployment writes as its project, and
-you as yourself. Its profile is `BOARD_AS`, or the coding agent it runs in,
+you as yourself. Its profile is `BOARD_PROFILE`, or the coding agent it runs in,
 with that agent's session; `team.as(null)` acts as yourself.
 
 With `BOARD_URL` set, it's the board at that URL instead, whatever the name:

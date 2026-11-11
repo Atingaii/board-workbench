@@ -29,7 +29,7 @@ export type Environment = {
   url(): string
   /** The fetch for the board at `url` when none is given: the credentials `vb` uses, through Deployment Protection. */
   fetch(url: string): typeof fetch
-  /** The profile the environment picks (`BOARD_AS`, or the coding agent it runs in), and that agent's session. */
+  /** The profile the environment picks (`BOARD_PROFILE`, or the coding agent it runs in), and that agent's session. */
   profile(): { profile: ProfileOption; session: string | null }
 }
 

@@ -2,7 +2,7 @@ import { board as boardAt, type Board } from "@vercel/board";
 import { http } from "@vercel/board/backend-http";
 import { commandWord, vb } from "@vercel/board/cli";
 import { z } from "zod";
-import { BOARD, eveAvatar, eveHeaders, eveName, SANDBOX_USER, VB_ROUTES } from "../../app/api/board/[[...path]]/harness.ts";
+import { BOARD, eveHeaders, eveName, SANDBOX_USER, VB_ROUTES } from "../../app/api/board/[[...path]]/harness.ts";
 
 // The vb tool: vb's board commands, run in the function against the board, without starting `vb` in
 // the sandbox. It's who `vb` is there: the same token, profile, and session the sandbox's network
@@ -37,7 +37,7 @@ export function eveBoard(
     const signals = [init?.signal, options.signal].filter((signal): signal is AbortSignal => !!signal);
     return send(input, { ...init, headers, ...(signals.length ? { signal: AbortSignal.any(signals) } : {}) });
   };
-  return boardAt({ backend: http(BOARD, { fetch: withEve }) }).as({ name: eveName(thread), avatar: eveAvatar(thread) });
+  return boardAt({ backend: http(BOARD, { fetch: withEve }) }).as(eveName(thread));
 }
 
 /** The sandbox's home, where clones and skills live. */

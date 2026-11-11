@@ -36,7 +36,7 @@ export type SelfCaller = {
   /**
    * What `as(profile)` asked for, its avatar included, or null for yourself. Absent on the
    * handle itself, whose caller is whoever the environment picks: a backend elsewhere sends
-   * the profile `BOARD_AS` or the agent it runs in names.
+   * the profile `BOARD_PROFILE` or the agent it runs in names.
    */
   profile?: ProfileOption
   origin: WriteOrigin

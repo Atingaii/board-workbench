@@ -46,7 +46,7 @@ describe('tokens', () => {
   it('writes as the profile and session it pins, whatever a request says', async () => {
     const { as, mint } = await setUp()
     const { secret } = await mint({ name: 'eve-1956', profile: 'clever-lemur', avatar: 'https://example.com/lemur.png', session: 'thread-1956' })
-    const eve = as(secret, { 'x-board-profile': 'claude', 'x-board-session': 'other', 'x-board-avatar': 'https://evil.example/x.png', 'x-board-handle': 'someone-else' })
+    const eve = as(secret, { 'x-board-profile': 'claude;avatar="https://evil.example/x.png"', 'x-board-session': 'other', 'x-board-handle': 'someone-else' })
     const me = (await eve('GET', '/me')).body
     expect(me).toMatchObject({ actor: 'vercel:user:u_julian+clever-lemur', handle: 'julian/clever-lemur', profile: 'clever-lemur', session: 'thread-1956', avatar: 'https://example.com/lemur.png' })
   })

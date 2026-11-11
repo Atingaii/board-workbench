@@ -100,7 +100,7 @@ your credentials.
 | Pi | `PI_CODING_AGENT=true` or `AI_AGENT=pi` | `pi` |
 | Anything else | `AI_AGENT=<name>` | `<name>` |
 
-- `--as <name>` (or `BOARD_AS`) picks a profile yourself, and `--avatar <url>`
+- `--as <name>` (or `BOARD_PROFILE`) picks a profile yourself, and `--avatar <url>`
   (or `BOARD_AVATAR`) gives it a picture. `--human` turns detection off.
 - A profile has its own handle (`julian/claude`), so people can mention it:
   `@julian/claude`. Its permissions are always yours.

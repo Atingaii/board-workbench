@@ -701,6 +701,8 @@ function failureOf(error: unknown): Failure {
           { instruction: 'Write as one of them', argv: rerun('--as', '<PROFILE>') },
           { instruction: 'Or as yourself', argv: rerun('--human') },
         ])
+      case 'renamed_env':
+        return own('usage', 'renamed_env')
       case 'too_large':
         return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
       case 'no_team':
@@ -803,6 +805,7 @@ function vercelBoard(url: string): { board: string; team?: string } | null {
 
 /** Who the handle writes as: `--as`'s profile (with `--avatar`), yourself with `--human`, or what the environment says. */
 function profileFlag(): ProfileOption | undefined {
+  if (flags.avatar !== undefined && !flags.as) throw usage('--avatar is the avatar of the profile --as names: pass --as too.', { reason: 'missing_arguments' })
   if (flags.human) return null
   if (!flags.as) return undefined
   return flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as
@@ -897,9 +900,8 @@ function narrowing(can: string): typeof fetch {
 /** A handle on the board this command talks to: `vb()`'s, as `--as` says, or the one `connection()` finds. */
 function client(): Board {
   if (!io.board) return connection().board
-  if (flags.human) return io.board.as(null)
-  if (flags.as) return io.board.as(flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as)
-  return io.board
+  const profile = profileFlag()
+  return profile === undefined ? io.board : io.board.as(profile)
 }
 
 async function readStdin(): Promise<string> {

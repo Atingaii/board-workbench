@@ -205,7 +205,7 @@ export type VercelEnvironment = {
   fetch(): typeof fetch
   /** The team, when the environment says which. */
   team(): Promise<string | null>
-  /** The profile the environment picks (`BOARD_AS`, or the coding agent it runs in), and that agent's session. */
+  /** The profile the environment picks (`BOARD_PROFILE`, or the coding agent it runs in), and that agent's session. */
   profile(): { profile: ProfileOption; session: string | null }
   /** Whether its fetch sends a board token you set (`BOARD_TOKEN`), whoever made it. */
   boardToken(): boolean
@@ -215,6 +215,18 @@ export type VercelEnvironment = {
 type Who = { profile: { name: string; avatar?: string } | null; session: string | null }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
+
+/**
+ * Who a request to Vercel's API writes as, as the API reads it today: the profile's name alone in
+ * `x-board-profile`, and its avatar in `x-board-avatar`, which board's protocol refuses for the
+ * avatar parameter of `x-board-profile` (`formatProfileHeader`). Every request and sandbox policy
+ * for the API gets its profile from here, so this is the one place that changes once the API reads
+ * the profile header as the protocol has it.
+ */
+export function apiProfileHeaders(profile: { name: string; avatar?: string | undefined } | null): Record<string, string> {
+  if (!profile) return {}
+  return { 'x-board-profile': profile.name, ...(profile.avatar?.startsWith('https://') ? { 'x-board-avatar': profile.avatar } : {}) }
+}
 const SESSION = /^[A-Za-z0-9_.:-]{1,128}$/
 const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
@@ -551,9 +563,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (typeof value === 'string') url.searchParams.set(name, value)
       else for (const one of value) url.searchParams.append(name, one)
     }
-    const headers: Record<string, string> = { 'content-type': 'application/json' }
-    if (who.profile) headers['x-board-profile'] = who.profile.name
-    if (who.profile?.avatar?.startsWith('https://')) headers['x-board-avatar'] = who.profile.avatar
+    const headers: Record<string, string> = { 'content-type': 'application/json', ...apiProfileHeaders(who.profile) }
     if (who.session && SESSION.test(who.session)) headers['x-board-session'] = who.session
     // A 429 did nothing. A 503 may have: only a request the API can tell it has seen goes again.
     const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'

@@ -234,6 +234,10 @@ thread rather than starting one.
   factory's production deployment as the principal
   (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Eve's policy adds).
   Its `vb` talks to the production board, the only one a sandbox can reach.
+  The policy sends the profile as board's protocol has it now, one
+  `x-board-profile` with the avatar as a parameter, and the factory's route
+  reads it into the name and `x-board-avatar` that 0.32.0 reads (`profile.ts`),
+  so a newer `vb` with `--avatar` works on it too.
   Its `vb` tool (`agent/tools/vb.ts`) runs a vb command straight from the function, in one
   request, with `vb()` from `@vercel/board/cli`: what the CLI prints, `--attach` and `download` on
   the sandbox's files. It sends the headers the policy adds (`eveHeaders`), so Eve is the same author

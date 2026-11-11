@@ -156,7 +156,7 @@ describe('board() with no backend', () => {
     const team = testBoard()
     vi.stubEnv('BOARD_URL', BOARD_URL)
     vi.stubEnv('BOARD_TOKEN', await personToken())
-    vi.stubEnv('BOARD_AS', 'ci')
+    vi.stubEnv('BOARD_PROFILE', 'ci')
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => team.fetch(new Request(input, init)))
     const here = board()
     expect((await here.post('dev', 'from CI')).by.actor).toBe('vercel:user:u_julian+ci')
@@ -167,13 +167,24 @@ describe('board() with no backend', () => {
     expect(meant).not.toHaveBeenCalled()
   })
 
+  it('refuses BOARD_AS, which BOARD_PROFILE replaced, rather than write as the person', async () => {
+    clean()
+    const team = testBoard()
+    vi.stubEnv('BOARD_URL', BOARD_URL)
+    vi.stubEnv('BOARD_TOKEN', await personToken())
+    vi.stubEnv('BOARD_AS', 'ci')
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => team.fetch(new Request(input, init)))
+    await expect(board().post('dev', 'from CI')).rejects.toMatchObject({ code: 'renamed_env', message: 'BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS.' })
+    expect((await team.messages({ channel: 'dev' })).messages).toEqual([])
+  })
+
   it("in a deployment, acts as a server's own user through its fetch: on the team it names, with none of the deployment's credentials or profile", async () => {
     // The deployment's OIDC token, a JWT that names its own team, as Vercel's does.
     const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
     const oidc = `${part({ alg: 'none' })}.${part({ owner_id: 'team_deploy', exp: Math.floor(Date.now() / 1000) + 3600 })}.`
     for (const extra of [{}, { VERCEL_TOKEN: 'vercel-token-from-env', BOARD_TOKEN: 'board-token-from-env' }]) {
       clean()
-      for (const [key, value] of Object.entries({ VERCEL: '1', VERCEL_OIDC_TOKEN: oidc, VERCEL_ORG_ID: 'team_deploy', BOARD_AS: 'deploy-bot', ...extra })) vi.stubEnv(key, value)
+      for (const [key, value] of Object.entries({ VERCEL: '1', VERCEL_OIDC_TOKEN: oidc, VERCEL_ORG_ID: 'team_deploy', BOARD_PROFILE: 'deploy-bot', ...extra })) vi.stubEnv(key, value)
       // Team acme, which a request reaches only by naming it.
       const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'security' }] })
       vi.stubGlobal('fetch', () => {

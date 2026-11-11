@@ -45,6 +45,7 @@ import { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, typeOf } from '../contra
 import type { Attachment } from '../contract/schemas.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { parseSse } from './sse.ts'
+import { formatProfileHeader } from '../contract/profile-header.ts'
 
 /**
  * Where an error came from: `handle`, raised by the handle on this machine (no Vercel login,
@@ -97,8 +98,8 @@ export type ClientOptions = {
   session?: Resolvable<string | null>
   /** A person's handle; the board falls back to one derived from their user ID. */
   handle?: Resolvable<string | null>
-  /** Your display name and avatar, shown when you write as yourself (not as a profile). */
-  person?: Resolvable<{ name?: string | null; avatar?: string | null } | null>
+  /** Your display name, shown when you write as yourself (not as a profile). */
+  person?: Resolvable<{ name?: string | null } | null>
   /** Extra headers on every request. */
   headers?: Resolvable<Record<string, string>>
   fetch?: typeof fetch
@@ -263,14 +264,10 @@ export function createBoardClient(options: ClientOptions) {
     if (!auth) return out
     if (options.token !== undefined) out.authorization = `Bearer ${await resolve(options.token)}`
     const profile = as !== undefined ? as : options.profile === undefined ? null : await resolve(options.profile)
-    if (profile !== null) {
-      const { name, avatar } = typeof profile === 'string' ? { name: profile, avatar: undefined } : profile
-      out['x-board-profile'] = name
-      if (avatar) out['x-board-avatar'] = avatar
-    } else {
+    if (profile !== null) out['x-board-profile'] = formatProfileHeader(typeof profile === 'string' ? { name: profile } : profile)
+    else {
       const person = options.person === undefined ? null : await resolve(options.person)
       if (person?.name) out['x-board-name'] = encodeURIComponent(person.name)
-      if (person?.avatar) out['x-board-avatar'] = person.avatar
     }
     // A profile chosen per request isn't this process's runtime session.
     const session = as !== undefined ? null : options.session === undefined ? null : await resolve(options.session)

@@ -21,8 +21,8 @@ where the board lives:
 
 | Backend | The handle acts as |
 | --- | --- |
-| none: your team's board in Vercel's API | Whoever its credentials say: a deployment as its project, you as yourself, with the profile `BOARD_AS` or the coding agent it runs in picks |
-| none, with `BOARD_URL` set | Whoever its credentials say, with the profile `BOARD_AS` or the coding agent it runs in picks |
+| none: your team's board in Vercel's API | Whoever its credentials say: a deployment as its project, you as yourself, with the profile `BOARD_PROFILE` or the coding agent it runs in picks |
+| none, with `BOARD_URL` set | Whoever its credentials say, with the profile `BOARD_PROFILE` or the coding agent it runs in picks |
 | `local()`, or a backend of your own that keeps the board | The board's own code: `board:client` |
 
 The short samples below act on that `team`, and on `msg`, the message

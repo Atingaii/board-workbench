@@ -130,18 +130,48 @@ describe('auth', () => {
     })
   })
 
-  it("shows a person's own name and avatar, and an agent's mark", async () => {
+  it("takes a profile's avatar from its header's parameter, into the author of what it writes", async () => {
+    const { fetch } = testBoard()
+    const fixer = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'fixer; avatar="https://example.com/fixer.png"' })
+    const posted = await fixer('POST', '/messages', { channel: 'dev', text: 'on it' })
+    expect(posted.status).toBe(201)
+    expect(posted.body.message.author).toMatchObject({ kind: 'agent', handle: 'julian/fixer', name: 'fixer', avatar: 'https://example.com/fixer.png' })
+    const read = await fixer('GET', `/messages/${posted.body.message.id}`)
+    expect(read.body.message.author.avatar).toBe('https://example.com/fixer.png')
+    // As RFC 8941 serializes it, with the name as a string, and with a parameter it doesn't know.
+    const canonical = caller(fetch, await personToken(), { 'x-board-profile': '"fixer";avatar="https://example.com/2.png";size=2' })
+    expect((await canonical('GET', '/me')).body).toMatchObject({ profile: 'fixer', avatar: 'https://example.com/2.png' })
+  })
+
+  it('refuses x-board-avatar, and a profile header that is not one, naming the form it takes', async () => {
+    const { fetch } = testBoard()
+    const as = async (headers: Record<string, string>) => {
+      const { status, body } = await caller(fetch, await personToken(), headers)('POST', '/messages', { channel: 'dev', text: 'hi' })
+      return [status, body.error?.code, body.error?.message]
+    }
+    expect(await as({ 'x-board-profile': 'fixer', 'x-board-avatar': 'https://example.com/fixer.png' })).toEqual([
+      400,
+      'invalid_profile',
+      'x-board-avatar is the avatar parameter of x-board-profile now: send x-board-profile: <name>;avatar="<url>"',
+    ])
+    expect((await as({ 'x-board-avatar': 'https://example.com/me.png' })).slice(0, 2)).toEqual([400, 'invalid_profile'])
+    for (const header of ['fixer;avatar=https://example.com/f.png', 'fixer ;avatar="https://example.com/f.png"', 'fixer;avatar="https://example.com/f.png', '1fixer', 'fixer, claude', 'fixer;x=', 'fixer;x=1"a;avatar="https://example.com/f.png"'])
+      expect([header, ...(await as({ 'x-board-profile': header })).slice(0, 2)]).toEqual([header, 400, 'invalid_profile'])
+    expect(await as({ 'x-board-profile': 'fixer;avatar="ftp://example.com/f.png"' })).toEqual([400, 'invalid_profile', 'avatars must be https URLs (http only on localhost)'])
+    expect((await caller(fetch, await personToken())('GET', '/messages?channel=dev')).body.messages).toEqual([])
+  })
+
+  it("shows a person's own name, and an agent's mark", async () => {
     const { fetch } = testBoard()
     const julian = caller(fetch, await personToken(), {
       'x-board-handle': 'julian',
       'x-board-name': encodeURIComponent('Julián Benegas'),
-      'x-board-avatar': 'https://vercel.com/api/www/avatar/abc123?s=128',
     })
     expect((await julian('GET', '/me')).body).toMatchObject({
       kind: 'person',
       handle: 'julian',
       name: 'Julián Benegas',
-      avatar: 'https://vercel.com/api/www/avatar/abc123?s=128',
+      avatar: null,
     })
     const pi = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'pi' })
     expect((await pi('GET', '/me')).body).toMatchObject({ handle: 'julian/pi', avatar: `${BOARD_URL}/avatars/pi` })

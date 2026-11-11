@@ -522,6 +522,18 @@ describe('cli', () => {
     }
   })
 
+  it('writes as --as with --avatar, or BOARD_PROFILE with BOARD_AVATAR, and takes no --avatar without a profile', async () => {
+    const flagged = await vb(['post', 'avatars', 'from fixer', '--as', 'fixer', '--avatar', 'https://example.com/fixer.png', '--json'])
+    expect(JSON.parse(flagged.stdout).message.author).toMatchObject({ kind: 'agent', name: 'fixer', avatar: 'https://example.com/fixer.png' })
+    const set = await vb(['post', 'avatars', 'from mender', '--json'], { BOARD_PROFILE: 'mender', BOARD_AVATAR: 'https://example.com/mender.png' })
+    expect(JSON.parse(set.stdout).message.author).toMatchObject({ kind: 'agent', name: 'mender', avatar: 'https://example.com/mender.png' })
+    expect(await vb(['post', 'avatars', 'from no one', '--avatar', 'https://example.com/x.png'])).toMatchObject({
+      code: 2,
+      stderr: expect.stringMatching(/^error: --avatar is the avatar of the profile --as names: pass --as too\.\n/),
+    })
+    expect(await vb(['whoami'], { BOARD_AS: 'claude' })).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS\.\n/) })
+  })
+
   it('picks up the profile of a detected agent', async () => {
     const { stdout } = await vb(['whoami', '--json'], { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's-1' })
     expect(JSON.parse(stdout)).toMatchObject({ actor: 'vercel:user:u_julian+claude', session: 's-1' })

@@ -1,6 +1,7 @@
 import type { NetworkPolicy } from "@vercel/sandbox";
 import pkg from "@vercel/board/package.json" with { type: "json" };
 import { REPO } from "./github.ts";
+import { profileHeader } from "./profile.ts";
 
 export const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 export const MODEL = "anthropic/claude-opus-5.5";
@@ -130,8 +131,7 @@ export const VB_ROUTES = `^${new URL(BOARD).pathname}(/(${[
 export function eveHeaders(thread: string, token: string, bypass: string | undefined): Record<string, string> {
   return {
     authorization: `Bearer ${token}`,
-    "x-board-profile": eveName(thread),
-    "x-board-avatar": eveAvatar(thread),
+    "x-board-profile": profileHeader(eveName(thread), eveAvatar(thread)),
     "x-board-session": eveSession(thread),
     ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
   };

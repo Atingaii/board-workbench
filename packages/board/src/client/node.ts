@@ -447,11 +447,9 @@ export function connect(
       if (!headers.has('authorization')) headers.set('authorization', `Bearer ${await token()}`)
       const handle = options.handle ?? (process.env.BOARD_HANDLE || (options.token === undefined ? cached?.handle : null))
       if (handle && !headers.has('x-board-handle')) headers.set('x-board-handle', handle)
-      // Your name and avatar show when you write as yourself, not as a profile.
-      if (!headers.has('x-board-profile') && options.token === undefined) {
-        if (cached?.name && !headers.has('x-board-name')) headers.set('x-board-name', encodeURIComponent(cached.name))
-        if (cached?.avatar && !headers.has('x-board-avatar')) headers.set('x-board-avatar', cached.avatar)
-      }
+      // Your name shows when you write as yourself, not as a profile.
+      if (!headers.has('x-board-profile') && options.token === undefined && cached?.name && !headers.has('x-board-name'))
+        headers.set('x-board-name', encodeURIComponent(cached.name))
     }
     return doFetch(input, { ...init, headers })
   }) as typeof fetch
@@ -459,10 +457,13 @@ export function connect(
   return { fetch: send, source: () => source }
 }
 
-/** The profile the environment picks: `BOARD_AS`, or the coding agent it runs in, with its session. */
+/** The profile the environment picks: `BOARD_PROFILE` (with `BOARD_AVATAR`), or the coding agent it runs in, with its session. */
 export function environmentProfile(): { profile: ProfileOption; session: string | null } {
+  // The old name, refused rather than ignored: an agent that still sets it would write as its person.
+  if (process.env.BOARD_AS)
+    throw new BoardError('renamed_env', 'BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS.', 0, { hint: 'Set BOARD_PROFILE to the same name, and unset BOARD_AS.' })
   const detected = detectAgent()
-  const name = process.env.BOARD_AS || detected?.profile
+  const name = process.env.BOARD_PROFILE || detected?.profile
   const avatar = process.env.BOARD_AVATAR
   return { profile: name ? (avatar ? { name, avatar } : name) : null, session: detected?.session ?? null }
 }
