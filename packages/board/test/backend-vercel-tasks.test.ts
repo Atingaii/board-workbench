@@ -73,6 +73,7 @@ describe("vercel()'s tasks", () => {
       "fences what a claim does: once it's over, its writes are lost and change nothing": 'passed',
       'holds a task until the tasks it needs complete, which a failed or canceled one never does': 'passed',
       'refuses a prerequisite that was canceled, which can never complete, and takes one that failed': 'passed',
+      'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed': 'passed',
       'holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'passed',
       'keeps a task assigned to a profile for that actor alone': 'passed',
       // This run sends no x-board-can: the kit's run with headers, in backend-vercel.test.ts, checks it.

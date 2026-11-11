@@ -998,6 +998,56 @@ const CHECKS: Check[] = [
   },
   {
     group: 'tasks',
+    name: 'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed',
+    run: async (ctx) => {
+      const { task: first } = await task(ctx, 'conformance: a prerequisite that completes first')
+      await (await ctx.board.tasks.claim(first.id, { lease: 60 })).complete()
+      const label = [`conformance=${ctx.labels.conformance}`]
+      let { cursor } = await ctx.board.poll({ channel: ctx.channel, label })
+      // Made with a claim once what it needs completed: it waits as it's made, is ready in the same write, and is claimed after.
+      const made = await task(ctx, 'conformance: a task made once what it needs completed', { needs: [first.id], claim: true, lease: 60 })
+      const { id } = made.task
+      same(made.task.task?.state, 'claimed', 'a task made with a claim, once what it needs completed')
+      check(made.claim, 'a task made with a claim should answer the claim')
+      await ctx.board.tasks.held(id, made.claim).block('conformance: approve?')
+      // One that needs none is ready as it's made and as it's unblocked, with no task.ready.
+      const { task: alone } = await task(ctx, 'conformance: a task that needs none')
+      await ctx.board.tasks.block(alone.id, 'conformance: approve?')
+      same((await ctx.board.tasks.unblock(alone.id)).task?.state, 'ready', 'a task that needs none, unblocked')
+      same((await ctx.board.tasks.unblock(id)).task?.state, 'ready', 'the task, unblocked once what it needs completed')
+      const seen: Awaited<ReturnType<Board['poll']>>['events'] = []
+      const changes = (of: string) => seen.filter((event) => event.type.startsWith('task.') && event.message?.id === of).map((event) => [event.type, event.message?.task?.state])
+      // Its second task.ready is the last of them written.
+      for (const deadline = Date.now() + 10_000; changes(id).filter(([type]) => type === 'task.ready').length < 2 && Date.now() < deadline; ) {
+        const page = await ctx.board.poll({ channel: ctx.channel, label, after: cursor, wait: 2 })
+        seen.push(...page.events)
+        cursor = page.cursor
+      }
+      alike(
+        changes(id),
+        [
+          ['task.created', 'waiting'],
+          ['task.ready', 'ready'],
+          ['task.claimed', 'claimed'],
+          ['task.blocked', 'blocked'],
+          ['task.unblocked', 'waiting'],
+          ['task.ready', 'ready'],
+        ],
+        'the changes of a task made and unblocked once what it needs completed, with its state after each',
+      )
+      alike(
+        changes(alone.id),
+        [
+          ['task.created', 'ready'],
+          ['task.blocked', 'blocked'],
+          ['task.unblocked', 'ready'],
+        ],
+        'the changes of a task that needs none, with its state after each',
+      )
+    },
+  },
+  {
+    group: 'tasks',
     name: 'holds a task for a person, by its owner or its claim, and gives it back when unblocked',
     run: async (ctx) => {
       const { task: root } = await task(ctx, 'conformance: a task to hold for a person')
