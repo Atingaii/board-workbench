@@ -105,9 +105,8 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 (`.vercel/project.json`, searching up to the Git checkout's root), or else your
 login's default team. `--scope <team>` picks another, by its slug or ID. It
 reads and writes as you, with the login the Vercel CLI hands it
-(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`. A board token in
-`BOARD_TOKEN` goes ahead of all of them, as it is, and the board acts as
-whoever minted it, within its `can`.
+(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`. A token in
+`BOARD_TOKEN` goes ahead of all of them, as it is.
 
 ### In-process, on a handle
 
@@ -485,17 +484,14 @@ prints its secret, which shows only here, so it pipes:
 `BOARD_TOKEN=$(vb tokens create widget --can feedback/=post)`. `--can` is
 `x-board-can`'s syntax (`dev/=read,post;ci/=read`). `--profile` and
 `--session` pin what every request with it writes as. It lives 30 days, or
-`--expires`, 90 days at most; on Vercel's board, a day, or `--expires`, 7 days
-at most. See [Tokens](../01-board/09-access.md#tokens).
-On Vercel's board, only a deployment mints one, with its own OIDC token, or a
-board token mints from itself: run as you, it answers with reason
-`unsupported_principal`:
+`--expires`, 90 days at most. See [Tokens](../01-board/09-access.md#tokens).
+Vercel's board issues no tokens, so there every `tokens` command answers with
+reason `not_supported`, and asks Vercel's API nothing:
 
 ```text
 $ vb tokens create widget --can feedback/=post --scope acme
-error: Vercel's board mints board tokens only for a deployment.
-
-  Mint it from a deployment, with its OIDC token, or from a board token.
+error: Can't mint token widget. This board doesn't support it.
+  Vercel's boards don't support board tokens
 ```
 
 | Flag | Effect |
@@ -503,7 +499,7 @@ error: Vercel's board mints board tokens only for a deployment.
 | `--can <scope>` | what it may do at most: `feedback/=post`, `dev/=read,post;ci/=read`, or `*=all`. Without it, read, post, react, and label everywhere |
 | `--profile <name>` | the profile every request with it writes as |
 | `--session <id>` | the session every request with it writes from |
-| `--expires <duration>` | how long it lives: `1h`, `7d`, up to `90d` (`7d` on Vercel's board) |
+| `--expires <duration>` | how long it lives: `1h`, `7d`, up to `90d` |
 
 `vb tokens` lists your live tokens, or with `manage` in every channel,
 everyone's: each one's ID, name, what it may do now, and when it expires, never a

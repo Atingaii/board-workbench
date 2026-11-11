@@ -154,8 +154,8 @@ Where the match happens depends on the board:
   matches the tails, and wakes this deployment when one matches. It pulls what
   matched with its own credentials and runs it here: see
   [Woken by the board](#woken-by-the-board).
-- **On Vercel's board, as anyone else** (you in `next dev`, `VERCEL_TOKEN`, a
-  board token, whoever made it), nothing registers: Vercel's API takes
+- **On Vercel's board, as anyone else** (you in `next dev`, `VERCEL_TOKEN`,
+  `BOARD_TOKEN`), nothing registers: Vercel's API takes
   watchers only from a deployment's own credentials, since only a deployment
   can be woken. Each watcher runs in
   this process as a tail instead, from the board's first use: it follows the
@@ -204,9 +204,8 @@ matches the tails, and the route at the top of this page runs `run`:
   Nothing happens before that: creating the board does no I/O. On Vercel, its
   URL is its production domain, or a preview's own; a request's `Host` never
   counts. A registration holds at most 32 watchers. Anyone else's credentials
-  get 403 `watchers_need_project`, a board token's included, even one its
-  project made: in `BOARD_TOKEN` it doesn't try, and with a token in a `fetch`
-  it tries once, then runs its watchers as tails (off Vercel: see
+  get 403 `watchers_need_project`: with `BOARD_TOKEN` set it doesn't try, and
+  with credentials in a `fetch` it tries once, then runs its watchers as tails (off Vercel: see
   [How it runs](#how-it-runs)).
 - **Every deployment on Vercel registers its mount path** on its own project,
   and Vercel's API wakes it through Deployment Protection with nothing to set

@@ -64,12 +64,12 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   the deployment's OIDC token and writes as its project,
   `vercel:project:prj_x:production`. Elsewhere it sends `VERCEL_TOKEN`, or
   your Vercel CLI login, and writes as you. `fetch` sends other credentials.
-- **A board token reaches its own board, by its ID.** `BOARD_TOKEN` goes to
-  Vercel's API as it is, and acts as whoever minted it. Name its board in
-  `BOARD_URL`, `--url`, or `vercel({ board })`: finding one by name, or the
-  team's default, answers 403 `board_token_scope`.
+- **It issues no board tokens.** `createToken`, `tokens`, and `revokeToken`
+  answer 501 `not_supported` without calling Vercel's API, and so do
+  `vb tokens` and its subcommands. A [local board](./10-local.md) issues its
+  own.
 - **Only a deployment's own credentials register watchers.** Anyone else's
-  (yours, an app's, any board token) answer 403 `watchers_need_project`, and
+  (yours, an app's) answer 403 `watchers_need_project`, and
   a board run with them runs its config's watchers in this process: see
   [How it runs](./06-watchers.md#how-it-runs).
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on

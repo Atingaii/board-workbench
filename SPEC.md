@@ -264,17 +264,15 @@ checked with `@vercel/board/conformance`.
   and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
   middleware screens a schedule when it's made. What the API doesn't keep yet
   answers 501 `not_supported`: files on a scheduled message, labels on a
-  scheduled reply, a post's sync targets. Grants and tokens go to the API, which takes no `github` or `oidc`
+  scheduled reply, a post's sync targets. Vercel's API keeps no board tokens,
+  so `createToken`, `tokens`, and `revokeToken` answer 501 `not_supported`
+  too, without calling it. Grants go to the API, which takes no `github` or `oidc`
   principal in a grant, or explains one (400 `unsupported_principal`: an app,
-  which an OIDC exchange policy issues tokens for, stands in), and mints board tokens only
-  for a deployment or from a board token (403 `unsupported_principal`), for
-  a day unless `expires` says otherwise and 7 days at most, since a
-  deployment can mint again (400 `invalid_expires` past that); `vercel()`
+  which an OIDC exchange policy issues tokens for, stands in); `vercel()`
   says the refusals with a hint. It
   runs no sync: `bind` throws for a board with `sync`, `readSource` answers
   404 `not_synced_here`, and `typing` reaches no targets. Only a deployment's
-  own credentials register watchers there: its OIDC token, never a board token,
-  whoever made it. Its watchers run as
+  own credentials register watchers there: its OIDC token. Its watchers run as
   [watchers woken by their board](#watchers-woken-by-their-board) says: it registers their tails with the API, which wakes
   this deployment by its path on its project, through Deployment Protection,
   from every deployment on Vercel (production, a branch's preview, which names
@@ -284,7 +282,7 @@ checked with `@vercel/board/conformance`.
   `1` outside development, so a dev server with `vercel env pull`'s env, or
   under `vercel dev` (`VERCEL_ENV=development`), counts as off Vercel, for
   this and for the tails below. With anyone else's
-  credentials (a person's, an app's, any board token), the API answers 403
+  credentials (a person's, an app's), the API answers 403
   `watchers_need_project`, so nothing registers: a `/me` principal that isn't
   a project, `BOARD_TOKEN` in Node, or that refusal to its first registration
   tells it so, and from then on each config
@@ -859,7 +857,8 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
 Grants say who may do what in each channel, kept as data, so people change who
 gets in while the board runs, from the handle or `vb`, without a deploy. A
 token is for callers without an OIDC token of their own: a widget, a sandbox,
-a script.
+a script. A board that keeps its own issues them, as `local()` does; Vercel's
+board keeps none, and answers the token methods 501 `not_supported`.
 
 ```ts
 import { board } from '@vercel/board'
@@ -1066,26 +1065,26 @@ token's ID is the index of the event that made it (`t12`), and a grant's the
 fold's counter (`g4`). `http()` forwards them to the board it uses, for its
 own handle: they're that board's.
 `vercel()`
-forwards them to Vercel's API as the protocol has them
+forwards grants to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
-`/boards/:id/grants/explain`, `/boards/:id/tokens`, each write with an
+`/boards/:id/grants/explain`, each write with an
 `operationId`), and adapts only times, which the API answers in milliseconds
-and the protocol as ISO strings (a grant's `at`, a token's `at` and
-`expiresAt`). The API looks up the names people type and answers views with
-IDs and names, and what it doesn't keep yet, it answers, so a board on
-`vercel()` fails the conformance kit's `tokens` group until it does, and its
-`grants` group wherever the run names a project or a repository the team
-doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
+and the protocol as ISO strings (a grant's `at`). The API keeps no board
+tokens, so `vercel()` answers the token methods 501 `not_supported` without
+calling it, and the conformance kit skips its `tokens` group there, as it
+does the `grants` checks that mint one. The API looks up the names people
+type and answers views with IDs and names, so a board on `vercel()` fails the
+conformance kit's `grants` group wherever the run names a project or a
+repository the team doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
 which `vercel()` gives back as the board's. Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers, `read` and `react` for
 viewers, and for a deployment's own credential, a project's read, post,
-react, label, and sync), and `expiresAt` in milliseconds, null
-until board tokens. Board reads `can` as it reads its own: a pattern it can't
+react, label, and sync), and `expiresAt` in milliseconds, or null. Board reads `can` as it reads its own: a pattern it can't
 parse is dropped, and what each permission implies is added. An `expiresAt`
 under 10^12 is epoch seconds, as a JWT's `exp` is. Where it says neither, read,
 post, react, and label everywhere, with no expiry.
-In Node it sends a board token from `BOARD_TOKEN` as it is, whatever its
+In Node it sends `BOARD_TOKEN` as it is, whatever its
 format (`Authorization: Bearer <token>`), ahead of `VERCEL_TOKEN`, the
 deployment's OIDC token, and the login, as `vb` sends one to any board.
 

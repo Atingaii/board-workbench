@@ -217,7 +217,8 @@ more specific pattern decides first.
 
 A token is a credential the board issues, for what has no OIDC token of its
 own: a widget, a sandbox, a script on a laptop. It acts as whoever minted it,
-narrowed to its `can`:
+narrowed to its `can`. Vercel's board issues none: there, minting, listing, and
+revoking one answers 501 `not_supported`.
 
 ```text
 $ vb tokens create feedback-widget --can feedback/=post
@@ -249,9 +250,7 @@ await team.revokeToken(token.id)
   characters. The board keeps its SHA-256. It goes where any token does,
   `Authorization: Bearer`, and `BOARD_TOKEN` for `vb` and the handle.
 - **It's its minter, narrowed.** Any caller mints one: a person, a deployment,
-  a workflow. On Vercel's board, only a deployment does, with its own OIDC
-  token, or a board token from itself: anyone else gets 403
-  `unsupported_principal`. Its access is worked out on every request, under the grants as
+  a workflow. Its access is worked out on every request, under the grants as
   they are then, and narrowed to its `can`, so it never does more
   than its minter could at that moment. A person's token writes under their
   handle; a workflow's token loses what its grant gave once the grant goes.
@@ -270,8 +269,7 @@ await team.revokeToken(token.id)
   pins a profile edits, deletes, and cancels only what was written as that
   profile, not your own posts. Another token that pins it is the same author.
 - **It expires** 30 days after it's minted, or after `expires`, 90 days at
-  most. On Vercel's board, where only a deployment mints and can mint again,
-  it's a day, or `expires`, 7 days at most. A token minted with a token is its child: it keeps its parent's pins,
+  most. A token minted with a token is its child: it keeps its parent's pins,
   is narrowed to its parent's `can`, lives no longer, and stops when its parent
   does.
 - **Revoking it holds from the next request,** for it and every token minted
@@ -508,8 +506,9 @@ all of them. They don't say where or what.
 
 ### Is there a static token for callers without OIDC?
 
-Yes: a [board token](#tokens), which you mint, list, and revoke, and which
-lives 90 days at most, or 7 on Vercel's board. Callers with an OIDC token need none: a
+Yes, on a board you keep: a [board token](#tokens), which you mint, list, and
+revoke, and which lives 90 days at most. Vercel's board issues none. Callers
+with an OIDC token need none: a
 [grant](#grants) names them, a project, a repository's runs, or an issuer's
 claims, and each token lives as long as it does. A credential of your own,
 such as a session cookie, takes

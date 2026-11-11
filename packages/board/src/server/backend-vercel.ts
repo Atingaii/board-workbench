@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type ThreadSummaryView, type TokenView } from '../api/routes.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
@@ -257,6 +257,9 @@ const WHO_AGAIN_MS = 10_000
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
+/** Vercel's API keeps no board tokens: a board there mints, lists, and revokes none, and asks the API nothing. */
+const noBoardTokens = () =>
+  new HttpError(501, 'not_supported', "Vercel's boards don't support board tokens", { hint: 'Grant the caller access instead, or use a local board, which keeps its own.' })
 
 /** What credentials may do when the API doesn't say: read, post, react, and label everywhere, as any it lets in. */
 const DEFAULT_CAN: AccessSummary = { '*': ['read', 'post', 'react', 'label'] }
@@ -342,8 +345,6 @@ const iso = (ms: number) => new Date(ms).toISOString()
 
 /** A grant as the API answers it, its `at` in milliseconds, as the protocol has it: an ISO string. */
 const grantFrom = (grant: GrantView): GrantView => ({ ...grant, at: expiryOf(grant.at) })
-/** A token as the API answers it, its times in milliseconds, as the protocol has them. */
-const tokenFrom = (token: TokenView): TokenView => ({ ...token, at: expiryOf(token.at) ?? token.at, expiresAt: expiryOf(token.expiresAt) ?? token.expiresAt })
 /** A schema the API keeps, as the protocol shows it. */
 const schemaFrom = (schema: ApiSchema): SchemaView => ({
   id: schema.id,
@@ -1875,16 +1876,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
     throw error
   }
-  /** A mint Vercel's API won't make: only a deployment mints board tokens there, and a board token mints from itself. */
-  const mintRefused = (error: unknown): never => {
-    if (error instanceof HttpError && error.code === 'unsupported_principal')
-      throw new HttpError(403, 'unsupported_principal', "Vercel's board mints board tokens only for a deployment.", {
-        hint: "Mint it from a deployment, with its OIDC token, or from a board token.",
-        origin: 'handle',
-      })
-    throw error
-  }
-
   const unsupported = Object.fromEntries(
     METHODS.map((method) => [
       method,
@@ -2202,7 +2193,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
       return { ok: true }
     },
-    // Grants and tokens are the API's, in the protocol's shapes: what it doesn't keep yet, it answers.
+    // Grants are the API's, in the protocol's shapes: what it doesn't keep yet, it answers.
     async grants(caller, _input, signal) {
       const who = whoOf(caller)
       const { grants } = await api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
@@ -2230,19 +2221,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
     },
-    async tokens(caller, _input, signal) {
-      const who = whoOf(caller)
-      const tokens = await all<TokenView>(who, await onBoard(who, '/tokens'), 'tokens', {}, signal)
-      return { tokens: tokens.map(tokenFrom) }
+    async tokens() {
+      throw noBoardTokens()
     },
-    async createToken(caller, input, signal) {
-      const who = whoOf(caller)
-      const created = await api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(mintRefused)
-      return { ...created, token: tokenFrom(created.token) }
+    async createToken() {
+      throw noBoardTokens()
     },
-    async revokeToken(caller, { id }, signal) {
-      const who = whoOf(caller)
-      return api<Protocol['revokeToken']['output']>(who, 'POST', await onBoard(who, `/tokens/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
+    async revokeToken() {
+      throw noBoardTokens()
     },
     // Schemas are the team's in the API: every board on it shares one registry.
     async schemas(caller, _input, signal) {

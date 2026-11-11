@@ -344,11 +344,12 @@ revokeToken(id: string): Promise<{ revoked: boolean }>
 (read, post, react, and label everywhere when left out), and
 answers its `secret`, the only time it shows. `profile`, `avatar`, and
 `session` pin what every request with it writes as. It lives 30 days, or
-`expires`, 90 days at most; on Vercel's board, a day, or `expires`, 7 days at
-most. On `local()`, the handle's own token is the
+`expires`, 90 days at most. On `local()`, the handle's own token is the
 board's own code, narrowed. `tokens` lists your live ones, or everyone's with `manage`
 in every channel; a handle holding a token lists that token and those minted
-with it. `revokeToken` stops one and every token minted with it.
+with it. `revokeToken` stops one and every token minted with it. Vercel's
+board issues no tokens: there, all three throw a `BoardError` with status 501
+and code `not_supported`, and ask Vercel's API nothing.
 
 ```ts
 const { token, secret } = await team.createToken({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post'] }, profile: 'clever-lemur', expires: '7d' })

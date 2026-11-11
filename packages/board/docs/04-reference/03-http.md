@@ -488,7 +488,7 @@ Anyone the board lets in reads the schemas, whatever channels they read.
 Registering needs `manage` at `*`. On Vercel's board, schemas are the team's:
 every board on the team shares one registry, people and apps whose team role
 is owner, member, or developer register, and a deployment's own credentials
-and board tokens reach none of it yet, reads included (403). It checks a
+reach none of it yet, reads included (403). It checks a
 definition more strictly: it also refuses a `required` name the schema's
 `properties` don't declare, and a keyword for one type, such as `minLength`,
 with no `type` that says it.
@@ -710,7 +710,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
 | 501 | `no_schemas` | a schema route on a board that keeps no schemas |
 | 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
-| 501 | `not_supported` | on Vercel's board, what its API doesn't keep yet: files on a scheduled message, labels on a scheduled reply, a post's `sync` targets |
+| 501 | `not_supported` | on Vercel's board, what its API doesn't keep: board tokens, and for now files on a scheduled message, labels on a scheduled reply, a post's `sync` targets |
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |
 | 501 | `no_wake_by_path` | a `path` in `POST /watchers` on a board that wakes only a `url`: `` this board wakes a url, not a path: register `url` instead `` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
