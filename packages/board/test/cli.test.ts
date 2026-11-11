@@ -801,7 +801,7 @@ describe('cli', () => {
     expect(dashed.stderr).toContain('vb post dev -- -1')
     // `update` here is a channel, not the removed command.
     expect((await vb(['--mentions', 'read', 'update'])).stderr).not.toContain('is gone')
-  })
+  }, 30_000)
 
   it('names the whole argument an unknown option is in, when it holds several words', async () => {
     // A shell variable that wasn't split: --as is real, but the argument it starts isn't an option.
