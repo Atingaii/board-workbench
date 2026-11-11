@@ -1,4 +1,4 @@
-import { connectors, factory, repoChannels, slackChannels } from "@/app/api/board/[[...path]]/factory";
+import { boardName, connectors, factory, repoChannels, slackChannels } from "@/app/api/board/[[...path]]/factory";
 import { open } from "@/lib/gate";
 import { boardDeps, liveDeps, setup } from "@/lib/setup";
 
@@ -11,7 +11,7 @@ export async function GET(request: Request): Promise<Response> {
   if (await open(new URL(request.url).host)) {
     return Response.json({ error: { code: "forbidden", message: "the setup checks are off until this deployment is protected" } }, { status: 403 });
   }
-  const deps = await liveDeps(boardDeps(factory), { connectors, repoChannels, slackChannels });
+  const deps = await liveDeps(boardDeps(factory), { connectors, repoChannels, slackChannels, board: boardName });
   deps.host = new URL(request.url).host;
   const steps = await setup(deps);
   return Response.json(steps.map(({ title, status, optional, summary, rows, fix }) => ({ title, status, optional, summary, rows, fix })));

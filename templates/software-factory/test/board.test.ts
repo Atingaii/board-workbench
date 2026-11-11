@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { attributes, boardFrom, boardOf } from "../agent/lib/board.ts";
+import { attributes, boardFrom, boardOf, sameDeployment } from "../agent/lib/board.ts";
 
 // What the board's watcher sends with a message reaches the turn as the channel keeps it in auth,
 // where the credentials read the thread's GitHub access.
@@ -30,4 +30,17 @@ test("what doesn't read as a connector or a repo is dropped, and the thread stil
 test("no thread, no turn", () => {
   assert.equal(turn({ board: { github: "github/factory", repos: ["acme/web"] } }), null);
   assert.equal(turn(null), null);
+});
+
+test("only this deployment's own token, or a local dev server, reaches the agent's channel", () => {
+  // eve's vercelOidc() lets in every token of this project, and says which environment it's from:
+  // `runtime` for this one, `service` for another, like a preview's of an unreviewed branch.
+  const runtime = { principalType: "runtime", principalId: "factory" };
+  const local = { principalType: "local-dev" };
+  assert.equal(sameDeployment(runtime), runtime);
+  assert.equal(sameDeployment(local), local);
+  assert.equal(sameDeployment({ principalType: "service", principalId: "factory" }), null);
+  assert.equal(sameDeployment({ principalType: "user", principalId: "u_ada" }), null);
+  assert.equal(sameDeployment(null), null);
+  assert.equal(sameDeployment(undefined), null);
 });

@@ -45,6 +45,7 @@ function fake(options: { env?: Record<string, string | undefined>; routes?: Rout
       connectors: { github: "github/factory", slack: "slack/factory" },
       repoChannels: { "acme/factory": "dev/factory" },
       slackChannels: { "#factory": "dev" },
+      board: null,
     },
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
@@ -257,6 +258,14 @@ test("try waits until someone posts and the agent replies", async () => {
   assert.equal(nothing.try!.status, "waiting");
   const unanswered = byId(await setup(fake({ deps: { messages: async () => [message("12", null)] } }).deps));
   assert.equal(unanswered.try!.status, "waiting");
+});
+
+test("try says how to open the board in its own step, on this team and by the board's name, so the agent's tool has it too", async () => {
+  const waiting = fake({ deps: { messages: async () => [] } });
+  assert.deepEqual(commands(byId(await setup(waiting.deps)).try!), ["npx @vercel/board inspect --scope acme"]);
+  const named = fake({ deps: { messages: async () => [] } });
+  named.deps.synced.board = "factory-dev";
+  assert.deepEqual(commands(byId(await setup(named.deps)).try!), ["npx @vercel/board inspect --scope acme --name factory-dev"]);
 });
 
 test("locally, the board needs nothing, and signing in is one link and one pull", async () => {

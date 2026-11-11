@@ -32,7 +32,13 @@ export type Step = {
 type Env = Record<string, string | undefined>;
 
 /** What the board syncs, as its route configures it: the checks look for these. */
-export type Synced = { connectors: { github: string; slack: string }; repoChannels: Record<string, string>; slackChannels: Record<string, string> };
+export type Synced = {
+  connectors: { github: string; slack: string };
+  repoChannels: Record<string, string>;
+  slackChannels: Record<string, string>;
+  /** The board's name, or null for the team's default board. */
+  board: string | null;
+};
 
 /** What the checks reach: the environment, the network, and the board. Tests pass their own. */
 export type Deps = {
@@ -102,6 +108,10 @@ const SIGN_IN: Fix = { text: "Link this directory and pull its environment, then
 /** Your machine: `vercel env pull` writes VERCEL_ENV=development, so that counts too. */
 export const isLocal = (env: Env) => !env.VERCEL_ENV || env.VERCEL_ENV === "development";
 
+/** The command that opens the board in a browser, as whoever runs it: on `team`, when it's known, and by its name when it has one. */
+export const inspectCommand = (team: string | undefined, board: string | null) =>
+  `npx @vercel/board inspect${team ? ` --scope ${team}` : ""}${board ? ` --name ${board}` : ""}`;
+
 /** Every step, in order. Until this deployment is known to turn strangers away, the rest show only their titles. */
 export async function setup(deps: Deps): Promise<Step[]> {
   const local = isLocal(deps.env);
@@ -113,7 +123,7 @@ export async function setup(deps: Deps): Promise<Step[]> {
     const rest: StepId[] = ["github", "slack", "try"];
     return [{ ...vercel, status: vercel.status === "locked" ? "todo" : "error" }, ...rest.map((id) => step(id, { status: "locked", summary: "", optional: id === "slack" }))];
   }
-  const [github, slack, tryIt] = await Promise.all([githubStep(deps, project), slackStep(deps, project), tryStep(deps)]);
+  const [github, slack, tryIt] = await Promise.all([githubStep(deps, project), slackStep(deps, project), tryStep(deps, project)]);
   return [vercel, github, slack, tryIt];
 }
 
@@ -298,7 +308,7 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   return step("slack", { optional: true, status: "done", summary: `Mirrors ${channel}.`, rows });
 }
 
-async function tryStep(deps: Deps): Promise<Step> {
+async function tryStep(deps: Deps, project: Project): Promise<Step> {
   const read: MessageView[][] | Error = await Promise.all([
     deps.messages({ channel: "dev", limit: 200 }),
     deps.messages({ channel: "dev/factory", limit: 200 }),
@@ -308,7 +318,11 @@ async function tryStep(deps: Deps): Promise<Step> {
   const heard = recent.some((m) => m.by.profile !== NAME);
   const replied = recent.some((m) => m.by.profile === NAME);
   if (heard && replied) return step("try", { status: "done", summary: "The agent is answering." });
-  return step("try", { status: "waiting", summary: "", fix: [{ text: "Open an issue on one of its repos, or post on the board: open it with the command below." }] });
+  return step("try", {
+    status: "waiting",
+    summary: "",
+    fix: [{ text: "Open an issue on one of its repos, or post on the board. This opens it:", commands: [inspectCommand(project?.team, deps.synced.board)] }],
+  });
 }
 
 /** What the checks ask the board, as this deployment. */

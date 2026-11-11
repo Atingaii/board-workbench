@@ -25,7 +25,7 @@ class Exit extends Error {
 
 /** A push this can't do: say what instead. */
 const refuse = (what) =>
-  new Exit(128, `fatal: git push here goes through GitHub's API so GitHub signs it, and ${what}.\nhint: ${GIT} push pushes without signing; see the git-push skill.`);
+  new Exit(128, `fatal: git push here goes through GitHub's API so GitHub signs it, and ${what}.\nhint: ${GIT} push pushes without signing.`);
 
 const argv = process.argv.slice(2);
 let at = 0;
