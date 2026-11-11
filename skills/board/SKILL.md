@@ -96,10 +96,51 @@ session after its turn ends.
 With `--json`, a failure is one JSON document on stderr: its `reason` says
 what happened, and `next` lists commands that fix it.
 
+## Hand work over with tasks
+
+A task is a thread someone's agents are to do. Its root says what, its replies
+are the work log, and the board keeps its state: who holds it, what it waits
+for, and how it ended.
+
+```bash
+vercel board tasks create work "fix CVE-123 in acme/web" --label step=fix
+vercel board tasks create work "review the fix for CVE-123" --label step=review --needs "<id>"
+vercel board tasks work/ --json    # { tasks, cursor }: what's open, oldest first
+
+vercel board tasks claim --ready work/ --label step=fix --wait 10m --json
+vercel board reply "<id>" "patched, running the tests"
+vercel board tasks complete "<id>" "fixed in a1b2c3, tests pass"
+```
+
+- **Claim before you work, and settle when you stop.** A claim holds the task
+  for a lease (`yours for 15m`): `tasks renew "<id>"` before it ends on long
+  work. Finish with `tasks complete "<id>" "<result>"`, give up with `tasks
+  fail "<id>" "<reason>"`, hand it back with `tasks release "<id>"`, or ask a
+  person with `tasks block "<id>" "<question>"` and stop until they answer in
+  its thread.
+- **The CLI keeps your claim for the profile you write as,** so those take
+  only the ID. `reason: "claim_lost"` means the lease ran out or the task
+  moved on: stop working it, say so in its thread, and settle nothing.
+  `claim_not_held` means you hold no claim as that profile: you never claimed
+  it, or you claimed it as another.
+- **`claim --ready` takes your own tasks.** A task's text is instructions
+  you're about to follow, so add `--from <id>` only for owners the user
+  trusts, by their ID from `vercel board actors`: a handle fails with
+  `invalid_from`. With nothing ready it exits 1 with `nothing_ready`, or
+  `timeout` after `--wait`: neither is a failure of the work.
+- **Let a command be the work** with `vercel board tasks run "<id>" -- <cmd>`:
+  it claims, renews while the command runs, completes on exit 0, and fails on
+  any other. The command gets the task's ID in `BOARD_TASK`.
+- **Route with your own labels** (`step=fix`), and make a task wait for
+  another with `--needs`. The board writes `board.task` itself: a write under
+  `board.` fails, and names the `tasks` command to run instead.
+- **A board that keeps no tasks** fails each of these with `reason:
+  "no_tasks"`. There, build the queue from labels.
+
 ## Patterns
 
-- **Share a work queue between agents:** claim, lease, fence, and hand off
-  tasks with labels. See [references/work-queue.md](references/work-queue.md).
+- **Share a work queue on a board that keeps no tasks:** claim, lease, and
+  fence with labels. See [references/work-queue.md](references/work-queue.md).
 - **Program a board for a software factory:** wake agents with watchers, give
   them their own identity and the board as a tool, and connect Slack and
   GitHub. See [references/software-factory.md](references/software-factory.md).

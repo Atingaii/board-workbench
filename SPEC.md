@@ -3421,11 +3421,12 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 
 Built on `local()`: the `task.*` events and their fold, the `/tasks` routes,
 the handle's `tasks`, the reserved `board.` labels (on every backend, since
-`board()` refuses them), and the `tasks` conformance group. Next: `vb tasks`
-and its claims directory, the task line in `vb read`, the CLI's
-`reserved_label` hint, the inspector, sync re-rendering a copy when its task
-changes, and `vercel()`, which answers 501 `no_tasks` until it maps the routes
-onto Vercel's API. Until `vb tasks` ships, the board skill's
+`board()` refuses them), the `tasks` conformance group, and the CLI: `vb tasks`
+and its claims directory, the task line in `vb read`, task events in `vb
+tail`, and the `tasks` command a `reserved_label` failure names. Next: the
+inspector, sync re-rendering a copy when its task changes, and `vercel()`,
+which answers 501 `no_tasks` until it maps the routes onto Vercel's API. On a
+board that keeps no tasks, the board skill's
 [work-queue reference](skills/board/references/work-queue.md) builds a queue
 from labels, and its queues keep working beside tasks.
 
@@ -3451,7 +3452,7 @@ $ vb reply 812 "patched, running the tests"
 $ vb tasks complete 812 "fixed in a1b2c3, tests pass"
 completed 812
 
-$ vb tasks work/
+$ vb tasks work/ --state all
 #812  completed  fix CVE-123 in acme/web         fixed in a1b2c3, tests pass
 #813  ready      review the fix for CVE-123      step=review
 ```
@@ -3586,6 +3587,15 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   `fail`, and `block` as that profile need nothing more, and a run as another
   profile gets `claim_not_held`, with `vb tasks claim <id>` as its way
   out. In code, `claim()` answers a claim with those methods, or `null`.
+- **A claim's file is its user's alone.** The directory follows
+  `XDG_CONFIG_HOME`, as the CLI's tokens do. Each claim is one file, mode 0600
+  in a 0700 directory, written whole or not at all, and named by a hash of its
+  board, task, and profile, so a name says nothing and never holds a token.
+  The token prints nowhere, `--json` included. The profile is the one the run
+  writes as, `--as`'s or `BOARD_PROFILE`'s, lowercase as in its actor's ID, or
+  none as yourself. The file goes when the claim ends, when the board answers
+  `claim_lost`, and a day after a lease that nothing settled ran out. `vb()`
+  keeps a handle's claims in memory instead, by task and `--as`.
 - **The board fences what a claim does.** Each claim raises the task's
   `epoch`. A write with an older epoch or the wrong token, or after its claim
   ended (released, blocked, or canceled), is 409 `claim_lost` and changes
@@ -3593,9 +3603,13 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   agent has since taken over.
 - **`vb tasks run <id> -- <cmd>`** (or `run --ready …`) claims, renews while
   the command runs, completes on exit 0 (with `--result "<text>"`), fails on
-  any other exit (`exited <code>`), releases on Ctrl-C, and exits with the
-  command's code. The command gets `BOARD_TASK=<id>`, so `vb reply
-  "$BOARD_TASK" "…"` works inside it.
+  any other exit (`exited <code>`, or `killed by <signal>`), releases on
+  Ctrl-C, and exits with the command's code. The command gets
+  `BOARD_TASK=<id>`, so `vb reply "$BOARD_TASK" "…"` works inside it. It
+  renews at a third of the lease the board gave. A renewal that answers
+  `claim_lost` stops the command, and `run` exits 1 saying so. A command that
+  can't start releases the task. `vb()` doesn't have `run`: it runs a command
+  on the CLI's machine.
 - **`vb tasks create … --claim`** creates a task and claims it in one write,
   for a single step an agent is about to do.
 
@@ -3642,8 +3656,8 @@ synced, is where they already are.
 
 ```text
 vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
-vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--idempotency-key <key>]
-vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <owner>]... [--wait <duration>]) [--lease <duration>]
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--no-sync] [--idempotency-key <key>]
+vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
 vb tasks renew <id> [--lease <duration>]
 vb tasks release <id>
@@ -3659,13 +3673,27 @@ vb tasks cancel <id> "<reason>"
 - **`vb tasks` lists open tasks** (`waiting`, `ready`, `claimed`, `blocked`)
   oldest first, the order a queue works them in: one line each, its ID, state,
   first line, and labels, and `needs #810` while it waits. `--state all`
-  includes finished ones.
-- **Writes say what happened, in a line:** `completed 812`, `claimed 812`.
-  `--json` is `{ tasks, cursor }` for a list, `{ task, claim }` for a claim,
-  and `{ task, outcome }` for the rest. A list with more prints where to pick
-  up, and `--after <cursor>` reads the next page, as `vb read` does.
+  includes finished ones, which say how they ended where an open one has its
+  labels, as a blocked one says what it's held for.
+- **A word after `tasks` that's one of its commands is that command.** A
+  channel named like one (`run`) lists as a prefix: `vb tasks run/`.
+- **A claim prints the task and how long it's yours:** `#812  yours for 15m
+  fix CVE-123 in acme/web`, for `claim`, `renew`, and `create --claim`.
+  **Other writes say what happened, in a line:** `completed 812`, `blocked
+  813`, `unassigned 815`. An `unblock` or a `reopen` that changed nothing says
+  `813 wasn't blocked`.
+- **`--json`** is `{ tasks, cursor }` for a list, `{ task, claim }` for a
+  claim, its `claim` being `{ epoch, until }` without the token, and `{ task,
+  outcome }` for the rest, `outcome` being what the line says, or `unchanged`.
+  A list with more prints where to pick up, and `--after <cursor>` reads the
+  next page, as `vb read` does.
 - **`vb read` shows a task's state under its root:** `task  claimed by claude
-  via ada · 12m left · needs #810`.
+  via ada · 12m left · needs #810`. **`vb tail` prints what happens to one:**
+  `#812  work  task claimed by claude via ada`.
+- **A failure names the way on.** The board's task codes each get a headline
+  and the command to run next: `task_claimed` reads the task, `claim_lost`
+  claims it again, and a `reserved_label` on `board.task` names the `tasks`
+  command for the state it asked for.
 
 ### The task view
 
@@ -3881,6 +3909,14 @@ makes and writes every root it posts.
 - A review that sends work back: the work-queue reference's `review` state
   does that today. Here a review is a task that `--needs` the fix, and a completed
   task can't be reopened.
+- Runs as one profile share its claims in a config home, whatever credential
+  each uses: two agents that name the same profile, or none, settle each
+  other's claims there. The board still fences every write by its token.
+- `vb tasks run` signals only the command it started, and once (`SIGTERM`
+  when the claim is lost): a command that ignores it, or its own children,
+  keep running.
+- The task list doesn't name each task's channel, where `vb read` does for a
+  subtree and for the whole board.
 
 ## Non-goals for v1
 
