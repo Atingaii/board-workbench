@@ -4,6 +4,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
 import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
+import { parseProfileHeader } from '../src/contract/profile-header.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -130,9 +131,12 @@ const samePrincipal = (a: Principal, b: Principal) => principalId(a) === princip
 
 /**
  * Who a request is: its bearer names a principal, is a credential `tokens` maps to one, or is the
- * secret of a board token `minted`, which acts as whoever minted its line.
+ * secret of a board token `minted`, which acts as whoever minted its line. Its profile is what
+ * `x-board-profile` names, with `x-board-avatar` and `x-board-session` beside it, as Vercel's API reads
+ * them today; `protocol` reads them as board's protocol has it: the profile and its avatar in one
+ * structured `x-board-profile`, and the other two refused.
  */
-function actorOf(request: Request, tokens: Record<string, string> = {}, minted: Minted | null = null): Actor {
+function actorOf(request: Request, tokens: Record<string, string> = {}, minted: Minted | null = null, protocol = false): Actor {
   const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
   const token = tokens[bearer] ?? bearer
   const [type, id, environment] = token.split(':')
@@ -146,9 +150,24 @@ function actorOf(request: Request, tokens: Record<string, string> = {}, minted: 
           ? { type, projectId: id, environment }
           : null
   if (!principal) throw new Refused(401, 'invalid_token', 'This token is invalid, expired, or revoked.')
-  const name = request.headers.get('x-board-profile') ?? minted?.profile ?? undefined
-  const avatar = request.headers.get('x-board-avatar') ?? undefined
-  const session = request.headers.get('x-board-session') ?? undefined
+  let { name, avatar, session } = {
+    name: request.headers.get('x-board-profile') ?? minted?.profile ?? undefined,
+    avatar: request.headers.get('x-board-avatar') ?? undefined,
+    session: request.headers.get('x-board-session') ?? undefined,
+  }
+  if (protocol) {
+    if (avatar !== undefined) throw new Refused(400, 'invalid_profile', 'x-board-avatar is the avatar parameter of x-board-profile now.')
+    if (session !== undefined) throw new Refused(400, 'invalid_request', 'x-board-session is gone.')
+    const header = request.headers.get('x-board-profile')
+    if (header !== null) {
+      try {
+        const parsed = parseProfileHeader(header)
+        ;({ name, avatar } = { name: parsed.name, avatar: parsed.avatar ?? undefined })
+      } catch (error) {
+        throw new Refused(400, 'invalid_profile', (error as Error).message)
+      }
+    }
+  }
   const base = principalId(principal)
   return {
     id: name ? `${base}+${name.toLowerCase()}` : base,
@@ -296,7 +315,7 @@ function viewOf(names: Pick<Shared, 'accounts' | 'directory' | 'projectIdHandles
   const project = p.type === 'project' && !names.projectIdHandles ? names.directory.projects[p.projectId] : undefined
   const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : (project ?? `project:${p.projectId}:${p.environment}`)
   if (actor.profile?.platform) return { id: actor.id, kind: 'external', handle: actor.profile.platform.userId, platform: actor.profile.platform.platform }
-  if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
+  if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name, ...(actor.profile.avatar ? { avatar: actor.profile.avatar } : {}) }
   if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
   return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
 }
@@ -1466,6 +1485,13 @@ export function fakeMessageboard(
     /** A deployment's handle is `project:prj_pong:production`, as Vercel's API named one before it named it by its project (`pong`). */
     projectIdHandles?: boolean
     /**
+     * Who writes is read as board's protocol has it, as Vercel's API will once it conforms: the profile and its avatar
+     * in one structured `x-board-profile` (`fixer;avatar="https://…"`), and `x-board-avatar` and `x-board-session`
+     * refused with 400. Without it, as the API reads them today: the name alone in `x-board-profile`, the avatar in
+     * `x-board-avatar`, and a session it keeps on the actor.
+     */
+    protocolProfile?: boolean
+    /**
      * Sync's records aren't kept apart, as board can't take for granted of an API it doesn't run: a thread's binding goes
      * to every registrant that syncs its key, another project's included, and `syncThread` lists every target of a thread.
      */
@@ -1525,7 +1551,7 @@ export function fakeMessageboard(
     if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
     if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
     const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-    const actor = actorOf(request, options.tokens, tokens.authenticate(bearer))
+    const actor = actorOf(request, options.tokens, tokens.authenticate(bearer), options.protocolProfile ?? false)
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method
     requests.push(`${method} ${path}`)

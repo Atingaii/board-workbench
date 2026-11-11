@@ -405,10 +405,18 @@ The backend picks them; the protocol only says their shape:
   registration is skipped too. `vb conformance` runs it as the CLI's identity,
   with `withToken` for a token it mints (the same board, that secret as the
   credential), so the tokens check sees a token narrowed to its `can` and
-  refused once revoked, and with `withCan` for its own credential narrowed with
-  `x-board-can` (as a proxy holding it sends it), so the narrowing checks see
-  that caller refused outside its `can`, and on its principal's watchers and
-  sync's records, and exits 1 when a check fails. board's own tests run
+  refused once revoked, and with `withHeaders` for its own credential with
+  headers of the run's (as a client or a proxy holding it sends them): an
+  `x-board-can`, so the narrowing checks see that caller refused outside its
+  `can`, and on its principal's watchers and sync's records (`withCan`, which
+  code may still pass, is `withHeaders` with that one header), and who writes:
+  a profile with its avatar in one `x-board-profile`, which the author view must
+  show, and `x-board-avatar` and `x-board-session`, which must be refused with
+  400. A `core` check also reads that no `by` on a message or an event, and no
+  `/me`, carries a `session`. It exits 1 when a check fails. Vercel's API fails
+  the three checks that send headers until it reads who writes as the protocol
+  has it (`fakeMessageboard({ protocolProfile: true })` in board's tests is it
+  once it does). board's own tests run
   it against boards on its internal engine, one of them keeping no schedules or
   files (which reports those two as not kept here), and against boards broken
   on purpose, so the kit and the backends can't drift apart unnoticed.

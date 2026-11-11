@@ -811,14 +811,14 @@ function profileFlag(): ProfileOption | undefined {
  * Vercel's API for `--scope` or `--team`; the one the environment points at; or the team's board
  * of the Vercel project it runs in, or, for an app with a team board, your login's.
  */
-function connection(url: string | undefined = flags.url, options: { token?: string; can?: string } = {}) {
+function connection(url: string | undefined = flags.url, options: { token?: string; can?: string; headers?: Record<string, string> } = {}) {
   const profile = profileFlag()
   const team = flags.scope ?? flags.team
   const name = boardNameFlag(url, team)
   // A name names a team's board as --scope does, so it goes before BOARD_URL too.
   const configured = url ?? (team === undefined && name === undefined ? configuredUrl() : null)
   if (configured === null) {
-    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token, options.can) }), ...(name !== undefined ? { name, ensure: flags.ensure === true } : {}) })
+    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token, options.can, options.headers) }), ...(name !== undefined ? { name, ensure: flags.ensure === true } : {}) })
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
@@ -826,10 +826,11 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   // A team's board in Vercel's API (what `whoami` prints for one) is reached through the API, as `--scope` is.
   const onVercel = vercelBoard(at)
   if (onVercel) {
-    const board = boardAt({ backend: vercel({ ...onVercel, ...sending(options.token, options.can) }) })
+    const board = boardAt({ backend: vercel({ ...onVercel, ...sending(options.token, options.can, options.headers) }) })
     return { url: at as string | null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
-  const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(options.can !== undefined ? { fetch: narrowing(options.can) } : {}) })
+  const extra = { ...options.headers, ...(options.can !== undefined ? { 'x-board-can': options.can } : {}) }
+  const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(Object.keys(extra).length > 0 ? { fetch: withHeaders(extra) } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
 }
@@ -866,26 +867,27 @@ function boardNameFlag(url: string | undefined, team: string | undefined): strin
   return given
 }
 
-/** For Vercel's API, `token` in place of your own credentials (a board token's secret), and `can` narrowing them. */
-function sending(token: string | undefined, can?: string): { fetch?: typeof fetch } {
-  if (token === undefined && can === undefined) return {}
+/** For Vercel's API, `token` in place of your own credentials (a board token's secret), `can` narrowing them, and `headers` beside them. */
+function sending(token: string | undefined, can?: string, extra: Record<string, string> = {}): { fetch?: typeof fetch } {
+  if (token === undefined && can === undefined && Object.keys(extra).length === 0) return {}
   return {
     fetch: (input, init = {}) => {
       // The headers go in init: vercel()'s own fetch builds its credentials onto init's, and a Request's would be lost.
       const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
       if (token !== undefined) headers.set('authorization', `Bearer ${token}`)
       if (can !== undefined) headers.set('x-board-can', can)
+      for (const [name, value] of Object.entries(extra)) headers.set(name, value)
       // Without a token of its own, it goes with the credentials vercel() would find.
       return (token === undefined ? credentialed() : globalThis.fetch)(input, { ...init, headers })
     },
   }
 }
 
-/** A fetch that narrows what a board on HTTP lets its credentials do to `can`, as a proxy holding them would. */
-function narrowing(can: string): typeof fetch {
+/** A fetch that adds `headers` to each request to a board on HTTP, as a proxy holding its credentials would: `x-board-can`, say. */
+function withHeaders(headers: Record<string, string>): typeof fetch {
   return (input, init) => {
     const request = new Request(input, init)
-    request.headers.set('x-board-can', can)
+    for (const [name, value] of Object.entries(headers)) request.headers.set(name, value)
     return globalThis.fetch(request)
   }
 }
@@ -1005,9 +1007,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       // A board token is its board's, so a team's board in Vercel's API is reached by its URL, which names it by ID.
       const tokenUrl = io.board ? undefined : connection().url === null ? (await client().discovery()).url : flags.url
       const withToken = io.board ? {} : { withToken: (secret: string) => connection(tokenUrl, { token: secret }).board }
-      // And with this run's own credential, narrowed with x-board-can, as a proxy holding it sends it.
-      const withCan = io.board ? {} : { withCan: (can: string) => connection(undefined, { can }).board }
-      const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken, ...withCan })
+      // And with this run's own credential and headers of the run's (x-board-can, a profile), as a proxy holding it sends them.
+      const withHeaders = io.board ? {} : { withHeaders: (headers: Record<string, string>) => connection(undefined, { headers }).board }
+      const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken, ...withHeaders })
       if (flags.json) result(report)
       else out(formatConformance(report))
       return report.ok ? 0 : 1

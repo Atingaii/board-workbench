@@ -39,6 +39,32 @@ const narrowedOn =
       }),
     })
 
+/** The same handle, with `headers` on every request, as `vb conformance` sends them to Vercel's API. */
+const withHeadersOn =
+  (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
+  (headers: Record<string, string>) =>
+    board({
+      backend: vercel({
+        team: 'team_test',
+        api: API,
+        // In init, where as() reads them: a Request's own headers it would drop.
+        fetch: (input, init = {}) => {
+          const sent = new Headers(init.headers)
+          for (const [name, value] of Object.entries(headers)) sent.set(name, value)
+          return as(api, principal)(input, { ...init, headers: sent })
+        },
+        files: api.files,
+      }),
+    })
+
+/** The checks of who writes: what a run with headers of its own checks. */
+const IDENTITY = [
+  'core: takes a profile and its avatar as one x-board-profile header, and shows both on what it writes',
+  "core: refuses x-board-avatar, which x-board-profile's avatar parameter replaced",
+  'core: refuses x-board-session: who writes is the principal and its profile',
+  'core: shows no session on a message, its event, or you',
+]
+
 /** Someone a host's verifier would name: a request from her is still no one's this board serves. */
 const ADA = { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } as const
 
@@ -67,7 +93,7 @@ describe('vercel()', () => {
     // The API looks names up, so the grants checks name a project, a repository, a viewer, and an app its team has.
     // A board token is its board's, so the handle it's sent on names the board.
     const withToken = (secret: string) => board({ backend: vercel({ team: 'team_test', api: API, board: 'brd_test', fetch: as(api, secret), files: api.files }) })
-    const report = await conformance(handleOn(api), { withToken, withCan: narrowedOn(api), principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com', app: 'ship' } })
+    const report = await conformance(handleOn(api), { withToken, withHeaders: withHeadersOn(api), principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com', app: 'ship' } })
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
       'core: says in its discovery where it is': 'passed',
@@ -89,6 +115,12 @@ describe('vercel()', () => {
       'core: lists the channel and you in it': 'passed',
       // Vercel's API doesn't read x-board-can yet: a narrowed caller gets its whole access.
       'core: narrows a caller to what its x-board-can says': 'failed',
+      // It reads x-board-profile as a name alone, and takes x-board-avatar and x-board-session.
+      [IDENTITY[0]!]: 'failed',
+      [IDENTITY[1]!]: 'failed',
+      [IDENTITY[2]!]: 'failed',
+      // It keeps a session on actors, which vercel() maps no view of.
+      [IDENTITY[3]!]: 'passed',
       // Neither registers for a person, narrowed or not.
       "watchers: refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking": 'skipped',
       "sync: refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox": 'skipped',
@@ -127,6 +159,21 @@ describe('vercel()', () => {
     })
     // It leaves the grants as it found them.
     expect([...api.grants.keys()]).toEqual(['g1', 'g2', 'g3'])
+  }, 30_000)
+
+  it("passes the conformance kit's checks of who writes against an API that reads them as board's protocol has it, and says how today's fails", async () => {
+    const statuses = (report: Awaited<ReturnType<typeof conformance>>) =>
+      report.checks.filter((check) => IDENTITY.includes(`${check.group}: ${check.name}`)).map((check) => [check.status, check.detail ?? null])
+    const conforming = fakeMessageboard({ protocolProfile: true })
+    expect(statuses(await conformance(handleOn(conforming), { withHeaders: withHeadersOn(conforming) }))).toEqual(IDENTITY.map(() => ['passed', null]))
+    const today = fakeMessageboard()
+    expect(statuses(await conformance(handleOn(today), { withHeaders: withHeadersOn(today) }))).toEqual([
+      // It takes the whole header as the profile's name.
+      ['failed', expect.stringMatching(/^the profile its header names: expected "conformance-[0-9a-f]{8}", got "conformance-[0-9a-f]{8}; avatar=\\"https:\/\/example\.com\/conformance\.png\\""$/)],
+      ['failed', 'a post with x-board-avatar: expected 400, and it succeeded'],
+      ['failed', 'a post with x-board-session: expected 400, and it succeeded'],
+      ['passed', null],
+    ])
   }, 30_000)
 
   it('answers only wake-ups and webhooks: it verifies no request, and none reaches the API, while its own code writes as the project', async () => {
@@ -2285,8 +2332,11 @@ describe("board tokens on Vercel's API", () => {
       { status: 'skipped', detail: 'only a deployment registers watchers here' },
       { status: 'skipped', detail: "this run can't call the board with an x-board-can header" },
     ])
-    // Every core and tokens check passes, but the narrowed caller's, which this run can't send the header for.
-    expect(report.checks.filter((check) => check.group === 'core' || check.group === 'tokens').map((check) => [check.name, check.status]).filter(([, status]) => status !== 'passed')).toEqual([['narrows a caller to what its x-board-can says', 'skipped']])
+    // Every core and tokens check passes, but those that send headers of their own, which this run can't.
+    expect(report.checks.filter((check) => check.group === 'core' || check.group === 'tokens').map((check) => [check.name, check.status]).filter(([, status]) => status !== 'passed')).toEqual([
+      ['narrows a caller to what its x-board-can says', 'skipped'],
+      ...IDENTITY.slice(0, 3).map((name) => [name.slice('core: '.length), 'skipped']),
+    ])
   }, 30_000)
 
   it("says plainly that only a deployment's own credentials register watchers, to a person, an app, and a board token", async () => {

@@ -18,6 +18,8 @@ const { allow } = await board().as('fixer').sandboxPolicy()
 // await Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } } })
 ```
 
+The conformance kit checks who writes: a profile and its avatar in one `x-board-profile`, shown on what it writes, `x-board-avatar` and `x-board-session` refused with 400, and no `session` on a message, an event, or `/me`. It sends those headers through a new option, `withHeaders(headers)`, which `vb conformance` passes and which stands in for `withCan` when that's left out. Vercel's API fails the three that send headers until it reads them as the protocol has it.
+
 ### Migrating
 
 - A proxy or sandbox network policy that sets `x-board-avatar`: put the avatar in `x-board-profile` instead, `<name>;avatar="<url>"`.
