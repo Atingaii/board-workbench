@@ -265,6 +265,19 @@ function parse(argv: string[]) {
   } catch (error) {
     throw parseFailure(error as Error & { code?: string }, argv, word)
   }
+  // What was found is what runs. A command's own reading of an option can leave another word first
+  // (`--claim delete tasks`: a value until `tasks` is found, none after), and whoever screened the
+  // command, as vb() does for the ones it refuses, screened the one found.
+  if (canonical(positionals[0]) !== word) throw misplaced(args, word)
+}
+
+/** An option `word`'s command reads its own way, written before the command: it goes after it. */
+function misplaced(args: string[], word: string | undefined): Failed {
+  const at = args.indexOf(word ?? '')
+  const before = (at === -1 ? args : args.slice(0, at)).filter((arg) => arg.startsWith('-'))
+  const own = optionsFor(word)
+  const option = before.map((arg) => arg.replace(/=.*$/, '')).find((arg) => arg.startsWith('--') && own[arg.slice(2) as keyof typeof own] !== OPTIONS[arg.slice(2) as keyof typeof OPTIONS])
+  return usage(`Put ${option ?? 'its options'} after ${word}.`, { reason: 'misplaced_option' })
 }
 
 /** What the parser rejected, as misuse: an unknown option (with the likeliest one meant), or an option without its value. */

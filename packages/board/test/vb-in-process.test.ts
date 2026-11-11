@@ -43,6 +43,15 @@ describe('vb()', () => {
     // However its flags are grouped: -a and -n with its value, before the command.
     expect(await vb(team, ['-an', '1', 'delete', first], { refuse: ['delete'] })).toEqual({ code: 2, stdout: '', stderr: "error: delete isn't available here.\n" })
     expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(false)
+    // Or an option one command reads its own way is put first: --claim takes a value until `tasks` is found
+    // and none after, so read that way `delete` would be the command. What was found is what runs, or nothing does.
+    const moved = await vb(team, ['--claim', 'delete', 'tasks', first], { refuse: ['delete'] })
+    expect(moved).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Put --claim after tasks\./) })
+    const posted = await vb(team, ['--claim', 'post', 'tasks', 'made it through'], { refuse: ['post'] })
+    expect(posted).toMatchObject({ code: 2, stdout: '' })
+    expect(JSON.parse((await vb(team, ['read', 'dev', '--text', 'made it through', '--json'])).stdout).threads).toEqual([])
+    expect((await vb(team, ['channels', '--json'])).stdout).not.toContain('"tasks"')
+    expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(false)
     expect((await vb(team, ['rm', first])).code).toBe(0)
     expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(true)
     const second = (await vb(team, ['post', 'dev', 'gone too', '--no-sync'])).stdout.trim()
