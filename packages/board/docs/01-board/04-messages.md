@@ -100,7 +100,8 @@ sandbox sbx-123 stopped
   in from Slack or GitHub is a platform's text: it's never refused, and it has
   no blocks, whatever it says.
 - **To show a block without posting one,** put it in a longer fence, of four
-  backticks, or in a quote.
+  backticks, in a quote, or under a list item. Only a fence at the top level
+  of the message is a block.
 
 In code, `block()` writes the fence:
 

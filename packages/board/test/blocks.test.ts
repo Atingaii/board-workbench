@@ -1,3 +1,5 @@
+import remarkParse from 'remark-parse'
+import { unified } from 'unified'
 import { describe, expect, it } from 'vitest'
 import { block, findBlocks } from '../src/contract/blocks.ts'
 
@@ -48,6 +50,55 @@ describe('blocks in a message’s text', () => {
     expect(found(`inline \`${F}json#sandbox@1\` isn't a fence`)).toEqual([])
     // Up to three spaces is still a fence.
     expect(found(fence.map((line) => `   ${line}`).join('\n'))).toEqual([{ id: 'sandbox@1', data: { id: 'sbx-9' } }])
+  })
+
+  it("ends a quote's or a list item's fence with it, so none hides a block after it", () => {
+    const real = [`${F}json#sandbox@1`, '{"id":"sbx-9"}', F]
+    const one = [{ id: 'sandbox@1', data: { id: 'sbx-9' } }]
+    // A fence that starts a list item and closes inside it.
+    expect(found(lines(`- ${F}json`, '  {"id":"shown"}', `  ${F}`, ...real))).toEqual(one)
+    // One left open in an item ends where the item does, and one left open in a quote, with the quote.
+    expect(found(lines(`- ${F}json`, '  {"id":"shown"}', ...real))).toEqual(one)
+    expect(found(lines(`> ${F}`, '> quoted', '', ...real))).toEqual(one)
+    expect(found(lines(`1. ${F}json#sandbox@1`, '   {"id":"shown"}', `   ${F}`, '', ...real))).toEqual(one)
+  })
+
+  it('reads none from under a list item, until the list ends', () => {
+    const under = [`  ${F}json#sandbox@1`, '  {"id":"sbx-9"}', `  ${F}`]
+    expect(found(lines('- the event:', '', ...under))).toEqual([])
+    // Text right under an item's text is still the item's, and so is the fence after it.
+    expect(found(lines('- the event', 'is this one', ...under))).toEqual([])
+    // Once something else starts, a fence is the message's own again.
+    expect(found(lines('- an item', '', 'and then', '', `${F}json#sandbox@1`, '{"id":"sbx-9"}', F))).toEqual([{ id: 'sandbox@1', data: { id: 'sbx-9' } }])
+    expect(found(lines('- an item', `${F}json#sandbox@1`, '{"id":"sbx-9"}', F))).toEqual([{ id: 'sandbox@1', data: { id: 'sbx-9' } }])
+  })
+
+  it('finds the fences a markdown reader calls the message’s own, in messages made of every kind of line', () => {
+    // CommonMark, as the inspector's renderer reads it: the code blocks at the top level of the document.
+    const parser = unified().use(remarkParse)
+    const flat = (value: string) => value.split('\n').map((line) => line.trimStart()).join('\n').trimEnd()
+    const reference = (text: string) =>
+      parser.parse(text).children.flatMap((node) => (node.type === 'code' && /^json#/.test(node.lang ?? '') ? [`${node.lang}|${flat(node.value)}`] : []))
+    const ours = (text: string) => findBlocks(text).map((block) => `json#${block.id}|${flat(block.source)}`)
+    const LINES = [
+      '', '', 'some text', 'more text', '{ "id": 1 }', '{}',
+      F, F, `${F}json`, `${F}json#a@1`, `${F}json#a@1`, `${F}json#b@2`, `${F}${F}`, `${F}${F}markdown`, '~~~', '~~~json#a@1',
+      ` ${F}`, `  ${F}`, `   ${F}json#a@1`, `    ${F}json#a@1`, `    ${F}`,
+      '> quoted', `> ${F}`, `> ${F}json#a@1`, '> {}', `>${F}`,
+      '- item', `- ${F}json`, `- ${F}json#a@1`, `  ${F}`, `  ${F}json#a@1`, '  {}', '  text in item', `1. ${F}`, `   ${F}`, '* item',
+    ]
+    // The same messages every run.
+    let seed = 7
+    const next = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32
+    let withBlocks = 0
+    for (let round = 0; round < 4000; round++) {
+      const text = Array.from({ length: 2 + Math.floor(next() * 10) }, () => LINES[Math.floor(next() * LINES.length)]).join('\n')
+      const want = reference(text)
+      if (want.length > 0) withBlocks++
+      expect(ours(text), text).toEqual(want)
+    }
+    // Enough of them carry one for the comparison to mean something.
+    expect(withBlocks).toBeGreaterThan(1000)
   })
 
   it('closes a fence only with one as long, of its own, with nothing after', () => {

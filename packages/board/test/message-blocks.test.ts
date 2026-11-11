@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { oidcTokens } from '../src/access/index.ts'
 import { block } from '../src/contract/blocks.ts'
-import type { Middleware } from '../src/server/index.ts'
-import { caller, deploymentToken, personToken, testBoard } from './harness.ts'
+import { a2 } from '../src/server/a2.ts'
+import { memoryBlob } from '../src/server/blob.ts'
+import { HttpError } from '../src/server/errors.ts'
+import type { Backend, Middleware } from '../src/server/index.ts'
+import { memory } from '../src/store/memory.ts'
+import { board as boardOn, BOARD_URL, caller, deploymentToken, personToken, testAuth, testBoard, testLocal } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
 const SANDBOX = {
@@ -145,6 +150,71 @@ describe('blocks in messages', () => {
     expect((await deployment('POST', '/messages', { channel: 'deploys', text: block('sandbox@1', started) })).status).toBe(201)
     expect((await deployment('POST', '/messages', { channel: 'deploys', text: block('sandbox@1', { id: 'sbx-9', action: 'boot' }) })).status).toBe(400)
     expect(await texts()).toEqual([block('sandbox@1', started)])
+  })
+
+  it('reads a schema as the board itself: a write is checked the same whoever may read schemas, and whoever wrote first', async () => {
+    // A board whose backend lets no request's caller read a schema, as Vercel's API refuses some.
+    const inner = a2({ store: memory(), blob: memoryBlob() })
+    const backend: Backend = {
+      ...inner,
+      schema: async (who, input, signal) => {
+        if ('identity' in who) throw new HttpError(403, 'forbidden', "this token can't read schemas")
+        return inner.schema(who, input, signal)
+      },
+    }
+    const team = boardOn({ backend, url: BOARD_URL, authenticate: oidcTokens({ ...testAuth, local: testLocal }) })
+    await team.createSchema({ name: 'sandbox', version: 1, schema: SANDBOX })
+    const julian = caller(team.fetch, await personToken())
+    expect((await julian('GET', '/schemas/sandbox@1')).status).toBe(403)
+    // Nothing has read the schema yet, and Julian can't: his block is checked all the same.
+    expect(await julian('POST', '/messages', { channel: 'deploys', text: block('sandbox@1', { id: 'sbx-9', action: 'boot' }) })).toMatchObject({ status: 400, body: { error: { code: 'invalid_block' } } })
+    expect((await julian('POST', '/messages', { channel: 'deploys', text: block('sandbox@1', started) })).body.message.blocks).toEqual([{ schema: 'sandbox', version: 1, data: started }])
+  })
+
+  it('answers a caller who may not post there as it would for any text, whatever its blocks say', async () => {
+    const { board, julian } = await setUp()
+    const reader = caller(board.fetch, (await julian('POST', '/tokens', { name: 'reader', can: { deploys: ['read'] } })).body.secret)
+    const { message } = (await julian('POST', '/messages', { channel: 'deploys', text: 'a thread' })).body
+    const bad = block('sandbox@1', { id: 'sbx-9', action: 'boot' })
+    const plain = [
+      await reader('POST', '/messages', { channel: 'deploys', text: 'plain text' }),
+      await reader('POST', '/messages', { re: message.id, text: 'plain text' }),
+      await reader('POST', `/messages/${message.id}/edit`, { text: 'plain text' }),
+      await reader('POST', '/schedules', { channel: 'deploys', text: 'plain text', in: '1h' }),
+    ]
+    const withBlock = [
+      await reader('POST', '/messages', { channel: 'deploys', text: bad }),
+      await reader('POST', '/messages', { re: message.id, text: bad }),
+      await reader('POST', `/messages/${message.id}/edit`, { text: bad }),
+      await reader('POST', '/schedules', { channel: 'deploys', text: bad, in: '1h' }),
+    ]
+    expect(plain.map((answer) => answer.status)).toEqual([403, 403, 403, 403])
+    expect(withBlock.map((answer) => [answer.status, answer.body.error.code])).toEqual(plain.map((answer) => [answer.status, answer.body.error.code]))
+    // Where it may post, its block is checked.
+    const poster = caller(board.fetch, (await julian('POST', '/tokens', { name: 'poster', can: { deploys: ['post'] } })).body.secret)
+    expect((await poster('POST', '/messages', { channel: 'deploys', text: bad })).status).toBe(400)
+  })
+
+  it('checks what a sync writes on the board itself as any write, before the middleware and after', async () => {
+    const breaks: Middleware = async ({ write, next }) => next({ text: write.text.replace('"started"', '"rewritten"') })
+    for (const middleware of [[], [breaks]]) {
+      const { board, read, texts } = await setUp({ middleware })
+      const sync = caller(board.fetch, await deploymentToken('sync', 'prj_sync'))
+      expect((await sync('POST', '/watchers', { watch: {}, sync: [{ key: 'reviews', platform: 'github' }] })).status).toBe(200)
+      const author = { id: 'reviews:user:9', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
+      // `from: null`: written on the board, as that platform user, by a sync that calls the board itself.
+      const write = (text: string) => sync('POST', '/sync/imports', { op: 'post', author, from: null, channel: 'deploys', text })
+      const bad = block('sandbox@1', { id: 'sbx-9', action: 'boot' })
+      expect(await write(bad)).toMatchObject({ status: 400, body: { error: { code: 'invalid_block' } } })
+      const good = await write(block('sandbox@1', { id: 'sbx-9', action: 'stopped' }))
+      expect(good.status).toBe(200)
+      expect((await read(good.body.message)).blocks).toEqual([{ schema: 'sandbox', version: 1, data: { id: 'sbx-9', action: 'stopped' } }])
+      expect(await sync('POST', '/sync/imports', { op: 'edit', author, from: null, message: good.body.message, text: bad })).toMatchObject({ status: 400, body: { error: { code: 'invalid_block' } } })
+      // What the middleware made of a block that matched is what's written, so it's what's checked.
+      const rewritten = await write(block('sandbox@1', started))
+      expect(rewritten.status).toBe(middleware.length ? 400 : 200)
+      expect((await texts()).filter((text) => text.includes('rewritten') || text.includes('boot'))).toEqual([])
+    }
   })
 
   it("posts a block from the board's own code, built with block()", async () => {

@@ -465,8 +465,10 @@ block against the schema it names. One that isn't a JSON object, or doesn't
 match, is 400 `invalid_block`, and one that names a schema the board doesn't
 have is 400 `schema_not_found`: nothing is written. Every message a read
 answers has `blocks`, each `{ schema, version, data }`, in order. A message a
-sync imported has none: a platform's text is never checked or refused. A fence
-inside a longer fence, or in a quote, is text.
+sync imported has none: a platform's text is never checked or refused. What a
+sync writes on the board itself, an import with `from: null`, is checked as
+any write. A fence inside a longer fence, in a quote, or under a list item is
+text.
 
 Anyone the board lets in reads the schemas, whatever channels they read.
 Registering needs `manage` at `*`. On Vercel's board, schemas are the team's:

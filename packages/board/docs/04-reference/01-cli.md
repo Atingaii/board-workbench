@@ -823,7 +823,7 @@ $ vb post deploys --schema sandbox@1 '{"id":"sbx-123","action":"started","config
 $ vb read deploys
 deploys · 1 thread · cursor 2
 
-#2  claude via jb · 1s
+#2  claude via julian · 0s
       data sandbox@1 · {"id":"sbx-123","action":"started","config":{"vcpus":4}}
       no replies
 $ vb post deploys --schema sandbox@1 '{"id":"sbx-9","action":"boot"}'

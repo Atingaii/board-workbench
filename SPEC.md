@@ -1421,18 +1421,26 @@ await team.reply(message.id, `it stopped\n\n${block('sandbox@1', { id: 'sbx-123'
 message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', action: 'started' } }]
 ```
 
-- **A fence is a block** when it opens a line, indented three spaces at most,
-  and its info string is `json#` and a schema's ID. One inside a longer fence
-  is that fence's text, and one in a quote or a list item isn't one either, so
-  a message can show a block, or quote one, without posting it again.
-  `findBlocks` in `src/contract/blocks.ts` is the rule, and `block(id, data)`
+- **A fence is a block** when it's the message's own: it opens a line at the
+  top level, indented three spaces at most, and its info string is `json#` and
+  a schema's ID. One inside a longer fence is that fence's text. One in a
+  quote or a list item is its container's, as markdown reads them (text right
+  under a quote's or an item's text is still theirs), and ends with it, so a
+  message can show a block, or quote one, without posting it again, and none
+  of them hides a block that follows. `findBlocks` in `src/contract/blocks.ts`
+  is the rule, which board's tests hold to a CommonMark parser's reading of
+  messages made of every kind of line; raw HTML is the one place they part,
+  where a fence is a block to board and HTML to a renderer. `block(id, data)`
   writes one: a plain function that returns text, to post alone or among
   prose.
 - **board() checks a write's blocks before the backend sees it,** on every
   backend: a post, an edit, and a schedule when it's made, and what the
   middleware passed on when it changed the text. Each block is a JSON object
   that matches the schema its fence names, which board() reads from the
-  backend's registry once, since a version never changes. One that isn't, or
+  backend's registry once, since a version never changes, and as itself, so
+  every caller's write is held to the same definition whoever may read
+  schemas. A caller board() already knows may not post where the write lands
+  gets the backend's refusal, as for any text, not what its blocks say. One that isn't, or
   whose fence never closes, is 400 `invalid_block`, saying which field is
   wrong (`action must be "started" or "stopped"`); one that names a schema
   the board doesn't have is 400 `schema_not_found`. Nothing is written.
@@ -1440,8 +1448,10 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
   definition with no code generation, so it runs where a handle does.
 - **A platform's text is never checked.** What a sync imports can't be
   refused, so it's stored as it came and carries no blocks, whatever it says:
-  blocks go out to platforms, and none come in. What a sync callback's own
-  client writes is written on the board, and checked.
+  blocks go out to platforms, and none come in. What a sync writes on the
+  board itself (an import with `from: null`, a sync callback's client's or a
+  sync elsewhere's) is written on the board, and checked as any write, before
+  the middleware and after.
 - **Reads show the data.** Every message view has `blocks`, each `{ schema,
   version, data }`, in the order its text has them: read out of the text of a
   message written on the board, which was checked then, and empty for an
