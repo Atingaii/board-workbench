@@ -1796,7 +1796,9 @@ async function tasks(args: string[]): Promise<number> {
     // Nothing in a channel that doesn't exist is a typo, of a channel or of what to do.
     if (page.tasks.length === 0 && verb && flags.after === undefined) {
       const channels = (await board.channels()).map((c) => c.path)
-      if (!channels.some((path) => path === verb || path.startsWith(verb.replace(/\/?$/, '/')))) {
+      // `work/` is `work` and what's under it: the channel itself is enough for it to be there.
+      const name = verb.replace(/\/$/, '')
+      if (!channels.some((path) => path === name || path.startsWith(`${name}/`))) {
         const meant = closest(verb, TASK_VERBS)
         if (meant) throw usage(`Unknown command ${verb} for ${named()} tasks. Did you mean ${meant}?`, { reason: 'unknown_command' })
         const guess = closest(verb, channels)
