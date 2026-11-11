@@ -227,6 +227,24 @@ describe('grants', () => {
     expect((await owner('PATCH', '/grants/g99', { can: { '*': ['read'] } })).status).toBe(404)
   })
 
+  it("answers a caller that can't list grants the same for a grant it can't reach as for one that isn't there, since grant IDs count up", async () => {
+    const { owner, person, as } = await setUp()
+    const { body } = await owner('POST', '/grants', { principals: [user('u_alice')], can: { 'security/': 'all' } })
+    const minted = await person('POST', '/tokens', { name: 'dev', can: { '*': ['read', 'post'], 'dev/': 'all' } })
+    const dev = await as(minted.body.secret)
+    const probe = async () => [await dev('POST', `/grants/${body.grant.id}/revoke`, {}), await dev('PATCH', `/grants/${body.grant.id}`, { can: { 'dev/': ['read'] } })]
+    const there = await probe()
+    expect(there.map((answer) => [answer.status, answer.body.error.code])).toEqual([
+      [403, 'forbidden'],
+      [403, 'forbidden'],
+    ])
+    expect((await owner('POST', `/grants/${body.grant.id}/revoke`, {})).body).toEqual({ revoked: true })
+    expect(await probe()).toEqual(there)
+    // Whoever may list them is told it's gone.
+    expect((await owner('POST', `/grants/${body.grant.id}/revoke`, {})).body).toEqual({ revoked: false })
+    expect((await owner('PATCH', `/grants/${body.grant.id}`, { can: { 'dev/': ['read'] } })).body.error.code).toBe('grant_not_found')
+  })
+
   it('keeps both of two adds to one grant that land at once', async () => {
     const { person } = await setUp()
     const { body } = await person('POST', '/grants', { principals: [user('u_ada')], can: { 'dev/': ['read'] } })

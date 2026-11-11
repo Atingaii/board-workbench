@@ -190,7 +190,9 @@ more specific pattern decides first.
 - **Revoking a grant, or removing from one, is judged the same way,** since
   lifting what it held back widens whoever it named: `manage` at its patterns,
   and under each wherever your own limits narrow you. It lets no one new in,
-  so what `everyone` gets doesn't count.
+  so what `everyone` gets doesn't count. Unless you may list the grants,
+  revoking or changing one you can't reach answers the same 403 as one that
+  isn't there, so trying g1, g2, and on finds out nothing.
 - **Naming an `oidc` principal takes `manage` everywhere,** since the board
   then fetches its issuer's keys. Listing grants takes `manage` at `*`.
 - **Owners always may.** On Vercel's API, the team's owners. On a local board,
