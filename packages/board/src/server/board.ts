@@ -170,10 +170,17 @@ function bounded(response: Response, signal: AbortSignal): Response {
       else signal.addEventListener('abort', stop, { once: true })
     },
     async pull(controller) {
-      const { done, value } = await reader.read().catch(() => ({ done: true as const, value: undefined }))
+      let read: ReadableStreamReadResult<Uint8Array>
+      try {
+        read = await reader.read()
+      } catch (error) {
+        // The signal's own error is out already; any other is the body's, and the caller gets it.
+        if (!signal.aborted) controller.error(error)
+        return
+      }
       if (signal.aborted) return
-      if (done) controller.close()
-      else controller.enqueue(value)
+      if (read.done) controller.close()
+      else controller.enqueue(read.value)
     },
     cancel: (reason) => reader.cancel(reason),
   })

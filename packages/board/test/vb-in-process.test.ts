@@ -7,8 +7,8 @@ import { caller, personToken, testBoard, BOARD_URL } from './harness.ts'
 // vb() on a handle over HTTP to an in-process board: the CLI's commands, output, and exit codes,
 // with files from its options. The CLI itself runs through the same code (cli*.test.ts).
 // With `stall.on`, its board never answers, whatever the request's signal says, and `stall.seen` keeps those requests.
-// With `stall.bodies`, a file's download answers, and its bytes never come.
-type Stall = { on: boolean; seen: Request[]; bodies?: boolean }
+// With `stall.bodies`, a file's download answers, and its bytes never come; with `stall.breaks`, its connection drops after one byte.
+type Stall = { on: boolean; seen: Request[]; bodies?: boolean; breaks?: boolean }
 async function handle(stall: Stall = { on: false, seen: [] }) {
   const served = testBoard()
   const token = await personToken('u_ada', BOARD_URL)
@@ -17,8 +17,10 @@ async function handle(stall: Stall = { on: false, seen: [] }) {
     request.headers.set('authorization', `Bearer ${token}`)
     if (stall.on) return stall.seen.push(request), new Promise<never>(() => {})
     const response = await served.fetch(request)
-    if (stall.bodies && request.method === 'GET' && new URL(request.url).pathname.includes('/attachments/'))
-      return new Response(new ReadableStream({ start() {} }), { status: response.status, headers: response.headers })
+    const download = request.method === 'GET' && new URL(request.url).pathname.includes('/attachments/')
+    if (download && stall.bodies) return new Response(new ReadableStream({ start() {} }), { status: response.status, headers: response.headers })
+    if (download && stall.breaks)
+      return new Response(new ReadableStream({ start: (body) => (body.enqueue(new Uint8Array([1])), body.error(new Error('connection reset'))) }), { status: response.status, headers: response.headers })
     return response
   }) as typeof globalThis.fetch
   return board({ backend: http(BOARD_URL, { fetch }) }).as(null)
@@ -97,7 +99,7 @@ describe('vb()', () => {
   })
 
   it("ends any command's requests with its signal, and runs the next call", async () => {
-    const stall = { on: false, seen: [] as Request[] }
+    const stall: Stall = { on: false, seen: [] }
     const team = await handle(stall)
     const id = (await vb(team, ['post', 'dev', 'before the outage', '--no-sync'])).stdout.trim()
     stall.on = true
@@ -127,6 +129,10 @@ describe('vb()', () => {
     stall.bodies = true
     expect(await vb(team, ['download', attachment, '/work/copy.png'], { ...files, signal: AbortSignal.timeout(50) })).toMatchObject({ code: 1 })
     stall.bodies = false
+    // One whose connection drops fails, as it does without a signal: never a short file that looks whole.
+    stall.breaks = true
+    expect((await vb(team, ['download', attachment, '/work/copy.png'], { ...files, signal: AbortSignal.timeout(5000) })).code).toBe(1)
+    stall.breaks = false
     // A signal that never fires changes nothing.
     expect(await vb(team, ['read', 'dev', '--text', 'outage'], { signal: new AbortController().signal })).toMatchObject({ code: 0, stdout: expect.stringMatching(/^dev · 1 thread/) })
   })
