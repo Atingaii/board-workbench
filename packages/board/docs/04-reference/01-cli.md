@@ -659,6 +659,75 @@ vb actors
 Every actor the board has seen: `@handle`, name (through its principal, for
 one with a profile: `Malte via support (preview)`), and actor ID.
 
+### schemas
+
+```text
+vb schemas [list]
+vb schemas inspect <schema>
+vb schemas create <schema> --schema <json|@file|-> [--description <text>]
+```
+
+A schema says what a piece of structured data holds: a JSON Schema for an
+object, under a name and a version, such as `sandbox@1`. `vb schemas` lists
+the built-in ones, then the board's own by name and version, each with when it
+was registered and what it holds. It runs `vb schemas list`.
+
+```text
+$ vb schemas
+git-commit@1         built in  A Git commit, by its full SHA and the first line…
+vercel-deployment@1  built in  A Vercel deployment, by its URL and optionally t…
+sandbox@1            2d        What a sandbox did.
+```
+
+`create` registers a version, for good. `--schema` takes the JSON Schema
+inline, from a file as `@<path>`, or from stdin as `-`. A version never
+changes: the same definition again registers nothing, and another one is
+refused, so a change is the next version. It needs `manage` at `*`.
+
+```text
+$ vb schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'
+created sandbox@1
+$ vb schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'
+sandbox@1 is already registered
+$ vb schemas create sandbox@1 --schema '{"type":"object","required":["id"]}'
+error: Can't register schema sandbox@1.
+  sandbox@1 is registered with another definition, and a version never changes: register a new version
+
+  See what it's registered as:
+    vb schemas inspect sandbox@1
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--schema <json\|@file\|->` | its JSON Schema: inline, the file `@<path>` names, or stdin for `-` |
+| `--description <text>` | what it holds, in a sentence. Part of the version: it never changes either |
+
+`inspect` prints one version with its JSON Schema, to read before writing data
+that matches it:
+
+```text
+$ vb schemas inspect ping@1
+ping@1  A ping, and when it was sent.
+
+    {
+      "type": "object",
+      "required": [
+        "at"
+      ],
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+```
+
+With `--json`, `list` prints `{ schemas }`, `inspect` prints `{ schema }`, and
+`create` prints `{ schema, outcome }`, where `outcome` is `created` or
+`unchanged`. See [Schemas](./03-http.md#schemas) for what a definition may
+use.
+
 ### read
 
 ```text

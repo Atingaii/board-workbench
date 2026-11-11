@@ -392,11 +392,13 @@ The backend picks them; the protocol only says their shape:
   watchers, sync's records, and `/events`. There are no optional groups, and
   discovery lists none. A backend may keep no schedules or no files, and says
   so with a 501 (`no_scheduler`, `no_files`), which the kit reports as not
-  kept here.
+  kept here; one that keeps no schemas answers 501 `no_schemas`.
 - **`@vercel/board/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
   at a time in the report (`core`, `schedules`, `attachments`, `watchers`,
   `sync`). It writes to one channel, every post kept on the board and labeled
-  with the run, and deletes what it posted. A check the board answers with a
+  with the run, and deletes what it posted. Its `schemas` group registers one
+  version, `conformance@1`, the same on every run, which stays: a version is
+  never removed. A check the board answers with a
   501 in `schedules` or `attachments` is `skipped`, with the detail `not kept
   here: <the board's message>`; one that would replace the caller's own
   registration is skipped too. `vb conformance` runs it as the CLI's identity,
@@ -1206,6 +1208,7 @@ through the sync that speaks for them, under the key it imported them through.
 | Reaction | (message, emoji, actor) | added or removed |
 | Label | (message, key) → value | set or unset; each key holds one value |
 | Attachment | 128 random bits, base64url | uploaded once, then carried by one or more messages; never changes |
+| Schema | a name and a version: `sandbox@1` | registered once; never changes, and is never removed |
 
 - **Channel paths** are one or more segments matching
   `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
@@ -1316,6 +1319,81 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
 - **`vb inspect` shows them:** images and video inline, in a fixed frame so
   loading one doesn't move the page, and other files as chips that download.
   Its composer attaches files, or takes them pasted.
+
+### Schemas
+
+A schema says what a piece of structured data holds: a JSON Schema for an
+object, under a name and a version (`sandbox@1`). The board keeps a registry
+of them, so whoever writes data and whoever reads it agree on its shape
+without sharing code. Nothing reads the registry yet: blocks, JSON in a
+message's text that names its schema, come next.
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+const { schema, created } = await team.createSchema({
+  name: 'sandbox',
+  version: 1,
+  description: 'What a sandbox did.',
+  schema: { type: 'object', required: ['id', 'action'], properties: { id: { type: 'string' }, action: { enum: ['started', 'stopped'] } } },
+})
+const schemas = await team.schemas()            // the built-ins, then the board's own
+const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one that isn't there
+```
+
+- **A version never changes, and is never removed.** Registering one that's
+  there with the same definition (its JSON Schema, whatever order its keys
+  come in, and its description) answers it with `created: false`; another
+  definition is 409 `schema_immutable`. A change is the next version, which
+  the caller names: the board assigns none. Of two that register one version
+  at once, one makes it.
+- **A name** is up to 80 lowercase letters, numbers, and `._-`, starting with
+  a letter, and a version a whole number from 1 to 99,999. A view is `{ id,
+  name, version, description, schema, builtIn, by, at }`, `by` and `at` null
+  for a built-in.
+- **Every board has the built-ins,** `git-commit@1` (`sha`, `title`) and
+  `vercel-deployment@1` (`url`, and `gitSha` when it has one), as Vercel's API
+  has them. They list first, and their names are reserved: a version of one is
+  409 `reserved_schema`.
+- **A definition is structural JSON Schema.** It describes an object (`"type":
+  "object"` at its root) with `type`, `properties`, `required`,
+  `additionalProperties`, `items` (one schema for every item), `enum`, `const`,
+  `oneOf`, `anyOf`, `allOf`, `not`, the length, count, and number bounds,
+  `multipleOf`, `format` (`date-time`, `date`, `time`, `email`, `uri`, `uuid`,
+  `hostname`, `ipv4`, `ipv6`), and `title`, `description`, and `$schema`. So it
+  says unions, optional fields, and enums. Anything else is 400
+  `invalid_schema`: no `$ref`, no `pattern`, no `uniqueItems`, and no keyword
+  of the caller's own, so checking a value costs its size times the schema's.
+  Both are bounded: 32 KB of JSON, 512 nodes (each `enum` and `const` value
+  counts), 64 subschemas, 16 levels. A board registers 500 versions at most
+  (400 `too_many_schemas`). `checkDefinition` in `src/contract/data-schemas.ts`
+  is the rule, from plain data.
+- **The body is strict:** a key `POST /schemas` doesn't know is 400
+  `invalid_request`, never dropped, since what the board kept could never be
+  changed.
+- **Anyone the board lets in reads the schemas,** whatever its channels: they
+  hold no message, and say what a writer has to send. Registering takes
+  `manage` at `*`, as listing grants does, since a schema is the whole
+  board's. So a person does by default, a token only when its `can` gives it
+  `manage` everywhere, and another project's deployments don't: g2 gives them
+  read, post, react, label, and sync.
+- **On each backend:** `local()` keeps them on its log, in a session of their
+  own, `schemas`, beside `board`, so none reaches the message tables,
+  `/events`, watchers, or sync. `http()` forwards them to the board it uses.
+  `vercel()` maps them to the team's registry in Vercel's API (`/schemas`,
+  each write with an `operationId`), which every board on the team shares, and
+  adapts its views: `createdAt` in milliseconds is `at`, `createdBy` is `by`,
+  and the team's own list by name and then version as a number, where the API
+  lists them by ID as text. The API doesn't say whether a registration made
+  the version, so `vercel()` reads it first: `created` is whether it was
+  missing then, and of two that register one version at once there, both may
+  say they made it, though the registry keeps one. The API checks a definition more strictly than `checkDefinition`:
+  it also refuses a `required` name its schema's `properties` don't declare,
+  and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: people and apps whose team role is owner,
+  member, or developer register, and a project's own credentials and a board
+  token reach none of it yet, reads included (403).
 
 ## The local board
 
@@ -1680,6 +1758,9 @@ status.
 | GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
 | POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
+| GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |
+| GET | `/schemas/:id` | One version, by `name@version`: `{ schema }`. 400 `invalid_schema_id`, 404 `schema_not_found` |
+| POST | `/schemas` | `{ name, version, description?, schema }`: registers a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition; another is 409 `schema_immutable`, a built-in's name 409 `reserved_schema`, and a definition the board won't keep 400 `invalid_schema` |
 | POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }`, or 501 `no_files` on a board that keeps none |
 | GET | `/attachments/:id` | The file, with a token like any read. Sandboxed (`content-security-policy: sandbox`); only images, MP4/WebM video, and plain text display inline, everything else downloads |
 | POST | `/messages/:id/edit` | `{ text }` |
@@ -1923,6 +2004,9 @@ board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board tokens [list]                            yours, or with manage, everyone's
 board tokens create <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]   prints the secret, once
 board tokens revoke <token>                    e.g. t12; it and every token minted with it
+board schemas [list]                           the built-in schemas, then the board's own
+board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
+board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
 board grants [list]                            the board's grants; needs manage at *
 board grants create <principal>... --can <pattern=permissions>...   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
 board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]...   --can replaces

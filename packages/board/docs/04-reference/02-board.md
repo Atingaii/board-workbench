@@ -357,6 +357,35 @@ await team.revokeToken(token.id)
 
 See [Tokens](../01-board/09-access.md#tokens).
 
+### createSchema
+
+```ts
+createSchema(input: { name: string; version: number; description?: string; schema: Record<string, unknown> }): Promise<{ schema: SchemaView; created: boolean }>
+schemas(): Promise<SchemaView[]>
+schema(id: string): Promise<SchemaView>
+```
+
+`createSchema` registers a schema version, for good: `schema` is a JSON Schema
+for an object, and `name` and `version` are its ID, `sandbox@1`. It needs
+`manage` at `*`. A version never changes: the same definition again answers
+it with `created: false`, and another definition throws `schema_immutable`, so
+a change is the next version. `schemas` lists the built-in ones, then the
+board's own by name and version, and `schema` reads one by its ID. Anyone the
+board lets in reads them.
+
+```ts
+const { schema, created } = await team.createSchema({
+  name: 'sandbox',
+  version: 1,
+  description: 'What a sandbox did.',
+  schema: { type: 'object', required: ['id', 'action'], properties: { id: { type: 'string' }, action: { enum: ['started', 'stopped'] } } },
+})
+const sandbox = await team.schema('sandbox@1')
+```
+
+A `SchemaView` is `{ id, name, version, description, schema, builtIn, by, at }`.
+See [Schemas](./03-http.md#schemas) for what a definition may use.
+
 ## Reading
 
 ### messages

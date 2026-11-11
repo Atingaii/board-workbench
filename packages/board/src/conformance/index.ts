@@ -1,5 +1,6 @@
 import type { Explanation, GrantView, Me, MessageView, RegistrationView } from '../api/routes.ts'
 import { BoardError, type ExplainPrincipal } from '../client/client.ts'
+import { canonical } from '../contract/data-schemas.ts'
 import { compileAccess, type Permission } from '../server/access.ts'
 import type { Board } from '../server/board.ts'
 
@@ -7,11 +8,12 @@ import type { Board } from '../server/board.ts'
  * Checks that a board speaks the protocol, through a handle on it (`conformance(board())`), as
  * `vb` and agents use it: every board answers all of it. A board may keep no schedules or files,
  * and says so with a 501, which the kit reports as not kept here. It writes to one channel
- * (`conformance` by default), keeps every post on the board, and deletes what it posted.
+ * (`conformance` by default), keeps every post on the board, and deletes what it posted. The one
+ * schema it registers, `conformance@1`, stays: a schema version is never removed.
  */
 
 /** What a check is about, for the report's headings. */
-export type CheckGroup = 'core' | 'schedules' | 'grants' | 'tokens' | 'attachments' | 'watchers' | 'sync'
+export type CheckGroup = 'core' | 'schedules' | 'grants' | 'tokens' | 'schemas' | 'attachments' | 'watchers' | 'sync'
 
 export type CheckResult = {
   group: CheckGroup
@@ -141,10 +143,10 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
 /**
  * The groups a board may keep none of, saying so with a 501: a board without a scheduler answers
  * `no_scheduler`, and without a blob store `no_files`; a backend of one's own that keeps no grants
- * answers `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
+ * answers `no_grants`, and one that keeps no schemas `no_schemas`. A board that's meant to keep something and doesn't yet answers otherwise,
  * and fails.
  */
-const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'attachments'])
+const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'schemas', 'attachments'])
 
 const needRoot = (ctx: Context) => {
   check(ctx.root && ctx.reply, "posting failed, so there's nothing to read")
@@ -298,6 +300,42 @@ const sortedOf = (values: readonly string[] | undefined) => [...(values ?? [])].
 /** That `actual` shows as `expected` does: a value compared as JSON, shown once when it isn't. */
 function alike(actual: unknown, expected: unknown, what: string) {
   if (show(actual) !== show(expected)) throw new Mismatch(`${what}: expected ${show(expected)}, got ${show(actual)}`)
+}
+
+/**
+ * The schema the schemas checks register: the same on every run, since a version never changes and
+ * is never removed, so a board holds one however often it's checked. A change to it is a new
+ * version here, never an edit: a board checked before would refuse this one as another definition.
+ * It names every property it requires and gives each keyword its type, as the strictest board asks.
+ */
+const SCHEMA = {
+  name: 'conformance',
+  version: 1,
+  description: 'What the conformance kit registers, once on every board it checks.',
+  schema: {
+    type: 'object',
+    required: ['run', 'outcome'],
+    additionalProperties: false,
+    properties: {
+      run: { type: 'string', minLength: 1, maxLength: 64 },
+      outcome: { enum: ['passed', 'failed'] },
+      checks: { type: 'array', maxItems: 500, items: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, skipped: { type: 'boolean' } } } },
+    },
+  },
+} as const
+
+/** `SCHEMA`'s definition, saying the same with its keys the other way around. */
+const reversed = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(reversed) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).reverse().map(([key, child]) => [key, reversed(child)])) : value
+
+/** Registers `SCHEMA`, or says why this run can't: a caller without manage at `*` is refused, and the check skipped. */
+async function register(ctx: Context): Promise<{ made: Awaited<ReturnType<Board['createSchema']>> } | { skip: string }> {
+  try {
+    return { made: await ctx.board.createSchema(SCHEMA) }
+  } catch (error) {
+    if (error instanceof BoardError && error.status === 403) return { skip: "this token can't register schemas" }
+    throw error
+  }
 }
 
 /** The sync key the sync checks register, a platform of their own, so nothing reaches a real one. */
@@ -966,6 +1004,79 @@ const CHECKS: Check[] = [
       }
       same((await ctx.board.revokeToken(token.id)).revoked, true, 'revoking it')
       await refused(holder.me(), 401, 'a request with a revoked token')
+    },
+  },
+  {
+    group: 'schemas',
+    name: 'lists the built-in schemas first, and reads a schema by its ID',
+    run: async (ctx) => {
+      const schemas = await ctx.board.schemas()
+      const own = schemas.findIndex((schema) => !schema.builtIn)
+      check(own === -1 || schemas.slice(own).every((schema) => !schema.builtIn), `schemas should list the built-ins first, got ${show(schemas.map((schema) => schema.id))}`)
+      const commit = schemas.find((schema) => schema.id === 'git-commit@1')
+      check(commit, `schemas should list the built-in git-commit@1, got ${show(schemas.map((schema) => schema.id))}`)
+      alike({ name: commit.name, version: commit.version, builtIn: commit.builtIn, by: commit.by, at: commit.at }, { name: 'git-commit', version: 1, builtIn: true, by: null, at: null }, 'the built-in git-commit@1')
+      check(commit.schema.type === 'object', `a schema's definition should describe an object, got ${show(commit.schema)}`)
+      same(canonical(await ctx.board.schema('git-commit@1')), canonical(commit), 'git-commit@1, read by its ID')
+      await rejects(ctx.board.schema('conformance-none@1'), 404, 'schema_not_found', 'reading a version no one registered')
+      await rejects(ctx.board.schema('Not A Schema'), 400, 'invalid_schema_id', 'reading an ID that names no schema')
+    },
+  },
+  {
+    group: 'schemas',
+    name: 'registers a schema version once: the same definition again changes nothing, and another is refused',
+    run: async (ctx) => {
+      const registered = await register(ctx)
+      if ('skip' in registered) return registered.skip
+      const { schema, created } = registered.made
+      check(typeof created === 'boolean', `created should say whether this made it, got ${show(created)}`)
+      alike(
+        { id: schema.id, name: schema.name, version: schema.version, description: schema.description, builtIn: schema.builtIn },
+        { id: 'conformance@1', name: SCHEMA.name, version: SCHEMA.version, description: SCHEMA.description, builtIn: false },
+        'the schema it registered',
+      )
+      same(canonical(schema.schema), canonical(SCHEMA.schema), "the schema's definition, as it was sent")
+      check(typeof schema.by === 'string' && schema.by.length > 0, `a registered schema should say who registered it, got ${show(schema.by)}`)
+      check(typeof schema.at === 'string' && !Number.isNaN(Date.parse(schema.at)), `a registered schema should say when, got ${show(schema.at)}`)
+      // The same definition, however its keys are ordered, is the same version.
+      const again = await ctx.board.createSchema({ ...SCHEMA, schema: reversed(SCHEMA.schema) as Record<string, unknown> })
+      same(again.created, false, 'whether registering the same definition again made one')
+      same(canonical(again.schema), canonical(schema), 'the schema, registered again')
+      await rejects(ctx.board.createSchema({ ...SCHEMA, schema: { type: 'object', required: ['run'], properties: { run: { type: 'string' } } } }), 409, 'schema_immutable', 'another definition for a version that is there')
+      await rejects(ctx.board.createSchema({ ...SCHEMA, description: 'Something else.' }), 409, 'schema_immutable', 'another description for a version that is there')
+      same(canonical(await ctx.board.schema(schema.id)), canonical(schema), 'the schema, read by its ID')
+      const listed = (await ctx.board.schemas()).filter((found) => found.id === schema.id)
+      same(listed.length, 1, `how many times schemas lists ${schema.id}`)
+    },
+  },
+  {
+    group: 'schemas',
+    name: "refuses a built-in's name, and a definition it couldn't check a value against",
+    run: async (ctx) => {
+      // Refused before anything is kept, so a board that takes one keeps a version named for this check alone.
+      const attempt = (schema: Record<string, unknown>, name = 'conformance-refused', version = 1) => ctx.board.createSchema({ name, version, schema })
+      const reserved = await attempt({ type: 'object' }, 'git-commit', 2).then(
+        () => null,
+        (error: unknown) => error,
+      )
+      if (reserved instanceof BoardError && reserved.status === 403) return "this token can't register schemas"
+      if (!(reserved instanceof BoardError && reserved.status === 409 && reserved.code === 'reserved_schema'))
+        throw new Mismatch(`a version of the built-in git-commit: expected 409 reserved_schema, ${reserved === null ? 'and it registered one' : `got ${reserved instanceof BoardError ? `${reserved.status} ${reserved.code}` : String(reserved)}`}`)
+      await rejects(attempt({ type: 'string' }), 400, 'invalid_schema', 'a schema that describes no object')
+      await rejects(attempt({ type: 'object', properties: { next: { $ref: '#' } } }), 400, 'invalid_schema', 'a schema with a $ref')
+      await rejects(attempt({ type: 'object', properties: { id: { type: 'string', pattern: '^(a+)+$' } } }), 400, 'invalid_schema', 'a schema with a pattern')
+      await rejects(attempt({ type: 'object', properties: { ids: { type: 'array', uniqueItems: true } } }), 400, 'invalid_schema', 'a schema with uniqueItems')
+    },
+  },
+  {
+    group: 'schemas',
+    name: 'refuses a caller narrowed with x-board-can a schema, and lets it read them',
+    run: async (ctx) => {
+      if (!ctx.withCan) return NO_CAN
+      const narrowed = ctx.withCan(`${ctx.channel}=read,post`)
+      check((await narrowed.schemas()).some((schema) => schema.id === 'git-commit@1'), 'a caller narrowed to a channel should read the schemas')
+      // The one this run registers, so a board that takes it keeps nothing new.
+      await narrowedOut(narrowed.createSchema(SCHEMA), 'registering a schema')
     },
   },
   {

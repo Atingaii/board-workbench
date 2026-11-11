@@ -20,6 +20,7 @@ import {
 } from './schemas.ts'
 import { ExternalEvent, ExternalTarget, Link, LINKS_PER_MESSAGE_MAX, Origin } from './external.ts'
 import { boardEvents } from './events.ts'
+import { SCHEMA_DESCRIPTION_MAX, SCHEMA_NAME, SCHEMA_VERSION_MAX } from './data-schemas.ts'
 
 // A2's contracts. The board log's events are plain zod in `events.ts`, so a handle on any backend
 // reads them without loading A2; this module and what imports it run only on the local board's engine.
@@ -330,3 +331,24 @@ export const accessContract = contract({
 export type AccessEvents = typeof accessContract.events
 export type AccessEvent = ContractEvent<AccessEvents>
 export const ACCESS_SESSION = 'access'
+
+/**
+ * The board's schema registry, outside the board log: one session, `schemas`. A version is
+ * registered once and never changes, so its event is all there is of it.
+ */
+export const schemasContract = contract({
+  name: 'board-schemas',
+  events: {
+    /** A schema version, for good: `name@version` is its ID, and `schema` the JSON Schema the board checked. */
+    'schema.created': z.object({
+      name: z.string().regex(SCHEMA_NAME),
+      version: z.number().int().min(1).max(SCHEMA_VERSION_MAX),
+      description: z.string().min(1).max(SCHEMA_DESCRIPTION_MAX).nullable(),
+      schema: z.record(z.string(), z.unknown()),
+      by: ActorId,
+    }),
+  },
+})
+
+export type SchemasEvent = ContractEvent<typeof schemasContract.events>
+export const SCHEMAS_SESSION = 'schemas'
