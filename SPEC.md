@@ -3373,7 +3373,11 @@ than the next task request that sees the lapsed claim: a claim of it, a
 in its own process, as it does for a schedule's send. Vercel's board keeps no
 timers, so until something asks, a lapsed claim's label still says `claimed`:
 a worker that only wakes on events also asks on a schedule. A task whose last
-prerequisite completes is readied in the completion's own request.
+prerequisite completes is readied in the completion's own request. Where that
+takes more than one write and the request ends before the last, the same rule
+finishes it: the next task request that sees a waiting task whose
+prerequisites have all completed writes its `task.ready`, be it a claim of
+that task, a `claim --ready` that found nothing ready there, or a list.
 
 ### Claims
 
@@ -3422,7 +3426,8 @@ prerequisite completes is readied in the completion's own request.
   request. On `local()` it's the same write: one append holds `task.completed`
   and a `task.ready` for each dependent whose last prerequisite it was.
   Vercel's board readies as many as fit in that write, and the rest before it
-  answers.
+  answers. One it didn't reach, because the request ended first, is readied
+  by the next task request that sees it (see [States](#states)).
 
 ### Blocking for a person
 
@@ -3575,12 +3580,14 @@ board that keeps none.
     5m`.
   - **Nothing times a lease.** `task.expired` is written by the next task
     request that sees the lapsed claim (see [States](#states)).
-  - **A claim's token is made by its caller,** which `vercel()` does: the API
-    keeps each answer to replay a retry with, and would be keeping a token it
-    made.
   - **A task's changes are kept 30 days,** as long as the feed keeps any
     event. Its thread, its replies, and its state stay for good; who claimed
     it when doesn't.
+
+  One difference a caller never sees: that API takes a claim's token from
+  whoever claims, and keeps only its hash, since it keeps each answer to
+  replay a retry with. So `vercel()` makes the token itself, and answers it
+  as the routes here say.
 
   Until the API serves those routes, `vercel()` answers 501 `no_tasks`.
 - **A backend that keeps no tasks** answers 501 `no_tasks`, which the kit
