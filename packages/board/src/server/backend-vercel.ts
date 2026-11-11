@@ -1195,6 +1195,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** The actor `who` writes as: the credentials' principal, and its profile, as the API names it. */
   const actorOf = async (who: Who) => `${principalId((await self(who)).actor.principal)}${who.profile ? `+${who.profile.name.toLowerCase()}` : ''}`
 
+  /**
+   * Refuses a handle narrowed with `as(profile, { can })` a source: the platform's app reads and
+   * joins what it can, not what the caller can, so it's this deployment's sync's job, as on a board
+   * of its own.
+   */
+  function ownSources(caller: Caller, what: string) {
+    if ('self' in caller && caller.can !== undefined) throw new HttpError(403, 'forbidden', `this handle is narrowed with a can, so it can't ${what}: that's its project's sync's job`)
+  }
+
   /** Who a caller acts as there: its profile, beside this deployment's credentials. */
   function whoOf(caller: Caller): Who {
     if ('identity' in caller) throw servesNone()
@@ -2337,12 +2346,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { targets: await binding.typing([message, ...replies], status) }
     },
     // A source is read, and joined, with the app of the sync that runs it here.
-    async readSource(_caller, { key, target, limit, after }) {
+    async readSource(caller, { key, target, limit, after }) {
       if (!binding?.sync.some((entry) => entry.key === key)) throw notFound(`this board doesn't run sync entry ${key}: read it where its sync runs`, 'not_synced_here')
+      ownSources(caller, 'read a source')
       return binding.readSource(key, target, limit ?? 50, after ?? null)
     },
-    async joinSource(_caller, { key, target }) {
+    async joinSource(caller, { key, target }) {
       if (!binding?.sync.some((entry) => entry.key === key)) throw notFound(`this board doesn't run sync entry ${key}: join it where its sync runs`, 'not_synced_here')
+      ownSources(caller, 'join a source')
       return binding.joinSource(key, target)
     },
     async syncImport(caller, body, signal) {

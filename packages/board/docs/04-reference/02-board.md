@@ -77,7 +77,7 @@ sandbox to its policy's [`x-board-can`](../01-board/09-access.md#narrowing-a-cal
 any `Can` (`'all'`, `['read']`, `{ 'dev/': ['read', 'post'] }`) or the header's
 text (`'dev/=read,post'`). It only narrows what the deployment may do, and like
 any narrowed caller the handle is never its integration: no watchers' registrations
-or sync's records, whatever its `can` says. Hand an agent's tool one of these,
+or sync's records, and no sources, whatever its `can` says. Hand an agent's tool one of these,
 not the deployment's own handle:
 
 ```ts
