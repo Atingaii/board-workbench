@@ -123,7 +123,7 @@ const owns = (actor: Actor, by: Actor) => samePrincipal(by.principal, actor.prin
  * Vercel's API reads them today; `protocol` reads them as board's protocol has it: the profile and
  * its avatar in one structured `x-board-profile`, and the other two ignored.
  */
-function actorOf(request: Request, tokens: Record<string, string> = {}, protocol = false, enforcesCan = false): Actor {
+function actorOf(request: Request, tokens: Record<string, string> = {}, protocol = false): Actor {
   const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
   const token = tokens[bearer] ?? bearer
   const [type, id, environment] = token.split(':')
@@ -156,7 +156,7 @@ function actorOf(request: Request, tokens: Record<string, string> = {}, protocol
     }
   }
   // A proxy that holds the credential narrows it.
-  const header = enforcesCan ? request.headers.get('x-board-can') : null
+  const header = request.headers.get('x-board-can')
   let can: Actor['can']
   if (header !== null) {
     try {
@@ -1298,6 +1298,7 @@ function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, 
       }
       if (method !== 'POST' || path !== '/schemas') return undefined
       if (actor.principal.type === 'user' && (roles[actor.principal.userId] ?? 'member') === 'viewer') throw new Refused(403, 'forbidden')
+      if (actor.narrowed) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't change the team's schemas: that's its principal's job.")
       const { operationId: _operationId, name, version, description, schema, ...unknown } = body
       if (Object.keys(unknown).length > 0) throw new Refused(400, 'bad_request', `Unknown property ${Object.keys(unknown)[0]}.`)
       const id = `${name}@${version}`
@@ -1371,12 +1372,6 @@ export function fakeMessageboard(
      */
     protocolProfile?: boolean
     /**
-     * A caller is held to the `x-board-can` it sends, as Vercel's API holds one once it reads the header: within what its
-     * grants give, and never its principal's integration, so its watchers and sync's
-     * records are 403. Without it, as the API answered before: it ignores the header.
-     */
-    enforcesCan?: boolean
-    /**
      * Sync's records aren't kept apart, as board can't take for granted of an API it doesn't run: a thread's binding goes
      * to every registrant that syncs its key, another project's included, and `syncThread` lists every target of a thread.
      */
@@ -1435,7 +1430,7 @@ export function fakeMessageboard(
     if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
     if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
     const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-    const actor = actorOf(request, options.tokens, options.protocolProfile ?? false, options.enforcesCan ?? false)
+    const actor = actorOf(request, options.tokens, options.protocolProfile ?? false)
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method
     requests.push(`${method} ${path}`)
@@ -1461,6 +1456,8 @@ export function fakeMessageboard(
       const listed = boards().filter((board) => mayUse(actor, board) && (name === null || board.name.toLowerCase() === name.toLowerCase()))
       return { boards: listed.map(show), defaultBoardId: made && mayUse(actor, general) ? general.id : null, cursor: null }
     }
+    // The team's boards are its principal's to change, not a caller narrowed to some channels.
+    if (actor.narrowed && method === 'POST' && (path === '/boards/default' || path === '/boards/ensure')) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't change the team's boards: that's its principal's job.")
     if (method === 'POST' && path === '/boards/default') {
       // Board creates record a person's event, so project tokens can't.
       if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')

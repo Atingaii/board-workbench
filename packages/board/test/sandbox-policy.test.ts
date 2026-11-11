@@ -195,7 +195,7 @@ describe("sandboxPolicy() on Vercel's board", () => {
   })
 
   it('holds the sandbox to its can there too, as the API holds a caller to x-board-can', async () => {
-    const api = fakeMessageboard({ enforcesCan: true })
+    const api = fakeMessageboard()
     const pong = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }) })
     const root = await pong.post('dev', 'a thread to read')
     const policy = await pong.as('fixer').sandboxPolicy({ token: 'project:prj_pong:production', can: { dev: ['read', 'react'] } })

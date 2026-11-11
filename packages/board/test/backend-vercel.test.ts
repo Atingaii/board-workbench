@@ -22,23 +22,6 @@ const API = 'http://localhost'
 const handleOn = (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
   board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal), files: api.files }) })
 
-/** The same handle, narrowed with `x-board-can` as a proxy holding the credential sends it, which Vercel's API doesn't read yet. */
-const narrowedOn =
-  (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
-  (can: string) =>
-    board({
-      backend: vercel({
-        team: 'team_test',
-        api: API,
-        fetch: (input, init) => {
-          const request = new Request(input, init)
-          request.headers.set('x-board-can', can)
-          return as(api, principal)(request)
-        },
-        files: api.files,
-      }),
-    })
-
 /** The same handle, with `headers` on every request, as `vb conformance` sends them to Vercel's API. */
 const withHeadersOn =
   (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
@@ -111,8 +94,7 @@ describe('vercel()', () => {
       'core: holds a long-poll open until the next event': 'passed',
       'core: deletes a message, leaving a tombstone': 'passed',
       'core: lists the channel and you in it': 'passed',
-      // Vercel's API doesn't read x-board-can yet: a narrowed caller gets its whole access.
-      'core: narrows a caller to what its x-board-can says': 'failed',
+      'core: narrows a caller to what its x-board-can says': 'passed',
       // It reads x-board-profile as a name alone, and an avatar from x-board-avatar.
       [IDENTITY[0]!]: 'failed',
       'core: lets a profile change only its own messages, and its principal all of them': 'passed',
@@ -120,8 +102,8 @@ describe('vercel()', () => {
       // It keeps a session on actors, which vercel() maps no view of.
       [IDENTITY[2]!]: 'passed',
       [IDENTITY[3]!]: 'passed',
-      // Neither registers for a person, narrowed or not.
-      "watchers: refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking": 'skipped',
+      "watchers: refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking": 'passed',
+      // A person keeps no sync's records, narrowed or not.
       "sync: refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox": 'skipped',
       'core: creates a channel only once: one a post made is there already': 'passed',
       'core: answers 404 for an ID that names nothing': 'passed',
@@ -135,18 +117,16 @@ describe('vercel()', () => {
       'grants: lets everyone narrow what something else lets in, and lets no one in itself': 'skipped',
       'grants: caps a person by their team role, so a viewer reads but neither posts nor manages': 'passed',
       'grants: names an app by its slug or client ID, keeps it by client ID, and every app as a group': 'passed',
-      // Vercel's API doesn't read x-board-can yet, so a narrowed caller changes grants as its principal would.
-      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'failed',
-      "grants: lets no caller narrowed with x-board-can grant past its can, even where everyone's grant closes it": 'failed',
-      'grants: lets no caller narrowed with x-board-can let anyone in where everyone gets more than it has': 'failed',
+      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'passed',
+      "grants: lets no caller narrowed with x-board-can grant past its can, even where everyone's grant closes it": 'passed',
+      'grants: lets no caller narrowed with x-board-can let anyone in where everyone gets more than it has': 'passed',
       'grants: lets a member grant on a pattern after a lock under it': 'skipped',
       'grants: lets a project on another team in, in its environments': 'skipped',
       'schemas: lists the built-in schemas first, and reads a schema by its ID': 'passed',
       'schemas: registers a schema version once: the same definition again changes nothing, and another is refused': 'passed',
       "schemas: refuses a built-in's name, and a definition it couldn't check a value against": 'passed',
       'schemas: carries a block in a message, checked against the schema its fence names': 'passed',
-      // Vercel's API doesn't read x-board-can yet, so a narrowed caller registers one.
-      'schemas: refuses a caller narrowed with x-board-can a schema, and lets it read them': 'failed',
+      'schemas: refuses a caller narrowed with x-board-can a schema, and lets it read them': 'passed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'skipped',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'skipped',
@@ -1065,24 +1045,22 @@ describe('vercel()', () => {
     })
   })
 
-  it("passes the conformance kit's sync as a project, through Vercel's API's sync routes, but for a narrowed caller's", async () => {
+  it("passes the conformance kit's sync as a project, through Vercel's API's sync routes", async () => {
     const api = fakeMessageboard()
-    const report = await conformance(handleOn(api, 'project:prj_pong:production'), { withCan: narrowedOn(api, 'project:prj_pong:production') })
+    const report = await conformance(handleOn(api, 'project:prj_pong:production'), { withHeaders: withHeadersOn(api, 'project:prj_pong:production') })
     expect(Object.fromEntries(report.checks.filter((check) => check.group === 'sync').map((check) => [check.name, check.status]))).toEqual({
       "keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced": 'passed',
       "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
       'hands a sync each message change as a match of its @sync watcher': 'passed',
       'keeps noSync on a post and a reply, so sync sends neither': 'passed',
-      // Vercel's API doesn't read x-board-can yet, so a narrowed caller keeps sync's records.
-      "refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox": 'failed',
+      "refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox": 'passed',
     })
   }, 30_000)
 
-  it("passes the conformance kit's watchers as a project too, registering a path on its own project, but for a narrowed caller's", async () => {
+  it("passes the conformance kit's watchers as a project too, registering a path on its own project", async () => {
     const api = fakeMessageboard()
-    const report = await conformance(handleOn(api, 'project:prj_pong:production'), { withCan: narrowedOn(api, 'project:prj_pong:production') })
-    // Vercel's API doesn't read x-board-can yet, so a narrowed caller registers its project's watchers.
-    expect(report.checks.filter((check) => check.group === 'watchers').map((check) => check.status)).toEqual(['passed', 'passed', 'failed'])
+    const report = await conformance(handleOn(api, 'project:prj_pong:production'), { withHeaders: withHeadersOn(api, 'project:prj_pong:production') })
+    expect(report.checks.filter((check) => check.group === 'watchers').map((check) => check.status)).toEqual(['passed', 'passed', 'passed'])
   }, 30_000)
 
   it('registers a path on its own project on Vercel, which the API wakes through its Deployment Protection', async () => {
