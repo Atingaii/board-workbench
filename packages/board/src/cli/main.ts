@@ -413,6 +413,12 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
   return uploaded
 }
 
+/**
+ * Whether `value` is a schedule's own ID and not a message's: `s12` on a local board, `sch_…` on
+ * Vercel's. A message's is a number or `msg_…`, so neither is ever one.
+ */
+export const isScheduleId = (value: string): boolean => /^(?:s\d+|sch_\S+)$/i.test(value)
+
 /** A schedule's ID as the board gave it: `s12`, or `sch_…` on Vercel's board. */
 function scheduleId(value: string | undefined): string {
   if (value === undefined) throw usage('Missing the schedule ID, like s12.', { reason: 'missing_arguments' })
@@ -1266,7 +1272,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'schedules': {
       // A schedule's own ID (s12) shows that schedule, whatever became of it: sent, canceled, or still pending.
-      if (args[0] !== undefined && /^s\d+$/i.test(args[0])) {
+      if (args[0] !== undefined && isScheduleId(args[0])) {
         const one = (await client().schedules({ all: true })).find((schedule) => schedule.id.toLowerCase() === args[0]!.toLowerCase())
         if (!one)
           throw new Failed({
@@ -1489,7 +1495,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const names = [...commands.flatMap((known) => [known.name, ...(known.aliases ?? [])]), ...Object.keys(app.commands)]
       const guess = closest(command, names)
       // What people and agents type for a command that goes by another name here.
-      const said = OTHER_NAMES[command.toLowerCase()]
+      const said = Object.hasOwn(OTHER_NAMES, command.toLowerCase()) ? OTHER_NAMES[command.toLowerCase()] : undefined
       throw usage(`Unknown command ${command} for ${named()}.${said ? '' : guess ? ` Did you mean ${guess}?` : ''}`, {
         reason: 'unknown_command',
         next: [
