@@ -3604,7 +3604,8 @@ that task, a `claim --ready` that found nothing ready there, or a list.
 - **`vb tasks run <id> -- <cmd>`** (or `run --ready …`) claims, renews while
   the command runs, completes on exit 0 (with `--result "<text>"`), fails on
   any other exit (`exited <code>`, or `killed by <signal>`), releases on
-  Ctrl-C, and exits with the command's code. The command gets
+  Ctrl-C (exit 130) or a supervisor's SIGTERM (143), and otherwise exits
+  with the command's code. The command gets
   `BOARD_TASK=<id>`, so `vb reply "$BOARD_TASK" "…"` works inside it. It
   renews at a third of the lease the board gave. A renewal that answers
   `claim_lost` stops the command, and `run` exits 1 saying so. A command that

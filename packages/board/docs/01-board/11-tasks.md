@@ -179,7 +179,8 @@ ready one, with `--label`, `--from`, and `--wait` as `claim` takes them.
   other exit fails it, with `exited <code>` or `killed by <signal>` as the
   reason. `run` exits with the command's code.
 - **It renews the claim while the command runs,** at a third of the lease.
-- **Ctrl-C releases the task** and exits 130.
+- **Ctrl-C releases the task** and exits 130. A supervisor's SIGTERM
+  releases it too, and exits 143.
 - **A lost claim stops the command.** When a renewal fails with `claim_lost`,
   `run` stops the command and exits 1.
 - **A command that can't start** releases the task, and `run` exits 1.

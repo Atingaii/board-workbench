@@ -7,11 +7,12 @@ const RENEW_MIN_MS = 10_000
 
 /**
  * How a command's run ended: it exited (`code` is its own, or 128 and its signal's number when one
- * killed it), Ctrl-C stopped it, its claim was lost and it was stopped, or it never started.
+ * killed it), Ctrl-C or a supervisor's SIGTERM stopped it (`code` is 128 and that signal's number,
+ * as a process it had killed would say), its claim was lost and it was stopped, or it never started.
  */
 export type Ran =
   | { how: 'exited'; code: number; signal: NodeJS.Signals | null }
-  | { how: 'interrupted' }
+  | { how: 'interrupted'; code: number }
   | { how: 'lost' }
   | { how: 'unstarted'; why: string }
 
@@ -24,18 +25,18 @@ export type Ran =
 export function runCommand(command: readonly string[], options: { env: NodeJS.ProcessEnv; every: number; renew: () => Promise<boolean> }): Promise<Ran> {
   return new Promise((resolve) => {
     const child = spawn(command[0]!, command.slice(1), { stdio: 'inherit', env: options.env })
-    let interrupted = false
+    let interrupted: 'SIGINT' | 'SIGTERM' | null = null
     let lost = false
     let ended = false
     let renewing: Promise<void> | null = null
     const interrupt = () => {
-      interrupted = true
+      interrupted = 'SIGINT'
       // At a terminal, Ctrl-C reaches the command too, as one of the same foreground group. Sent to
       // this process alone (a supervisor's, a script's), it's passed on.
       if (!process.stdin.isTTY) child.kill('SIGINT')
     }
     const terminate = () => {
-      interrupted = true
+      interrupted = 'SIGTERM'
       child.kill('SIGTERM')
     }
     process.on('SIGINT', interrupt)
@@ -62,7 +63,7 @@ export function runCommand(command: readonly string[], options: { env: NodeJS.Pr
       process.off('SIGTERM', terminate)
       // A renewal on its way says whether the claim still held when the command ended.
       await renewing
-      resolve(ran.how === 'unstarted' ? ran : lost ? { how: 'lost' } : interrupted ? { how: 'interrupted' } : ran)
+      resolve(ran.how === 'unstarted' ? ran : lost ? { how: 'lost' } : interrupted ? { how: 'interrupted', code: 128 + constants.signals[interrupted] } : ran)
     }
     child.once('error', (error: NodeJS.ErrnoException) => void end({ how: 'unstarted', why: error.code === 'ENOENT' ? "there's no such command" : error.message }))
     child.once('exit', (code, signal) => void end({ how: 'exited', code: code ?? 128 + (signal ? (constants.signals[signal] ?? 0) : 0), signal }))

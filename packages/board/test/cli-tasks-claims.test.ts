@@ -224,6 +224,18 @@ describe('vb tasks run', () => {
     expect(await claimOn(id)).toEqual([])
   }, 60_000)
 
+  it("releases the task and exits 143 when a supervisor's SIGTERM stops it", async () => {
+    const id = await create('runs', 'a long deploy')
+    const running = start(['tasks', 'run', id, ...node('console.log("started"); setTimeout(() => {}, 60_000)')])
+    await until(() => running.printed.stdout.includes('started'), 'the command to start')
+    expect((await task(id)).task).toMatchObject({ state: 'claimed', epoch: 1 })
+    running.child.kill('SIGTERM')
+    expect(await running.exited).toBe(143)
+    expect(running.printed).toEqual({ stdout: 'started\n', stderr: '' })
+    expect((await task(id)).task).toMatchObject({ state: 'ready', epoch: 1, claim: null })
+    expect(await claimOn(id)).toEqual([])
+  }, 60_000)
+
   it.concurrent('renews the claim while a long command runs, so a lease shorter than the command holds', async () => {
     const id = await create('renews', 'a build longer than its lease')
     const started = Date.now()

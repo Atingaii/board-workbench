@@ -1739,7 +1739,7 @@ async function claimFor(board: Board, claims: Claims, target: string | undefined
       {
         channel: target,
         ...(flags.label?.length ? { label: labelPairs(flags.label) } : {}),
-        // An owner by ID, or by a handle as people write one.
+        // Owners by their IDs: a handle names no owner.
         ...(flags.from?.length ? { from: flags.from } : {}),
         ...(wait !== undefined ? { wait } : {}),
         ...(lease !== undefined ? { lease } : {}),
@@ -1919,7 +1919,8 @@ async function tasks(args: string[]): Promise<number> {
     if (ran.how === 'interrupted') {
       await withClaim(claims, id, () => claim.release())
       await claims.drop(id)
-      return 130
+      // 130 for Ctrl-C, 143 for a supervisor's SIGTERM: what the signal would have said had it ended this process.
+      return ran.code
     }
     const settled = ran.code === 0
       ? await withClaim(claims, id, () => claim.complete(flags.result))

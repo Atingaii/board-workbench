@@ -338,6 +338,7 @@ error document:
 | 1 | it failed: `error: Couldn't find message #9999.`, or `wait` or `tasks claim --wait` timed out (`reason: "timeout"`) |
 | 2 | misuse: an unknown command or option, a missing or malformed argument, or no board to use |
 | 130 | Ctrl-C stopped `tail`, `wait`, `tasks claim --wait`, or `tasks run` |
+| 143 | SIGTERM stopped `tasks run`, which released its task |
 
 `tasks run` exits with its command's code.
 
