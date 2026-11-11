@@ -80,9 +80,10 @@ function toTask({ message, replies, last }: ThreadSummaryView): Task[] {
  * The fleet as it is now: its newest messages, then one read per task state. A board indexes a
  * label with one value, so `task.state=ready` lists only the ready tasks, while a filter with
  * several values, or the bare key, makes Vercel's board page through every thread in every channel
- * of the fleet. Finished states are read with a small limit, so what a snapshot costs follows the
- * open tasks, not every task ever made. Nothing is kept between snapshots: each is the board as it
- * is, whoever asks and whatever they missed.
+ * of the fleet. Finished states are read with a small limit, which caps their summaries, the
+ * expensive part; Vercel's board still lists every finished task to find the newest few, a request
+ * per page of them. Nothing is kept between snapshots: each is the board as it is, whoever asks
+ * and whatever they missed.
  */
 export async function snapshot(board: Board = team(), fleet: string = FLEET): Promise<Snapshot> {
   // The messages first: their cursor is where the live route listens from, so a change that lands

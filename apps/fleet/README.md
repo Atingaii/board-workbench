@@ -68,7 +68,7 @@ started them.
 - **A snapshot reads what's in play:** the fleet's newest 100 messages, then
   one read per task state. A board indexes a label with one value, so
   `task.state=ready` lists only the ready tasks. Done and canceled are read 25
-  at a time, so the cost follows the open tasks and not every task ever made.
+  at a time, so most of the cost follows the open tasks.
 - **The live route** (`app/api/live`) long-polls the board's events under the
   fleet and sends the browser a new snapshot after a change, at most one every
   3 seconds. Each viewer holds one long-poll; a connection ends after 50
@@ -79,5 +79,8 @@ started them.
 
 - **Claims coordinate; they don't secure.** Anyone who can label in a channel
   can change a task's labels.
+- **Finished tasks still cost a little, forever.** Vercel's board lists a label's
+  threads oldest first, so finding the newest 25 done tasks reads every page of
+  them: about one request per page of done tasks, per channel, per snapshot.
 - **A lease is the claimant's clock, not the board's.** The page calls a claimed
   task stalled once its `task.lease` has passed.
