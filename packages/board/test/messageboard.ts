@@ -911,13 +911,17 @@ function fakeBoard(shared: Shared, boardId: string) {
         // To a caller that can't read its channel, its ID and nothing else: it can't have asked for a claim, since `label` brings `read`.
         return mayRead(actor, thread.channelId) ? told(answer(thread)) : { task: { id: thread.id } }
       }
-      return told(
-        once(actor, body.operationId, () => {
-          // What it can't be is refused before its channel or its first message is made.
-          const { thread } = startThread(actor, body, (channel) => checkedTask(actor, channel, body, null), (made, checked) => makeTask(made, actor, checked, body.operationId))
-          return answer(thread)
-        }),
-      )
+      let made = false
+      const first = once(actor, body.operationId, () => {
+        // What it can't be is refused before its channel or its first message is made.
+        const { thread } = startThread(actor, body, (channel) => checkedTask(actor, channel, body, null), (started, checked) => makeTask(started, actor, checked, body.operationId))
+        made = true
+        return answer(thread)
+      })
+      // Only the request that made the task answers it whole to a caller that can't read its channel: a retry of the
+      // operation answers its ID alone, as a replay by client ID does.
+      if (!made && !mayRead(actor, first.task.channelId)) return { task: { id: first.task.id } }
+      return told(first)
     }
     const worked = /^\/tasks\/([^/]+)\/(claim|renew|release|complete|fail|block|unblock|reopen|assign|cancel)$/.exec(rest)
     if (method !== 'POST' || !worked) return undefined

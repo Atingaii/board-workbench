@@ -748,7 +748,7 @@ describe("vercel()'s tasks", () => {
     expect((await julian.thread(note.id)).message.task).toBeUndefined()
   })
 
-  it("gives a caller that may post but not read its task back as what it asked for, when a retry answers its ID alone", async () => {
+  it("gives a caller that may post but not read its task back as what it asked for, when a retry answers its ID alone: by its ID or by its operation", async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
     const { task: first } = await pong.tasks.create('work', { text: 'a task to wait for' })
@@ -767,6 +767,31 @@ describe("vercel()'s tasks", () => {
     expect(await answers[1]).toEqual({ task: { id: threadOf(made.task.id) } })
     expect(again.task).toMatchObject({ id: made.task.id, channel: 'intake', text: 'from a form', labels: { 'board.task': 'waiting' }, task: { state: 'waiting', owner: 'vercel:project:prj_pong:production', needs: [first.id], epoch: 0, claim: null } })
     expect((await pong.thread(made.task.id)).message.task).toMatchObject({ state: 'waiting', needs: [first.id] })
+
+    // A retry of the operation itself answers the same way: the API put the create off once the task was made, the
+    // same operation goes again, and only the request that made the task answers it whole.
+    vi.useFakeTimers()
+    const retried: Promise<unknown>[] = []
+    const putOff = handleOn(api, 'project:prj_pong:production', {
+      can: 'intake=post;work=read',
+      answered: (request, response) => {
+        if (request.method !== 'POST' || request.path !== '/tasks') return response
+        if (retried.push(response.clone().json()) > 1) return response
+        return Response.json({ error: { code: 'board_busy', message: 'retry shortly' } }, { status: 503, headers: { 'retry-after': '1' } })
+      },
+    })
+    const creating = putOff.tasks.create('intake', { text: 'from another form' })
+    await vi.advanceTimersByTimeAsync(1500)
+    const landed = await creating
+    const [asked, resent] = putOff.sent.filter((request) => request.method === 'POST' && request.path === '/tasks')
+    expect(resent!.body).toEqual(asked!.body)
+    expect(await Promise.all(retried)).toEqual([{ task: expect.objectContaining({ id: threadOf(landed.task.id), state: 'ready' }) }, { task: { id: threadOf(landed.task.id) } }])
+    expect(landed.task).toMatchObject({ channel: 'intake', text: 'from another form', labels: { 'board.task': 'ready' }, task: { state: 'ready', owner: 'vercel:project:prj_pong:production', needs: [], epoch: 0, claim: null } })
+    // One task came of it, as the deployment that reads the channel sees.
+    expect((await pong.tasks.list({ channel: 'intake' })).tasks.map((task) => [task.message.id, task.message.text])).toEqual([
+      [made.task.id, 'from a form'],
+      [landed.task.id, 'from another form'],
+    ])
   })
 
   it("reads as a board that keeps no tasks where the API's /me says nothing of them, and asks it nothing else", async () => {
