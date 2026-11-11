@@ -43,6 +43,11 @@ export type Message = {
    * it's theirs to edit and delete only then. Its event's payload says so too.
    */
   blind?: true
+  /**
+   * Set while its text is a platform's though it was written on the board: its last edit is one a
+   * sync brought in, which the board can't refuse or check. An edit made on the board clears it.
+   */
+  platformText?: true
   /** The index of the last event that changed it. Folds from before it existed leave it out. */
   version?: number
   /** The index of its post, or of its last edit or delete. Folds from before it existed leave it out. */
@@ -106,6 +111,8 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       if (!message || message.deleted) return undefined
       message.text = event.payload.text
       message.editedAt = iso(event.createdAt)
+      if (message.from === null && event.payload.from !== null) message.platformText = true
+      else delete message.platformText
       return message
     }
     case 'message.deleted': {

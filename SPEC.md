@@ -1448,10 +1448,14 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
   definition with no code generation, so it runs where a handle does.
 - **A platform's text is never checked.** What a sync imports can't be
   refused, so it's stored as it came and carries no blocks, whatever it says:
-  blocks go out to platforms, and none come in. What a sync writes on the
-  board itself (an import with `from: null`, a sync callback's client's or a
-  sync elsewhere's) is written on the board, and checked as any write, before
-  the middleware and after.
+  blocks go out to platforms, and none come in. The same goes for an edit a
+  sync brings in to a message written on the board: its text is the
+  platform's from then on, and it carries no blocks until it's edited on the
+  board again. What a sync writes on the board itself (an import with `from:
+  null`, a sync callback's client's or a sync elsewhere's) is written on the
+  board, and checked as any write, before the middleware and after. A block's
+  fence is code to whatever reads or rewrites mentions, so its data stays as
+  it was checked.
 - **Reads show the data.** Every message view has `blocks`, each `{ schema,
   version, data }`, in the order its text has them: read out of the text of a
   message written on the board, which was checked then, and empty for an

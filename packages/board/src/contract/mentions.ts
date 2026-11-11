@@ -1,3 +1,4 @@
+import { findBlocks } from './blocks.ts'
 const FENCED_CODE = /```[\s\S]*?```/g
 const INLINE_CODE = /`[^`\n]*`/g
 const NAME = '[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?'
@@ -9,11 +10,16 @@ const MENTION = new RegExp(
 // `@[slack:T0123:U0456]` names an exact actor.
 const EXACT = /(?<![\w@.-])@\[([^\]\s]+)\]/g
 
-/** Blanks out code so mentions inside it never count. */
-const proseOnly = (text: string): string =>
-  text
-    .replace(FENCED_CODE, (match) => ' '.repeat(match.length))
-    .replace(INLINE_CODE, (match) => ' '.repeat(match.length))
+/**
+ * Blanks out code so mentions inside it never count. A block's fence is code whatever it's fenced
+ * with and whatever its JSON holds, so nothing that reads or rewrites mentions touches its data.
+ */
+function proseOnly(text: string): string {
+  let prose = text.replace(FENCED_CODE, (match) => ' '.repeat(match.length)).replace(INLINE_CODE, (match) => ' '.repeat(match.length))
+  if (text.includes('json#'))
+    for (const { start, end } of findBlocks(text)) prose = `${prose.slice(0, start)}${' '.repeat(end - start)}${prose.slice(end)}`
+  return prose
+}
 
 export type MentionToken =
   | { kind: 'handle'; handle: string }
