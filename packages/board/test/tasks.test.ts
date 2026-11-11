@@ -398,6 +398,11 @@ describe('a task that needs others', () => {
     expect(await read(ada, review.id)).toMatchObject({ labels: { 'board.task': 'ready' }, task: { state: 'ready' } })
     expect((await bo('POST', `/tasks/${review.id}/claim`, {})).status).toBe(200)
 
+    // A task waits for at most 20 others, as many as Vercel's board takes.
+    const many = (count: number) => ({ channel: 'work', text: 'ship it all', needs: Array.from({ length: count }, (_, i) => String(1000 + i)) })
+    expect(code(await ada('POST', '/tasks', many(21)))).toEqual([400, 'invalid_request'])
+    expect(code(await ada('POST', '/tasks', many(20)))).toEqual([400, 'invalid_needs'])
+
     // One whose prerequisites completed already is ready from the start.
     expect(await task(ada, 'announce it', { needs: [fix.id, docs.id] })).toMatchObject({ labels: { 'board.task': 'ready' }, task: { state: 'ready', needs: [fix.id, docs.id] } })
   })

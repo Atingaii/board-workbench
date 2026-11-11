@@ -11,7 +11,7 @@ export const RESERVED_LABEL_PREFIX = 'board.'
 /** The label a task's root wears, with its state as the value. */
 export const TASK_LABEL = 'board.task'
 /** How many tasks one task may wait for. */
-export const TASK_NEEDS_MAX = 32
+export const TASK_NEEDS_MAX = 20
 /** The longest result or reason a task keeps: a line or two, with the detail in its thread. */
 export const TASK_NOTE_MAX = 1000
 
