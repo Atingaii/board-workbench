@@ -15,7 +15,6 @@ const PRODUCTION = {
   VERCEL_PROJECT_PRODUCTION_URL: "factory.acme.dev",
   VERCEL_GIT_REPO_OWNER: "acme",
   VERCEL_GIT_REPO_SLUG: "factory",
-  VERCEL_PROJECT_ID: "prj_factory",
   VERCEL_AUTOMATION_BYPASS_SECRET: "bypass",
 };
 
@@ -162,11 +161,12 @@ test("a project the board hasn't let in sees the board's own words, and its way 
   );
 });
 
-test("a project that can't sync is told how to be let, since GitHub and Slack wouldn't reach the board", async () => {
+test("a project the board's grants don't let sync isn't ready, and is told who can let it, with no grant of the launcher's own", async () => {
   const { vercel } = byId(await setup(fake({ deps: { access: async () => ({ "*": ["read", "post", "react", "label"] }) } }).deps));
   assert.equal(vercel!.status, "todo");
   assert.deepEqual(vercel!.rows?.find(([label]) => label === "board"), ["board", "can't sync"]);
-  assert.deepEqual(commands(vercel!), ["npx @vercel/board grants create --project prj_factory --environment production --can '*=read,post,react,label,sync'"]);
+  assert.equal(vercel!.fix?.[0]?.text, "The board's grants don't let this project sync, so GitHub and Slack won't reach it. Someone who manages the board can let it.");
+  assert.deepEqual(commands(vercel!), []);
 });
 
 test("sync in one channel pattern is enough for the Vercel step", async () => {

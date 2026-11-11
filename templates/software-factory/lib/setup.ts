@@ -161,15 +161,10 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
     const hint = (access as { hint?: unknown } | null)?.hint;
     fix.push({ text: `${message(access)}${typeof hint === "string" ? ` ${hint}` : ""}` });
   } else {
+    // A board lets every project on its team sync unless someone narrowed its grants: then it's theirs to widen.
     const syncs = Object.values(access as Record<string, readonly string[]>).some((can) => can.includes("sync"));
     rows.push(["board", syncs ? "can sync" : "can't sync"]);
-    if (!syncs) {
-      const id = deps.env.VERCEL_PROJECT_ID;
-      fix.push({
-        text: "Let this project sync on the board, so GitHub and Slack reach it.",
-        ...(id ? { commands: [`npx @vercel/board grants create --project ${id} --environment ${deps.env.VERCEL_ENV ?? "production"} --can '*=read,post,react,label,sync'`] } : {}),
-      });
-    }
+    if (!syncs) fix.push({ text: "The board's grants don't let this project sync, so GitHub and Slack won't reach it. Someone who manages the board can let it." });
   }
 
   const balance = await deps.credits().catch((error: unknown) => error);
