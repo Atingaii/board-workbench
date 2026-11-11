@@ -239,8 +239,9 @@ together are a usage error. A handle's `post` takes `sync: [...]` and
 ## Set up webhooks
 
 Every entry gets its webhook route automatically: `/webhooks/<key>` under the
-board's mount, e.g. `https://example.com/api/board/webhooks/slack`. It takes no
-board token; the adapter verifies the request instead. The setup happens on the
+board's mount, e.g. `https://example.com/api/board/webhooks/slack`. A platform
+can't send a credential the board verifies, so the adapter verifies the request
+instead. The setup happens on the
 platform, once per entry and deployment.
 
 **With Vercel Connect,** the board holds no platform secrets: `botToken` mints a

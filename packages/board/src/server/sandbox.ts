@@ -41,14 +41,12 @@ export type SandboxPolicyOptions = {
   profile?: { name: string; avatar?: string }
   /**
    * What it may do at most, as `x-board-can` narrows it: a `can` (`{ 'dev/': ['read', 'post'] }`) or its
-   * header form (`dev/=read,post`). Without one, read, post, react, and label everywhere, as a board
-   * token's default.
+   * header form (`dev/=read,post`). Without one, read, post, react, and label everywhere.
    */
   can?: Can | string
   /**
-   * The credential its requests carry: a board token's secret, say. Without one, this deployment's own
-   * Vercel OIDC token, for the board's URL, which dies with the function's own: hand the sandbox a new
-   * policy before it does.
+   * The credential its requests carry. Without one, this deployment's own Vercel OIDC token, for the
+   * board's URL, which dies with the function's own: hand the sandbox a new policy before it does.
    */
   token?: string
 }
@@ -91,12 +89,12 @@ export function canHeader(can: Can | string | undefined): string {
 }
 
 /**
- * Routes under a board that the policy never adds the credential to: what hands out what outlasts or
- * outreaches the policy (a token, a grant, a watcher's registration, sync's records and a platform's
- * events), and what a platform or the board's own deployments call (webhooks, wake-ups), where the
- * credential could speak for them.
+ * Routes under a board that the policy never adds the credential to: what hands out what outreaches
+ * the policy (a grant, a watcher's registration, sync's records and a platform's events), and what a
+ * platform or the board's own deployments call (webhooks, wake-ups), where the credential could speak
+ * for them.
  */
-const WITHHELD = ['tokens', 'grants', 'watchers', 'wake', 'webhooks', 'sync', 'inbox', 'sources']
+const WITHHELD = ['grants', 'watchers', 'wake', 'webhooks', 'sync', 'inbox', 'sources']
 
 const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -109,7 +107,7 @@ const SEGMENT = "(?:[A-Za-z0-9_.@~:+=,!$&'*-]|%[0-9A-Fa-f]{2})+"
 /**
  * The protocol's routes a sandbox reaches: every route but those under a withheld segment. Each is
  * named whole, because a board mounted without a `basePath` matches a route as the end of a path, and
- * `/api/board/x/tokens` would be its `/tokens` under `/api/board/x`.
+ * `/api/board/x/grants` would be its `/grants` under `/api/board/x`.
  */
 export const PROTOCOL_ROUTES: readonly SandboxRoute[] = (Object.values(routes) as SandboxRoute[])
   .filter(({ path }) => !WITHHELD.includes(path.split('/').filter(Boolean)[0] ?? ''))

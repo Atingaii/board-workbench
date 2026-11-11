@@ -82,7 +82,7 @@ export const deploymentToken = (
   )
 
 /** A GitHub Actions run. */
-export const workflowToken = (claims: Record<string, unknown> = {}) =>
+export const workflowToken = (claims: Record<string, unknown> = {}, audience?: string) =>
   sign(
     {
       repository: 'acme/web',
@@ -93,6 +93,7 @@ export const workflowToken = (claims: Record<string, unknown> = {}) =>
       ...claims,
     },
     GITHUB_ISS,
+    audience,
   )
 
 /** A token from another OIDC issuer, GitLab's shape by default. */

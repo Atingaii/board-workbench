@@ -1,68 +1,35 @@
 import { reducer } from 'experimental-a2'
 import { createServer } from 'experimental-a2/server'
 import type { Protocol } from '../api/protocol.ts'
-import type { GrantView, PrincipalView, TokenView } from '../api/routes.ts'
-import { duration } from '../client/client.ts'
+import type { GrantView, PrincipalView } from '../api/routes.ts'
 import { ACCESS_SESSION, accessContract, type AccessEvent } from '../contract/contract.ts'
-import { CAN_MAX } from '../contract/schemas.ts'
-import { checkGrantChange, compileAccess, FULL_ACCESS, parseCan, patternsOf, canText, type Access, type Can, type GrantShape, type WrittenCan } from './access.ts'
+import { checkGrantChange, compileAccess, parseCan, type Access, type GrantShape, type WrittenCan } from './access.ts'
 import {
-  BOARD_TOKEN_PREFIX,
   checkCan,
   checkGrant,
   checkPrincipal,
-  DEFAULT_CAN,
   GITHUB_ISSUER,
   grantIssuers,
   issuerName,
   joined,
   principalKey,
   removes,
-  tokenHash,
   workflowPath,
   type GrantPrincipal,
   type Known,
-  type Principal,
   type StoredGrant,
 } from './auth.ts'
-import type { Identity, StoredToken, Trust } from './backend.ts'
+import type { Identity, Trust } from './backend.ts'
 import type { Decided } from './policy.ts'
 import { whileHeadMoves } from './writes.ts'
-import { badRequest, forbidden, notFound, unauthorized } from './errors.ts'
-
-/** How long a token lives when its minter doesn't say, and at most: npm caps its write tokens at 90 days. */
-export const TOKEN_DEFAULT_MS = 30 * 24 * 3600_000
-export const TOKEN_MAX_MS = 90 * 24 * 3600_000
-/** How deep tokens minted with tokens go: each request walks the chain to its root. */
-const TOKEN_DEPTH_MAX = 8
+import { badRequest, forbidden, notFound } from './errors.ts'
 
 /** A grant as the fold keeps it: `event` is the index of the event that made it, null for the one the board starts with. */
 type GrantRow = { id: number; event: number | null; principals: GrantPrincipal[]; can: WrittenCan; by: string | null; at: number | null }
-type TokenRow = {
-  id: number
-  hash: string
-  name: string
-  minter: Known
-  profile: string | null
-  avatar: string | null
-  expiresAt: number
-  parent: number | null
-  by: string
-  at: number
-}
-/**
- * Grants by ID, and the next ID; live tokens by ID, and their IDs by hash. A revoked token leaves
- * the state at once, and an expired one with the first event of the day after it expires: its
- * token IDs wait in `expiring`, by that day. The log keeps every event.
- */
+/** Grants by ID, and the next ID. The log keeps every event. */
 export type AccessState = {
   grants: Record<string, GrantRow>
   nextGrant: number
-  tokens: Record<string, TokenRow>
-  hashes: Record<string, number>
-  expiring: Record<string, number[]>
-  /** The first day not yet pruned: the day of the first event, until then. */
-  pruned: number | null
 }
 
 /**
@@ -85,58 +52,18 @@ const STARTING_GRANTS: Record<string, GrantRow> = {
   3: { id: 3, event: null, principals: [{ kind: 'all-apps' }], can: { '*': ['read', 'post', 'react', 'label'] }, by: null, at: null },
 }
 
-/** The access session before its first event: the grants every board starts with, and no tokens. */
-export const startingAccess = (): AccessState => ({ grants: structuredClone(STARTING_GRANTS), nextGrant: 4, tokens: {}, hashes: {}, expiring: {}, pruned: null })
+/** The access session before its first event: the grants every board starts with. */
+export const startingAccess = (): AccessState => ({ grants: structuredClone(STARTING_GRANTS), nextGrant: 4 })
 
-const DAY_MS = 24 * 3600_000
-
-function dropToken(state: AccessState, id: number) {
-  const row = state.tokens[id]
-  if (!row) return
-  delete state.hashes[row.hash]
-  delete state.tokens[id]
-}
-
-/** Whether token `id` is token `ancestor`, or was minted with it at any depth. */
-function mintedWith(state: AccessState, id: number, ancestor: number): boolean {
-  let at: number | null = id
-  for (let depth = 0; at !== null && depth <= TOKEN_DEPTH_MAX; depth++) {
-    if (at === ancestor) return true
-    at = state.tokens[at]?.parent ?? null
-  }
-  return false
-}
-
-/**
- * Whether `identity` may see and revoke token `row`: anyone's with `manage` in every channel. A
- * token acts as its minter, so its principal alone would hand it every token its minter has: with
- * a token, it's that token and those minted with it; without one, those its principal minted.
- */
-function manages(state: AccessState, { principal }: Identity, row: TokenRow): boolean {
-  if (principal.access.everywhere('manage')) return true
-  if (row.minter.id !== principal.id) return false
-  if (principal.token === undefined) return true
-  const held = indexOf(principal.token, 't')
-  return held !== null && mintedWith(state, row.id, held)
-}
-
-/**
- * The access session's fold. It prunes by the events' own times, so every instance folds the same
- * state, and each event costs a day's expired tokens at most. A child whose parent is gone counts
- * as dead (`liveIn`), and lives no longer than its parent, so pruning never brings one back.
- */
+/** The access session's fold. */
 export function foldAccess(state: AccessState, event: AccessEvent): AccessState {
   const at = new Date(event.createdAt).getTime()
-  const day = Math.floor(at / DAY_MS)
-  if (state.pruned === null) state.pruned = day
-  for (; state.pruned < day; state.pruned++) {
-    for (const id of state.expiring[state.pruned] ?? []) dropToken(state, id)
-    delete state.expiring[state.pruned]
-  }
   switch (event.type) {
-    // From before grants named principals: they name no one now.
+    // From before grants named principals, and from when boards issued tokens: they let no one in now.
     case 'grant.set':
     case 'grant.revoked':
+    case 'token.minted':
+    case 'token.revoked':
       break
     case 'grant.created': {
       const { principals, can, by } = event.payload
@@ -153,33 +80,21 @@ export function foldAccess(state: AccessState, event: AccessEvent): AccessState 
     case 'grant.deleted':
       delete state.grants[event.payload.id]
       break
-    case 'token.minted': {
-      const { payload } = event
-      if (state.hashes[payload.hash] !== undefined) break
-      state.tokens[event.index] = { id: event.index, ...payload, minter: payload.minter as Known, at }
-      state.hashes[payload.hash] = event.index
-      ;(state.expiring[Math.floor(payload.expiresAt / DAY_MS)] ??= []).push(event.index)
-      break
-    }
-    case 'token.revoked':
-      dropToken(state, event.payload.id)
-      break
   }
   return state
 }
 
 export const accessReducer = reducer({
   contract: accessContract,
-  // v3 since g2 starts with sync: the grants are folded again from the log, so a g2 that no event changed syncs too.
-  name: 'board.access.v3',
+  // v4 since it keeps no tokens: the grants are folded again from the log, without them.
+  name: 'board.access.v4',
   initialState: startingAccess(),
 }).fold(foldAccess)
 
 const grantId = (id: number) => `g${id}`
-const tokenId = (id: number) => `t${id}`
-/** The index an ID names: `g12` or `t12` for 12. Null for one that names none. */
-function indexOf(id: string, prefix: 'g' | 't'): number | null {
-  const found = new RegExp(`^${prefix}([1-9]\\d{0,15})$`).exec(id)
+/** The index a grant's ID names: `g12` for 12. Null for one that names none. */
+function indexOf(id: string): number | null {
+  const found = /^g([1-9]\d{0,15})$/.exec(id)
   return found ? Number(found[1]) : null
 }
 
@@ -214,24 +129,6 @@ const grantView = (row: GrantRow): GrantView => ({
 })
 
 const storedGrant = (row: GrantRow): StoredGrant => ({ id: grantId(row.id), principals: row.principals, can: row.can })
-
-/** A token as the protocol shows it, with `can` what it may do now (`accessNow`'s, for its minter). */
-const tokenView = (row: TokenRow, can: Access | null): TokenView => ({
-  id: tokenId(row.id),
-  name: row.name,
-  can: (can === null ? {} : can.summary()) as TokenView['can'],
-  profile: row.profile,
-  by: row.by,
-  at: new Date(row.at).toISOString(),
-  expiresAt: new Date(row.expiresAt).toISOString(),
-  parent: row.parent === null ? null : tokenId(row.parent),
-})
-
-/** A new token's secret: the prefix and 32 random bytes, base64url. */
-function newSecret(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32))
-  return `${BOARD_TOKEN_PREFIX}${btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`
-}
 
 /**
  * The principal an explain query names, as a token of its would make it: a person by user ID, a
@@ -284,7 +181,7 @@ function principalNamed(query: Protocol['explain']['input'], team: string | null
  */
 const isOwner = (principal: Identity['principal']) => principal.kind === 'person' && principal.id.startsWith('local:user:') && principal.facts?.issuer !== 'host'
 
-/** Whether `identity` may list the grants: `manage` at `*`, or the owner, as far as its token's scope allows. */
+/** Whether `identity` may list the grants: `manage` at `*`, or the owner, as far as its `x-board-can` allows. */
 function lists({ principal }: Identity): boolean {
   if (principal.access.at('manage', '*')) return true
   return isOwner(principal) && (principal.scope === undefined || compileAccess(parseCan(principal.scope)).at('manage', '*'))
@@ -301,10 +198,10 @@ function mayList(identity: Identity, what: string) {
  */
 const unreachable = (what: string) => forbidden(`this token can't ${what}: it needs manage wherever that grant reaches`)
 
-/** A principal's access under `grants`, narrowed by its token: what a grant write judges by, on the snapshot it appends to. */
+/** A principal's access under `grants`, narrowed by its `x-board-can`: what a grant write judges by, on the snapshot it appends to. */
 type AccessIn = (principal: Known, grants: readonly StoredGrant[]) => Promise<Access | null>
 
-/** `grants` with no `everyone` in them: what a caller's own limits are, its role, its grants and its groups', and its token. */
+/** `grants` with no `everyone` in them: what a caller's own limits are, its role, its grants and its groups', and its `x-board-can`. */
 const withoutEveryone = (grants: readonly StoredGrant[]): StoredGrant[] =>
   grants.flatMap((grant) => {
     const principals = grant.principals.filter((principal) => principal.kind !== 'everyone')
@@ -313,7 +210,7 @@ const withoutEveryone = (grants: readonly StoredGrant[]): StoredGrant[] =>
 
 /**
  * What the caller may do on `grants`, the snapshot its write appends to (`caller`), and by its own
- * limits alone (`own`): null for an owner no token narrows. A 403 when it may do nothing.
+ * limits alone (`own`): null for an owner no `x-board-can` narrows. A 403 when it may do nothing.
  */
 async function changerAccess({ principal }: Identity, grants: readonly StoredGrant[], accessIn: AccessIn): Promise<{ caller: Access; own: Access } | null> {
   if (isOwner(principal)) {
@@ -360,7 +257,7 @@ const namesIssuer = (principals: readonly GrantPrincipal[]) => principals.some((
  * already. `issuers` are the ones the board's rules trust.
  */
 async function updated(identity: Identity, state: AccessState, { id, add, remove, can }: Protocol['updateGrant']['input'], issuers: readonly string[], accessIn: AccessIn, team: string | null) {
-  const index = indexOf(id, 'g')
+  const index = indexOf(id)
   const row = index === null ? undefined : state.grants[index]
   if (!row) {
     // One that isn't there is only news to whoever may list them.
@@ -397,9 +294,9 @@ async function updated(identity: Identity, state: AccessState, { id, add, remove
 }
 
 /**
- * The board's grants and tokens, in session `access` of its log: what a local board answers for them, and
+ * The board's grants, in session `access` of its log: what a local board answers for them, and
  * what board() checks requests against. `accessNow`: what a principal may do now, under board()'s
- * defaults and the grants, which a token's listing shows.
+ * defaults and the grants.
  */
 export function createTrust(options: {
   store: Parameters<typeof createServer>[0]['store']
@@ -413,58 +310,12 @@ export function createTrust(options: {
   const accessIn: AccessIn = (principal, grants) => options.accessNow(principal, grants)
   const session = createServer({ contract: accessContract, store: options.store }).session(ACCESS_SESSION)
   const read = async () => (await session.state(accessReducer)).state
-  /** The grants and tokens as they are now, and the index a conditional write holds them at. */
+  /** The grants as they are now, and the index a conditional write holds them at. */
   const latest = () => session.state(accessReducer, { through: 'latest' })
-
-  /**
-   * What each of `rows` may do now: its minter's access, narrowed by its scope. A minter's is worked
-   * out once, however many tokens it has.
-   */
-  async function viewsOf(rows: readonly TokenRow[]): Promise<TokenView[]> {
-    const minters = new Map<string, Promise<Access | null>>()
-    return Promise.all(
-      rows.map(async (row) => {
-        const { scope, ...minter } = row.minter
-        const key = JSON.stringify(minter)
-        let access = minters.get(key)
-        if (!access) minters.set(key, (access = options.accessNow(minter)))
-        const now = await access
-        return tokenView(row, now === null || scope === undefined ? now : now.narrow(parseCan(scope)))
-      }),
-    )
-  }
-
-  /** Whether token `id` and every token it was minted with are live now. */
-  function liveIn(state: AccessState, id: number): boolean {
-    let at: number | null = id
-    for (let depth = 0; at !== null; depth++) {
-      const row: TokenRow | undefined = state.tokens[at]
-      if (!row || row.expiresAt <= Date.now() || depth > TOKEN_DEPTH_MAX) return false
-      at = row.parent
-    }
-    return true
-  }
 
   const trust: Trust = {
     async grants(): Promise<StoredGrant[]> {
       return Object.values((await read()).grants).map(storedGrant)
-    },
-    async token(hash): Promise<StoredToken | null> {
-      const state = await read()
-      const id = state.hashes[hash]
-      if (id === undefined || !liveIn(state, id)) return null
-      const row = state.tokens[id]!
-      return {
-        id: tokenId(row.id),
-        name: row.name,
-        minter: row.minter,
-        pinned: { profile: row.profile, avatar: row.avatar },
-        expiresAt: new Date(row.expiresAt),
-      }
-    },
-    async live(id) {
-      const index = indexOf(id, 't')
-      return index !== null && liveIn(await read(), index)
     },
   }
 
@@ -507,8 +358,8 @@ export function createTrust(options: {
       if (named) mayList(identity, 'explain what another principal may do')
       // A local board has no apps, so nothing lets one in, whatever its grants name.
       if (query.app !== undefined) return { channel: query.channel, pattern: null, over: [], level: null, grants: [], capped: null, can: [] }
-      const { id, kind, handle, facts, scope, token } = identity.principal
-      const principal: Known = named ? principalNamed(query, await options.team()) : { id, kind, handle, ...(facts ? { facts } : {}), ...(scope !== undefined ? { scope } : {}), ...(token !== undefined ? { token } : {}) }
+      const { id, kind, handle, facts, scope } = identity.principal
+      const principal: Known = named ? principalNamed(query, await options.team()) : { id, kind, handle, ...(facts ? { facts } : {}), ...(scope !== undefined ? { scope } : {}) }
       const decided = await options.explain(principal, query.channel)
       const { grants } = await read()
       // A grant names whom else it lets in: only those who may list grants see which decided.
@@ -519,7 +370,7 @@ export function createTrust(options: {
         over: decided.over,
         level: decided.level,
         grants: shown.flatMap((grant) => {
-          const row = grants[indexOf(grant.id, 'g') ?? 0]
+          const row = grants[indexOf(grant.id) ?? 0]
           return row ? [grantView(row)] : []
         }),
         // A board on `a2()` has no team roles.
@@ -530,7 +381,7 @@ export function createTrust(options: {
     async revokeGrant(identity: Identity, { id }: { id: string }): Promise<Protocol['revokeGrant']['output']> {
       return whileHeadMoves(async () => {
         const { state, index } = await latest()
-        const at = indexOf(id, 'g')
+        const at = indexOf(id)
         const row = at === null ? undefined : state.grants[at]
         if (!row) {
           // One that isn't there is only news to whoever may list them.
@@ -542,79 +393,6 @@ export function createTrust(options: {
         await session.append.ifLastIndex(index, { type: 'grant.deleted', payload: { id: row.id, by: identity.actor.id } })
         return { revoked: true }
       })
-    },
-
-    async tokens(identity: Identity): Promise<Protocol['tokens']['output']> {
-      const state = await read()
-      const rows = Object.values(state.tokens).filter((row) => liveIn(state, row.id) && manages(state, identity, row))
-      return { tokens: await viewsOf(rows.sort((a, b) => a.id - b.id)) }
-    },
-    /** The board tokens `principal` came with: its own, then each it was minted with. Undefined with none. */
-    async chain(principal: Pick<Principal, 'token'>): Promise<string[] | undefined> {
-      if (principal.token === undefined) return undefined
-      const state = await read()
-      const chain: string[] = []
-      for (let at = indexOf(principal.token, 't'); at !== null && chain.length <= TOKEN_DEPTH_MAX; at = state.tokens[at]?.parent ?? null) chain.push(tokenId(at))
-      return chain
-    },
-    async createToken(identity: Identity, body: Protocol['createToken']['input']): Promise<Protocol['createToken']['output']> {
-      const { principal, actor } = identity
-      const state = await read()
-      const now = Date.now()
-      const asked = body.expires === undefined ? TOKEN_DEFAULT_MS : duration(body.expires)
-      if (asked <= 0 || asked > TOKEN_MAX_MS) throw badRequest('a token lives up to 90 days: pass expires as 90d or less', 'invalid_expires')
-      let expiresAt = now + asked
-      // A token minted with a token is its child: it lives no longer than it, and stops when it does.
-      let parent: TokenRow | null = null
-      if (principal.token !== undefined) {
-        const index = indexOf(principal.token, 't')
-        parent = index === null ? null : (state.tokens[index] ?? null)
-        if (!parent || !liveIn(state, parent.id)) throw unauthorized("invalid token: revoked, expired, or not this board's")
-        let depth = 0
-        for (let at: TokenRow | undefined = parent; at; at = at.parent === null ? undefined : state.tokens[at.parent]) depth++
-        if (depth >= TOKEN_DEPTH_MAX) throw badRequest(`tokens minted with tokens go ${TOKEN_DEPTH_MAX} deep at most`, 'invalid_token')
-        expiresAt = Math.min(expiresAt, parent.expiresAt)
-      }
-      // What it may do at most: its minter's scope, narrowed by its own `can`. It always has one, so
-      // a token is never its principal's integration: no registering watchers, no sync's records.
-      let can: ReturnType<typeof compileAccess>
-      try {
-        can = compileAccess((body.can ?? DEFAULT_CAN) as Can)
-      } catch (error) {
-        throw badRequest((error as Error).message, 'invalid_scope')
-      }
-      const scope = canText((principal.scope === undefined ? FULL_ACCESS : compileAccess(parseCan(principal.scope))).narrow(can))
-      if (scope.length > CAN_MAX) throw badRequest(`a token's can is ${CAN_MAX} characters at most as a scope: name fewer channels`, 'invalid_scope')
-      const minter: Known = {
-        id: principal.id,
-        kind: principal.kind,
-        handle: principal.handle,
-        ...(principal.facts ? { facts: principal.facts } : {}),
-        scope,
-      }
-      // A child keeps its parent's pins: a token can't mint its way out of the profile it writes as.
-      const pinned = principal.pinned
-      const profile = pinned?.profile ?? body.profile ?? null
-      const avatar = pinned?.profile ? pinned.avatar : profile !== null ? (body.avatar ?? null) : null
-      const secret = newSecret()
-      const [row] = await session.append({
-        type: 'token.minted',
-        payload: { hash: await tokenHash(secret), name: body.name, minter, profile, avatar, expiresAt, parent: parent?.id ?? null, by: actor.id },
-      })
-      const minted = row && (await read()).tokens[row.index]
-      if (!minted) throw new Error('a token was minted but its log has no record of it')
-      const [view] = await viewsOf([minted])
-      return { token: view!, secret }
-    },
-    async revokeToken(identity: Identity, { id }: { id: string }): Promise<Protocol['revokeToken']['output']> {
-      const state = await read()
-      const index = indexOf(id, 't')
-      const row = index === null ? undefined : state.tokens[index]
-      // Only a live token you manage: one that's gone, never was, or isn't yours answers alike, so
-      // it says nothing about others' tokens.
-      if (!row || !liveIn(state, row.id) || !manages(state, identity, row)) return { revoked: false }
-      await session.append({ type: 'token.revoked', payload: { id: row.id, by: identity.actor.id } })
-      return { revoked: true }
     },
   }
 }

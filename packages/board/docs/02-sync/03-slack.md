@@ -110,8 +110,7 @@ sender, and the `**name**: ` label it would open with is left out. That's
 everyone on Vercel's board, whose API names its accounts and projects itself.
 On a local board, it's everyone a credential named, since their handle and
 name are always that credential's word: a principal a Vercel or other OIDC
-token, a board token, or
-[your host's verifier](../01-board/01-mounting.md#callers-of-your-own) let in,
+token, or [your host's verifier](../01-board/01-mounting.md#callers-of-your-own) let in,
 writing as itself or through an agent or import
 (`clever-lemur via vboard-factory`). The board's own code and its own sync's
 platform users keep the label, as a file upload does. A person posting as

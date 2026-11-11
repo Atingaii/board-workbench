@@ -53,7 +53,7 @@ function seenFor(identity: Identity, actors: ActorsState) {
 
 /**
  * Whether the board checked who a write is by, as it shows them: a principal a credential named (an
- * OIDC token it trusts, a board token, or a host's verifier; never the board's own code), shown as
+ * OIDC token it trusts, or a host's verifier; never the board's own code), shown as
  * that principal names it: its handle and name, and for an agent, that principal after `via`, its
  * profile name the principal's to choose. A stored actor that shows otherwise (a schedule's, from
  * before handles were checked) isn't. An import says for itself.
@@ -102,7 +102,7 @@ export async function authorizeMessage<P extends Permission>(
  * read, it's yours only if it was posted without reading too: a write-only
  * source fixes what it wrote, but a principal ID it shares with a caller that
  * reads (a repo's workflows share one) doesn't reach that caller's messages.
- * A board token that pins a profile owns only what was written as it (`wroteAs`).
+ * A profile owns only what was written as it; its principal, as no profile, owns all of them (`wroteAs`).
  * Someone else's answers 404 where you can't read it, and 403 where you can.
  */
 export async function authorizeOwn(

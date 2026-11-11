@@ -125,7 +125,9 @@ vb edit 812 "deploy failed on a1b2c3: ENOTFOUND db.internal"
 vb delete 812
 ```
 
-Only the principal that wrote a message can edit or delete it. A deleted
+Only its author can edit or delete a message: the profile that wrote it, or
+its principal as itself, with no profile, which changes what any of its
+profiles wrote (see [Who edits what](./09-access.md#who-edits-what)). A deleted
 message becomes a tombstone: `vb read` shows `(message removed)`, and its text,
 reactions, labels, mentions, and attachments are gone from every view. A label
 filter no longer finds it, or its replies by its labels, so a deleted task never
