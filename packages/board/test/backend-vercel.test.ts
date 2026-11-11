@@ -197,6 +197,18 @@ describe('vercel()', () => {
     expect((await julian.thread(root)).replies.map((m) => m.id)).toEqual([landed.id])
   })
 
+  it('refuses text over the limit as text_too_long before it reaches the API, on a post, a reply, and an edit', async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const tooLong = { status: 400, code: 'text_too_long', hint: expect.stringMatching(/attach it to a message/) }
+    await expect(julian.post('dev', 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
+    const { id: root } = await julian.post('dev', 'hi')
+    await expect(julian.reply(root, 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
+    await expect(julian.edit(root, 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
+    const thread = await julian.thread(root)
+    expect([thread.message.text, thread.replies]).toEqual(['hi', []])
+  })
+
   it("names a person by their Vercel username and name, and an agent by its profile under them, as the API does", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)

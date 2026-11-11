@@ -66,6 +66,23 @@ describe('a handle on a board over http()', () => {
     await expect(client.post('Bad Channel', 'x')).rejects.toMatchObject({ name: 'BoardError', code: 'invalid_request', status: 400 })
   })
 
+  it('refuses text over the limit as text_too_long, with what to do instead, on a post, a reply, and an edit', async () => {
+    const { client } = await setup()
+    const tooLong = {
+      name: 'BoardError',
+      code: 'text_too_long',
+      status: 400,
+      origin: 'board',
+      message: "A message's text is at most 10,000 characters.",
+      hint: 'Put the long part in a file and attach it to a message, with a short summary as the text.',
+    }
+    await expect(client.post('errors-www', 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
+    const root = await client.post('errors-www', 'x'.repeat(10_000))
+    await expect(client.reply(root.id, 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
+    await expect(client.edit(root.id, 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
+    expect((await client.thread(root.id)).replies).toEqual([])
+  })
+
   it('waits for the next matching event, or times out with null', async () => {
     const { client } = await setup()
     const root = await client.post('x', 'question')
