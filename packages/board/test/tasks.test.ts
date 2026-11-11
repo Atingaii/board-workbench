@@ -457,6 +457,40 @@ describe('a task that needs others', () => {
     expect((await ada('GET', `/tasks?needs=${lint.id}`)).body.tasks.map((t: { message: MessageView }) => t.message.id)).toEqual([merge.id])
   })
 
+  it('refuses a prerequisite that was canceled, which can never complete, when a task is made and when a thread is made one', async () => {
+    const { board, ada } = setup()
+    const dropped = await task(ada, 'migrate the old table')
+    const build = await task(ada, 'build the image')
+    await ada('POST', `/tasks/${dropped.id}/cancel`, { reason: 'not needed after all' })
+    const plain = (await ada('POST', '/messages', { channel: 'work', text: 'a thread to make a task' })).body.message
+    // Both ways of making a task hear it at once, alone or among prerequisites that are fine, and nothing is made.
+    expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'drop the old table', needs: [dropped.id] }))).toEqual([400, 'invalid_needs'])
+    expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'drop the old table', needs: [build.id, dropped.id] }))).toEqual([400, 'invalid_needs'])
+    expect(code(await ada('POST', '/tasks', { re: plain.id, needs: [dropped.id] }))).toEqual([400, 'invalid_needs'])
+    expect((await ada('GET', '/messages?channel=work')).body.messages.map((m: MessageView) => [m.text, m.task?.state])).toEqual([
+      ['migrate the old table', 'canceled'],
+      ['build the image', 'ready'],
+      ['a thread to make a task', undefined],
+    ])
+    // One whose root was deleted was canceled with it.
+    const gone = await task(ada, 'gone soon')
+    await ada('POST', `/messages/${gone.id}/delete`, {})
+    expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'after what is gone', needs: [gone.id] }))).toEqual([400, 'invalid_needs'])
+    // A failed one can be reopened, so it's still something to wait for.
+    await ada('POST', `/tasks/${build.id}/fail`, { ...(await claim(ada, build.id)), reason: 'registry is down' })
+    expect((await task(ada, 'deploy it', { needs: [build.id] })).task).toMatchObject({ state: 'waiting', needs: [build.id] })
+    expect((await ada('POST', '/tasks', { re: plain.id, needs: [build.id] })).body.task.task).toMatchObject({ state: 'waiting', needs: [build.id] })
+    // One the caller can't read says nothing of having been canceled: it answers as what isn't there.
+    await grantCi(board, { work: ['read', 'post', 'label'] })
+    const runner = ci(board)
+    const secret = await task(ada, 'rotate the keys', { channel: 'elsewhere' })
+    await ada('POST', `/tasks/${secret.id}/cancel`, { reason: 'rotated by hand' })
+    const hidden = await runner('POST', '/tasks', { channel: 'work', text: 'after that', needs: [secret.id] })
+    const missing = await runner('POST', '/tasks', { channel: 'work', text: 'after that', needs: ['999'] })
+    expect(code(hidden)).toEqual([400, 'invalid_needs'])
+    expect(hidden.body.error.message).toBe(missing.body.error.message.replace('999', secret.id))
+  })
+
   it('names only tasks the caller can read, and never itself', async () => {
     const { board, ada } = setup()
     await grantCi(board, { work: ['read', 'post', 'label'] })

@@ -975,6 +975,29 @@ const CHECKS: Check[] = [
   },
   {
     group: 'tasks',
+    name: 'refuses a prerequisite that was canceled, which can never complete, and takes one that failed',
+    run: async (ctx) => {
+      const { task: dropped } = await task(ctx, 'conformance: a prerequisite that was canceled')
+      await ctx.board.tasks.cancel(dropped.id, 'conformance: not wanted')
+      // A task that waited for it would wait for good, so whoever makes one hears at once: a new thread, or one that's there.
+      const waiting = ctx.board.tasks.create(ctx.channel, { text: 'conformance: needs a canceled task', labels: ctx.labels, noSync: true, needs: [dropped.id] }).then((made) => {
+        ctx.posted.push(made.task.id)
+        return made
+      })
+      await rejects(waiting, 400, 'invalid_needs', 'a task that needs a canceled one')
+      const plain = await post(ctx, 'conformance: a thread that would need a canceled task')
+      await rejects(ctx.board.tasks.create({ re: plain.id }, { needs: [dropped.id] }), 400, 'invalid_needs', 'making a thread a task that needs a canceled one')
+      same((await ctx.board.thread(plain.id)).message.task, undefined, 'the thread, after it was refused as a task')
+      // A failed one may be reopened, so it's still something to wait for.
+      const { task: failed } = await task(ctx, 'conformance: a prerequisite that failed')
+      await (await ctx.board.tasks.claim(failed.id, { lease: 60 })).fail('conformance: not this time')
+      const { task: after } = await task(ctx, 'conformance: a task that waits for a failed one', { needs: [failed.id] })
+      same(after.task?.state, 'waiting', 'a task that needs one that failed')
+      alike(after.task?.needs, [failed.id], 'what it needs')
+    },
+  },
+  {
+    group: 'tasks',
     name: 'holds a task for a person, by its owner or its claim, and gives it back when unblocked',
     run: async (ctx) => {
       const { task: root } = await task(ctx, 'conformance: a task to hold for a person')

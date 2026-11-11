@@ -168,7 +168,7 @@ describe('the conformance kit', () => {
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
     expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
-    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 12 }, () => 'passed'))
+    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 13 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
     // Every task it made went with its root: none is left open, and none still wears a state.
@@ -386,7 +386,7 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(taskless))
     expect(report.ok).toBe(true)
     const tasks = report.checks.filter((check) => check.group === 'tasks')
-    expect(tasks).toHaveLength(12)
+    expect(tasks).toHaveLength(13)
     // The one that needs no task route is about labels, which a board has either way.
     expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
     expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
@@ -409,6 +409,7 @@ describe('the conformance kit', () => {
     const noNeeds = rewriting(flat.fetch, (method, path) => method === 'POST' && path.endsWith('/tasks'), (body) => delete body.needs)
     expect(failed(await conformance(await clientOf(noNeeds)))).toEqual([
       ['holds a task until the tasks it needs complete, which a failed or canceled one never does', 'a task that needs one that has not completed: expected "waiting", got "ready"'],
+      ['refuses a prerequisite that was canceled, which can never complete, and takes one that failed', 'a task that needs a canceled one: expected 400 invalid_needs, and it succeeded'],
       ['shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token', 'the feed should show the task become ready, within a few seconds'],
     ])
     // One that gives every claim its own default lease, whatever it asked for.

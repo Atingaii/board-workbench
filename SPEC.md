@@ -3593,9 +3593,14 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   can't read, in the same words: a task that became ready would say when a
   task out of sight completed. Needs never change and nothing can need a
   thread before it's a task, so the only cycle is a task that needs itself.
+- **A canceled task is no prerequisite.** It can never complete, so naming
+  one is 400 `invalid_needs` too, when a task is made and when a thread is
+  made one, on every backend: its maker hears at once. A failed task is one,
+  since `reopen` can retry it.
 - **A failed or canceled prerequisite never readies its dependents.** `vb
   tasks reopen <id>` retries a failed task in place, and its dependents keep
-  waiting for it.
+  waiting for it. One canceled after its dependents were made leaves them
+  waiting, until their owner cancels them.
 - **Completing a task readies its dependents,** in the completion's own
   request. On `local()` it's the same write: one append holds `task.completed`
   and a `task.ready` for each dependent whose last prerequisite it was.

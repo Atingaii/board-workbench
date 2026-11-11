@@ -263,7 +263,9 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
    * task, or that the caller can't read, is refused alike, so `needs` says nothing of what's out of
    * sight. Needs never change, and nothing can need a thread before it's a task, so the only cycle
    * there could be is a task that waits for itself: `self` isn't a task yet, so it's refused as any
-   * thread that isn't one, and named here only so the refusal says why.
+   * thread that isn't one, and named here only so the refusal says why. One that was canceled is
+   * refused too: it can never complete, so a task that waited for it would wait for good, and its
+   * maker hears now. A failed one may yet be reopened, so it's still something to wait for.
    */
   async function needsAt(access: Access, refs: readonly string[] | undefined, position: number, self: number | null): Promise<{ ids: number[]; completed: boolean }> {
     const invalid = (value: string, why: string) => badRequest(`needs: #${value} ${why}`, 'invalid_needs')
@@ -279,6 +281,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     for (const [id, value] of named) {
       const need = found.get(id)
       if (!need?.task || !access.readable(need.channel)) throw invalid(value, "isn't a task")
+      if (need.task.state === 'canceled') throw invalid(value, 'was canceled: it can never complete')
     }
     return { ids, completed: ids.every((id) => found.get(id)!.task!.state === 'completed') }
   }

@@ -416,8 +416,8 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   `labels`, `noSync`, and `id` as [a post](#posting) does, and needs `post`
   there, and `label` for `labels`. With `re` it makes a task of a thread as it
   is, and needs `label` in its channel. The caller's principal owns the task.
-  `needs` names tasks the caller can read. `claim: true` claims it in the same
-  write.
+  `needs` names tasks the caller can read, none of them canceled: one that was
+  can never complete. `claim: true` claims it in the same write.
 - **A claim is a lease.** `lease` is seconds, 30 to 3600, and 900 when left
   out. The answer's `claim` is `{ epoch, token, until }`: `epoch` and `token` go
   on every write the claim makes, and `until` is when the lease ends. The token
@@ -750,7 +750,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
 | 400 | `reserved_label` | a write that sets or unsets a label under `board.` |
-| 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, or the task itself |
+| 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, the task itself, or a task that was canceled |
 | 400 | `invalid_from` | a claim whose `from` names an owner by handle: several can share one, so `from` takes IDs |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |

@@ -359,10 +359,10 @@ if (claim) {
 
 - **`create`** starts a thread as a task, taking `text`, `labels`, `noSync`,
   and `id` as `post` does, or with `{ re }` makes a task of a thread as it is.
-  `TaskOptions` is `needs` (the IDs of the tasks it waits for), `for` (the one
-  actor of yours that claims it, `<your principal>+<profile>`), `claim`, and
-  `lease`. You own the task. `claim` comes back when it was made with
-  `claim: true`.
+  `TaskOptions` is `needs` (the IDs of the tasks it waits for, none of them
+  canceled), `for` (the one actor of yours that claims it,
+  `<your principal>+<profile>`), `claim`, and `lease`. You own the task.
+  `claim` comes back when it was made with `claim: true`.
 - **`claim`** by ID throws a 409 when the task can't be claimed:
   `task_claimed`, `task_waiting`, `task_blocked`, `task_finished`, or
   `task_assigned`. With `{ channel }` it claims the oldest ready task in that
