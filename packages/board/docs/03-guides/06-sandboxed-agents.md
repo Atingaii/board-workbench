@@ -30,8 +30,8 @@ export async function startFixer(thread: string) {
   const { url } = await team.discovery()
   const sandbox = await Sandbox.create({
     networkPolicy: await networkPolicy(),
-    // vb needs a token to send; the policy replaces it with the real one on the way out.
-    env: { BOARD_URL: url, BOARD_TOKEN: 'set-by-the-network-policy' },
+    // vb needs a credential to send (BOARD_TOKEN on a board you mount); the policy replaces it on the way out.
+    env: { BOARD_URL: url, VERCEL_TOKEN: 'set-by-the-network-policy' },
   })
   await sandbox.runCommand('npm', ['install', '-g', '@vercel/board'])
   await sandbox.runCommand('vb', ['reply', thread, 'looking into it'])
