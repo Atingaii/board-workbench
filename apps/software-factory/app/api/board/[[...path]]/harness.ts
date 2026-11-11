@@ -1,4 +1,4 @@
-import type { NetworkPolicy } from "@vercel/sandbox";
+import type { NetworkPolicy, NetworkPolicyRule } from "@vercel/sandbox";
 import pkg from "@vercel/board/package.json" with { type: "json" };
 import { REPO } from "./github.ts";
 import { profileHeader } from "./profile.ts";
@@ -134,6 +134,19 @@ export function eveHeaders(thread: string, token: string, bypass: string | undef
   };
 }
 
+/**
+ * The factory's board, handed to a thread's Eve: the routes vb calls, with the board's token and who Eve is. It's the
+ * shape board's `sandboxPolicy()` returns, merged the way a caller merges that, which replaces it once the factory runs
+ * a release that has it (0.32.0 doesn't).
+ */
+export function boardPolicy(thread: string, token: string, bypass: string | undefined): { allow: Record<string, NetworkPolicyRule[]> } {
+  return {
+    allow: {
+      [new URL(BOARD).host]: [{ match: { path: { regex: VB_ROUTES } }, transform: [{ headers: eveHeaders(thread, token, bypass) }] }],
+    },
+  };
+}
+
 /** Real credentials on the way out, and who Eve is on the board. */
 export function policy(
   thread: string,
@@ -147,12 +160,7 @@ export function policy(
       "ai-gateway.vercel.sh": [
         { transform: [{ headers: { "x-api-key": tokens.gateway, authorization: `Bearer ${tokens.gateway}` } }] },
       ],
-      [new URL(BOARD).host]: [
-        {
-          match: { path: { regex: VB_ROUTES } },
-          transform: [{ headers: eveHeaders(thread, tokens.board, bypass) }],
-        },
-      ],
+      ...boardPolicy(thread, tokens.board, bypass).allow,
       ...(bypass ? { [evePreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
       "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
       "github.com": [{ transform: [{ headers: { authorization: `Basic ${git}` } }] }],

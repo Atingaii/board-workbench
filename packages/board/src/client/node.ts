@@ -455,6 +455,39 @@ const ownHost = (host: string) =>
   [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
     .some((own) => !!own && own.toLowerCase() === host.toLowerCase())
 
+/**
+ * What a sandbox's requests to the board at `url` carry, from this deployment: `token`, or this
+ * deployment's own Vercel OIDC token, for `audience` (the board's URL; null for Vercel's API, which
+ * takes it as it is), and on a board behind Deployment Protection what a hosted client sends to get
+ * through it: this deployment's bypass secret on its own hosts, or else its OIDC token for Trusted
+ * Sources. Never a person's login or `VERCEL_TOKEN`: what a policy holds, its sandbox can use.
+ */
+export async function sandboxHeaders(url: string, audience: string | null, token?: string): Promise<Record<string, string>> {
+  const oidc = async () => {
+    try {
+      return await getVercelOidcToken(audience === null ? undefined : { audience })
+    } catch (cause) {
+      throw Object.assign(
+        new BoardError('no_token', `There's no Vercel OIDC token here to hand a sandbox for ${url}.`, 0, {
+          hint: 'Run it in a Vercel deployment with OIDC, or pass the credential: sandboxPolicy({ token }).',
+        }),
+        { cause },
+      )
+    }
+  }
+  const credential = token ?? (await oidc())
+  const headers: Record<string, string> = { authorization: `Bearer ${credential}` }
+  if (audience === null) return headers
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+  if (bypass && (process.env.VERCEL !== '1' || ownHost(new URL(url).host))) headers['x-vercel-protection-bypass'] = bypass
+  else if (process.env.VERCEL === '1') {
+    // The edge trusts OIDC tokens only: a board token gets through as this deployment's.
+    const edge = credential.startsWith('board_') ? await oidc().catch(() => null) : credential
+    if (edge !== null) headers['x-vercel-trusted-oidc-idp-token'] = edge
+  }
+  return headers
+}
+
 /** Explicit bypass wins; otherwise hosted calls use OIDC and local people use their saved bypass. */
 function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<string>): typeof fetch {
   const host = new URL(url).host

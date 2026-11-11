@@ -9,6 +9,8 @@ import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { deployedOnVercel } from './registrant.ts'
 import { tailWatchers } from './tails.ts'
+import { withoutToken, type SandboxInput, type SandboxReach } from './sandbox.ts'
+import { formatProfileHeader } from '../contract/profile-header.ts'
 
 export type HttpOptions = {
   /**
@@ -31,6 +33,8 @@ export type Environment = {
   fetch(url: string): typeof fetch
   /** The profile the environment names: `BOARD_PROFILE`, with `BOARD_AVATAR`. */
   profile(): ProfileOption
+  /** What a sandbox's requests to the board at `url` carry from this deployment: `token`, or its own OIDC token, and what gets them through Deployment Protection. */
+  sandbox(url: string, token: string | undefined): Promise<Record<string, string>>
 }
 
 /** A watcher's or client's name is the profile its writes are by. */
@@ -268,6 +272,10 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     routes: [],
     // The log is the board it uses'.
     keeps: false,
+    async sandbox({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
+      const credential = environment ? await environment.sandbox(remote, token) : token === undefined ? withoutToken(remote) : { authorization: `Bearer ${token}` }
+      return { url: remote, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, protocol: true }
+    },
     bind(next: BoardBinding) {
       if (binding) throw new Error('http: this backend already serves a board: create one http() per board()')
       for (const [id, spec] of Object.entries(next.subscriptions)) {

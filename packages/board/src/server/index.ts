@@ -2,6 +2,7 @@
 // verifies the OIDC tokens made out to it, and knows its own Vercel project.
 import { http } from '../backend-http/index.ts'
 import { vercel } from '../backend-vercel/index.ts'
+import { sandboxHeaders } from '../client/node.ts'
 import { createBoard, type Board, type BoardOptions } from './board.ts'
 
 /**
@@ -14,6 +15,7 @@ export function board(options: BoardOptions = {}): Board {
     backend: (fetch) => (process.env.BOARD_URL?.trim() ? http() : vercel(fetch ? { fetch } : {})),
     sync: () => import('../sync/engine.ts'),
     serving: () => import('./serving.ts'),
+    sandbox: (url, token) => sandboxHeaders(url, url, token),
   })
 }
 

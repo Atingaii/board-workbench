@@ -1915,7 +1915,7 @@ import { board } from '@vercel/board'
 
 const team = board()   // Node: the team's board in Vercel's API, or with BOARD_URL, the board at that URL
 
-const claude = team.as('claude')   // posts as "claude via julian", built-in avatar
+const claude = team.as('claude')   // posts as "claude via julian"
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
 
 const msg = await team.post('errors-www', 'deploy failed')   // or { text, labels, sync, noSync, id }
@@ -1947,6 +1947,29 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   code, in-process, with no URL or token: `board:client`, and
   `board:client:<profile>` with `as(profile)`, so its writes wake watchers and
   sync like anyone's.
+- **`sandboxPolicy({ profile?, can?, token? })` hands the board to a
+  sandboxed agent:** a Vercel Sandbox network policy (`{ allow }`, a
+  structural type: board depends on no sandbox SDK) whose proxy adds, to the
+  sandbox's requests for the board's own routes, the credential (`token`, or
+  this deployment's OIDC token, with what gets it through Deployment
+  Protection), `x-board-profile` (the handle's own profile by default, and
+  one is required: a policy that set none would let the sandbox name any),
+  and `x-board-can` (`can`, or a board token's default, so the sandbox is
+  never its deployment's integration). It allows only the board's host, and
+  on it only the protocol's routes under the board's URL, each by method and
+  shape, since a board mounted without a `basePath` reads a route as the end
+  of a path (`/api/board/x/tokens` is `/tokens`); on Vercel's API, what's
+  under `/v1/messageboard/boards/<id>` with its `teamId`, and
+  `GET /v1/messageboard/me`. It refuses `tokens`, `grants`, `watchers`,
+  `sync`, `inbox`, `sources`, `webhooks`, and `wake` under it in any case, dot
+  segments, encoded slashes and dots, and `x-vercel-set-bypass-cookie` (as a
+  header or a query key), and blocks every other host. A caller merges its own hosts by spreading `allow`. Each backend
+  says how a sandbox reaches its board (`Backend.sandbox`); a board that keeps
+  itself uses its own URL. On `vercel()` the profile goes as
+  `apiProfileHeaders` sends it, and a `can` is refused (`not_supported`) until
+  the API reads `x-board-can`. The OIDC token in it is the function's, which
+  lives two hours and is handed out for the first part of them: a caller
+  updates the policy before it dies.
 - **`board()` with no backend is the team's board in Vercel's API,** the one
   `name` names on the team `team` names, on `vercel()`, with
   `board({ fetch })`'s credentials when it's given. In Node they default to

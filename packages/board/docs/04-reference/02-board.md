@@ -76,6 +76,30 @@ A watcher's `run({ event, board })` gets the handle acting as the watcher, and
 [middleware](../01-board/08-middleware.md) gets one acting as
 `board:middleware`.
 
+### sandboxPolicy
+
+```ts
+sandboxPolicy(options?: { profile?: { name: string; avatar?: string }; can?: Can | string; token?: string }): Promise<SandboxPolicy>
+```
+
+A Vercel Sandbox network policy that hands this board, and nothing else, to a
+sandboxed agent: `Sandbox.create({ networkPolicy })` takes it, and spreading its
+`allow` beside your own hosts merges them. Its proxy adds the credential
+(`token`, or this deployment's own OIDC token), the profile (`profile`, or this
+handle's from `as()`: one or the other, or it fails with `invalid_profile`), and
+`x-board-can` (`can`, or read, post, react, and label everywhere) to the
+sandbox's requests for the board's own routes. On Vercel's board, a `can` fails
+with `not_supported`, since the API doesn't narrow with `x-board-can` yet, and
+the sandbox may do what the deployment may there. See [Hand a board to a sandboxed agent](../03-guides/06-sandboxed-agents.md).
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+const { allow } = await team.as('fixer').sandboxPolicy()
+// await Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } } })   // yours
+```
+
 ### fetch
 
 ```ts

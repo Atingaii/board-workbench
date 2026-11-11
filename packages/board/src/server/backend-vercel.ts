@@ -18,6 +18,7 @@ import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
 import { waitUntil } from './wait-until.ts'
+import { canHeader, withoutToken, type SandboxInput, type SandboxReach } from './sandbox.ts'
 
 // The `/v1/messageboard` API's shapes, as this backend reads them. `@api/messageboard-types` is
 // private to Vercel's monorepo, so these are written out: conformance catches drift.
@@ -208,12 +209,17 @@ export type VercelEnvironment = {
   profile(): ProfileOption
   /** Whether its fetch sends a board token you set (`BOARD_TOKEN`), whoever made it. */
   boardToken(): boolean
+  /** What a sandbox's requests to Vercel's API carry from this deployment: `token`, or its own OIDC token. */
+  sandbox(url: string, token: string | undefined): Promise<Record<string, string>>
 }
 
 /** Who a request to the API is from, beside its credentials: a label it shows, never who it is. */
 type Who = { profile: { name: string; avatar?: string } | null }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
+
+/** A sandbox's `x-board-can` when its policy names none: what any caller the board lets in may. */
+const DEFAULT_CAN_HEADER = canHeader(undefined)
 
 /**
  * Who a request to Vercel's API writes as, as the API reads it today: the profile's name alone in
@@ -2531,6 +2537,27 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     routes,
     // The board is Vercel's: a board here answers only wake-ups and webhooks.
     keeps: false,
+    /**
+     * A sandbox's way to this board in Vercel's API: its routes, by its ID and team, and `/me`, which a
+     * handle on it asks. The API reads the profile as `apiProfileHeaders` sends it, and no `x-board-can`
+     * yet, so a `can` that would narrow nothing is refused rather than handed over unsaid.
+     */
+    async sandbox({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
+      if (can !== DEFAULT_CAN_HEADER)
+        throw new HttpError(501, 'not_supported', "Vercel's API doesn't narrow a caller with x-board-can yet, so a sandbox can't be held to a can there", {
+          hint: "Leave can out: the sandbox gets what this deployment may do on the board, less the routes its policy withholds.",
+          origin: 'handle',
+        })
+      // The API reads the avatar from its own header, which a sandbox could send when the policy sets none.
+      if (profile.avatar !== undefined && !profile.avatar.startsWith('https://'))
+        throw new HttpError(400, 'invalid_profile', `${profile.avatar} isn't an avatar Vercel's API takes: one is an https URL.`, { origin: 'handle' })
+      const who = { profile: null }
+      const team = await teamId()
+      const id = team?.startsWith('team_') ? team : (await self(who)).teamId
+      const url = `${origin}/v1/messageboard${await onBoard(who)}?teamId=${encodeURIComponent(id)}`
+      const credential = environment ? await environment.sandbox(url, token) : token === undefined ? withoutToken(url) : { authorization: `Bearer ${token}` }
+      return { url, headers: { ...credential, ...apiProfileHeaders(profile), 'x-board-can': can }, reads: ['/v1/messageboard/me'], protocol: false }
+    },
     // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
     sendsSchedulesHere: false,
     // One deployment of a project holds each of its sync keys, as Vercel's API says when it registers.
