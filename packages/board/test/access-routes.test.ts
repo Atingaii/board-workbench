@@ -169,10 +169,6 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'GET', path: '/grants/explain?channel=open&user=u_julian', status: 403 },
   ],
   revokeGrant: () => [{ method: 'POST', path: '/grants/g1/revoke', status: 403 }],
-  // Anyone mints a token, which acts as them: it can't do more than they can.
-  createToken: () => [{ method: 'POST', path: '/tokens', body: { name: 'walker', can: 'all' }, status: 200 }],
-  tokens: () => [{ method: 'GET', path: '/tokens', status: 200, check: (body) => expect(body.tokens.map((token: any) => token.name)).not.toContain('keeper') }],
-  revokeToken: () => [{ method: 'POST', path: '/tokens/t999999/revoke', status: 200, check: (body) => expect(body).toEqual({ revoked: false }) }],
   // Schemas are the whole board's and hold no channel's messages: anyone the board let in reads them, and only manage at * registers one.
   schemas: () => [{ method: 'GET', path: '/schemas', status: 200, check: (body) => expect(body.schemas.map((schema: any) => schema.id)).toEqual(['git-commit@1', 'vercel-deployment@1']) }],
   schema: () => [{ method: 'GET', path: '/schemas/git-commit@1', status: 200 }],

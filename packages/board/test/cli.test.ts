@@ -86,8 +86,7 @@ describe('cli', () => {
 
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
     // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
-    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have, or a
-    // BOARD_TOKEN, which it would send there: this run has neither.
+    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have.
     const outside = await tmp('board-vercel-')
     await mkdir(join(outside, '.vercel'))
     await writeFile(join(outside, '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_x', projectId: 'prj_x' }))

@@ -30,7 +30,6 @@ import {
   GrantBody,
   UpdateGrantBody,
   ExplainQuery,
-  TokenBody,
   SchemaBody,
   SchedulesQuery,
   SourceJoinBody,
@@ -117,7 +116,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'actors':
     case 'watchers':
     case 'grants':
-    case 'tokens':
     case 'schemas':
       return {}
     case 'message':
@@ -127,7 +125,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'unblockTask':
     case 'reopenTask':
     case 'revokeGrant':
-    case 'revokeToken':
     case 'schema':
     case 'attachment':
     case 'uploadFinish':
@@ -181,8 +178,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return { id, ...UpdateGrantBody.parse(await body()) }
     case 'explain':
       return ExplainQuery.parse(queryObject(url))
-    case 'createToken':
-      return TokenBody.parse(await body())
     case 'createSchema':
       return SchemaBody.parse(await body())
     case 'register':
@@ -929,7 +924,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       const boardUrl = (options.url ?? `${url.origin}${match.base}`).replace(/\/+$/, '')
 
       if (target.kind === 'board' && target.name === 'webhook') {
-        // A platform can't send a board token: its adapter verifies the request.
+        // A platform can't send a credential the board verifies: its adapter verifies the request.
         if (!engine || !entries[match.params.key ?? '']) throw notFound(`no sync entry named ${match.params.key}`)
         return await engine.handleWebhook(match.params.key!, request)
       }
@@ -941,7 +936,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         })
       }
       if (target.kind === 'board' && target.name === 'openapi') return json(openapi())
-      // A backend's own routes check what they need: a wake-up carries no board token.
+      // A backend's own routes check what they need: a wake-up carries no credential the board verifies.
       if (target.kind === 'backend') return await target.route.handle(request, { caller: injected && 'platform' in injected ? engine!.caller : injected, param: match.param })
 
       // Everything else is for a caller: this deployment's own code, or a request, which a board that

@@ -41,8 +41,8 @@ bindings. Extend an existing allowlist rather than replacing other grants:
 Replace the example IDs. Missing configuration grants no external project
 access. Omitted environments default to production; enable preview or development
 only when needed. The mount grants reads and posts in all channels, and labels only in `factory/`,
-since Factory contributions carry provenance labels. It grants no reactions or `sync`. Raw board clients can also edit/delete messages owned by their verified
-principal. The Factory tool exposes only scoped reads, posts and replies;
+since Factory contributions carry provenance labels. It grants no reactions or `sync`. Raw board clients can also edit/delete their own messages: as a profile, only
+that profile's; as their verified principal itself, its profiles' too. The Factory tool exposes only scoped reads, posts and replies;
 session labels do not create separate ownership principals.
 
 Separately, configure the board project's **Settings → Deployment Protection →

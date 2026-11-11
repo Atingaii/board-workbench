@@ -116,7 +116,7 @@ async function writeCache(audience: string, login: string | null, cached: Cached
   const tokens = join(configDir(), 'tokens')
   await mkdir(tokens, { recursive: true, mode: 0o700 })
   await writeFile(cacheFile(audience, login), JSON.stringify(cached), { mode: 0o600 })
-  // A login that rotates leaves a file per access token: a day on, its board token is dead.
+  // A login that rotates leaves a file per access token: a day on, its token for the board is dead.
   const dead = Date.now() - 24 * 60 * 60_000
   for (const name of await readdir(tokens).catch(() => [])) {
     const file = join(tokens, name)
@@ -173,7 +173,7 @@ export const vercelLogin = () =>
   handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken()
 
 /**
- * A handed login's token, which its board tokens are cached by: null for `vercel login`'s own. One
+ * A handed login's token, which its tokens for boards are cached by: null for `vercel login`'s own. One
  * that fails fails the request: `vercel login`'s, cached or in the `vercel` on PATH, can be someone
  * else's.
  */
@@ -480,11 +480,7 @@ export async function sandboxHeaders(url: string, audience: string | null, token
   if (audience === null) return headers
   const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
   if (bypass && (process.env.VERCEL !== '1' || ownHost(new URL(url).host))) headers['x-vercel-protection-bypass'] = bypass
-  else if (process.env.VERCEL === '1') {
-    // The edge trusts OIDC tokens only: a board token gets through as this deployment's.
-    const edge = credential.startsWith('board_') ? await oidc().catch(() => null) : credential
-    if (edge !== null) headers['x-vercel-trusted-oidc-idp-token'] = edge
-  }
+  else if (process.env.VERCEL === '1') headers['x-vercel-trusted-oidc-idp-token'] = credential
   return headers
 }
 
@@ -529,26 +525,17 @@ function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<
     }
     // Without one, hosted workloads use project trust, never a person's saved bypass credentials.
     if (process.env.VERCEL === '1') {
-      let edgeless = false
       if (!headers.has('x-vercel-trusted-oidc-idp-token')) {
         const bearer = headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]
         const token = bearer ?? (typeof suppliedToken === 'function' ? await suppliedToken() : suppliedToken)
           ?? (process.env.BOARD_TOKEN || await hostedToken(url))
-        // The edge trusts OIDC tokens only: a board's own token gets through as this deployment's,
-        // and without one, goes as it is, which a board without Deployment Protection takes.
-        const edge = token.startsWith('board_') ? await hostedToken(url).catch(() => null) : token
-        if (edge === null) edgeless = true
-        else headers.set('x-vercel-trusted-oidc-idp-token', edge)
+        headers.set('x-vercel-trusted-oidc-idp-token', token)
       }
       return through(doFetch, input, init, null).catch((error) => {
         if (!(error instanceof Wall)) throw error
-        throw edgeless
-          ? new BoardError('protected', `${url} is behind Vercel Deployment Protection, and this deployment has no Vercel OIDC token to get through it.`, error.status, {
-              hint: "Enable OIDC on its project, and add it to the board project's Deployment Protection Trusted Sources.",
-            })
-          : new BoardError('protected', `${url} is behind Vercel Deployment Protection, and it rejected this deployment's Vercel OIDC token.`, error.status, {
-              hint: "Add this project and environment to the board project's Deployment Protection Trusted Sources.",
-            })
+        throw new BoardError('protected', `${url} is behind Vercel Deployment Protection, and it rejected this deployment's Vercel OIDC token.`, error.status, {
+          hint: "Add this project and environment to the board project's Deployment Protection Trusted Sources.",
+        })
       })
     }
     const used = await (secret ??= readBypass(host))

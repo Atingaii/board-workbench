@@ -133,7 +133,7 @@ export const StoredPrincipal = z.object({
     })
     .optional(),
   scope: z.string().max(CAN_MAX).optional(),
-  /** The board token it came with: what it stores stops when the token does. */
+  /** The board token it came with, from when boards issued them: what it stored stopped with them. */
   token: z.string().min(1).max(64).optional(),
 })
 
@@ -301,9 +301,8 @@ const GrantPrincipal = z.discriminatedUnion('kind', [
 const GrantCan = z.record(z.string().min(1).max(300), Grant)
 
 /**
- * Who the board trusts beside its code's rules, outside the board log: grants, and the tokens it
- * issued, of which only a hash is kept. Session `access`. A token's ID is the index of the event
- * that made it; a grant's comes from the fold, counting from the one the board starts with.
+ * Who the board trusts beside its code's rules, outside the board log: its grants. Session
+ * `access`. A grant's ID comes from the fold, counting from the one the board starts with.
  */
 export const accessContract = contract({
   name: 'board-access',
@@ -323,20 +322,10 @@ export const accessContract = contract({
     'grant.updated': z.object({ id: z.number().int().positive(), principals: z.array(GrantPrincipal).min(1).max(32), can: GrantCan, by: ActorId }),
     /** A grant revoked. */
     'grant.deleted': z.object({ id: z.number().int().positive(), by: ActorId }),
-    'token.minted': z.object({
-      /** The secret's SHA-256, hex. */
-      hash: z.string().regex(/^[0-9a-f]{64}$/),
-      name: z.string().min(1).max(64),
-      /** Who it acts as, its scope narrowed to what the token may do. */
-      minter: StoredPrincipal,
-      profile: z.string().min(1).max(32).nullable(),
-      avatar: z.string().max(2048).nullable(),
-      expiresAt: Millis,
-      /** The token it was minted with, which it stops with. */
-      parent: z.number().int().positive().nullable(),
-      by: ActorId,
-    }),
-    'token.revoked': z.object({ id: z.number().int().positive(), by: ActorId }),
+    /** From when boards issued tokens: kept so older logs load, and folded into nothing. */
+    'token.minted': z.object({ by: ActorId }),
+    /** From when boards issued tokens: folded into nothing. */
+    'token.revoked': z.object({ by: ActorId }),
   },
 })
 

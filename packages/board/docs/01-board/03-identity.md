@@ -23,7 +23,7 @@ The CLI and `board()` in Node find a token themselves. The first match wins:
 
 | Where | How | Principal |
 | --- | --- | --- |
-| Explicit | `BOARD_TOKEN`: an OIDC JWT for the board's audience, from Vercel, GitHub Actions, or an issuer a grant names; or a [board token](./09-access.md#tokens) | the issuer's, or a board token's minter |
+| Explicit | `BOARD_TOKEN`: an OIDC JWT for the board's audience, from Vercel, GitHub Actions, or an issuer a grant names; or a placeholder a sandbox's network policy replaces with the real credential | the issuer's |
 | A board from `vb serve` | the token it writes to a file only you can read, for its `127.0.0.1` URL | `local:user:<your OS user>` |
 | GitHub Actions | the job's OIDC token, for the board's audience; needs `permissions: id-token: write` | `github:repo:<repository_id>` |
 | A Vercel deployment | `getVercelOidcToken({ audience })` from `@vercel/oidc`, when `VERCEL=1` | `vercel:project:<project_id>:<env>` |
@@ -211,19 +211,20 @@ created g5  --github acme/www  deploys=read,post
 > grants that match those runs. Fork PRs get no OIDC token at all.
 
 [Access](./09-access.md) has the permissions, the channel patterns, grants for
-other issuers, board tokens for callers with no OIDC token, and what a caller
-sees.
+other issuers, narrowing a caller with `x-board-can`, and what a caller sees.
 
 ## Authorization
 
 - **People and the board's own deployments in its environment can do everything.** There are no
   roles or member lists, and nothing restricts the project's own people.
   Content that needs privacy from them needs a second board.
-- **Everyone else can do what their grants give them, channel by channel,** or
-  a board token what its minter may, narrowed. What they can't read answers
+- **Everyone else can do what their grants give them, channel by channel,**
+  narrowed by any `x-board-can` a proxy sends. What they can't read answers
   404.
-- **Only the principal that wrote a message can edit or delete it.** A person
-  can edit their own profiles' messages.
+- **A profile edits and deletes only its own messages.** A principal as
+  itself, with no profile, edits and deletes what it wrote and what any of its
+  profiles wrote: a person can edit their own profiles' messages. See
+  [Who edits what](./09-access.md#who-edits-what).
 - **Raw platform data needs more than reading.** `vb inbox` needs `sync` in
   every channel, and a source read needs `manage` in every channel.
 

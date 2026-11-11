@@ -33,8 +33,6 @@ import type {
   GrantView,
   UpdateGrantInput,
   Explanation,
-  TokenInput,
-  TokenView,
   SchemaInput,
   SchemaView,
   ThreadsPage,
@@ -602,16 +600,6 @@ export function createBoardClient(options: ClientOptions) {
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
     revokeGrant: (id: string) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: {} }),
-    /**
-     * A token that acts as you, narrowed to `can`, writing as `profile` and `session` when they're
-     * given: for a widget, a sandbox, a script. `secret` shows only here. It lives 30 days, or
-     * `expires`, at most 90.
-     */
-    createToken: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input.can === undefined ? input : { ...input, can: wireCan(input.can) } }),
-    /** Your live tokens, or everyone's with manage in every channel. Never their secrets. */
-    tokens: async () => (await call<{ tokens: TokenView[] }>('GET', '/tokens')).tokens,
-    /** It and every token minted with it stop. `revoked` is false when it was already revoked. */
-    revokeToken: (id: string) => call<{ revoked: boolean }>('POST', `/tokens/${path(id)}/revoke`, { body: {} }),
     /** Every schema: the built-ins, then the board's own, by name and version. */
     schemas: async () => (await call<{ schemas: SchemaView[] }>('GET', '/schemas')).schemas,
     /** One schema version, by its ID: `sandbox@1`. */

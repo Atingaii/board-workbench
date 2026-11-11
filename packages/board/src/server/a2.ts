@@ -286,7 +286,7 @@ function build(options: A2Options, binding: BoardBinding) {
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     consumers: [inbound],
   })
-  // Who the board trusts beside its defaults: grants, and the tokens it issued.
+  // Who the board trusts beside its defaults: its grants.
   const access = createTrust({
     store: log,
     accessNow: (principal, grants) => binding.accessNow(principal, grants),
@@ -613,9 +613,6 @@ function build(options: A2Options, binding: BoardBinding) {
     updateGrant: async (caller, input) => access.updateGrant(await identityOf(caller), input),
     explain: async (caller, query) => access.explain(await identityOf(caller), query),
     revokeGrant: async (caller, input) => access.revokeGrant(await identityOf(caller), input),
-    tokens: async (caller) => access.tokens(await identityOf(caller)),
-    createToken: async (caller, body) => access.createToken(await identityOf(caller), body),
-    revokeToken: async (caller, input) => access.revokeToken(await identityOf(caller), input),
     // Anyone board() let in reads the schemas: they say what anyone posting has to send.
     schemas: async () => schemaRegistry.schemas(),
     schema: async (_caller, input) => schemaRegistry.schema(input),
@@ -626,12 +623,12 @@ function build(options: A2Options, binding: BoardBinding) {
       if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
       // Sync's own imports are fetched in this process, with no request to fit under, so they may be bigger.
       const max = ownSync(caller) ? IMPORT_BYTES_MAX : ATTACHMENT_BYTES_MAX
-      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id, uploadedWith: await access.chain(principal) }, max) }
+      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id }, max) }
     },
     async uploadStart(caller, { name, type, size }) {
       const { principal } = (await identityOf(caller))
       if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
-      return startUpload(blob, { name: name ?? null, type: type ?? null, size, uploadedBy: principal.id, uploadedWith: await access.chain(principal) })
+      return startUpload(blob, { name: name ?? null, type: type ?? null, size, uploadedBy: principal.id })
     },
     async uploadFinish(caller, { id }) {
       const { principal } = (await identityOf(caller))
@@ -1280,11 +1277,9 @@ export function a2(options: A2Options) {
     routes: [] as BackendRoute[],
     // The board lives here: board() lets its people and own deployments in by default.
     keeps: true,
-    // Its grants and tokens, in its log: board() checks requests against them.
+    // Its grants, in its log: board() checks requests against them.
     trust: {
       grants: async () => (await ready()).trust.grants(),
-      token: async (hash: string) => (await ready()).trust.token(hash),
-      live: async (id: string) => (await ready()).trust.live(id),
     } satisfies Trust,
     bind(given: BoardBinding) {
       if (binding) throw new Error('this backend already serves a board: create one per board()')

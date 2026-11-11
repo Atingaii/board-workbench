@@ -34,26 +34,11 @@ describe("the access session's fold", () => {
     ])
   })
 
-  it('drops a revoked token at once, and its hash with it', () => {
+  it('folds the tokens of a log from when boards issued them into nothing', () => {
     const { state, at, mint } = history()
     const id = mint(T0, T0 + 30 * DAY)
     at(T0 + 1000, 'token.revoked', { id, by: minter.id })
-    expect(state.tokens).toEqual({})
-    expect(state.hashes).toEqual({})
-  })
-
-  it('drops expired tokens with the first event of a later day, and keeps the live ones', () => {
-    const { state, at, mint } = history()
-    const short = mint(T0, T0 + DAY)
-    const long = mint(T0, T0 + 30 * DAY)
-    // The day it expires, it's still there: it goes with the first event after that day.
-    at(T0 + DAY, 'grant.revoked', { id: 999, by: minter.id })
-    expect(Object.keys(state.tokens).map(Number)).toEqual([short, long])
-    at(T0 + 2 * DAY, 'grant.revoked', { id: 999, by: minter.id })
-    expect(Object.keys(state.tokens).map(Number)).toEqual([long])
-    expect(Object.keys(state.hashes)).toHaveLength(1)
-    at(T0 + 40 * DAY, 'grant.revoked', { id: 999, by: minter.id })
-    expect(state.tokens).toEqual({})
-    expect(state.expiring).toEqual({})
+    mint(T0 + 2000, T0 + 30 * DAY)
+    expect(state).toEqual(startingAccess())
   })
 })

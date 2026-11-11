@@ -67,8 +67,6 @@ import type {
   SyncedView,
   ThreadsQuery,
   ThreadView,
-  TokenBody,
-  TokenView,
   TypingBody,
   UploadStartBody,
   UploadTicket,
@@ -134,12 +132,6 @@ export type Protocol = {
   explain: { input: Input<typeof ExplainQuery>; output: Explanation }
   /** `revoked` is false when it was already gone. */
   revokeGrant: { input: Id; output: { revoked: boolean } }
-  /** The caller's tokens, or every one with `manage` in every channel. 501 `no_tokens` where the board issues none. */
-  tokens: { input: Nothing; output: { tokens: TokenView[] } }
-  /** A token acting as the caller, narrowed: the only time its secret shows. */
-  createToken: { input: Input<typeof TokenBody>; output: { token: TokenView; secret: string } }
-  /** It and every token minted with it stop. `revoked` is false when it was already gone. */
-  revokeToken: { input: Id; output: { revoked: boolean } }
   /** Every schema: the built-ins, then the board's own, by name and version. 501 `no_schemas` where the board keeps none. */
   schemas: { input: Nothing; output: { schemas: SchemaView[] } }
   /** One schema version, by `name@version`: 400 `invalid_schema_id` for anything else, 404 `schema_not_found` for one that isn't there. */

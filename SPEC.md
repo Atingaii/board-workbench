@@ -66,8 +66,8 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
    `vercel login`, and machines get theirs from their platform. Vercel's API
    lets the team's people use its boards, and the projects each is granted
    to. A board `board()` keeps trusts its own project's people and its
-   deployments in the environment it runs in, plus whatever its grants and
-   board tokens let in, and they say what each may do in each channel.
+   deployments in the environment it runs in, plus whatever its grants let
+   in, and they say what each may do in each channel.
 3. **Every event records who wrote it**: a verified principal, plus an
    optional profile, such as an agent acting for a person.
 4. **A thread syncs with a set of external threads.** A message written in the
@@ -86,8 +86,7 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
   each channel: `read`, `post`, `react`, `label`, `sync`, or `manage`. Reads
   are gated, so a write-only caller is `['post']`, and what a caller can't
   read answers 404. A grant names who it lets in, so a credential lives as
-  long as its OIDC token; a board token, for callers without one, lives 90
-  days at most. People go through grants too: closing `security/` to
+  long as its OIDC token. People go through grants too: closing `security/` to
   `everyone` and opening it to Alice keeps the rest of the team out.
 - **No accounts.** The board has no login page, sessions, or user table.
   Principals are strings derived from verified OIDC claims, from verified
@@ -208,8 +207,8 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   needs. One at a protocol route's path takes its place.
 - **`keeps`** says whether the board lives in the backend. One that keeps it
   (`local()`) serves requests: people, the board's own deployments in its
-  environment, and whoever its grants and board tokens let in, which it hands
-  `board()` as `trust` (`grants()`, `token(hash)`, `live(id)`). One that
+  environment, and whoever its grants let in, which it hands `board()` as
+  `trust` (`grants()`). One that
   doesn't (`vercel()`, `http()`) serves no request but wake-ups and webhooks,
   and verifies none.
 - **`bind(binding)`** is called once, when `board()` is created, before any
@@ -264,17 +263,13 @@ checked with `@vercel/board/conformance`.
   and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
   middleware screens a schedule when it's made. What the API doesn't keep yet
   answers 501 `not_supported`: files on a scheduled message, labels on a
-  scheduled reply, a post's sync targets. Grants and tokens go to the API, which takes no `github` or `oidc`
+  scheduled reply, a post's sync targets. Grants go to the API, which takes no `github` or `oidc`
   principal in a grant, or explains one (400 `unsupported_principal`: an app,
-  which an OIDC exchange policy issues tokens for, stands in), and mints board tokens only
-  for a deployment or from a board token (403 `unsupported_principal`), for
-  a day unless `expires` says otherwise and 7 days at most, since a
-  deployment can mint again (400 `invalid_expires` past that); `vercel()`
+  which an OIDC exchange policy issues tokens for, stands in); `vercel()`
   says the refusals with a hint. It
   runs no sync: `bind` throws for a board with `sync`, `readSource` answers
   404 `not_synced_here`, and `typing` reaches no targets. Only a deployment's
-  own credentials register watchers there: its OIDC token, never a board token,
-  whoever made it. Its watchers run as
+  own credentials register watchers there: its OIDC token. Its watchers run as
   [watchers woken by their board](#watchers-woken-by-their-board) says: it registers their tails with the API, which wakes
   this deployment by its path on its project, through Deployment Protection,
   from every deployment on Vercel (production, a branch's preview, which names
@@ -284,10 +279,9 @@ checked with `@vercel/board/conformance`.
   `1` outside development, so a dev server with `vercel env pull`'s env, or
   under `vercel dev` (`VERCEL_ENV=development`), counts as off Vercel, for
   this and for the tails below. With anyone else's
-  credentials (a person's, an app's, any board token), the API answers 403
+  credentials (a person's, an app's), the API answers 403
   `watchers_need_project`, so nothing registers: a `/me` principal that isn't
-  a project, `BOARD_TOKEN` in Node, or that refusal to its first registration
-  tells it so, and from then on each config
+  a project tells it so, and from then on each config
   watcher runs in this process as a tail, following `events` from the head as
   `vb tail` does, with local()'s retries, and skipping its own writes. Sync
   doesn't run for them, and on Vercel neither do the tails: a deployment's
@@ -404,20 +398,20 @@ The backend picks them; the protocol only says their shape:
   501 in `schedules`, `tasks`, or `attachments` is `skipped`, with the detail `not kept
   here: <the board's message>`; one that would replace the caller's own
   registration is skipped too. `vb conformance` runs it as the CLI's identity,
-  with `withToken` for a token it mints (the same board, that secret as the
-  credential), so the tokens check sees a token narrowed to its `can` and
-  refused once revoked, and with `withHeaders` for its own credential with
-  headers of the run's (as a client or a proxy holding it sends them): an
-  `x-board-can`, so the narrowing checks see that caller refused outside its
-  `can`, and on its principal's watchers and sync's records (`withCan`, which
+  with `withHeaders` for its own credential with headers of the run's (as a
+  client or a proxy holding it sends them): an `x-board-can`, so the narrowing
+  checks see that caller refused outside its `can`, on its principal's
+  watchers and sync's records, and changing grants past it (`withCan`, which
   code may still pass, is `withHeaders` with that one header), and who writes:
   a profile with its avatar in one `x-board-profile`, which the author view must
   show, and `x-board-avatar` and `x-board-session`, which released clients
   still send and which must be ignored: a post that carries them lands as its
   verified actor, with no avatar but its profile's header's and no session. A
   `core` check also reads that no `by` on a message or an event, and no `/me`,
-  carries a `session`. It exits 1 when a check fails. Vercel's API fails the
-  profile's and `x-board-avatar`'s checks until it reads who writes as the
+  carries a `session`, and another that a profile changes only its own
+  messages, and its principal all of them. It exits 1 when a check fails.
+  Vercel's API fails that one until it holds a profile to its own messages,
+  and the profile's and `x-board-avatar`'s checks until it reads who writes as the
   protocol has it (`fakeMessageboard({ protocolProfile: true })` in board's tests is it
   once it does). board's own tests run
   it against boards on its internal engine, one of them keeping no schedules or
@@ -539,7 +533,7 @@ brings credentials for Vercel's board (see [The handle](#the-handle)).
 
 | Where | How | Principal |
 | --- | --- | --- |
-| Explicit | `BOARD_TOKEN` (any OIDC JWT; for other CI systems and tests) | depends on the issuer |
+| Explicit | `BOARD_TOKEN` (any OIDC JWT, for other CI systems and tests, or a placeholder a sandbox's network policy replaces) | depends on the issuer |
 | A local board (`vb serve`) | the token file it writes for its URL, only for loopback URLs | `local:user:<os user>` |
 | GitHub Actions | `ACTIONS_ID_TOKEN_REQUEST_URL`, with audience set to the board URL (needs `permissions: id-token: write`) | `github:repo:<repository_id>` |
 | A Vercel deployment | `@vercel/oidc` `getVercelOidcToken({ audience })` | `vercel:project:<project_id>:<env>` |
@@ -757,9 +751,8 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   production) on Vercel's board, and by its handle or ID elsewhere. Profile names
   match case-insensitively, so `Claude` and `claude` are the same actor, and the
   spelling supplied is the one displayed. There are no sessions: who writes
-  is the principal and its profile, and whatever is kept per writer (a token's
-  pins, a post's client ID, read cursors once they're built) is kept per
-  actor. Two parallel agents that need to keep apart write as two profiles.
+  is the principal and its profile, and whatever is kept per writer (a post's
+  client ID, read cursors once they're built) is kept per actor. Two parallel agents that need to keep apart write as two profiles.
   `x-board-session`, which released `vb` sends inside a coding agent, is
   ignored, and a log from before keeps a session on each `by` it wrote, which
   no view shows.
@@ -768,8 +761,7 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
 
 - People, the board's own deployments in its environment, and the board's own
   code get everything; anyone else gets what every grant that matches its
-  token gives, added up (`union`), and a board token what its minter may,
-  narrowed by its `can`. `can` is `'all'`, a list
+  token gives, added up (`union`). `can` is `'all'`, a list
   (`['post']` means `{ '*': ['post'] }`), or a map from channel pattern to
   permissions. A pattern is `*`, a channel (`feedback`), or a channel and its
   subtree (`feedback/`); any other `*` is a config error that says what to
@@ -830,8 +822,15 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   one which handles or actors exist. Nor does a read: only a caller that reads
   every channel finds someone through their other name (`--mentions` by ID
   matching their handle); anyone else's matches what it names as written.
-- Only the principal that wrote a message may edit or delete it. A person can
-  edit their own profiles' messages. A principal ID is coarser than access (a
+- Only the actor that wrote a message may edit or delete it, and the principal
+  behind it. A request that writes as a profile changes only what that profile
+  wrote (its own actor, principal and profile): edits, deletes, and schedule
+  cancels. A request from the principal itself, with no profile, changes what
+  it wrote and what any of its profiles wrote: a person can edit their own
+  profiles' messages, as themselves. `x-board-can` changes none of this: a
+  sandbox is held to its own profile because its policy always sets one.
+  `manage` in a channel still cancels anyone's schedule there, and what sync
+  imported as a platform user is changed as before. A principal ID is coarser than access (a
   repo's workflows share one), so where a caller can't read, its own is only
   what was posted without reading (`blind` on `message.posted`, and on
   `schedule.created` for listing and canceling): a `pull_request` run that
@@ -868,12 +867,10 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   author: no sync renames another's platform users, or the board's
   own sync's. An import's avatar that isn't an `https` URL is dropped.
 
-### Grants and tokens
+### Grants
 
 Grants say who may do what in each channel, kept as data, so people change who
-gets in while the board runs, from the handle or `vb`, without a deploy. A
-token is for callers without an OIDC token of their own: a widget, a sandbox,
-a script.
+gets in while the board runs, from the handle or `vb`, without a deploy.
 
 ```ts
 import { board } from '@vercel/board'
@@ -885,13 +882,7 @@ const { grant } = await team.createGrant({ principals: [{ kind: 'user', email: '
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }] })
 const grants = await team.grants()
 await team.revokeGrant(grant.id)
-
-const { token, secret } = await team.createToken({ name: 'feedback-widget', can: { 'feedback/': ['post'] }, expires: '30d' })
-const tokens = await team.tokens()
-await team.revokeToken(token.id)
 ```
-
-**Grants:**
 
 - **A grant is `{ id, principals, can }`.** `can` is one map from channel
   pattern to `'all'` or permissions (`[]` for none) for every principal it
@@ -936,7 +927,7 @@ await team.revokeToken(token.id)
   reads). `grantAccess` in `@vercel/board/access` is this, from plain data,
   which a board and Vercel's API both run: the caller, the grants, whether
   the caller is on the team (`member`, `teamProject`, `teamApp`), its `cap`,
-  and a token's `can`. A `can` that doesn't parse throws `InvalidCan`,
+  and the `can` its `x-board-can` narrows it to. A `can` that doesn't parse throws `InvalidCan`,
   `code` `invalid_can`. `everyone` never lets anyone in: it only shapes what
   callers something else lets in get, a person on the team, or a project or
   workflow a grant names.
@@ -963,7 +954,7 @@ await team.revokeToken(token.id)
   everyone it lets in; `pattern` and `level` are null where no grant decides
   (the board's own code and deployments, or a principal nothing lets in,
   whose `can` is empty).
-- **You can't grant what you don't have:** your token's and your own grants'
+- **You can't grant what you don't have:** your `x-board-can`'s and your own grants'
   limits count, an `everyone` lock doesn't, and anyone you let in gets what
   `everyone` gets. On the grants the write appends to, and as they'd be after
   it, making or widening one (a create, or an update that adds principals or
@@ -971,7 +962,7 @@ await team.revokeToken(token.id)
   - **reach:** `manage` at each of its patterns, judged with every grant and
     judged without `everyone` grants, and at every more specific spot under
     them, judged without: by the caller's role, the grants naming it or a
-    group it's in, and its token. A lock binds whoever the grant names as
+    group it's in, and its `x-board-can`. A lock binds whoever the grant names as
     much as the caller, now and once it's lifted, so it doesn't count under
     the grant's patterns. At its own patterns it does: there the grant meets
     the lock at the same pattern and wins, being closer;
@@ -986,7 +977,7 @@ await team.revokeToken(token.id)
   that lands in between makes it look again. Revoking a grant, removing
   principals from one, or updating it, as it was, is judged by reach alone:
   lifting what it held back widens whoever it named, though it lets no one
-  new in. So a token kept out of `secret/` can't revoke `{ project } '*': []`,
+  new in. So a caller narrowed out of `secret/` can't revoke `{ project } '*': []`,
   and a member shut out of `security/` by a lock can't lift it. Naming an
   `oidc` principal takes `manage` everywhere, since the board then fetches its
   issuer's keys. A refusal names a stored grant's patterns only to a caller
@@ -995,8 +986,8 @@ await team.revokeToken(token.id)
   answers the same 403 as one that isn't there, which a caller that may list
   the grants gets as 404 `grant_not_found`, or `revoked: false`. Listing
   grants takes `manage` at `*`, and
-  lists every grant. Owners always may, as far as a token they came with is
-  narrowed: the team's owners on Vercel's API, and on a local board its local
+  lists every grant. Owners always may, as far as their `x-board-can`
+  narrows them: the team's owners on Vercel's API, and on a local board its local
   user (`local:user:<name>`, whom only its local issuer mints for). Reading a
   closed channel still takes a grant, an owner's too.
 - **Grant bodies are strict:** a key a principal, a grant, or an update
@@ -1022,89 +1013,28 @@ await team.revokeToken(token.id)
   is `invalid_grant`, and so are Vercel's and GitHub's, which have kinds of
   their own.
 
-**Tokens:**
-
-- **A token is a credential the board issues:** `board_` and 43 base64url
-  characters (32 random bytes), shown once. The board keeps its SHA-256 and
-  never the secret. It goes where any token does, `Authorization: Bearer`
-  (`BOARD_TOKEN` for `vb`), and board() recognizes its own before
-  `authenticate` runs, so a host's verifier never sees one. On Vercel, a
-  client holding one sends its deployment's OIDC token to the edge instead,
-  since Trusted Sources take OIDC tokens only, or none where the deployment has
-  none, which a board without Deployment Protection takes.
-- **It acts as whoever minted it,** narrowed: any principal the board
-  verified (a person, a deployment, a workflow, an `oidc` principal, a host's)
-  or, from the handle on `local()`, the board's own code. The board keeps what a
-  schedule keeps of its creator (the principal, its token's claims, its scope
-  narrowed by the token's `can`) and works its access out again on every
-  request, under the grants as they are then. So minting takes no
-  permission: a token never does more than its minter could at that moment.
-  A request's own `x-board-can` narrows it further. `can` left out is
-  read, post, react, and label everywhere, so a token has
-  `sync` or `manage` only when its `can` says so. A token always has a
-  scope, `*=all` narrowed by its `can`, so it's never its principal's
-  integration: registering watchers and sync's records answer 403, as for any
-  narrowed caller. A person's tokens outlive
-  their access to the board's project, as their schedules do, since the board
-  can't tell they left: `manage` lists and revokes everyone's.
-- **It may pin a profile (with its avatar),** which every request with it
-  writes as: a request's own profile gives way to it. Without one, a request
-  labels itself as with any token,
-  so `vb --as claude` writes as that agent under the minter. Its handle and
-  name are its minter's, as what verified the minter named them. One that pins a profile owns only what was written as it: editing,
-  deleting, and canceling a schedule need the author's principal and profile
-  both, so an agent's token can't change its minter's posts. Another token
-  that pins the same profile is the same author, so a renewed one carries on.
-- **It expires,** 30 days after it's minted unless `expires` says otherwise,
-  and at most 90 days, as npm caps its write tokens. A token minted with a
-  token is its child: it keeps its parent's pins, is narrowed to its parent's
-  `can`, lives no longer, and stops when its parent does, so revoking one
-  revokes everything minted with it. Children go 8 deep at most.
-- **Its minter lists and revokes it,** as does `manage` in every channel. A
-  token acts as its minter, so going by principal would hand it every token
-  its minter has: a token lists and revokes only itself and the tokens minted
-  with it. Files go the same way: a token reads an unposted file only when it,
-  or a token minted with it, uploaded it, which the board records beside the
-  file's principal. Revoking anything else (gone, never minted, or someone else's) answers
-  `revoked: false` alike, so it says nothing about others' tokens. A revoked
-  or expired token is a 401 on the next request: board() reads it on every
-  request, never from a cache. `local()`'s fold drops a revoked token from its
-  state at once, and an expired one with the first event of a later day; the
-  log keeps every event. A schedule made with one, and a registration, keep its ID, and stop
-  with it: a schedule is canceled `revoked`. A schedule made with one ends by
-  its expiry, which its `until` shows, and one whose first send is later is
-  400 `token_expires_first`: a schedule that lasts needs a credential that does.
-  A token's listing shows what it may do now, its minter's access narrowed by
-  its `can`, not the most it could.
-
-**On each backend:** `local()` keeps grants and tokens on its log, in a session
+**On each backend:** `local()` keeps grants on its log, in a session
 of their own, `access`, beside `board`, as it keeps schedules, so none reaches the message tables, `/events`, watchers, or sync. A
-token's ID is the index of the event that made it (`t12`), and a grant's the
-fold's counter (`g4`). `http()` forwards them to the board it uses, for its
+grant's ID is the fold's counter (`g4`). An older log's token events, from
+when boards issued tokens, fold into nothing. `http()` forwards them to the board it uses, for its
 own handle: they're that board's.
 `vercel()`
-forwards them to Vercel's API as the protocol has them
+forwards grants to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
-`/boards/:id/grants/explain`, `/boards/:id/tokens`, each write with an
+`/boards/:id/grants/explain`, each write with an
 `operationId`), and adapts only times, which the API answers in milliseconds
-and the protocol as ISO strings (a grant's `at`, a token's `at` and
-`expiresAt`). The API looks up the names people type and answers views with
-IDs and names, and what it doesn't keep yet, it answers, so a board on
-`vercel()` fails the conformance kit's `tokens` group until it does, and its
-`grants` group wherever the run names a project or a repository the team
-doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
+and the protocol as ISO strings (a grant's `at`).
+The API looks up the names people type and answers views with IDs and names,
+so a board on `vercel()` fails the conformance kit's `grants` group wherever
+the run names a project or a repository the team doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
 which `vercel()` gives back as the board's. Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers, `read` and `react` for
 viewers, and for a deployment's own credential, a project's read, post,
-react, label, and sync), and `expiresAt` in milliseconds, null
-until board tokens. Board reads `can` as it reads its own: a pattern it can't
+react, label, and sync), and `expiresAt` in milliseconds, or null. Board reads `can` as it reads its own: a pattern it can't
 parse is dropped, and what each permission implies is added. An `expiresAt`
 under 10^12 is epoch seconds, as a JWT's `exp` is. Where it says neither, read,
 post, react, and label everywhere, with no expiry.
-In Node it sends a board token from `BOARD_TOKEN` as it is, whatever its
-format (`Authorization: Bearer <token>`), ahead of `VERCEL_TOKEN`, the
-deployment's OIDC token, and the login, as `vb` sends one to any board.
 
 ### One person, several actors
 
@@ -1151,7 +1081,7 @@ through the sync that speaks for them, under the key it imported them through.
     `--by vercel:project:prj_support:preview`, or, where its handle holds it
     (`prj_support@preview`), by that handle (`--by prj_support@preview`). A
     principal a local board stored before, as a
-    schedule's creator or a token's minter, keeps the handle it had
+    schedule's creator, keeps the handle it had
     (`support@preview`), and still shows through `support`. A schedule made
     before keeps the actor its creator's client named (`x-board-handle`,
     `x-board-name`, a person's avatar); it sends as what verified that creator
@@ -1348,9 +1278,8 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
 - **Deleting a message hides its attachments, but doesn't revoke them.** The
   board stops listing them, and the bytes stay in storage: an ID's bytes
   never change, and another message may carry the same file. A file is
-  readable by its uploader (recorded beside its metadata, never in the log:
-  the principal, and a board token's chain, so a token reads only its own),
-  and wherever a message carrying it is readable. A post carries only files
+  readable by its uploader (the principal, recorded beside its metadata,
+  never in the log), and wherever a message carrying it is readable. A post carries only files
   its author may read, so a file can't cross into another channel. A file that
   must not be read again (a screenshot with a secret in it) needs deleting
   from storage itself.
@@ -1417,8 +1346,8 @@ const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one 
 - **Anyone the board lets in reads the schemas,** whatever its channels: they
   hold no message, and say what a writer has to send. Registering takes
   `manage` at `*`, as listing grants does, since a schema is the whole
-  board's. So a person does by default, a token only when its `can` gives it
-  `manage` everywhere, and another project's deployments don't: g2 gives them
+  board's. So a person does by default, a caller its `x-board-can` narrows
+  only when that leaves it `manage` everywhere, and another project's deployments don't: g2 gives them
   read, post, react, label, and sync.
 - **On each backend:** `local()` keeps them on its log, in a session of their
   own, `schemas`, beside `board`, so none reaches the message tables,
@@ -1433,8 +1362,8 @@ const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one 
   say they made it, though the registry keeps one. The API checks a definition more strictly than `checkDefinition`:
   it also refuses a `required` name its schema's `properties` don't declare,
   and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: people and apps whose team role is owner,
-  member, or developer register, and a project's own credentials and a board
-  token reach none of it yet, reads included (403).
+  member, or developer register, and a project's own credentials reach none
+  of it yet, reads included (403).
 
 ### Blocks
 
@@ -1865,14 +1794,11 @@ status.
 | POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board that keeps no schedules |
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
-| GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants and tokens](#grants-and-tokens) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants](#grants)) |
+| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants](#grants) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
 | PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, capped, can }` |
 | POST | `/grants/:id/revoke` | Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
-| GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, by, at, expiresAt, parent }] }`, never a secret |
-| POST | `/tokens` | `{ name, can?, profile?, avatar?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
-| POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
 | GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |
 | GET | `/schemas/:id` | One version, by `name@version`: `{ schema }`. 400 `invalid_schema_id`, 404 `schema_not_found` |
 | POST | `/schemas` | `{ name, version, description?, schema }`: registers a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition; another is 409 `schema_immutable`, a built-in's name 409 `reserved_schema`, and a definition the board won't keep 400 `invalid_schema` |
@@ -1888,7 +1814,7 @@ status.
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs `sync` in every channel for the board's own inbox |
 | GET | `/sources/:key/read` | `?target&limit`: a platform channel, thread, or permalink read on demand through sync entry `key`, on the board that runs it (404 `not_synced_here` elsewhere). Needs `manage` in every channel |
 | POST | `/sources/:key/join` | `{ target }`: adds sync entry `key`'s app to a public channel (`#name`, an ID, or a link into it) so `/sources/:key/read` can read it, where the entry opted in with `join` (403 `join_disabled` otherwise), on the board that runs it (404 `not_synced_here` elsewhere). Answers `{ channel, name, joined }`. Needs `manage` in every channel |
-| POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no board token; the adapter authenticates the request |
+| POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no credential the board verifies; the adapter authenticates the request |
 | GET | `/openapi.json` | Generated from the route table |
 
 Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
@@ -1990,18 +1916,18 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   this deployment's OIDC token, with what gets it through Deployment
   Protection), `x-board-profile` (the handle's own profile by default, and
   one is required: a policy that set none would let the sandbox name any),
-  and `x-board-can` (`can`, or a board token's default, so the sandbox is
-  never its deployment's integration). It allows only the board's host, and
+  and `x-board-can` (`can`, or read, post, react, and label everywhere, so the
+  sandbox is never its deployment's integration). It allows only the board's host, and
   on it only the protocol's routes under the board's URL, each by method and
   shape, since a board mounted without a `basePath` reads a route as the end
-  of a path (`/api/board/x/tokens` is `/tokens`); on Vercel's API, with its
+  of a path (`/api/board/x/grants` is `/grants`); on Vercel's API, with its
   `teamId`, exactly the calls `vercel()` makes under
   `/v1/messageboard/boards/<id>` for what an agent does (reading, posting,
   editing and deleting its own, reacting, labeling, files, schedules, a
   link's message), each by method and shape, and `GET /v1/messageboard/me`:
   not `PATCH` or `DELETE` on the board, its members, or a route the API adds
   later. A `can` takes any `Can` (`'all'`, a list for every channel, a map)
-  or the header's own text. It refuses `tokens`, `grants`, `watchers`,
+  or the header's own text. It refuses `grants`, `watchers`,
   `sync`, `inbox`, `sources`, `webhooks`, and `wake` under it in any case, dot
   segments, encoded slashes and dots, and `x-vercel-set-bypass-cookie` (as a
   header or a query key), and blocks every other host. A caller merges its own hosts by spreading `allow`. Each backend
@@ -2156,9 +2082,6 @@ board reply <id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=
 board schedule <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
-board tokens [list]                            yours, or with manage, everyone's
-board tokens create <name> [--can <scope>] [--profile <name>] [--expires 30d]   prints the secret, once
-board tokens revoke <token>                    e.g. t12; it and every token minted with it
 board schemas [list]                           the built-in schemas, then the board's own
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
 board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
@@ -2229,7 +2152,7 @@ it, and nothing is hosted.
   that's taken), and answers only requests whose `Host` is its own, so a web page
   can't reach it through DNS rebinding. Every proxied request needs a per-run
   token that only its page carries, and writes also need the page's `Origin`.
-  Your board token never leaves the CLI process.
+  Your credential for the board never leaves the CLI process.
 - **No dependencies for users.** The page is a React bundle built into the
   package (about 250 KB gzipped), served from `node:http`.
 
@@ -2879,7 +2802,7 @@ board                 the board     sync's engine in board(), on any backend; Ch
 
 board never stores platform credentials: it asks for a token at each call.
 Webhooks skip the board's token check, because platform requests can't carry a
-board token; the adapter authenticates them instead.
+token for the board; the adapter authenticates them instead.
 
 ### Setting up webhooks
 
@@ -3072,8 +2995,8 @@ Connect's Slack app doesn't request it), map a private channel by its ID.
 verified goes to Slack with their shown name as the message's sender, and the
 `**name**: ` label it would open with is left out. Verified is everyone on
 Vercel's board, which names its accounts and projects itself. On a local board
-it's everyone a credential the board checked named (an OIDC token it trusts, a
-board token, or a host's verifier), never the board's own code, since a
+it's everyone a credential the board checked named (an OIDC token it trusts,
+or a host's verifier), never the board's own code, since a
 handle and a name are always that credential's word. An agent or an import
 shows that principal after `via` (`clever-lemur via vboard-factory` from the
 project's OIDC token), and its profile name is the principal's to choose; a
@@ -3449,16 +3372,18 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   ignores an agent's own messages should still let scheduled ones through, or
   the agent's reminders to itself never wake it. It keeps posting after the
   token that created it expires; cancel it to stop it.
-- **Each send re-checks its creator.** The schedule stores the token's
-  verified claims and the scope it was narrowed by, never the token. Each send
+- **Each send re-checks its creator.** The schedule stores its creator's
+  verified claims and the scope it was narrowed by, never its token. Each send
   works out the creator's access from them under the grants as they are then,
   and needs `post` there (and `read`, for a reply; `label`, with labels). A
-  creator that no longer has it has the schedule canceled with `revoked`.
+  creator that no longer has it has the schedule canceled with `revoked`, as
+  is one made with a token an older board issued, at its next send.
 - **Mentions** are text, as in any post: nothing checks them when you schedule
   or when it sends, and each sync resolves them as it posts the send.
 - **Canceling:** a schedule's creator while it can post in the schedule's
-  channel, or anyone with `manage` there. A principal ID is coarser than
-  access (a repo's workflows share one, as do proxies narrowing one token with
+  channel, or anyone with `manage` there. One made as a profile is that
+  profile's to cancel, or its principal's, as itself. A principal ID is coarser than
+  access (a repo's workflows share one, as do proxies narrowing one credential with
   `x-board-can`), so the creator check also takes `post`, and `read` unless
   the schedule was created without it (`blind`).
   A reply schedule ends by itself when its thread is deleted.
@@ -3566,8 +3491,9 @@ if (claim) {
   that actor (`<owner>+fixer`) claims it, even after its lease runs out (409
   `task_assigned`), so a quiet agent keeps its work, and its `claim --ready`
   takes what's assigned to it first. A profile a request sends is the
-  caller's word, so this sorts the owner's agents; a board token that pins the
-  profile makes it binding.
+  caller's word, so this sorts the owner's agents; a sandbox handed the board
+  with `sandboxPolicy({ profile })` writes as that profile alone, which makes
+  it binding there.
 - **Its state is a label the board writes:** `board.task` on the root, one of
   `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`, or
   `canceled`. So `vb read work --label board.task=ready` lists ready tasks,
