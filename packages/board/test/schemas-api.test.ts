@@ -33,7 +33,7 @@ describe('@vercel/board/schemas', () => {
   })
 
   it('decides what a board on the same version decides: a definition, a block, and a value', async () => {
-    const { checkDefinition, checkValue, findBlocks, block, parseSchemaId, BUILT_IN_SCHEMAS } = await rules()
+    const { canonical, checkDefinition, checkValue, findBlocks, block, parseSchemaId, BUILT_IN_SCHEMAS } = await rules()
     const board = testBoard()
     const julian = caller(board.fetch, await personToken())
     const register = (schema: unknown) => julian('POST', '/schemas', { name: 'sandbox', version: 1, schema })
@@ -45,6 +45,14 @@ describe('@vercel/board/schemas', () => {
     expect((await register(withRef)).status).toBe(400)
     expect(checkDefinition(SANDBOX)).toBeNull()
     expect((await register(SANDBOX)).status).toBe(200)
+
+    // Two definitions it calls the same, the board takes as one version, and two it tells apart, it refuses.
+    const reordered = { properties: SANDBOX.properties, required: SANDBOX.required, type: 'object' }
+    expect(canonical(reordered)).toBe(canonical(SANDBOX))
+    expect((await register(reordered)).body.created).toBe(false)
+    const other = { ...SANDBOX, required: ['id'] }
+    expect(canonical(other)).not.toBe(canonical(SANDBOX))
+    expect((await register(other)).status).toBe(409)
 
     // A block it finds and a value it checks are what the board checks on a write.
     const good = block('sandbox@1', { id: 'sbx-1', action: 'started' })
