@@ -299,6 +299,12 @@ function mayList(identity: Identity, what: string) {
   if (!lists(identity)) throw forbidden(`this token can't ${what}: it needs manage at *`)
 }
 
+/**
+ * What a caller that may not list the grants is told when it can't `what` one: the same for a grant
+ * beyond its reach as for one that isn't there, since grant IDs count up and a difference maps them.
+ */
+const unreachable = (what: string) => forbidden(`this token can't ${what}: it needs manage wherever that grant reaches`)
+
 /** A principal's access under `grants`, narrowed by its token: what a grant write judges by, on the snapshot it appends to. */
 type AccessIn = (principal: Known, grants: readonly StoredGrant[]) => Promise<Access | null>
 
@@ -342,7 +348,7 @@ async function mayGrant(
   if (access === null) return
   const refused = checkGrantChange({ ...access, after, ...change })
   if (refused?.reason === 'reach') {
-    if (change.revoked && !lists(identity)) throw forbidden(`this token can't ${what}: it needs manage wherever that grant reaches`)
+    if (change.revoked && !lists(identity)) throw unreachable(what)
     throw forbidden(`${change.revoked ? `this token can't ${what}: it` : what} reaches ${refused.pattern}, where you can't manage grants`)
   }
   if (refused) throw forbidden(`you can't let anyone in: everyone gets ${refused.permission} in ${refused.pattern}, which you can't`)
@@ -362,7 +368,7 @@ async function updated(identity: Identity, state: AccessState, { id, add, remove
   const row = index === null ? undefined : state.grants[index]
   if (!row) {
     // One that isn't there is only news to whoever may list them.
-    mayList(identity, 'update grants')
+    if (!lists(identity)) throw unreachable(`update ${id}`)
     throw notFound(`grant not found: ${id}`, 'grant_not_found')
   }
   const before = Object.values(state.grants).map(storedGrant)
@@ -532,7 +538,7 @@ export function createTrust(options: {
         const row = at === null ? undefined : state.grants[at]
         if (!row) {
           // One that isn't there is only news to whoever may list them.
-          mayList(identity, 'revoke grants')
+          if (!lists(identity)) throw unreachable(`revoke ${id}`)
           return { revoked: false }
         }
         const before = Object.values(state.grants).map(storedGrant)
