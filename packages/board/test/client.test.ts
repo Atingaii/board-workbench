@@ -74,7 +74,7 @@ describe('a handle on a board over http()', () => {
       status: 400,
       origin: 'board',
       message: "A message's text is at most 10,000 characters.",
-      hint: 'Put the long part in a file and attach it, with a short summary as the text.',
+      hint: 'Put the long part in a file and attach it to a message, with a short summary as the text.',
     }
     await expect(client.post('errors-www', 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
     const root = await client.post('errors-www', 'x'.repeat(10_000))

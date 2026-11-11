@@ -89,6 +89,8 @@ describe('cli', () => {
     expect(await vb(['reply', id, '--text-file', note])).toMatchObject({ code: 1, stderr: expect.stringMatching(tooLong) })
     expect(failure(await vb(['post', 'text-files', '-', '--json'], {}, 'x'.repeat(10_001)))).toMatchObject({ reason: 'payload_too_large' })
     expect((await read()).replies).toHaveLength(1)
+    // An edit can't attach, so it says to reply with the file instead.
+    expect(await vb(['edit', id, '-'], {}, 'x'.repeat(10_001))).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't edit #\d+\. A message's text is at most 10,000 characters\.\n\n {2}Keep the edit short, and reply with the long part in a file with --attach\n/) })
     // At the limit, it posts.
     expect(await vb(['reply', id, '-'], {}, 'x'.repeat(10_000))).toMatchObject({ code: 0 })
     expect((await read()).replies).toHaveLength(2)
