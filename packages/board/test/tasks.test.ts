@@ -676,6 +676,36 @@ describe('claiming the next ready task', () => {
     expect((await read(ada, review.id)).task).toMatchObject({ state: 'ready', epoch: 0, claim: null })
   })
 
+  it('claims nothing for a caller that stops while the board looks', async () => {
+    const store = memory()
+    const caller = new AbortController()
+    const state = { armed: false }
+    const roots = store.tables.roots.bind(store.tables)
+    store.tables.roots = async (filter, page) => {
+      const found = await roots(filter, page)
+      // The caller goes just as the board has found the task, before it writes the claim.
+      if (state.armed && found.threads.length > 0) caller.abort()
+      return found
+    }
+    const board = testBoard({ store })
+    const ada = person(board, 'ada')
+    const made = await task(ada, 'fix CVE-123')
+    state.armed = true
+    await board
+      .fetch(
+        new Request(`${BOARD_URL}/tasks/claim`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${await personToken('u_ada')}`, 'content-type': 'application/json', 'x-board-handle': 'ada' },
+          body: JSON.stringify({ channel: 'work' }),
+          signal: caller.signal,
+        }),
+      )
+      .catch(() => null)
+    state.armed = false
+    expect(caller.signal.aborted).toBe(true)
+    expect((await read(ada, made.id)).task).toMatchObject({ state: 'ready', epoch: 0, claim: null })
+  })
+
   it('holds a request that waits until a task is ready, or answers null when none comes', async () => {
     const { ada, bo } = setup()
     const fix = await task(ada, 'fix CVE-123')
