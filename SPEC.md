@@ -702,7 +702,9 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   display (the inspector's logo, a relayed message's label), on each actor
   view of a platform user as `platform`. Renaming a key changes its users'
   IDs. Providers name their users on their platform (`slack:user:…`), and
-  the engine puts them under the key.
+  the engine puts them under the key. On Vercel's board each project's keys
+  are its own: support's `slack` and www's are two connections, whose users
+  are each project's profiles.
 - **Profile:** an optional named identity within a principal, with an avatar.
   It's Just Chat's delegated profile, slimmed down.
   - **Selection:** `team.as('claude')` on a handle, `--as claude` in the CLI.
@@ -1112,7 +1114,10 @@ through the sync that speaks for them, under the key it imported them through.
   - A profile's handle is `<person-handle>/<profile>`, for example
     `julian/claude`.
   - A deployment's handle is its project name, plus `@<env>` outside
-    production.
+    production. On Vercel's board it's the project name in every environment,
+    as Vercel's API names it, and a deployment outside production shows as
+    `support (preview)`; where nothing names its project, its ID
+    (`prj_support`, `prj_support@preview`).
   - An Actions principal's handle is `owner/repo`.
   - A GitHub user's handle is their login. A Slack user's handle is their Slack
     display name. That's the board's own sync's users; a platform user a sync
@@ -1222,7 +1227,12 @@ through the sync that speaks for them, under the key it imported them through.
   - `github:acme/web:123` is a PR thread.
 
   Wherever an external target is accepted, `slack:#prs` also works and resolves
-  through a cached name lookup.
+  through a cached name lookup. On Vercel's board a key is its project's, and
+  a reader outside that project sees it as `<project>/<key>`
+  (`www/slack:C0123ABC`), by the project's name (the handle its deployments go
+  by, `support`, or that their agents go by under it, `support/sync`, or else
+  the `via` its imported users name) or its ID; the project's own deployments
+  see it bare.
 - **Emoji are stored as normalized short names** (`eyes`, `white_check_mark`),
   using Chat SDK's emoji normalization. The CLI accepts `eyes`, `:eyes:`, or 👀.
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
@@ -1706,7 +1716,9 @@ in [Tasks](#tasks), and sync's records
   [IDs, cursors, and versions](#ids-cursors-and-versions)). A bad one is 400
   `invalid_cursor`.
 - `from` is a sync key (`slack`), or `board` for what was written on the
-  board; `text` is words the text contains, case-insensitively.
+  board; `text` is words the text contains, case-insensitively. On Vercel's
+  board, another project's key is `<project>/<key>`, by its name (`www/slack`)
+  or its ID (`prj_…/slack`), and a bare key is the caller's own project's.
 - The profile is sent as `x-board-profile`, `x-board-avatar`, and
   `x-board-session`, and the server records them after verifying the token.
 - `x-board-can` narrows the token's access for that request (see
@@ -2002,7 +2014,8 @@ it, and nothing is hosted.
 `--text <words>`, and `--after <id>` (a message ID or a cursor). All of them
 must match.
 - **`--source`** is a sync key (`slack`, `github`), or `board` for messages
-  written on the board.
+  written on the board. On Vercel's board, `www/slack` or `prj_…/slack` is
+  www's key, as a message's `from` names it to anyone outside www.
 - **`--label`** with a key alone means "has it"; `state=open|draft` means
   either value. A label matches on the message **or its thread's root**: sync
   labels roots, so `--label pr=owner/repo#1` is the PR's whole conversation.
@@ -2164,8 +2177,7 @@ const team = board({
 export const GET = team.fetch, POST = team.fetch
 ```
 
-**Sync runs in `board()`, on any backend but `vercel()`, which throws at bind
-for a board with `sync`.** Its adapters, webhooks, and
+**Sync runs in `board()`, on any backend.** Its adapters, webhooks, and
 deliveries run where `board()` does, and it keeps its records on the backend
 through protocol routes every backend answers, each behind the `sync`
 permission in the channel concerned, but for a person's own codes and
@@ -2197,6 +2209,28 @@ matches of watcher `@sync`. A new root, however it reached the board, goes to
 each sync function as sync sees it, and the function starts its threads. Two
 syncers on one platform channel would each import and each deliver: that's
 config's to avoid.
+
+**On Vercel's board, a project's sync keys are its own,** and one deployment of
+the project holds each, so a project never delivers a message twice. Production
+takes a key over from the project's previews and development; otherwise the
+first to register it keeps it. Registering never fails over a key:
+`PUT /watchers` registers the watchers, lists the keys it holds in `sync`, and
+names who holds each of the rest in `elsewhere`
+(`{ key, platform, owner, environment }`). A deployment runs sync only through
+the keys it holds (`Backend.syncedHere(key)`). For one it doesn't, its webhook
+answers 200 before its adapter reads anything, it pulls no inbox, offers no
+root, and delivers to no target, and it says once who holds the key
+(`[board] slack is synced by production`). Its keyed calls answer without the
+API: an inbox push or ack is dropped, a pull or listing is empty, and an import
+or a receipt is 404 `not_synced_here`. A key another deployment took since it
+registered, however recently, the API refuses with 403 `sync_key_not_owned`:
+it registers again at once, and answers the same way. Another project may also hold `slack`:
+its targets and bindings say whose they are (`projectId`), and a
+`thread.synced` for another project's is not this one's to backfill, nor a
+target its thread's sync doesn't list. Against an API from before each project
+had its own keys (no `elsewhere`), a deployment holds every key it registered,
+a second registrant's is 409 `sync_key_taken`, and a target that names no
+project is the caller's own.
 
 **Each platform takes its app and one sync function**: `slack(app, sync)`,
 where `app` is a connector name or the options. board calls the function with
@@ -2391,8 +2425,9 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
 1. **Delivery.** Every message, edit, delete, and reaction in a thread goes to
    every external thread the thread is synced with, except those under the
    sync key it came through: a reply from `slack:C1` doesn't reach the
-   thread's `slack:C2` copy either. Messages written with `noSync` stay on the
-   board. Where a platform doesn't
+   thread's `slack:C2` copy either. Another project's key on Vercel's board is
+   another key: a reply www imported reaches support's Slack copy. Messages
+   written with `noSync` stay on the board. Where a platform doesn't
    support something, that delivery is skipped.
 2. **Starting a thread.** A root posted on the board, including one posted by a
    watcher, goes to the sync function of every platform that can start threads
@@ -3320,9 +3355,11 @@ if (claim) {
 - **Only its owner's edits change what a task says.** Editing the root, which
   only its author can do, changes the task when the author is its owner. When
   anyone else's edit lands (the author of a thread someone else made a task, or
-  a platform edit synced in), the board holds the task: `task.blocked`, kind
-  `edited`, which ends any claim. Its owner reads the new text and unblocks or
-  cancels it. An agent reads the text as it is when it claims.
+  a platform edit synced in) on a task that's `waiting`, `ready`, or `claimed`,
+  the board holds it: `task.blocked`, kind `edited`, which ends any claim. Its
+  owner reads the new text and unblocks or cancels it. A task that's held
+  already stays held as it was, and one that's finished stays finished: an edit
+  never brings work back. An agent reads the text as it is when it claims.
 
 ### States
 
