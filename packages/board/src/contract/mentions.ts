@@ -2,9 +2,10 @@ import { findBlocks } from './blocks.ts'
 const FENCED_CODE = /```[\s\S]*?```/g
 const INLINE_CODE = /`[^`\n]*`/g
 const NAME = '[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?'
-// `@ada` and `@julian/claude`; never part of an email or a longer token.
+// `@ada` and `@julian/claude`; never part of an email or a longer token. A colon ends one when
+// it's punctuation (`@ada: can you look?`), and not when it joins it to more (`@slack:U0456`).
 const MENTION = new RegExp(
-  `(?<![\\w@.-])@(${NAME}(?:/${NAME})?)(?!:|[a-z0-9_/-]|\\.(?=[a-z0-9]))`,
+  `(?<![\\w@.-])@(${NAME}(?:/${NAME})?)(?!:\\S|[a-z0-9_/-]|\\.(?=[a-z0-9]))`,
   'gi',
 )
 // `@[slack:T0123:U0456]` names an exact actor.
