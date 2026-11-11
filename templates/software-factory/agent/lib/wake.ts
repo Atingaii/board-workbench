@@ -2,14 +2,10 @@ import type { WatcherContext } from "@vercel/board";
 import { byAgent, ORIGIN } from "./identity.ts";
 
 // All the board sees of the agent: its watcher hands over every message posted where it tails, and
-// reactions to the agent's own messages, with the GitHub access the thread gets. The agent reads the
-// thread and decides what each needs.
-
-/** The GitHub connector the agent acts through, and the repos the board brings in (`owner/name`). */
-export type GitHubAccess = { github: string; repos: string[] };
+// reactions to the agent's own messages. The agent reads the thread and decides what each needs.
 
 /** One wake-up: the thread it's about, the event's cursor, and what to tell the agent. */
-export type AgentMessage = { thread: string; key: string; text: string; github: GitHubAccess };
+export type AgentMessage = { thread: string; key: string; text: string };
 
 export type Deliver = (message: AgentMessage) => Promise<void>;
 
@@ -21,7 +17,7 @@ const own = (board: Pick<WatcherContext["board"], "me">) =>
     throw error;
   });
 
-export async function wakeAgent({ event, board }: WatcherContext, github: GitHubAccess, deliver: Deliver = send): Promise<void> {
+export async function wakeAgent({ event, board }: WatcherContext, deliver: Deliver = send): Promise<void> {
   const message = event.message;
   if (!message) return;
   const thread = message.re ?? message.id;
@@ -35,7 +31,7 @@ export async function wakeAgent({ event, board }: WatcherContext, github: GitHub
     if (!byAgent(message.by, me) || byAgent(event.payload.by, me)) return;
     text = `${event.actor?.name ?? "Someone"} reacted :${event.payload.emoji}: to your message #${message.id} in board thread #${thread}.`;
   } else return;
-  await sendToAgent(board, { thread, key: event.cursor, text, github }, deliver);
+  await sendToAgent(board, { thread, key: event.cursor, text }, deliver);
 }
 
 /**
@@ -66,7 +62,7 @@ export async function sendToAgent(board: Pick<WatcherContext["board"], "reply">,
  * delivers twice starts no second turn. Nothing here keeps a map of sessions. The board runs a
  * thread's events in order: two first wake-ups at the very same moment could each start a session.
  */
-export async function send({ thread, key, text, github }: AgentMessage, request: typeof fetch = fetch): Promise<void> {
+export async function send({ thread, key, text }: AgentMessage, request: typeof fetch = fetch): Promise<void> {
   const token = process.env.VERCEL_URL ? await (await import("@vercel/oidc")).getVercelOidcToken() : null;
   const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
   const post = async (path: string, body: object) => {
@@ -90,7 +86,7 @@ export async function send({ thread, key, text, github }: AgentMessage, request:
     if (!opened.ok || !opened.sessionId) throw failed("opening the thread's session", opened);
     return opened.sessionId;
   };
-  const deliver = (session: string) => post(`/eve/v1/session/${session}`, { message: text, clientContext: { board: { thread, ...github } }, idempotencyKey: key });
+  const deliver = (session: string) => post(`/eve/v1/session/${session}`, { message: text, clientContext: { board: { thread } }, idempotencyKey: key });
   let sent = await deliver(await open());
   // The session ended since it was found (idle for too long, or reset): the thread gets a new one.
   if (sent.code === "session_not_active") sent = await deliver(await open());

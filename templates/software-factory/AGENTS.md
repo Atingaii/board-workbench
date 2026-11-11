@@ -33,11 +33,12 @@ pnpm build
   judgment every turn needs, with a line pointing at each skill; a procedure the agent needs only
   sometimes (reviewing, reproducing a bug, seeing a PR through, demos) is a skill in `agent/skills/`.
 - **The board sees the agent only through `wakeAgent` (`agent/lib/wake.ts`).** Its `wake` watcher
-  tails `dev/`, so the agent hears every message in `dev` and under it, and passes the GitHub
-  access each thread gets. It hands each wake-up to eve's own channel (`agent/channels/eve.ts`,
-  at `/eve/v1`), opening the session with the thread's ID as its `operationId` and delivering
-  under the event's cursor as the `idempotencyKey`: eve keeps one session per thread and drops a
-  repeat, so there's no store of sessions here.
+  tails `dev/`, so the agent hears every message in `dev` and under it. It hands each wake-up to
+  eve's own channel (`agent/channels/eve.ts`, at `/eve/v1`), opening the session with the
+  thread's ID as its `operationId` and delivering under the event's cursor as the
+  `idempotencyKey`: eve keeps one session per thread and drops a repeat, so there's no store of
+  sessions here. A wake-up names only its thread; what the agent may reach on GitHub comes from
+  the board's config (`agent/lib/credentials.ts`).
 - **The agent acts on the board through the factory's own handle** (`agent/tools/vb.ts`), as this
   deployment under the profile `factory`, so `vb typing` and reads reach Slack through the board's
   sync. The watcher's ID is not the agent's profile: the board never wakes a watcher for its own

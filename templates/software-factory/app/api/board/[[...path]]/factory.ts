@@ -35,9 +35,9 @@ export const factory = board({
     slack: slack({ adapter: connectors.slack, join: true }, channels(slackChannels)),
   },
   watch: {
-    // Every message in dev and the channels under it, with GitHub access to the repos above. Not
-    // named for the agent: a watcher writes as a profile named for its ID, and the board never
-    // wakes a watcher for its own writes, so the agent's check-ins would never reach it.
-    wake: { tail: "dev/", run: (context) => wakeAgent(context, { github: connectors.github, repos: Object.keys(repoChannels) }) },
+    // Every message in dev and the channels under it. Not named for the agent: a watcher writes as
+    // a profile named for its ID, and the board never wakes a watcher for its own writes, so the
+    // agent's check-ins would never reach it.
+    wake: { tail: "dev/", run: (context) => wakeAgent(context) },
   },
 });

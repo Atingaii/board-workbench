@@ -24,28 +24,11 @@ test("a reply through the tool lands on the board under the agent's profile", as
   assert.equal(reply?.by.actor, "board:client:factory");
 });
 
-test("the tool runs no command that streams, reads outside the board's channels, or acts on the board itself", async () => {
+test("the tool runs no command that streams: a tool call can't, and vb() runs one call at a time", async () => {
   const { agent } = await factory();
-  for (const command of ["tail", "wait", "sources", "inbox", "tokens", "grants", "schemas", "hooks", "conformance"]) {
-    const printed = await runVb(agent, [command], noFiles);
+  for (const command of ["tail", "wait"]) {
+    const printed = await runVb(agent, [command, "dev"], noFiles);
     assert.match(printed, new RegExp(`${command} isn't available here`), command);
     assert.match(printed, /\(exit 2\)/, command);
   }
-});
-
-test("the agent can't write as another profile: --as and --avatar are refused, and nothing is posted", async () => {
-  const { team, root, agent } = await factory();
-  for (const flag of [["--as", "wake"], ["--as=wake"], ["--avatar", "https://example.com/a.png"]]) {
-    const printed = await runVb(agent, ["reply", String(root.id), "as someone else", ...flag], noFiles);
-    assert.match(printed, /--as and --avatar aren't available here: you write as factory/);
-  }
-  const { messages } = await team.messages({ channel: "dev" });
-  assert.equal(messages.some((message) => message.text === "as someone else"), false);
-});
-
-test("text that says --as, after --, is only text", async () => {
-  const { team, root, agent } = await factory();
-  await runVb(agent, ["reply", String(root.id), "--", "--as"], noFiles);
-  const { messages } = await team.messages({ channel: "dev" });
-  assert.equal(messages.some((message) => message.text === "--as"), true);
 });

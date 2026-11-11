@@ -6,7 +6,6 @@ import { send, sendToAgent, wakeAgent, type AgentMessage } from "../agent/lib/wa
 // that says who this deployment writes as. What reaches the agent is what `deliver` gets.
 
 const DEPLOYMENT = "vercel:project:prj_factory:production";
-const GITHUB = { github: "github/factory", repos: ["acme/factory"] };
 
 const by = (principal: string, profile: string | null) => ({ principal, profile, actor: profile ? `${principal}+${profile}` : principal });
 const ada = by("vercel:user:u_ada", null);
@@ -22,13 +21,13 @@ async function woken(event: never) {
   const got: AgentMessage[] = [];
   const replies: string[] = [];
   const board = { me: async () => ({ principal: DEPLOYMENT }), reply: async (_id: string, text: string) => void replies.push(text) } as never;
-  await wakeAgent({ event, board } as never, GITHUB, async (message) => void got.push(message));
+  await wakeAgent({ event, board } as never, async (message) => void got.push(message));
   return { got, replies };
 }
 
-test("a person's reply wakes the agent, for its thread, under the event's cursor, with the thread's GitHub access", async () => {
+test("a person's reply wakes the agent, for its thread, under the event's cursor", async () => {
   const { got } = await woken(posted());
-  assert.deepEqual(got, [{ thread: "12", key: "c-13", text: "New message #13 in board thread #12.", github: GITHUB }]);
+  assert.deepEqual(got, [{ thread: "12", key: "c-13", text: "New message #13 in board thread #12." }]);
 });
 
 test("a new thread wakes the agent for itself", async () => {
@@ -57,7 +56,7 @@ test("a wake-up that never gets there is tried 3 times, then said in the thread"
   let tries = 0;
   const replies: [string, string][] = [];
   const board = { reply: async (id: string, text: string) => void replies.push([id, text]) } as never;
-  const message = { thread: "12", key: "c-13", text: "New message #13 in board thread #12.", github: GITHUB };
+  const message = { thread: "12", key: "c-13", text: "New message #13 in board thread #12." };
   await sendToAgent(board, message, async () => ((tries += 1), Promise.reject(new Error("the agent's channel answered 500: boom"))), 0);
   assert.equal(tries, 3);
   assert.deepEqual(replies, [["12", "The agent couldn't start: `the agent's channel answered 500: boom`. Reply here to try again."]]);
@@ -74,8 +73,8 @@ function eve(answers: [status: number, body: object][]) {
   return { requests, fake };
 }
 
-const WAKE = { thread: "12", key: "c-13", text: "hi", github: GITHUB };
-const DELIVERY = { message: "hi", clientContext: { board: { thread: "12", github: "github/factory", repos: ["acme/factory"] } }, idempotencyKey: "c-13" };
+const WAKE = { thread: "12", key: "c-13", text: "hi" };
+const DELIVERY = { message: "hi", clientContext: { board: { thread: "12" } }, idempotencyKey: "c-13" };
 
 test("a wake-up finds the thread's session by the thread, then delivers once under the event's cursor", async () => {
   const { requests, fake } = eve([
