@@ -212,7 +212,8 @@ export type VercelEnvironment = {
 }
 
 /** Who a request to the API is from, beside its credentials: a label it shows, never who it is. */
-type Who = { profile: { name: string; avatar?: string } | null }
+/** Who a call to the API is: the profile it writes as, and the `can` a handle's `as()` narrowed it to, sent as `x-board-can`. */
+type Who = { profile: { name: string; avatar?: string } | null; can?: string }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 
@@ -595,7 +596,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (typeof value === 'string') url.searchParams.set(name, value)
       else for (const one of value) url.searchParams.append(name, one)
     }
-    const headers: Record<string, string> = { 'content-type': 'application/json', ...apiProfileHeaders(who.profile) }
+    const headers: Record<string, string> = { 'content-type': 'application/json', ...apiProfileHeaders(who.profile), ...(who.can !== undefined ? { 'x-board-can': who.can } : {}) }
     // A 429 did nothing. A 503 may have: only a request the API can tell it has seen goes again.
     const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'
     for (let attempt = 0; ; attempt++) {
@@ -1205,7 +1206,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     if (caller.origin.via?.kind === 'client') {
       const asked = 'profile' in caller ? caller.profile : (caller.self ?? undefined)
-      return { profile: named(asked === undefined ? (environment?.profile() ?? null) : asked) }
+      return { profile: named(asked === undefined ? (environment?.profile() ?? null) : asked), ...(caller.can !== undefined ? { can: caller.can } : {}) }
     }
     return { profile: named(caller.self ?? 'client') }
   }

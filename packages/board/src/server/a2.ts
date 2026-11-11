@@ -15,7 +15,7 @@ import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
-import { FULL_ACCESS, type Access, type Permission } from './access.ts'
+import { FULL_ACCESS, parseCan, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
 import { viaOf } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
@@ -125,6 +125,15 @@ const OWN: SelfCaller = { self: null, origin: { via: { kind: 'client', name: nul
  * and sync.
  */
 function selfIdentity(caller: SelfCaller): Identity {
+  const identity = ownIdentity(caller)
+  if (caller.can === undefined) return identity
+  // A handle narrowed with `as(profile, { can })`: what a request narrowed with x-board-can gets.
+  const { principal } = identity
+  return { ...identity, principal: { ...principal, scope: caller.can, access: principal.access.narrow(parseCan(caller.can)) } }
+}
+
+/** Who this deployment's own code is, before a handle's `can` narrows it. */
+function ownIdentity(caller: SelfCaller): Identity {
   const { self, origin } = caller
   if (origin.via?.kind === 'watcher') return deploymentIdentity(`board:watch:${self}`, self ?? 'watch')
   if (origin.via?.kind === 'middleware') return deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
@@ -975,8 +984,9 @@ function build(options: A2Options, binding: BoardBinding) {
 
     async inbox(caller, { key, channel, limit }) {
       // Raw platform payloads. This board's own inbox, and every sync's that registered here, span every
-      // channel; a caller's own pushes are its own.
-      const { principal } = (await needSync(caller, 'read an inbox'))
+      // channel; a caller's own pushes are its own. Sync's records, which no caller narrowed with
+      // x-board-can reads, as a sandbox's policy never reaches them.
+      const { principal } = (await needSync(caller, 'read an inbox', true))
       const everywhere = principal.access.everywhere('sync')
       const entries: InboxEntry[] = []
       if (everywhere) {

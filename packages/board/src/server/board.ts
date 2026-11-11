@@ -8,7 +8,7 @@ import { createPolicy, type Policy, type PolicyOptions, type Serving } from './p
 import { createServe, type PlatformCaller, type Serve } from './serve.ts'
 import type { Watcher } from './watcher.ts'
 import { HttpError } from './errors.ts'
-import { InvalidCan } from './access.ts'
+import { canText, compileAccess, InvalidCan, parseCan, type Can } from './access.ts'
 import { formatProfileHeader } from '../contract/profile-header.ts'
 import { boardPolicy, canHeader, PROTOCOL_ROUTES, withoutToken, type SandboxInput, type SandboxPolicy, type SandboxPolicyOptions, type SandboxReach } from './sandbox.ts'
 
@@ -74,9 +74,12 @@ export type Board = BoardClient & {
   fetch(request: Request): Promise<Response>
   /**
    * The handle, acting with `profile`: `<principal>+<profile>` over HTTP, `board:client:<profile>`
-   * on `local()`. `null` acts as yourself, outside any agent session.
+   * on `local()`. `null` acts as yourself, outside any agent session. With `can`, the board holds
+   * every call it makes to that, as it holds a sandbox to its policy's `x-board-can`: an agent's tool
+   * that runs `vb()` on `team.as('fixer', { can: ['read', 'post'] })` can't read sync's inbox or
+   * change grants. A narrowed handle's own `as()` and `sandboxPolicy()` stay inside its `can`.
    */
-  as(profile: ProfileOption): Board
+  as(profile: ProfileOption, options?: AsOptions): Board
   /**
    * A Vercel Sandbox network policy that hands this board, and nothing else, to a sandboxed agent:
    * `Sandbox.create({ networkPolicy })` takes it. The sandbox's proxy adds the credential (this
@@ -87,6 +90,17 @@ export type Board = BoardClient & {
    * it: hand the sandbox a new policy (`sandbox.update({ networkPolicy })`) before it expires.
    */
   sandboxPolicy(options?: SandboxPolicyOptions): Promise<SandboxPolicy>
+}
+
+/** What `as()` takes beside the profile. */
+export type AsOptions = {
+  /**
+   * What the handle may do at most, as `x-board-can` narrows a request: a `can` (`{ 'dev/': ['read',
+   * 'post'] }`, `['read']`) or its header form (`dev/=read,post`). It only narrows what this
+   * deployment may do, and what the handle it's called on may: never sync's records, watchers'
+   * registrations, or what `manage` does unless it says so. Without one, the handle's own.
+   */
+  can?: Can | string
 }
 
 /** A board on a backend you pass, which says how it reaches the board itself. */
@@ -220,6 +234,22 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     return { url, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, routes: PROTOCOL_ROUTES }
   }
 
+  /** `can`'s header text, read as the board reads one: a 400 `invalid_scope` for one it doesn't. */
+  function canOf(can: Can | string | undefined): string {
+    try {
+      return canHeader(can)
+    } catch (error) {
+      if (error instanceof InvalidCan) throw new BoardError('invalid_scope', error.message, 400)
+      throw error
+    }
+  }
+
+  /** What a handle narrowed to `held` (or nothing) may do once `can` narrows it too: never more than either. */
+  const within = (held: string | undefined, can: string): string => (held === undefined ? can : canText(compileAccess(parseCan(held)).narrow(parseCan(can))))
+
+  /** The `can` a handle as `caller` holds: what `as(profile, { can })` gave it. */
+  const heldBy = (caller: Caller): string | undefined => ('self' in caller ? caller.can : undefined)
+
   /** The policy that hands this board to a sandbox, for a handle as `caller`. */
   async function sandboxPolicy(caller: Caller, options: SandboxPolicyOptions = {}): Promise<SandboxPolicy> {
     const own = 'profile' in caller ? caller.profile : null
@@ -230,13 +260,8 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
       })
     if (!SANDBOX_PROFILE.test(named.name)) throw new BoardError('invalid_profile', `${named.name} isn't a profile's name: one starts with a letter and uses up to 32 letters, numbers, and hyphens.`, 400)
     if (named.avatar !== undefined && !avatarUrl(named.avatar)) throw new BoardError('invalid_profile', `${named.avatar} isn't an avatar: one is an https URL, or http on localhost.`, 400)
-    let can: string
-    try {
-      can = canHeader(options.can)
-    } catch (error) {
-      if (error instanceof InvalidCan) throw new BoardError('invalid_scope', error.message, 400)
-      throw error
-    }
+    // A narrowed handle hands a sandbox no more than it holds itself.
+    const can = within(heldBy(caller), canOf(options.can))
     const input: SandboxInput = { profile: named, can, token: options.token }
     try {
       return boardPolicy(backend.sandbox ? await backend.sandbox(input) : await ownReach(input))
@@ -248,7 +273,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
 
   /** A handle on `client`, which `as` gives other profiles of. */
   function handle(client: BoardClient, url: (() => string) | null, caller: Caller): Board {
-    const made = { ...client, fetch: serve, as, sandboxPolicy: (options?: SandboxPolicyOptions) => sandboxPolicy(caller, options) } as Board
+    const made = { ...client, fetch: serve, as: asFrom(caller), sandboxPolicy: (options?: SandboxPolicyOptions) => sandboxPolicy(caller, options) } as Board
     if (url) Object.defineProperty(made, 'url', { get: url, enumerable: true })
     return made
   }
@@ -274,7 +299,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
         // In-process, a request is this caller's whatever its headers say: another profile is another handle's.
         request: (path, init = {}) => {
           const { as: profile, ...rest } = init
-          return profile !== undefined ? as(profile).request(path, rest) : client.request(path, rest)
+          return profile !== undefined ? asFrom(caller)(profile).request(path, rest) : client.request(path, rest)
         },
         events: (query, opts) => events(client, query, opts),
       },
@@ -283,14 +308,19 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     )
   }
 
-  const profileCaller = (profile: ProfileOption): SelfCaller => {
+  const profileCaller = (profile: ProfileOption, can: string | undefined): SelfCaller => {
     const name = profile === null ? null : typeof profile === 'string' ? profile : profile.name
-    return { self: name, profile, origin: { via: { kind: 'client', name } } }
+    return { self: name, profile, ...(can !== undefined ? { can } : {}), origin: { via: { kind: 'client', name } } }
   }
 
-  function as(profile: ProfileOption): Board {
-    return handleOf(profileCaller(profile), null)
-  }
+  /** `as()` on a handle as `caller`: another profile, held to what that handle holds, and to `can` when it's given. */
+  const asFrom =
+    (caller: Caller) =>
+    (profile: ProfileOption, options: AsOptions = {}): Board => {
+      const held = heldBy(caller)
+      const can = options.can === undefined ? held : within(held, canOf(options.can))
+      return handleOf(profileCaller(profile, can), null)
+    }
 
   const context: BoardContext = { options, backend, runtime, policy, state, ownUrl, clientAs, handleOf }
 
