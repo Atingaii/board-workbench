@@ -3366,12 +3366,14 @@ if (claim) {
 | `canceled` | no longer wanted, with a `reason`; its dependents keep waiting | none |
 
 A claim whose lease has run out is claimable at once, and `vb tasks --state
-ready` lists it. What the board derives (a lease running out, a task's last
-prerequisite completing) can reach `board.task` a few seconds late: the board
-appends `task.expired` or `task.ready` for it, which sets the label and wakes
-the workers waiting on it, while a claim always checks the task as it is.
-`local()` appends `task.ready` in the same write as the completion, and arms a
-timer for `task.expired`, as it does for a schedule's send.
+ready` lists it. Nothing has to run when a lease ends. The board writes
+`task.expired`, which sets the label and wakes whoever waits on it, no later
+than the next task request that sees the lapsed claim: a claim of it, a
+`claim --ready`, or a list. `local()` writes it when the lease ends, on a timer
+in its own process, as it does for a schedule's send. Vercel's board keeps no
+timers, so until something asks, a lapsed claim's label still says `claimed`:
+a worker that only wakes on events also asks on a schedule. A task whose last
+prerequisite completes is readied in the completion's own request.
 
 ### Claims
 
@@ -3416,10 +3418,11 @@ timer for `task.expired`, as it does for a schedule's send.
 - **A failed or canceled prerequisite never readies its dependents.** `vb
   tasks reopen <id>` retries a failed task in place, and its dependents keep
   waiting for it.
-- **Completing a task readies its dependents.** On `local()` it's the same
-  write: one append holds `task.completed` and a `task.ready` for each
-  dependent whose last prerequisite it was. Elsewhere `task.ready` can come a
-  few seconds later (see [States](#states)).
+- **Completing a task readies its dependents,** in the completion's own
+  request. On `local()` it's the same write: one append holds `task.completed`
+  and a `task.ready` for each dependent whose last prerequisite it was.
+  Vercel's board readies as many as fit in that write, and the rest before it
+  answers.
 
 ### Blocking for a person
 
@@ -3561,34 +3564,25 @@ board that keeps none.
   and `board.task` label in the tables, checks every claim and fenced write
   with the engine's conditional append (as label `if` does), and times leases
   with its scheduler.
-- **`vercel()`** maps the routes onto Vercel's API, which kept tasks before
-  board did. Its engine already does what this section asks: claims with an
-  epoch and a token, leases it times, prerequisites checked in the claim's own
-  write, holds, and reopening. What ties a task to its thread
-  doesn't yet, and the conformance kit fails those checks until it does. What
-  the API would change, keeping its own task records:
-  - **Create a task and its root in one write,** the root's text being the
-    task's. Today a task's thread appears when someone first posts in it, and
-    that post isn't the task.
-  - **Make an existing thread a task.** Its task ID can come from the
-    thread's, as a task's thread ID comes from the task's today.
-  - **Write `board.task` on the root with each task change,** what it derives
-    within a few seconds, and refuse every client write under `board.`. Count
-    `board.*` outside its 16 labels a message may carry, so a task keeps room
-    for every label it routes by.
-  - **Route by the root's labels:** list and claim ready tasks by label, and
-    across channels, where today it lists one channel's at a time.
-  - **Tie the root to its task:** deleting the root cancels the task, the
-    task's text is the root's, and an edit by anyone but its owner holds it.
-  - **Check `label` for a claim:** a claim needs `label` in the task's
-    channel, whoever owns the task, and the owner or `manage` there does the
-    rest. Today only the owner claims.
-  - **Assign to a profile:** keep a task to one of its owner's actors, which
-    its `session` does today for a string the client picks.
-  - **Leave a task's thread where it is.** The API moves it along when a task
-    moves to another channel, and a board thread never changes channel.
+- **`vercel()`** maps the routes onto Vercel's API, where a thread carries
+  task state the same way: stored with the thread, with no text, channel, or
+  ID of its own, and each task change a thread event in the feed, in order
+  with the thread's messages. The tasks that API had before, a record of
+  their own beside threads, aren't board tasks: their routes stay as they are
+  for the tools that call them, and `vb tasks` neither lists nor changes
+  them. What a caller can notice there, against `local()`:
+  - **A lease is at most 5 minutes,** so the default comes back `yours for
+    5m`.
+  - **Nothing times a lease.** `task.expired` is written by the next task
+    request that sees the lapsed claim (see [States](#states)).
+  - **A claim's token is made by its caller,** which `vercel()` does: the API
+    keeps each answer to replay a retry with, and would be keeping a token it
+    made.
+  - **A task's changes are kept 30 days,** as long as the feed keeps any
+    event. Its thread, its replies, and its state stay for good; who claimed
+    it when doesn't.
 
-  Its 5-minute leases already fit.
+  Until the API serves those routes, `vercel()` answers 501 `no_tasks`.
 - **A backend that keeps no tasks** answers 501 `no_tasks`, which the kit
   reports as not kept here.
 
@@ -3617,8 +3611,8 @@ board that keeps none.
 - A claim that asks for 5 minutes or less gets it, and its `until` says what
   it gave.
 - `claim --ready` with a label finds a ready task in a channel under a prefix.
-- `tail` with `--label board.task=ready` sees a task become ready, within a
-  few seconds of its last prerequisite completing, and get claimed.
+- `tail` with `--label board.task=ready` sees a task become ready when its
+  last prerequisite completes, and get claimed.
 
 ### Not in this version
 
@@ -3641,8 +3635,10 @@ board that keeps none.
   out. The cost: a crashed agent's task waits until its owner reassigns it.
 - `--from` matches owners by handle, which a person's CLI asserts on
   `local()` today; it's as safe as handles are verified.
-- How late `board.task` may be on a backend that derives readiness: "a few
-  seconds" needs a number the kit can check.
+- Whether a board with no clock of its own should still announce a lease
+  running out: on Vercel's board the next task request does.
+- Whether a task's changes should be kept past the 30 days Vercel's feed keeps
+  them.
 - A review that sends work back: the work-queue reference's `review` state
   does that today. Here a review is a task that `--needs` the fix, and a completed
   task can't be reopened.
@@ -3704,6 +3700,8 @@ board that keeps none.
 | Where does the board keep state people filter on? | **In labels under `board.`,** which only the board writes. Every filter, the event feed's before-or-after rule, watchers, the tables, the inspector, and renderers already handle labels; a filter of its own (`--task`) would have to be taught to each. A namespace nobody else uses keeps existing labels untouched, and the key says who wrote it. |
 | Who may work a task? | **Anyone with `label` in its channel.** A task's state is its root's `board.task` label, so working it changes a thread's state, which `label` grants; `post` only says things, and broad `post` grants are common. Its owner, or `manage`, keeps the rest: assigning, holding, reopening, canceling. Agents take others' tasks only with `--from`, so a teammate's text steers no one by accident. |
 | Who decides how tasks behave? | **board.** It specs them and the conformance kit's `tasks` group checks them; Vercel's API conforms check by check, as it did for label `if`, reply `after`, and `revision`. |
+| How do tasks live in Vercel's API? | **On its threads.** A thread carries the task's state, and its changes are thread events, as on `local()`. Tying a thread to the task records that API already had would keep the same facts in two places (text, state, existence, channel, events), each needing a rule to stay equal. Those tasks stay as they are for the tools that call them, and aren't board tasks. |
+| What happens when a lease runs out? | **The next task request writes it.** Nothing is armed for a claim: a lapsed claim is claimable at once, and `task.expired` lands with the next claim, `claim --ready`, or list that sees it. `local()` also times it in its own process. A worker that only wakes on events asks on a schedule too. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a deployment registers the tails of the watchers it deployed, and its own `https` URL or path, which the board wakes with no event and no credential (see [Watchers woken by their board](#watchers-woken-by-their-board)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release
