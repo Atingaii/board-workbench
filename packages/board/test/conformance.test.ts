@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { conformance } from '../src/conformance/index.ts'
@@ -150,6 +150,9 @@ function wakingByPath(fetch: Fetch): Fetch {
 /** The watcher and sync checks' statuses, in order. */
 const watcherStatuses = (report: Awaited<ReturnType<typeof conformance>>) =>
   report.checks.filter((check) => check.group === 'watchers' || check.group === 'sync').map((check) => check.status)
+
+// Each of these runs the kit against a board, some more than once: seconds each, and more under a full run.
+vi.setConfig({ testTimeout: 30_000 })
 
 describe('the conformance kit', () => {
   it('passes a board on a2(), checking the whole protocol, and deletes what it posted', async () => {
