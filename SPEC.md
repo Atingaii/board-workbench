@@ -3307,17 +3307,21 @@ if (claim) {
   thread as one, and `vb tasks create <id>` makes an existing thread one: a
   GitHub issue's, a Slack question's. A task's ID is its root's.
 - **Its owner is the principal that made it a task.** The owner, or anyone
-  with `manage` in its channel, changes it: assigns, holds, unblocks, reopens,
-  or cancels it (403 `task_not_owned` for anyone else). A principal ID is
-  coarser than access (a proxy narrows one token with `x-board-can`), so the
-  owner changes it only while it may still `post` or `label` there, as it had
-  to, to make it.
+  with `manage` in its channel, changes it: assigns, unblocks, reopens, or
+  cancels it, and holds it while no one has claimed it (403 `task_not_owned`
+  for anyone else). A claimed task is held through its claim alone. A
+  principal ID is coarser than access (a proxy narrows one token with
+  `x-board-can`), so the owner changes it only while it may still `post` or
+  `label` there, as it had to, to make it.
 - **Anyone with `label` in its channel may claim it,** the owner's agents and
   a teammate's alike, so a team works one queue. A task's state is its root's
   `board.task` label, and working it changes that state, which is what `label`
   grants: `post` only says things. Once claimed, the claim fences what its
   claimant does (renew, release, complete, fail, block). Without `label`
-  there, a claim is 403 `forbidden`.
+  there, a claim is 403 `forbidden`. Starting a new thread as a task is the
+  one write that sets `board.task` with `post` alone: it changes no thread
+  that's there, and what it posts steers no one until an agent takes tasks
+  from its owner.
 - **Taking someone else's task is a choice.** A task's text is instructions
   for whoever claims it, so `claim --ready` takes only the caller's own tasks
   unless `--from` names the owners it takes instructions from: each by ID, or
@@ -3366,7 +3370,7 @@ if (claim) {
 | State | Means | Moves to |
 | --- | --- | --- |
 | `waiting` | a prerequisite hasn't completed | `ready` once every one has; `blocked`, `canceled` |
-| `ready` | anyone of the owner's may claim it | `claimed`, `blocked`, `canceled` |
+| `ready` | anyone with `label` in its channel may claim it, or only the actor it's assigned to | `claimed`, `blocked`, `canceled` |
 | `claimed` | an agent holds it until its lease ends | `completed`, `failed`, `blocked`, or `canceled`; or `ready` (released, or the lease ran out) |
 | `blocked` | held for a person, with a `kind` and a `reason` | `ready` or `waiting`, when unblocked; `canceled` |
 | `completed` | done, with an optional `result` | none; its dependents become `ready` |
@@ -3436,10 +3440,12 @@ timer for `task.expired`, as it does for a schedule's send.
 
 `vb tasks block 813 "approve the prod deploy?" --kind awaiting_approval` holds
 a task for a person: `kind` is open (`needs_input`, `awaiting_approval`) but
-for `edited`, which is the board's own and a request can't ask for, and
-blocking a claimed task, which only its claimant can do, releases the claim.
-Its owner's hold of a task someone holds is 409 `task_claimed`; once the lease
-has run out the task is no one's, and its owner holds it.
+for `edited`, which is the board's own and a request can't ask for. A
+claimed task is held through its claim, by its claimant alone, whoever owns
+the task, and the hold ends the claim. A task no one has claimed is held by
+its owner, or by `manage` in its channel: their hold of a task someone holds
+is 409 `task_claimed`, so they cancel claimed work they want stopped. Once a
+lease has run out the task is no one's, and its owner holds it.
 `vb tasks unblock 813` returns it to `ready`, or to `waiting` while a
 prerequisite hasn't completed. Unblocking a task that isn't blocked, or
 reopening one that's open, changes nothing and answers the task as it is. The person answers in the task's thread, which,
@@ -3634,8 +3640,9 @@ board that keeps none.
   one never readies it.
 - Another principal with `label` in the channel claims and completes a task;
   without it, the claim is `forbidden`.
-- Another principal's cancel, hold, or assign is `task_not_owned`, and with
-  `manage` in the channel it lands.
+- Another principal's cancel or assign, or its hold of a task no one has
+  claimed, is `task_not_owned`, and with `manage` in the channel it lands. A
+  claimant's hold through its own claim lands, whoever owns the task.
 - `claim --ready` takes another principal's task only when `--from` names
   its owner.
 - A task assigned to a profile is claimed only as that actor
