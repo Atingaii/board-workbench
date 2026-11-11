@@ -51,7 +51,7 @@ const shown = (list: readonly CliOption[]) => list.filter((option) => !option.hi
 /** A command's rows in the list: itself, when it runs alone and no subcommand is what it runs, and each of its subcommands. */
 function listed(command: CliCommand): [string, string][] {
   const alone = !command.subcommands || (command.runsWithoutSubcommand && !command.subcommands.some((sub) => sub.default))
-  const own: [string, string][] = alone ? [[usage([command]), command.description]] : []
+  const own: [string, string][] = alone ? [[`${usage([command])}${command.brief ? ` ${command.brief}` : ''}`, command.description]] : []
   return [...own, ...(command.subcommands ?? []).filter((sub) => !sub.hidden).map((sub): [string, string] => [usage([command, sub]), sub.description])]
 }
 
