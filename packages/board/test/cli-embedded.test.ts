@@ -424,14 +424,14 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("sends a board token you set to Vercel's API as itself, ahead of your login, from vb and from a CLI that runs board's", async () => {
+  it("sends your login to Vercel's API and never BOARD_TOKEN, from vb and from a CLI that runs board's, and says to log in again when it's refused", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
     vi.stubEnv('BOARD_TOKEN', 'p9Lr4vTzQ2wc')
-    const api = fakeMessageboard({ tokens: { p9Lr4vTzQ2wc: 'user:u_ada' }, me: { p9Lr4vTzQ2wc: { can: { 'dev/': ['read'] }, expiresAt: null } } })
+    const api = fakeMessageboard({ tokens: { p9Lr4vTzQ2wc: 'user:u_ada' } })
     const sent: (string | null)[] = []
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      sent.push(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization'))
+      sent.push(new Request(input, init).headers.get('authorization'))
       return api.fetch(input, init)
     })
     const cwd = process.cwd()
@@ -439,45 +439,18 @@ describe('the embedded CLI', () => {
     try {
       const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
       expect(whoami.code).toBe(0)
-      expect(whoami.stdout).toMatch(/^Ada Lovelace \(vercel:user:u_ada\)\n(.*\n)*source +BOARD_TOKEN\n(.*\n)*can +dev\/  read\n$/)
-      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
-      // `vercel board`: its login and its signed fetch go unused, and the token goes as it is.
+      expect(whoami.stdout).toMatch(/^.* \(vercel:user:u_jb\)\n/)
+      expect(new Set(sent)).toEqual(new Set(['Bearer user:u_jb']))
+      // `vercel board`: the login it hands over.
       sent.length = 0
-      let asked = 0
-      const signed = vi.fn()
-      const app = createApp({ appName: 'vercel board', login: async () => (asked++, 'user:u_jb'), team: async () => 'team_test', fetch: async (input, init) => (signed(), api.fetch(input, init)) })
+      const app = createApp({ appName: 'vercel board', login: async () => 'user:u_jb', team: async () => 'team_test' })
       expect((await capture(() => app.run(['read', 'general']))).code).toBe(0)
-      expect([asked, signed.mock.calls.length]).toEqual([0, 0])
-      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
-    } finally {
-      fetching.mockRestore()
-      process.chdir(cwd)
-      await rm(home, { recursive: true, force: true })
-    }
-  })
-
-  it("shows what a board token Vercel's API minted may do and until when, and says it reaches only its own board", async () => {
-    const home = await isolated()
-    const api = fakeMessageboard()
-    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
-    // A deployment mints it on the team's board: its secret is all the CLI gets.
-    const minting = await api.fetch('https://api.vercel.com/v1/messageboard/boards/brd_test/tokens?teamId=team_test', {
-      method: 'POST',
-      headers: { authorization: 'Bearer project:prj_pong:production', 'content-type': 'application/json' },
-      body: JSON.stringify({ operationId: 'op_1', name: 'ci', can: { 'dev/': ['read'] }, expires: '2h' }),
-    })
-    vi.stubEnv('BOARD_TOKEN', ((await minting.json()) as { secret: string }).secret)
-    const cwd = process.cwd()
-    process.chdir(home)
-    try {
-      const whoami = await capture(() => main(['whoami', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test'], { name: 'board', commands: local }))
-      expect(whoami.code).toBe(0)
-      expect(whoami.stdout).toMatch(/^.* \(vercel:project:prj_pong:production\)\n(.*\n)*token +expires in (1h 59m|2h 0m)\n(.*\n)*can +dev\/  read\n$/)
-      // Naming no board, the CLI asks for the team's, which a board token can't.
-      expect(await capture(() => main(['read', 'dev', '--scope', 'test'], { name: 'board', commands: local }))).toMatchObject({
-        code: 1,
-        stderr: 'error: a board token reaches only its own board, by its ID.\n\n  Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).\n',
-      })
+      expect(new Set(sent)).toEqual(new Set(['Bearer user:u_jb']))
+      // A login it refuses is yours to renew: BOARD_TOKEN has nothing to do with it.
+      vi.stubEnv('VERCEL_AUTH_TOKEN', 'not-a-token')
+      const refused = await capture(() => main(['read', 'general', '--scope', 'test'], { name: 'board', commands: local }))
+      expect(refused).toMatchObject({ code: 1, stderr: expect.stringContaining('vercel login') })
+      expect(refused.stderr).not.toContain('BOARD_TOKEN')
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -494,7 +467,7 @@ describe('the embedded CLI', () => {
       sent.push(new Request(input, init).headers.get('authorization'))
       return api.fetch(input, init)
     })
-    // What `vb conformance` does with a token it minted: the same board, that secret as the credential.
+    // A token an app's command passes in place of your login.
     const probe: Command = {
       spec: { name: 'probe', description: 'who a token is on the board', arguments: [], options: [], examples: [] },
       run: async (_args, { connection, out }) => {
@@ -796,11 +769,11 @@ describe('the embedded CLI', () => {
       })
       // An app gets in, as the hint says.
       expect((await run('grants', 'create', '--app', 'ship', '--can', 'ci/=post')).stdout).toMatch(/^created g4  --app ship  ci\/=post\n$/)
-      const refused = "This board doesn't support it.\n  Vercel's boards don't support board tokens\n"
-      expect(await run('tokens', 'create', 'ci', '--can', 'dev/=read')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't mint token ci. ${refused}` })
-      expect(await run('tokens')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't list tokens. ${refused}` })
-      expect(await run('tokens', 'revoke', 'tok_1')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't revoke token tok_1. ${refused}` })
-      expect(JSON.parse((await run('tokens', 'create', 'ci', '--json')).stderr)).toMatchObject({ reason: 'not_supported', data: { error: { status: 501, hint: expect.stringContaining('local board') } } })
+      const refused = (method: string) => `This board doesn't support it.\n  Vercel's boards don't support ${method} yet\n`
+      expect(await run('tokens', 'create', 'ci', '--can', 'dev/=read')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't mint token ci. ${refused('createToken')}` })
+      expect(await run('tokens')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't list tokens. ${refused('tokens')}` })
+      expect(await run('tokens', 'revoke', 'tok_1')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't revoke token tok_1. ${refused('revokeToken')}` })
+      expect(JSON.parse((await run('tokens', 'create', 'ci', '--json')).stderr)).toMatchObject({ reason: 'not_supported', data: { error: { status: 501 } } })
       expect(api.requests.filter((request) => request.includes('/tokens'))).toEqual([])
     } finally {
       fetching.mockRestore()
@@ -833,7 +806,7 @@ describe('the embedded CLI', () => {
       expect(named.code).not.toBe(2)
       expect(named.stdout).toMatch(/\d+ passed/)
       // Vercel's board keeps no board tokens: the tokens checks are skipped, not failed.
-      expect(named.stdout).toMatch(/\ntokens\n  skipped  mints a token[^\n]*\n {11}not kept here: Vercel's boards don't support board tokens\n  skipped  lets a token/)
+      expect(named.stdout).toMatch(/\ntokens\n  skipped  mints a token[^\n]*\n {11}not kept here: Vercel's boards don't support createToken yet\n  skipped  lets a token/)
       expect(writes()).toBeGreaterThan(0)
     } finally {
       fetching.mockRestore()

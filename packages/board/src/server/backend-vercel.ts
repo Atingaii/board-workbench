@@ -207,8 +207,6 @@ export type VercelEnvironment = {
   team(): Promise<string | null>
   /** The profile the environment picks (`BOARD_AS`, or the coding agent it runs in), and that agent's session. */
   profile(): { profile: ProfileOption; session: string | null }
-  /** Whether its fetch sends a board token you set (`BOARD_TOKEN`), whoever made it. */
-  boardToken(): boolean
 }
 
 /** Who a request to the API is from, beside its credentials: a label it shows, never who it is. */
@@ -257,9 +255,6 @@ const WHO_AGAIN_MS = 10_000
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
-/** Vercel's API keeps no board tokens: a board there mints, lists, and revokes none, and asks the API nothing. */
-const noBoardTokens = () =>
-  new HttpError(501, 'not_supported', "Vercel's boards don't support board tokens", { hint: 'Grant the caller access instead, or use a local board, which keeps its own.' })
 
 /** What credentials may do when the API doesn't say: read, post, react, and label everywhere, as any it lets in. */
 const DEFAULT_CAN: AccessSummary = { '*': ['read', 'post', 'react', 'label'] }
@@ -584,9 +579,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         continue
       }
       const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
-      // A board token reaches its own board by ID, and none of the team's routes: finding a board by its name or as the team's is one.
-      if (error?.code === 'board_token_scope')
-        throw new HttpError(403, 'board_token_scope', 'a board token reaches only its own board, by its ID.', { hint: 'Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).', origin: 'handle' })
       throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
     }
   }
@@ -1555,13 +1547,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const whereOf = (found: ApiRegistration) => (found.path ? { url: null, path: found.path, ...(found.branch ? { branch: found.branch } : {}) } : { url: null })
 
   /**
-   * Vercel's API takes watchers only from a deployment's own credentials: never a person's, an app's,
-   * or a board token's, whoever made it. Anyone else's registration, pull, or ack is its 403
-   * `watchers_need_project`.
+   * Vercel's API takes watchers only from a deployment's own credentials: never a person's or an
+   * app's. Anyone else's registration, pull, or ack is its 403 `watchers_need_project`.
    */
   const notADeployment = () =>
     new HttpError(403, 'watchers_need_project', "Vercel's API takes watchers only from a deployment's own credentials.", {
-      hint: "Register them from the project's deployment, with no board token. Watchers in board()'s config run in this process instead.",
+      hint: "Register them from the project's deployment. Watchers in board()'s config run in this process instead.",
       origin: 'handle',
     })
   const needsProject = (error: unknown) => (error instanceof HttpError && error.code === 'watchers_need_project' ? notADeployment() : error)
@@ -1721,16 +1712,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const runner = registrant({
     remote: "Vercel's API",
     registry: {
-      register: (where) =>
-        registerAs(deployment, where, tails, bound().sync, true, holding).catch((error: unknown) => {
-          // These aren't a deployment's own credentials after all (a board token in a fetch): they run here from now on.
-          if (error instanceof HttpError && error.code === 'watchers_need_project') {
-            refused = true
-            runner.close()
-            runHere()
-          }
-          throw error
-        }),
+      register: (where) => registerAs(deployment, where, tails, bound().sync, true, holding),
       matches: ({ signal, ...query }) => pullAs(deployment, query, signal, tails),
       ack: (id, body) => ackAs(deployment, id, body),
     },
@@ -1747,19 +1729,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   })
 
   let deployed: Promise<boolean> | null = null
-  /** Whether Vercel's API refused to register this board's watchers: its credentials aren't a deployment's own. */
-  let refused = false
-  /**
-   * Whether this board's own credentials are a deployment's own: a project's, and no board token. A
-   * board token you set says so; one in a `fetch` passed in says so when the API refuses it.
-   */
-  const isDeployment = async () => {
-    if (refused || (!options.fetch && environment?.boardToken())) return false
-    return (deployed ??= self(deployment).then((found) => found.actor.principal.type === 'project')).catch((error: unknown) => {
+  /** Whether this board's own credentials are a deployment's own: a project's. */
+  const isDeployment = () =>
+    (deployed ??= self(deployment).then((found) => found.actor.principal.type === 'project')).catch((error: unknown) => {
       deployed = null
       throw error
     })
-  }
 
   let here: ReturnType<typeof tailWatchers> | null = null
   let deployedElse = false
@@ -1769,7 +1744,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // A deployment's function doesn't outlive its request, so a tail there would stop with it.
     if (deployedOnVercel()) {
       deployedElse = true
-      console.error("[board] watchers on a deployment need its own OIDC token: with a board token or another Vercel token, none run here")
+      console.error("[board] watchers on a deployment need its own OIDC token: with another Vercel token, none run here")
       return
     }
     const { sync, run } = bound()
@@ -2220,15 +2195,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async revokeGrant(caller, { id }, signal) {
       const who = whoOf(caller)
       return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
-    },
-    async tokens() {
-      throw noBoardTokens()
-    },
-    async createToken() {
-      throw noBoardTokens()
-    },
-    async revokeToken() {
-      throw noBoardTokens()
     },
     // Schemas are the team's in the API: every board on it shares one registry.
     async schemas(caller, _input, signal) {

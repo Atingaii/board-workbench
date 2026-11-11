@@ -105,8 +105,7 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 (`.vercel/project.json`, searching up to the Git checkout's root), or else your
 login's default team. `--scope <team>` picks another, by its slug or ID. It
 reads and writes as you, with the login the Vercel CLI hands it
-(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`. A token in
-`BOARD_TOKEN` goes ahead of all of them, as it is.
+(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`.
 
 ### In-process, on a handle
 
@@ -219,8 +218,7 @@ itself.
   the Vercel CLI sets for a CLI it runs, or else your `vercel login`. That last one is cached
   in `~/.config/board/tokens/` for its 12-hour life. See
   [Identity](../01-board/03-identity.md). A team's board in Vercel's API
-  gets `BOARD_TOKEN` first too, then `VERCEL_TOKEN`, the deployment's OIDC
-  token, and your Vercel login.
+  gets `VERCEL_TOKEN`, the deployment's OIDC token, or your Vercel login.
 - **Profiles are detected** from the agent's environment. More than one match
   is an error; pick one with `--as`, or none with `--human`.
 
@@ -318,7 +316,7 @@ error document:
 - **`reason` is what a program branches on:** `missing_scope`,
   `login_required`, `permission_denied`, `deployment_protected`,
   `board_not_found`, `board_not_granted`, `board_name_taken`,
-  `board_token_scope`, `watchers_need_project`,
+  `watchers_need_project`,
   `message_not_found`, `channel_not_found`,
   `unknown_command`, `unknown_option`, `invalid_arguments`, `timeout`, and
   the board's own codes, such as `already_synced` or `no_scheduler`.
@@ -485,14 +483,6 @@ prints its secret, which shows only here, so it pipes:
 `x-board-can`'s syntax (`dev/=read,post;ci/=read`). `--profile` and
 `--session` pin what every request with it writes as. It lives 30 days, or
 `--expires`, 90 days at most. See [Tokens](../01-board/09-access.md#tokens).
-Vercel's board issues no tokens, so there every `tokens` command answers with
-reason `not_supported`, and asks Vercel's API nothing:
-
-```text
-$ vb tokens create widget --can feedback/=post --scope acme
-error: Can't mint token widget. This board doesn't support it.
-  Vercel's boards don't support board tokens
-```
 
 | Flag | Effect |
 | --- | --- |

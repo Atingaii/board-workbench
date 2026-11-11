@@ -685,8 +685,6 @@ function failureOf(error: unknown): Failure {
         return own('permission', 'watchers_need_project')
       case 'unsupported_principal':
         return own(status === 403 ? 'permission' : 'usage', 'unsupported_principal')
-      case 'board_token_scope':
-        return own('permission', 'board_token_scope')
       case 'invalid_board_name':
         return own('usage', 'invalid_arguments', [helpRecovery()])
       case 'too_many_redirects':
@@ -741,8 +739,8 @@ function failureOf(error: unknown): Failure {
       'auth',
       'login_required',
       "The board didn't accept your credentials.",
-      // A token you passed is yours to replace: logging in changes nothing while BOARD_TOKEN is set.
-      process.env.BOARD_TOKEN ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }] : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
+      // A token you passed is yours to replace: logging in changes nothing while BOARD_TOKEN is set. Vercel's board never reads it.
+      process.env.BOARD_TOKEN && reached && !vercelBoard(reached) ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }] : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
     )
   if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`)
   if (status === 404) {
@@ -870,7 +868,7 @@ function boardNameFlag(url: string | undefined, team: string | undefined): strin
   return given
 }
 
-/** For Vercel's API, `token` in place of your own credentials (a board token's secret), and `can` narrowing them. */
+/** For Vercel's API, `token` in place of your own credentials, and `can` narrowing them. */
 function sending(token: string | undefined, can?: string): { fetch?: typeof fetch } {
   if (token === undefined && can === undefined) return {}
   return {
@@ -1008,9 +1006,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           ],
         })
       // The same board with a token's secret, which the tokens check mints: what `vb()` was handed can't be opened again.
-      // A board token is its board's, so a team's board in Vercel's API is reached by its URL, which names it by ID.
-      const tokenUrl = io.board ? undefined : connection().url === null ? (await client().discovery()).url : flags.url
-      const withToken = io.board ? {} : { withToken: (secret: string) => connection(tokenUrl, { token: secret }).board }
+      const withToken = io.board ? {} : { withToken: (secret: string) => connection(flags.url, { token: secret }).board }
       // And with this run's own credential, narrowed with x-board-can, as a proxy holding it sends it.
       const withCan = io.board ? {} : { withCan: (can: string) => connection(undefined, { can }).board }
       const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken, ...withCan })

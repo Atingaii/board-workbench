@@ -217,8 +217,8 @@ more specific pattern decides first.
 
 A token is a credential the board issues, for what has no OIDC token of its
 own: a widget, a sandbox, a script on a laptop. It acts as whoever minted it,
-narrowed to its `can`. Vercel's board issues none: there, minting, listing, and
-revoking one answers 501 `not_supported`.
+narrowed to its `can`. Vercel's board issues none: tokens are a `local()`
+feature.
 
 ```text
 $ vb tokens create feedback-widget --can feedback/=post
@@ -506,9 +506,8 @@ all of them. They don't say where or what.
 
 ### Is there a static token for callers without OIDC?
 
-Yes, on a board you keep: a [board token](#tokens), which you mint, list, and
-revoke, and which lives 90 days at most. Vercel's board issues none. Callers
-with an OIDC token need none: a
+Yes: a [board token](#tokens), which you mint, list, and revoke, and which
+lives 90 days at most. Callers with an OIDC token need none: a
 [grant](#grants) names them, a project, a repository's runs, or an issuer's
 claims, and each token lives as long as it does. A credential of your own,
 such as a session cookie, takes

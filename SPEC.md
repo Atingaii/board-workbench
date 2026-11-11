@@ -284,8 +284,7 @@ checked with `@vercel/board/conformance`.
   this and for the tails below. With anyone else's
   credentials (a person's, an app's), the API answers 403
   `watchers_need_project`, so nothing registers: a `/me` principal that isn't
-  a project, `BOARD_TOKEN` in Node, or that refusal to its first registration
-  tells it so, and from then on each config
+  a project tells it so, and from then on each config
   watcher runs in this process as a tail, following `events` from the head as
   `vb tail` does, with local()'s retries, and skipping its own writes. Sync
   doesn't run for them, and on Vercel neither do the tails: a deployment's
@@ -857,8 +856,7 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
 Grants say who may do what in each channel, kept as data, so people change who
 gets in while the board runs, from the handle or `vb`, without a deploy. A
 token is for callers without an OIDC token of their own: a widget, a sandbox,
-a script. A board that keeps its own issues them, as `local()` does; Vercel's
-board keeps none, and answers the token methods 501 `not_supported`.
+a script.
 
 ```ts
 import { board } from '@vercel/board'
@@ -1069,13 +1067,10 @@ forwards grants to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
 `/boards/:id/grants/explain`, each write with an
 `operationId`), and adapts only times, which the API answers in milliseconds
-and the protocol as ISO strings (a grant's `at`). The API keeps no board
-tokens, so `vercel()` answers the token methods 501 `not_supported` without
-calling it, and the conformance kit skips its `tokens` group there, as it
-does the `grants` checks that mint one. The API looks up the names people
-type and answers views with IDs and names, so a board on `vercel()` fails the
-conformance kit's `grants` group wherever the run names a project or a
-repository the team doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
+and the protocol as ISO strings (a grant's `at`). It keeps no board tokens.
+The API looks up the names people type and answers views with IDs and names,
+so a board on `vercel()` fails the conformance kit's `grants` group wherever
+the run names a project or a repository the team doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
 which `vercel()` gives back as the board's. Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers, `read` and `react` for
@@ -1084,9 +1079,6 @@ react, label, and sync), and `expiresAt` in milliseconds, or null. Board reads `
 parse is dropped, and what each permission implies is added. An `expiresAt`
 under 10^12 is epoch seconds, as a JWT's `exp` is. Where it says neither, read,
 post, react, and label everywhere, with no expiry.
-In Node it sends `BOARD_TOKEN` as it is, whatever its
-format (`Authorization: Bearer <token>`), ahead of `VERCEL_TOKEN`, the
-deployment's OIDC token, and the login, as `vb` sends one to any board.
 
 ### One person, several actors
 
