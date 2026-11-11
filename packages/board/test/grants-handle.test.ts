@@ -70,9 +70,12 @@ describe('a private channel, from the handle', () => {
     const under = (await team.createGrant({ principals: [{ kind: 'user', userId: 'u_ada' }], can: { 'ops/deploys': ['read'] } })).grant.id
     await expect(julian.createChannel('ops', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_granted', message: expect.stringContaining(under) })
     const before = await ids(team)
-    // A token that can't list grants can't tell, so it makes nothing.
-    const minted = await caller(team.fetch, await personToken())('POST', '/tokens', { name: 'narrow', can: { '*': ['read', 'post'] } })
-    await expect(handleAs(team.fetch, async () => minted.body.secret).createChannel('lockbox', { private: true })).rejects.toMatchObject({ status: 403 })
+    // A caller that can't list grants can't tell, so it makes nothing.
+    const narrowed = (request: Request) => {
+      request.headers.set('x-board-can', '*=read,post')
+      return team.fetch(request)
+    }
+    await expect(handleAs(narrowed, () => personToken()).createChannel('lockbox', { private: true })).rejects.toMatchObject({ status: 403 })
     expect(await ids(team)).toEqual(before)
     expect(await team.channels()).toEqual([])
   })
@@ -202,7 +205,5 @@ describe('grants, from the handle', () => {
     })
     const updated = await julian.updateGrant(grant.id, { add: [{ kind: 'project', project: 'prj_api' }], remove: [{ kind: 'all-projects' }], can: { 'ci/': 'none' } })
     expect(updated.grant).toMatchObject({ principals: [{ projectId: 'prj_web' }, { projectId: 'prj_api', environments: ['production'] }], can: { 'ci/': [] } })
-    const { token } = await julian.createToken({ name: 'no-security', can: { '*': ['read'], 'security/': 'none' } })
-    expect(token.can).toEqual({ '*': ['read'], 'security/': [] })
   })
 })

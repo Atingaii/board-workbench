@@ -69,32 +69,20 @@ function attachmentId(): string {
   }
 }
 
-/**
- * Who sent an upload, as the board recorded it: its principal, and when it came with a board
- * token, that token and each it was minted with (`uploadedWith`).
- */
-export type Uploader = { uploadedBy: string | null; uploadedWith?: readonly string[] | null }
+/** Who sent an upload, as the board recorded it: its principal. */
+export type Uploader = { uploadedBy: string | null }
 
-/**
- * Whether an upload is the caller's own, to read and attach before a message carries it: its
- * principal sent it, and the caller holds no board token, or holds the one it came with or one
- * that token was minted with. A token acts as its minter, so the principal alone would hand it
- * every file its minter, or another of its minter's tokens, uploaded.
- */
-export function ownUpload(upload: Uploader, caller: { id: string; token?: string }): boolean {
-  if (upload.uploadedBy !== caller.id) return false
-  return caller.token === undefined || (upload.uploadedWith?.includes(caller.token) ?? false)
-}
+/** Whether an upload is the caller's own, to read and attach before a message carries it: its principal sent it. */
+export const ownUpload = (upload: Uploader, caller: { id: string }): boolean => upload.uploadedBy === caller.id
 
 /**
  * Stores an upload under a fresh ID, with its metadata beside it. `uploadedBy`
- * is the principal that sent it, who can read it before any message carries it,
- * and `uploadedWith` the board tokens it came with (`ownUpload`).
+ * is the principal that sent it, who can read it before any message carries it.
  * `max` is the most it can be: `ATTACHMENT_BYTES_MAX` unless the board's own sync imports it.
  */
 export async function writeUpload(
   blob: BlobStore | null,
-  input: { data: Uint8Array; name: string | null; type: string | null; uploadedBy?: string; uploadedWith?: readonly string[] | undefined },
+  input: { data: Uint8Array; name: string | null; type: string | null; uploadedBy?: string },
   max = ATTACHMENT_BYTES_MAX,
 ): Promise<AttachmentType> {
   if (!blob) throw noBlob()
@@ -107,7 +95,7 @@ export async function writeUpload(
     size: input.data.byteLength,
   }
   await blob.put(dataKey(attachment.id), input.data, attachment.type)
-  const meta = input.uploadedBy === undefined ? attachment : { ...attachment, uploadedBy: input.uploadedBy, ...(input.uploadedWith ? { uploadedWith: input.uploadedWith } : {}) }
+  const meta = input.uploadedBy === undefined ? attachment : { ...attachment, uploadedBy: input.uploadedBy }
   await blob.put(metaKey(attachment.id), new TextEncoder().encode(JSON.stringify(meta)), 'application/json')
   return attachment
 }
@@ -127,9 +115,8 @@ export async function readUpload(blob: BlobStore | null, id: string): Promise<{ 
   if (!blob) throw noBlob()
   const found = Attachment.shape.id.safeParse(id).success ? await blob.get(metaKey(id)) : null
   if (!found) throw attachmentNotFound(id)
-  const meta = JSON.parse(new TextDecoder().decode(await bytes(found.data))) as { uploadedBy?: unknown; uploadedWith?: unknown }
-  const tokens = Array.isArray(meta.uploadedWith) && meta.uploadedWith.every((token) => typeof token === 'string') ? (meta.uploadedWith as string[]) : null
-  return { attachment: Attachment.parse(meta), uploadedBy: typeof meta.uploadedBy === 'string' ? meta.uploadedBy : null, uploadedWith: tokens }
+  const meta = JSON.parse(new TextDecoder().decode(await bytes(found.data))) as { uploadedBy?: unknown }
+  return { attachment: Attachment.parse(meta), uploadedBy: typeof meta.uploadedBy === 'string' ? meta.uploadedBy : null }
 }
 
 /** An attachment's bytes. */
@@ -151,7 +138,7 @@ export async function attachmentBody(blob: BlobStore | null, id: string): Promis
 /** How long a direct upload's URL takes bytes: long enough for 100 MB on a slow link. */
 const DIRECT_UPLOAD_TTL_MS = 30 * 60 * 1000
 
-type Ticket = { id: string; name: string; type: string; size: number; uploadedBy: string; uploadedWith?: readonly string[]; expiresAt: string }
+type Ticket = { id: string; name: string; type: string; size: number; uploadedBy: string; expiresAt: string }
 
 const noDirectUploads = () =>
   new HttpError(501, 'no_direct_uploads', `this board's blob store can't take direct uploads, so files are at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
@@ -162,7 +149,7 @@ const noDirectUploads = () =>
  */
 export async function startUpload(
   blob: BlobStore | null,
-  input: { name: string | null; type: string | null; size: number; uploadedBy: string; uploadedWith?: readonly string[] | undefined },
+  input: { name: string | null; type: string | null; size: number; uploadedBy: string },
 ): Promise<{ id: string; url: string; headers: Record<string, string>; expiresAt: string }> {
   if (!blob) throw noBlob()
   if (!blob.uploadUrl || !blob.head) throw noDirectUploads()
@@ -174,7 +161,6 @@ export async function startUpload(
     type: mediaType(input.type),
     size: input.size,
     uploadedBy: input.uploadedBy,
-    ...(input.uploadedWith ? { uploadedWith: input.uploadedWith } : {}),
     expiresAt: expires.toISOString(),
   }
   await blob.put(ticketKey(ticket.id), new TextEncoder().encode(JSON.stringify(ticket)), 'application/json')
@@ -189,7 +175,7 @@ export async function startUpload(
  * finish answers the same attachment. It never reads the record before writing it: a store with a
  * cache (Vercel Blob's CDN) would keep that miss, and the post that names the file would find nothing.
  */
-export async function finishUpload(blob: BlobStore | null, id: string, caller: { id: string; token?: string }): Promise<AttachmentType> {
+export async function finishUpload(blob: BlobStore | null, id: string, caller: { id: string }): Promise<AttachmentType> {
   if (!blob) throw noBlob()
   const found = Attachment.shape.id.safeParse(id).success ? await blob.get(ticketKey(id)) : null
   const ticket = found ? (JSON.parse(new TextDecoder().decode(await bytes(found.data))) as Ticket) : null
@@ -201,9 +187,7 @@ export async function finishUpload(blob: BlobStore | null, id: string, caller: {
     throw badRequest(`the store has ${stored.size} bytes for ${id}, but its upload said ${ticket.size}`, 'size_mismatch')
   const attachment: AttachmentType = { id, name: ticket.name, type: ticket.type, size: stored.size }
   try {
-    // Its uploader as the ticket recorded it, whoever of them finishes it.
-    const uploader = { uploadedBy: ticket.uploadedBy, ...(ticket.uploadedWith ? { uploadedWith: ticket.uploadedWith } : {}) }
-    await blob.put(metaKey(id), new TextEncoder().encode(JSON.stringify({ ...attachment, ...uploader })), 'application/json')
+    await blob.put(metaKey(id), new TextEncoder().encode(JSON.stringify({ ...attachment, uploadedBy: ticket.uploadedBy })), 'application/json')
   } catch (error) {
     // Finished before: a store that never overwrites refuses the record, which is there to read.
     const done = await blob.get(metaKey(id)).catch(() => null)

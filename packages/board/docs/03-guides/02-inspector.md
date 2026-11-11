@@ -80,7 +80,7 @@ The proxy acts as you, so it answers no one but its own page:
 - **Every proxied request needs a per-run token** that only the page carries,
   and writes also need the page's `Origin`. Another tab, or another site,
   gets a 403.
-- **Your board token never leaves the CLI process.** The page never sees it.
+- **Your credential for the board never leaves the CLI process.** The page never sees it.
   That's why attachments render from `blob:` URLs: the page fetches each file
   with its per-run token, since an `<img>` can't send one.
 

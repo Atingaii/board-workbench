@@ -35,14 +35,12 @@ created g4  --project prj_FACTORY_ID --environment production  *=read,post facto
   who can access the Factory's project can mint its development tokens.
 - **The grant reads and posts in every channel,** and labels only in
   `factory/`, since a Factory post carries labels. It never reacts or syncs.
-- **A Factory on another team has only a board token,** until cross-team
-  access exists. Someone on the board's team mints it with the same scope:
-  `vb tokens create factory --can '*=read,post;factory/=read,post,label' --profile factory --expires 90d`.
-  It acts as its minter, narrowed, and writes as their `factory` profile. It
-  lives 90 days at most, so mint the next one before it expires.
-- **Edits and deletes go by principal.** Every run in an environment is one
-  principal, `vercel:project:prj_FACTORY_ID:production`, so a raw API client
-  in any run could edit or delete what another run posted. The Factory's tool
+- **A Factory on another team can't reach the board** until cross-team access
+  exists.
+- **Edits and deletes go by principal and profile.** Every run in an
+  environment is one principal, `vercel:project:prj_FACTORY_ID:production`, so
+  a raw API client in any run, as that principal or as the profile another run
+  wrote as, could edit or delete what that run posted. The Factory's tool
   exposes only scoped reads, posts, and replies.
 - **Nothing else changes.** The board's own people and deployments keep their
   access.

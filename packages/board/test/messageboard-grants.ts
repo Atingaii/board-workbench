@@ -31,8 +31,8 @@ type Grant = { id: string; principals: Stored[]; can: Can; by: string | null; at
 type Level = 'principal' | 'group' | 'everyone'
 
 /**
- * Who asks, or whom explain asks about, as the API knows them from a token. A board token's `can`
- * is its `limit`: the most it may do, whatever the grants give its minter.
+ * Who asks, or whom explain asks about, as the API knows them from a token. The `x-board-can` it's
+ * held to is its `limit`: the most it may do, whatever the grants give it.
  */
 export type Who = (
   | { kind: 'user'; userId: string }
@@ -229,7 +229,7 @@ export function fakeGrants(options: {
     const deciding = at.filter((candidate) => candidate.level === level)
     const given = new Set<Permission>()
     for (const { grant } of deciding) for (const permission of expand(grant.can[pattern]!)) given.add(permission)
-    // A board token gets what its can says at its closest pattern, and no more.
+    // A narrowed caller gets what its limit says at its closest pattern, and no more.
     const limited = who.limit && Object.keys(who.limit).filter((spot) => covers(spot, target)).sort((a, b) => specificity(b) - specificity(a))[0]
     const limit = who.limit ? (limited === undefined ? new Set<Permission>() : expand(who.limit[limited]!)) : null
     let can = PERMISSIONS.filter((permission) => given.has(permission) && (limit === null || limit.has(permission)))
@@ -243,7 +243,7 @@ export function fakeGrants(options: {
     return { pattern, over, level, grants: deciding.map((candidate) => candidate.grant), capped, can }
   }
 
-  // A board token is held to its can, an owner's too.
+  // A narrowed caller is held to its limit, an owner too.
   const isOwner = (who: Who) => who.kind === 'user' && options.roles[who.userId] === 'owner' && who.limit === undefined
   /** Whether `who` may list the grants, or explain anyone: manage at `*`, or a team owner. */
   const lists = (who: Who) => isOwner(who) || decide(who, '*').can.includes('manage')
@@ -264,7 +264,7 @@ export function fakeGrants(options: {
    */
   function mayGrant(who: Who, patterns: Iterable<string>, after: readonly Grant[], what: string) {
     if (isOwner(who)) return
-    // Its own limits' patterns are spots too: a board token's can, and the grants that name it.
+    // Its own limits' patterns are spots too: its x-board-can, and the grants that name it.
     const spots = [...grants.values()].filter((grant) => grant.principals.some((principal) => names(principal, who, true))).flatMap((grant) => Object.keys(grant.can)).concat(Object.keys(who.limit ?? {}))
     const everyone = after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone')).flatMap((grant) => Object.keys(grant.can))
     const manages = (spot: string, own = false) => decide(who, spot, own).can.includes('manage')
@@ -339,7 +339,7 @@ export function fakeGrants(options: {
     grants,
     /**
      * `can`, what a credential may do as `GET /me` says, within what the grants give `who`: at
-     * each pattern either names, or `who`'s token does, what both allow there. A board's `/me`.
+     * each pattern either names, or `who`'s limit does, what both allow there. A board's `/me`.
      */
     within(who: Who, can: Record<string, string[]>): Record<string, string[]> {
       const patterns = new Set(['*', ...Object.keys(can), ...[...grants.values()].flatMap((grant) => Object.keys(grant.can)), ...Object.keys(who.limit ?? {})])
