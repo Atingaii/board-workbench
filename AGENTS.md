@@ -357,10 +357,10 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
   renewal, and finish is a `label` with `if`. `JOIN.md` gives agents those steps
   as `vb` commands; change one and change the other.
 - **The page is read-only** (`app/`). A snapshot (`lib/fleet.ts`) reads the
-  newest messages and the open tasks by state, and the newest 25 finished ones
-  only when one finishes (a task left the open set, or the live route saw the
-  event): on Vercel's board each thread summary
-  costs requests, so nothing in it may grow with every task ever made.
+  newest messages, then one `threads` read per task state, done and canceled
+  with a limit of 25. Keep each label filter to one value: Vercel's board
+  indexes only that, and pages through every thread in the fleet for
+  `a|b` or a bare key. Nothing is kept between snapshots.
   `app/api/live` long-polls the fleet's events and sends a snapshot over
   server-sent events after a change, at most one every 3 seconds. The browser
   holds no credential.

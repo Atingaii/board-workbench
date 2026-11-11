@@ -48,20 +48,12 @@ const line = (message: MessageView): Line => ({
   at: message.createdAt,
 });
 
-/** The states a task is still in play in. Finished tasks are read apart, and only a few. */
-const OPEN = "ready|claimed|review|blocked";
-const FINISHED = "done|canceled";
+/** The states a task is still in play in: the page shows every such task. */
+const OPEN = ["ready", "claimed", "review", "blocked"] as const;
+/** The states a task ends in: the page shows the newest few of each. */
+const FINISHED = ["done", "canceled"] as const;
 const OPEN_LIMIT = 200;
 const FINISHED_LIMIT = 25;
-/** Finished tasks are read again when one finishes, or after this long. */
-const FINISHED_FOR_MS = 60_000;
-
-/** A board's last finished read, and which tasks were open then: per instance, and safe to lose. */
-const keeps = new WeakMap<Board, { finished: Task[]; open: Set<string>; at: number }>();
-
-/** True for an event about a task that is finished now: the live route's cue that the finished list moved. */
-export const finishes = (event: { message?: MessageView }): boolean =>
-  FINISHED.split("|").includes(event.message?.labels["task.state"] ?? "");
 
 function toTask({ message, replies, last }: ThreadSummaryView): Task[] {
   const state = message.labels["task.state"] as State | undefined;
@@ -85,38 +77,31 @@ function toTask({ message, replies, last }: ThreadSummaryView): Task[] {
 }
 
 /**
- * The fleet as it is now. What it reads grows with the open tasks, not with every task ever made:
- * the newest messages, the open tasks by their state, and the finished ones only when one may have
- * finished since the last look. On Vercel's board a thread summary costs requests of its own, so a
- * done task that stayed in every snapshot would cost on every change, forever.
- *
- * A task may have finished when one left the open set, or when the caller saw it happen
- * (`finished`, from the events it follows): a task made and finished between two snapshots was
- * never in an open set to leave.
+ * The fleet as it is now: its newest messages, then one read per task state. A board indexes a
+ * label with one value, so `task.state=ready` lists only the ready tasks, while a filter with
+ * several values, or the bare key, makes Vercel's board page through every thread in every channel
+ * of the fleet. Finished states are read with a small limit, so what a snapshot costs follows the
+ * open tasks, not every task ever made. Nothing is kept between snapshots: each is the board as it
+ * is, whoever asks and whatever they missed.
  */
-export async function snapshot(hint: { finished?: boolean } = {}, board: Board = team(), fleet: string = FLEET): Promise<Snapshot> {
+export async function snapshot(board: Board = team(), fleet: string = FLEET): Promise<Snapshot> {
   // The messages first: their cursor is where the live route listens from, so a change that lands
   // between the reads is in the next snapshot rather than in neither.
   const page = await board.messages({ channel: fleet, limit: 100 });
-  const open = (await board.threads({ channel: fleet, label: { "task.state": OPEN }, limit: OPEN_LIMIT })).threads.flatMap(toTask);
-  const ids = new Set(open.map((task) => task.id));
-  let kept = keeps.get(board);
-  const left = kept ? [...kept.open].some((id) => !ids.has(id)) : true;
-  if (!kept || left || hint.finished || Date.now() - kept.at > FINISHED_FOR_MS) {
-    const { threads } = await board.threads({ channel: fleet, label: { "task.state": FINISHED }, limit: FINISHED_LIMIT });
-    kept = { finished: threads.flatMap(toTask), open: ids, at: Date.now() };
-    keeps.set(board, kept);
-  } else {
-    kept.open = ids;
-  }
+  const read = async (state: State, limit: number) =>
+    (await board.threads({ channel: fleet, label: { "task.state": state }, limit })).threads.flatMap(toTask).reverse();
+  const [open, finished] = await Promise.all([
+    Promise.all(OPEN.map((state) => read(state, OPEN_LIMIT))),
+    Promise.all(FINISHED.map((state) => read(state, FINISHED_LIMIT))),
+  ]);
   return {
     name: NAME,
     fleet,
     cursor: page.cursor,
     at: new Date().toISOString(),
-    // The board lists oldest first; the page reads newest first.
-    tasks: [...open.reverse(), ...[...kept.finished].reverse()],
-    finishedCapped: kept.finished.length >= FINISHED_LIMIT,
+    // The board lists oldest first; the page reads newest first, state by state.
+    tasks: [...open.flat(), ...finished.flat()],
+    finishedCapped: finished.some((tasks) => tasks.length >= FINISHED_LIMIT),
     flow: page.messages.map(line).reverse(),
   };
 }

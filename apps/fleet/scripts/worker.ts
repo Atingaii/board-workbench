@@ -23,8 +23,9 @@ for (;;) {
 
   const { threads } = await board.threads({ channel: FLEET, label: { "task.state": "ready" } });
   if (threads.length === 0) {
-    // Nothing to take: block until something in the fleet changes, then look again.
-    await board.wait({ channel: FLEET }, { timeout: "1m" });
+    // Nothing to take: block until something in the fleet changes, then look again. Waiting from
+    // where the first read stood catches what landed while this loop was looking.
+    await board.wait({ channel: FLEET, after: reviews.cursor }, { timeout: "1m" });
     continue;
   }
   const { message } = threads[Math.floor(Math.random() * threads.length)]!;

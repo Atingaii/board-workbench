@@ -1,5 +1,5 @@
 import { FLEET, team } from "@/lib/board";
-import { finishes, snapshot } from "@/lib/fleet";
+import { snapshot } from "@/lib/fleet";
 
 // The page's live feed, as server-sent events: a snapshot when it connects, and another after every
 // change under the fleet. The browser never talks to the board, so it never holds a credential.
@@ -29,8 +29,6 @@ export async function GET(request: Request): Promise<Response> {
         send("snapshot", first);
         let cursor = first.cursor;
         let drawn = Date.now();
-        // Whether a task finished in the events since the last redraw: the snapshot then reads the finished list again.
-        let finished = false;
         while (!stop.signal.aborted) {
           // One long-poll: it answers as soon as something under the fleet changes, or empty after 20 s.
           const page = await team().poll({ channel: FLEET, after: cursor, wait: 20 }, stop.signal);
@@ -41,12 +39,10 @@ export async function GET(request: Request): Promise<Response> {
           }
           // However many events land, the page is redrawn once, and not sooner than the last redraw
           // allows. What lands during the wait is in the snapshot, which is read after it.
-          finished ||= page.events.some(finishes);
           const wait = drawn + REDRAW_MS - Date.now();
           if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
           if (stop.signal.aborted) break;
-          send("snapshot", await snapshot({ finished }));
-          finished = false;
+          send("snapshot", await snapshot());
           drawn = Date.now();
         }
       } catch (error) {

@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { board as makeBoard, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
-import { finishes, snapshot } from "../lib/fleet.ts";
+import { snapshot } from "../lib/fleet.ts";
 import { claim, create, finish } from "../lib/queue.ts";
 
 const fresh = (): Board => makeBoard({ backend: local({ memory: true }) });
-const look = (board: Board, hint = {}) => snapshot(hint, board, "fleet/");
+const look = (board: Board) => snapshot(board, "fleet/");
 const states = (tasks: { title: string; state: string }[]) => Object.fromEntries(tasks.map((task) => [task.title, task.state]));
 async function done(board: Board, title: string): Promise<string> {
   const id = await create(board, "fleet/fixes", { title, key: title });
@@ -47,28 +47,20 @@ test("a task that finishes between two snapshots shows as done in the next", asy
   assert.deepEqual(states((await look(board)).tasks), { "soon done": "done", "done before": "done" });
 });
 
-test("a task made and finished between two snapshots shows once the caller says one finished", async () => {
+test("a task made and finished between two snapshots shows in the next, though it was never seen open", async () => {
   const board = fresh();
   await create(board, "fleet/fixes", { title: "still ready", key: "a" });
   await look(board);
-  const after = (await board.messages({ channel: "fleet/" })).cursor;
   await done(board, "quick one");
-
-  // What the live route does: it follows the events, and tells the snapshot when one finishes a task.
-  const { events } = await board.poll({ channel: "fleet/", after, wait: 0 });
-  assert.equal(events.some(finishes), true);
-  assert.deepEqual(states((await look(board, { finished: events.some(finishes) })).tasks), { "still ready": "ready", "quick one": "done" });
+  assert.deepEqual(states((await look(board)).tasks), { "still ready": "ready", "quick one": "done" });
 });
 
-test("events that finish nothing don't say a task finished", async () => {
+test("a canceled task shows as canceled, and a label that names no state isn't a task", async () => {
   const board = fresh();
-  const after = (await board.post("fleet/general", "hello")).id;
-  const id = await create(board, "fleet/fixes", { title: "taken", key: "a" });
-  await claim(board, id, "ada");
-  await board.reply(id, "[progress] working");
-  const { events } = await board.poll({ channel: "fleet/", after, wait: 0 });
-  assert.ok(events.length >= 3);
-  assert.equal(events.some(finishes), false);
+  const id = await create(board, "fleet/fixes", { title: "dropped", key: "a" });
+  await board.label(id, { set: { "task.state": "canceled" }, if: { "task.state": "ready" } });
+  await board.post("fleet/fixes", { text: "odd one", labels: { "task.state": "paused" } });
+  assert.deepEqual(states((await look(board)).tasks), { dropped: "canceled" });
 });
 
 test("a snapshot holds the newest 25 finished tasks and says there are more", async () => {
