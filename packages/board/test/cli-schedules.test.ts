@@ -26,6 +26,14 @@ describe('cli schedules', () => {
       expect(before).toContain('  s1  #')
       expect(before).toContain(`  ${id}  #${root} · every 30m · until `)
       expect((await vb(['schedules', root], as)).stdout.match(/^s\d+  /gm)).toHaveLength(2)
+      // `--by me` is the caller's own and nobody else's: not what their agent scheduled.
+      const agents = await vb(['schedule', 'elsewhere', 'from the agent', '--in', '1h', '--as', 'claude', '--json'], as)
+      const theirs = JSON.parse(agents.stdout).schedule.id
+      const mine = (await vb(['schedules', '--by', 'me'], as)).stdout
+      expect(mine.match(/^s\d+  /gm)).toHaveLength(2)
+      expect(mine).not.toContain(`${theirs}  `)
+      expect((await vb(['schedules', '--by', 'me', '--as', 'claude'], as)).stdout).toMatch(new RegExp(`^${theirs}  new thread in elsewhere`))
+      expect((await vb(['schedule', 'cancel', theirs, '--as', 'claude'], as)).stdout).toBe(`canceled ${theirs}\n`)
 
       await new Promise((resolve) => setTimeout(resolve, 1100))
       await queue.fire()

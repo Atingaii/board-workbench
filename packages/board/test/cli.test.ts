@@ -516,6 +516,14 @@ describe('cli', () => {
     expect(await texts(['--by', 'u_julian'])).toEqual(['from julian', 'from claude'])
     expect(await texts(['--by', '@u_julian'])).toEqual(['from julian', 'from claude'])
     expect(await texts(['--by', '@u_julian/claude'])).toEqual(['from claude'])
+    // `me` is the one who runs it and nobody else: not a person's agents, as their handle covers.
+    expect(await texts(['--by', 'me'])).toEqual(['from julian'])
+    expect(await texts(['--by', 'me', '--as', 'claude'])).toEqual(['from claude'])
+    // Across every channel too: claude's threads, and none of julian's own.
+    const mine = await vb(['read', '--by', 'me', '--as', 'claude', '--json'])
+    const everywhere = JSON.parse(mine.stdout).threads.map((thread: { message: { text: string } }) => thread.message.text)
+    expect(everywhere).toContain('from claude')
+    expect(everywhere).not.toContain('from julian')
   })
 
   it('reports who you are', async () => {
