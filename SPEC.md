@@ -131,6 +131,7 @@ One package, `@vercel/board`, with subpath exports:
 | --- | --- | --- |
 | `@vercel/board` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
 | `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; `resolveActor()`; `compileAccess()`, `union()`, `FULL_ACCESS`, and `DEFAULT_CAN`; `parseCan()` and `CAN_MAX`, which read `x-board-can` as the board does; and the permission types | server |
+| `@vercel/board/schemas` | How a board keeps schemas and reads blocks, as plain functions that import nothing: `checkDefinition()` and `checkValue()`, which check a definition and a value against one; `canonical()`, by which two definitions are the same version; `findBlocks()` and `block()`, which read and write a message's blocks; `parseSchemaId()`; and `BUILT_IN_SCHEMAS`. For a server that keeps a board itself, as Vercel's API does | isomorphic |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `INSPECTOR_PAGE` names the inspector's page (name, version, path, SHA-256) for that CLI to fetch and hand to `createApp()` as `inspectorPage`, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `@vercel/board/backend-local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
@@ -1446,6 +1447,8 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
   the board doesn't have is 400 `schema_not_found`. Nothing is written.
   `checkValue` in `src/contract/data-values.ts` checks a value against a
   definition with no code generation, so it runs where a handle does.
+  `@vercel/board/schemas` exports both rules, with `checkDefinition`, for a
+  server that keeps a board itself to check a write as board() does.
 - **A platform's text is never checked.** What a sync imports can't be
   refused, so it's stored as it came and carries no blocks, whatever it says:
   blocks go out to platforms, and none come in. The same goes for an edit a

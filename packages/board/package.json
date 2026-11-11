@@ -26,6 +26,10 @@
       "types": "./dist/access.d.mts",
       "default": "./dist/access.mjs"
     },
+    "./schemas": {
+      "types": "./dist/schemas.d.mts",
+      "default": "./dist/schemas.mjs"
+    },
     "./conformance": {
       "types": "./dist/conformance.d.mts",
       "default": "./dist/conformance.mjs"
