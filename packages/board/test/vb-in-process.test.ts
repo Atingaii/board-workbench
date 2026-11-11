@@ -1,20 +1,25 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { vb } from '../src/cli/embedded.ts'
-import { personToken, testBoard, BOARD_URL } from './harness.ts'
+import { caller, personToken, testBoard, BOARD_URL } from './harness.ts'
 
 // vb() on a handle over HTTP to an in-process board: the CLI's commands, output, and exit codes,
 // with files from its options. The CLI itself runs through the same code (cli*.test.ts).
 // With `stall.on`, its board never answers, whatever the request's signal says, and `stall.seen` keeps those requests.
-async function handle(stall: { on: boolean; seen: Request[] } = { on: false, seen: [] }) {
+// With `stall.bodies`, a file's download answers, and its bytes never come.
+type Stall = { on: boolean; seen: Request[]; bodies?: boolean }
+async function handle(stall: Stall = { on: false, seen: [] }) {
   const served = testBoard()
   const token = await personToken('u_ada', BOARD_URL)
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
     request.headers.set('authorization', `Bearer ${token}`)
     if (stall.on) return stall.seen.push(request), new Promise<never>(() => {})
-    return served.fetch(request)
+    const response = await served.fetch(request)
+    if (stall.bodies && request.method === 'GET' && new URL(request.url).pathname.includes('/attachments/'))
+      return new Response(new ReadableStream({ start() {} }), { status: response.status, headers: response.headers })
+    return response
   }) as typeof globalThis.fetch
   return board({ backend: http(BOARD_URL, { fetch }) }).as(null)
 }
@@ -115,8 +120,46 @@ describe('vb()', () => {
     expect(stopped.code).toBe(130)
     expect(JSON.parse(stopped.stderr)).toMatchObject({ reason: 'canceled', hint: expect.stringMatching(/may have happened/) })
     stall.on = false
+    // A download whose bytes stall ends too.
+    const files = { readFile: async () => new Uint8Array([1, 2, 3]), writeFile: async () => {} }
+    const shot = (await vb(team, ['post', 'dev', 'proof', '--attach', '/work/shot.png', '--no-sync'], files)).stdout.trim()
+    const attachment = JSON.parse((await vb(team, ['read', shot, '--json'])).stdout).message.attachments[0].id
+    stall.bodies = true
+    expect(await vb(team, ['download', attachment, '/work/copy.png'], { ...files, signal: AbortSignal.timeout(50) })).toMatchObject({ code: 1 })
+    stall.bodies = false
     // A signal that never fires changes nothing.
     expect(await vb(team, ['read', 'dev', '--text', 'outage'], { signal: new AbortController().signal })).toMatchObject({ code: 0, stdout: expect.stringMatching(/^dev · 1 thread/) })
+  })
+
+  it('sends nothing for a call whose signal fired while it waited its turn, on a backend that ignores signals', async () => {
+    const kept = testBoard()
+    const id = (await vb(kept, ['post', 'dev', 'the build is red', '--no-sync'])).stdout.trim()
+    const late = await vb(kept, ['reply', id, 'too late', '--no-sync'], { signal: AbortSignal.abort() })
+    expect(late.code).toBe(130)
+    expect(JSON.parse((await vb(kept, ['read', id, '--json'])).stdout).replies).toEqual([])
+    expect((await vb(kept, ['reply', id, 'on time', '--no-sync'])).code).toBe(0)
+    expect(JSON.parse((await vb(kept, ['read', id, '--json'])).stdout).replies).toMatchObject([{ text: 'on time' }])
+  })
+
+  it.each([false, true])("posts each of a watcher's writes through vb(), with a signal or without (%s)", async (withSignal) => {
+    const replies: string[][] = []
+    const served = testBoard({
+      watch: {
+        triage: {
+          tail: 'firehose',
+          run: async ({ event, board: own }) => {
+            if (event.type !== 'message.posted' || event.message!.re !== null) return
+            const opts = withSignal ? { signal: AbortSignal.timeout(5000) } : {}
+            await vb(own, ['reply', event.message!.id, 'first', '--no-sync'], opts)
+            await vb(own, ['reply', event.message!.id, 'second', '--no-sync'], opts)
+            replies.push((await own.thread(event.message!.id)).replies.map((reply) => reply.text))
+          },
+        },
+      },
+    })
+    const ada = caller(served.fetch, await personToken('u_ada', BOARD_URL), {})
+    await ada('POST', '/messages', { channel: 'firehose', text: 'export is broken' })
+    await vi.waitFor(() => expect(replies).toEqual([['first', 'second']]))
   })
 
   it('attaches and downloads through its readFile and writeFile, and - reads its stdin', async () => {

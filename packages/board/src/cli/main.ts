@@ -1700,7 +1700,9 @@ const WRITES = new Set(['post', 'reply', 'edit', 'delete', 'label', 'react', 'sc
 /** What a run its caller's signal stopped says: a write it was making may have landed. */
 function stopped(reason: unknown): Failed {
   const timedOut = reason instanceof Error && reason.name === 'TimeoutError'
-  const writes = WRITES.has(current.command ?? '') || ['create', 'update', 'revoke', 'cancel', 'join'].includes(current.args[0] ?? '')
+  // A subcommand that writes is `channels create`'s first word, `sources <key> join`'s second.
+  const sub = current.command === 'sources' ? current.args[1] : current.args[0]
+  const writes = WRITES.has(current.command ?? '') || ['create', 'update', 'revoke', 'cancel', 'join'].includes(sub ?? '')
   return new Failed({
     class: timedOut ? 'timeout' : 'canceled',
     reason: timedOut ? 'timeout' : 'canceled',
