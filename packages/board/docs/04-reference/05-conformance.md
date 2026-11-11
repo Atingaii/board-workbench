@@ -153,8 +153,7 @@ schedules, tasks, grants, schemas, or files, and say so: one that answers
 one of those groups' checks with a 501 has it skipped, `not kept here`, with
 what the board said. A board that's meant to keep them and doesn't yet answers
 otherwise, and fails: a deployment's own credentials fail the schemas group
-on Vercel's boards until its API lets a project read its team's schemas,
-and the tasks group is skipped there, since a board there keeps none yet.
+on Vercel's boards until its API lets a project read its team's schemas.
 Vercel's API reads who writes as boards did before, so a run there fails two
 core checks until it reads `x-board-profile` as a structured header and its
 avatar from there alone: the profile it shows is the whole header, and the

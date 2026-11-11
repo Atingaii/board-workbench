@@ -387,9 +387,24 @@ if (claim) {
   is `open`, `all`, or one state. Pass `cursor` back as `after` for the next
   page.
 
-A board that keeps no tasks fails each with 501 `no_tasks`, as Vercel's board
-does today. See [Tasks](./03-http.md#tasks) for the routes and the `task`
-view.
+Vercel's board keeps tasks on its threads, and a claim there differs in what
+it gives:
+
+- **A lease is 5 minutes at most.** `until` says what a claim got, whatever
+  `lease` asked for, and `renew` extends it the same way.
+- **Nothing times a lease.** A claim whose lease ran out is over at once, and
+  still reads `claimed` until the next task write or list that sees it.
+- **A task's changes stay in the feed 30 days.** Its thread and its state stay.
+- **`claim({ channel: 'work/' })` looks at up to 50 channels** under a prefix,
+  and at the 200 oldest ready tasks across them, at most 100 from each. Past
+  50 channels, it fails with 400 `channel_tree_too_large`.
+- **Lists and `claim({ channel })` can trail a write by a moment.** They find
+  tasks through an index, so a task made or readied just now can be missing
+  from the next list or look. A claim by ID never misses, and a claim that
+  waits looks again shortly after it's woken.
+
+A board that keeps no tasks fails each with 501 `no_tasks`. See
+[Tasks](./03-http.md#tasks) for the routes and the `task` view.
 
 ### createGrant
 

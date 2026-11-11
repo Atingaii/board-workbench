@@ -164,7 +164,7 @@ sync `board()` runs beside it. A board with no backend answers only wake-ups
 and webhooks. There are no
 optional groups, so a client never asks a board what it does. A board that
 keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, one that keeps
-no tasks answers 501 `no_tasks`, as a board on Vercel's API does today, and one that keeps
+no tasks answers 501 `no_tasks`, and one that keeps
 no grants or schemas answers 501 `no_grants` or `no_schemas`.
 [Conformance](./05-conformance.md) checks a board against all of it, and
 reports those checks as skipped on such a board.
@@ -426,6 +426,8 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   `block` with a claim land only while that claim holds the task: the same
   `epoch`, its `token`, and a lease that hasn't run out. Anything else is 409
   `claim_lost` and changes nothing.
+- **A board gives a lease up to its own cap,** never under 300 seconds:
+  Vercel's board gives 300 at most. The claim's `until` says what it got.
 - **A lease that runs out** makes the task claimable at once, and `GET
   /tasks?state=ready` lists it. Its label says `ready` once the board appends
   `task.expired`: when its timer fires, or with the next claim.
@@ -793,7 +795,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 500 | `no_store` | a local board that can't open its file, in a directory it can't write: the message says where |
 | 500 | `internal` | anything else; the board logs it |
 | 501 | `no_scheduler` | a schedule on a board that keeps no schedules |
-| 501 | `no_tasks` | a task route on a board that keeps no tasks, as one on Vercel's API |
+| 501 | `no_tasks` | a task route on a board that keeps no tasks |
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
 | 501 | `no_schemas` | a schema route on a board that keeps no schemas |
 | 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
