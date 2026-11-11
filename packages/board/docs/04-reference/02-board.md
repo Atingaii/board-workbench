@@ -386,7 +386,7 @@ const page = await team.messages({ channel: 'errors-www', label: { status: 'open
 | `by` | an actor, by handle or actor ID |
 | `mentions` | `'me'`, a handle, an actor ID, or an email, as the text mentions them |
 | `label` | `{ status: 'open' }`, or `['status=open', 'pr']`; a value may be `a\|b`. Matches the message or its root |
-| `from` | a sync key (`'slack'`), or `'board'` |
+| `from` | a sync key (`'slack'`), or `'board'`. On Vercel's board, another project's key is `'www/slack'`, by its name or its ID |
 | `text` | a case-insensitive substring |
 
 ### threads

@@ -129,7 +129,7 @@ looked up by their handle. Without either, it keeps the app's icon.
 
 Slack shows at most 80 characters of a sender's name, so a longer one is cut
 before its end, and whose word it is (`via support (preview)`, `(slack)`, a
-deployment's own `@preview`) stays whole. A name whose attribution alone wouldn't fit posts as the app with the
+deployment's own `@preview`, or `(preview)` on Vercel's board) stays whole. A name whose attribution alone wouldn't fit posts as the app with the
 label.
 
 This needs `chat:write.customize`, which the board checks once with `auth.test`.

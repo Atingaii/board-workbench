@@ -698,6 +698,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   engine?.bind({
     backend: synced,
     client: (platform, trigger) => clientAs({ platform: { author: platform.author, key: platform.key, respond: platform.respond }, origin: { via: platform.via } }, trigger),
+    syncedHere: async (key) => (backend.syncedHere ? backend.syncedHere(key) : true),
   })
 
   /**

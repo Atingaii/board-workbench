@@ -59,8 +59,11 @@ export const Filters = z.object({
   by: z.string().optional(),
   mentions: z.string().optional(),
   label: repeated.pipe(z.array(LabelFilter)).optional(),
-  /** Where messages came from: a sync key such as `slack`, or `board` for the board itself. */
-  from: z.string().min(1).max(64).optional(),
+  /**
+   * Where messages came from: a sync key such as `slack`, or `board` for the board itself. On Vercel's board, another
+   * project's key is `<project>/<key>`, by its name (up to 100 characters) or its ID.
+   */
+  from: z.string().min(1).max(165).optional(),
   /** Case-insensitive words the text contains. */
   text: z.string().min(1).max(200).optional(),
 })
