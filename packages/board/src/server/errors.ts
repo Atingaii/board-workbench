@@ -1,5 +1,6 @@
 import { ZodError } from 'zod'
 import { handleErrors, type ErrorOrigin } from '../client/client.ts'
+import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
 
 export class HttpError extends Error {
   readonly status: number
@@ -34,6 +35,10 @@ export const forbidden = (message: string) =>
   new HttpError(403, 'forbidden', message)
 export const notFound = (message: string, code = 'not_found') =>
   new HttpError(404, code, message)
+export const textTooLong = () =>
+  new HttpError(400, 'text_too_long', `A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.`, {
+    hint: 'Put the long part in a file and attach it, with a short summary as the text.',
+  })
 export const duplicateId = () =>
   new HttpError(409, 'duplicate_id', 'that id was already used for a different write')
 
@@ -65,6 +70,9 @@ export function toErrorResponse(error: unknown): Response {
   }
   if (error instanceof ZodError) {
     const issue = error.issues[0] && reported(error.issues[0])
+    // Too much text is the one limit people hit by writing, so it says what to do instead.
+    if (issue?.code === 'too_big' && issue.origin === 'string' && issue.maximum === MESSAGE_TEXT_MAX && issue.path.at(-1) === 'text')
+      return toErrorResponse(textTooLong())
     const path = issue?.path.length ? `${issue.path.join('.')}: ` : ''
     return json(
       { error: { code: 'invalid_request', message: `${path}${issue?.message ?? 'invalid request'}` } },
