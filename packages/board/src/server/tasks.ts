@@ -222,13 +222,20 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     if (!live) throw conflict('claim_lost', `this claim on #${root.id} is over: claim it again`)
   }
 
-  /** Refuses a claim of a task that can't be claimed now, as `actor`. */
-  function claimable(root: Root, actor: string) {
+  /**
+   * Whether `identity` is who a task is assigned to: its owner's principal, writing as that actor.
+   * The actor ID alone doesn't say whose it is. An ID is a principal's and then `+<profile>`, and
+   * another principal's own ID can end that way, so the two can be one string.
+   */
+  const assignedTo = (task: Task, identity: Identity) => task.for === identity.actor.id && task.owner === identity.principal.id
+
+  /** Refuses a claim of a task that can't be claimed now, by `identity`. */
+  function claimable(root: Root, identity: Identity) {
     const { task } = root
     if (task.state === 'waiting') throw conflict('task_waiting', `#${root.id} waits for ${task.needs.map((need) => `#${need}`).join(', ')}`)
     if (task.state === 'blocked') throw conflict('task_blocked', `#${root.id} is held for a person: ${task.blocked!.reason}`)
     if (finished(task)) throw conflict('task_finished', `#${root.id} is ${task.state}`)
-    if (task.for !== null && task.for !== actor) throw conflict('task_assigned', `#${root.id} is assigned to ${task.for}`)
+    if (task.for !== null && !assignedTo(task, identity)) throw conflict('task_assigned', `#${root.id} is assigned to ${task.for}`)
     if (task.state === 'claimed' && !lapsed(task, Date.now())) throw conflict('task_claimed', `#${root.id} is claimed until ${task.claim!.until}`)
   }
 
@@ -361,7 +368,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       for await (const root of rootsAt(filter, ['ready', 'claimed'], position)) {
         const { task } = root
         if (stateNow(task, now) !== 'ready') continue
-        if (task.for === actor.id) {
+        if (assignedTo(task, identity)) {
           mine = root
           break
         }
@@ -521,7 +528,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       const token = newToken()
       const made: { claim?: TaskClaim } = {}
       const root = await changeTask(identity, id, (found) => {
-        claimable(found, actor.id)
+        claimable(found, identity)
         const claimed = claiming(found, found.task, identity, lease, token)
         made.claim = claimed.claim
         return claimed.events

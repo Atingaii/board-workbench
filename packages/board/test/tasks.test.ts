@@ -598,6 +598,24 @@ describe("a task's owner", () => {
   })
 })
 
+describe('a task assigned to a profile', () => {
+  it("isn't taken by another principal whose own ID reads the same as that actor's", async () => {
+    const { ada, board } = setup()
+    // An actor is its principal, then `+` and a profile. This principal's own ID ends that way: the
+    // same string as Ada's `fixer`, and nothing of hers.
+    const lookalike = person(board, 'ada+fixer', { 'x-board-handle': 'eve' })
+    const made = await task(ada, 'fix CVE-123', { for: `${ADA}+fixer` })
+    expect((await lookalike('GET', '/me')).body.actor).toBe(made.task!.for)
+    // It names no owner, so it takes only its own: Ada's task isn't one, whoever it's for.
+    expect((await lookalike('POST', '/tasks/claim', { channel: 'work' })).body).toEqual({ task: null })
+    expect(code(await lookalike('POST', `/tasks/${made.id}/claim`, {}))).toEqual([409, 'task_assigned'])
+    expect(await stateOf(ada, made.id)).toBe('ready')
+    // The actor it's for is Ada's, and takes it.
+    const fixer = person(board, 'ada', { 'x-board-profile': 'fixer' })
+    expect((await fixer('POST', '/tasks/claim', { channel: 'work' })).body.task.id).toBe(made.id)
+  })
+})
+
 describe('claiming the next ready task', () => {
   it('takes the oldest in a channel or its subtree that has every label asked for', async () => {
     const { ada } = setup()
