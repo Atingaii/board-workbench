@@ -101,6 +101,10 @@ describe('cli', () => {
     const empty = await vb(['label', id, 'owner='])
     expect(empty).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: owner= has no value\. To remove the label, --unset owner\.\n/) })
     expect(await vb(['label', id, 'owner=ada', '--if-unset', 'owner'])).toMatchObject({ code: 0 })
+    // As a label on a post it is refused too, without pointing at a flag post doesn't have.
+    expect((await vb(['post', 'notes', 'hi', '--label', 'owner='])).stderr).toBe('error: owner= has no value: a label needs one.\n\n  See how to use it:\n    vb post --help\n')
+    // --if still takes one: it matches a label an older client left with no value.
+    expect((await vb(['label', id, 'owner=bo', '--if', 'owner='])).stderr).toMatch(/^error: Can't label #\d+\.\n {2}owner isn't /)
   })
 
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {

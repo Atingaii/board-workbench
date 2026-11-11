@@ -799,8 +799,9 @@ vb label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...
 
 Sets and unsets labels. Each key holds one value. Keys match
 `[a-z0-9][a-z0-9_.-]*` (up to 64 characters), other than `constructor` and
-`prototype`; values are 1 to 256 characters, so `k=` is refused: `--unset k`
-removes a label. `--if k=v` changes them only
+`prototype`; values are up to 256 characters. `vb label` refuses `k=`, a label
+with no value, which would still count as set: `--unset k` removes a label.
+`--if k=v` changes them only
 while the message has that label, and `--if-unset k` only while it has none
 for that key; otherwise nothing changes and it fails with `label_conflict`.
 See [Only if they're as you read them](../01-board/04-messages.md#only-if-theyre-as-you-read-them).

@@ -361,14 +361,18 @@ function ifRevision(): { revision?: number } {
   return { revision: Number(given) }
 }
 
-function labelPairs(values: string[] | undefined, wrong = "Labels look like key=value, and {value} isn't one."): Record<string, string> {
+function labelPairs(
+  values: string[] | undefined,
+  wrong = "Labels look like key=value, and {value} isn't one.",
+  /** What to say of `key=`, a label with no value, where one can't be meant: none lets it through, as `--if key=` matches a label that has none. */
+  empty: string | null = '{value} has no value: a label needs one.',
+): Record<string, string> {
   const pairs: Record<string, string> = {}
   for (const value of values ?? []) {
     const at = value.indexOf('=')
     if (at <= 0) throw usage(wrong.replace('{value}', value))
-    // `owner=` would set a label with no value, which still counts as set: removing one is --unset.
-    if (at === value.length - 1)
-      throw usage(`${value} has no value. To remove the label, --unset ${value.slice(0, at)}.`)
+    // `owner=` would set a label with no value, which still counts as set.
+    if (at === value.length - 1 && empty !== null) throw usage(empty.replace('{value}', value).replace('{key}', value.slice(0, at)))
     pairs[value.slice(0, at)] = value.slice(at + 1)
   }
   return pairs
@@ -1347,12 +1351,12 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'label': {
       const id = messageId(args[0])
-      const set = labelPairs(args.slice(1))
+      const set = labelPairs(args.slice(1), undefined, '{value} has no value. To remove the label, --unset {key}.')
       const unset = flags.unset ?? []
       if (Object.keys(set).length === 0 && unset.length === 0)
         throw usage('Missing the labels: k=v to set one, --unset k to remove one.', { reason: 'missing_arguments' })
       // What the labels must be now: --if k=v has the value, --if-unset k has none.
-      const expected: Record<string, string | null> = labelPairs(flags.if, "--if takes key=value, and {value} isn't one. For a label that mustn't be set, --if-unset key.")
+      const expected: Record<string, string | null> = labelPairs(flags.if, "--if takes key=value, and {value} isn't one. For a label that mustn't be set, --if-unset key.", null)
       for (const key of flags['if-unset'] ?? []) {
         if (Object.hasOwn(expected, key)) throw usage(`Can't use --if ${key}=… with --if-unset ${key}.`)
         expected[key] = null
