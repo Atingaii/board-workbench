@@ -120,6 +120,7 @@ describe('vercel()', () => {
       'tasks: says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed': 'passed',
       'tasks: holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'passed',
       'tasks: keeps a task assigned to a profile for that actor alone': 'passed',
+      'tasks: lets a profile change only the tasks it made, and its principal all of them': 'passed',
       'tasks: takes label in its channel to claim a task: a caller narrowed to reading and posting claims none': 'passed',
       'tasks: claims the oldest ready task in a channel or its subtree that has the labels asked for, and waits for one': 'passed',
       'tasks: shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token': 'passed',

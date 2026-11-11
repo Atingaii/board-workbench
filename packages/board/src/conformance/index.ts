@@ -1090,6 +1090,48 @@ const CHECKS: Check[] = [
   },
   {
     group: 'tasks',
+    name: 'lets a profile change only the tasks it made, and its principal all of them',
+    run: async (ctx) => {
+      // A board that keeps no tasks says so first, whatever the run can send.
+      const { task: principals } = await task(ctx, "conformance: its principal's task")
+      if (!ctx.withHeaders) return NO_HEADERS
+      if (ctx.me.actor !== ctx.me.principal) return "this run writes as a profile, so it can't change tasks as its principal"
+      // Without manage, which changes anyone's task: what's left is whose task it is.
+      const can = `${ctx.channel}=read,post,react,label`
+      const as = (name: string) => ctx.withHeaders!({ 'x-board-profile': `conformance-${name}-${ctx.labels.conformance}`, 'x-board-can': can })
+      const principal = ctx.withHeaders({ 'x-board-can': can })
+      const profile = as('own')
+      const sibling = as('other')
+      const [actor, other] = await Promise.all([profile.me(), sibling.me()])
+      if (actor.principal !== ctx.me.principal) return "this handle's profiles are principals of their own, so none is its principal's actor"
+      // What its principal made as itself isn't the profile's: not to give itself, to hold, or to cancel.
+      await rejects(profile.tasks.assign(principals.id, actor.actor), 403, 'task_not_owned', "assigning its principal's task to itself, by a profile")
+      await rejects(profile.tasks.block(principals.id, 'conformance: not its own'), 403, 'task_not_owned', "holding its principal's task, by a profile")
+      await rejects(profile.tasks.cancel(principals.id, 'conformance: not its own'), 403, 'task_not_owned', "canceling its principal's task, by a profile")
+      // What it made is its own to change, and no other profile's, which shares its credential.
+      const { task: own } = await profile.tasks.create(ctx.channel, { text: "conformance: a profile's own task", labels: ctx.labels, noSync: true })
+      ctx.posted.push(own.id)
+      same(own.task?.owner, ctx.me.principal, "who owns a profile's task: its principal")
+      same((await profile.tasks.assign(own.id, actor.actor)).task?.for, actor.actor, "who a profile's own task is for, once it assigns it")
+      await rejects(sibling.tasks.assign(own.id, other.actor), 403, 'task_not_owned', "assigning a profile's task to itself, by another profile of its principal")
+      await rejects(sibling.tasks.cancel(own.id, 'conformance: not its own'), 403, 'task_not_owned', "canceling a profile's task, by another profile of its principal")
+      same((await ctx.board.thread(own.id)).message.task?.for, actor.actor, "who a profile's task is for, after another profile's refused changes")
+      // Its principal, as itself, changes any of its profiles' tasks, and the one it made.
+      same((await principal.tasks.assign(own.id, null)).task?.for, null, "who a profile's task is for, once its principal gives it back to the pool")
+      same((await principal.tasks.cancel(own.id, 'conformance: done checking')).task?.state, 'canceled', "a profile's task, once its principal cancels it")
+      same((await principal.tasks.assign(principals.id, actor.actor)).task?.for, actor.actor, "who its principal's task is for, once its principal assigns it")
+      // The same owner decides whose edit changes what a task says: a profile's thread, made a task by its principal, is held when the profile edits it.
+      const thread = await profile.post(ctx.channel, { text: "conformance: a profile's thread, made a task by its principal", labels: ctx.labels, noSync: true })
+      ctx.posted.push(thread.id)
+      await principal.tasks.create({ re: thread.id })
+      await profile.edit(thread.id, "conformance: a profile's thread, edited by it")
+      const edited = (await ctx.board.thread(thread.id)).message
+      same(edited.task?.state, 'blocked', "its principal's task, once the profile that wrote its root edited it")
+      same(edited.task?.blocked?.kind, 'edited', 'what it is held for')
+    },
+  },
+  {
+    group: 'tasks',
     name: 'takes label in its channel to claim a task: a caller narrowed to reading and posting claims none',
     run: async (ctx) => {
       // A board that keeps no tasks says so first, whatever the run can send.

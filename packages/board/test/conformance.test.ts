@@ -82,6 +82,8 @@ const NO_ROLES = ['caps a person by their team role, so a viewer reads but neith
 const NO_APPS = ['names an app by its slug or client ID, keeps it by client ID, and every app as a group', 'name an app in principals to check it: a local board has no apps']
 const CROSS_TEAM = ['lets a project on another team in, in its environments', "grants across teams aren't specified yet: what a project on another team needs, and what all-projects means for one, comes later"]
 /** The tasks check a board's own code skips: its profiles are `board:client:<profile>`, principals of their own. */
+/** The tasks check that sends headers of its own: a profile, narrowed to no `manage`. */
+const TASKS_OWNED = 'lets a profile change only the tasks it made, and its principal all of them'
 const OWN_PROFILES = ['keeps a task assigned to a profile for that actor alone', "this handle's profiles are principals of their own, so none is its principal's actor"]
 /** And one no run can check: shut out by a lock, it couldn't lift the lock after. */
 const LOCKED_OUT = ['lets a member grant on a pattern after a lock under it', "a run can't be shut out by a lock and lift it afterwards: the board's own tests check it"]
@@ -168,7 +170,7 @@ describe('the conformance kit', () => {
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
     expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
-    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 14 }, () => 'passed'))
+    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 15 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
     // Every task it made went with its root: none is left open, and none still wears a state.
@@ -185,6 +187,7 @@ describe('the conformance kit', () => {
       [NARROWED[0], NO_CAN],
       ...HEADERS.map((name) => [name, NO_HEADERS]),
       OWN_PROFILES,
+      [TASKS_OWNED, NO_HEADERS],
       [NARROWED[1], NO_CAN],
       NO_ROLES,
       NO_APPS,
@@ -222,6 +225,30 @@ describe('the conformance kit', () => {
     }
     expect(owns(await conformance(await clientOf(strict), { withHeaders: withHeaders(board.fetch) }))).toMatchObject({ status: 'failed', detail: expect.stringContaining('only the author can edit a message') })
   })
+
+  it("fails a board that lets a profile change its principal's tasks or another profile's, or holds no task when a profile edits its thread", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const owned = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name === TASKS_OWNED)
+    /** A board that takes the requests `match` picks as the principal's, whatever profile sent them. */
+    const principalOnly = (match: (method: string, path: string) => boolean): Fetch => (request) => {
+      if (!match(request.method, new URL(request.url).pathname)) return board.fetch(request)
+      const headers = new Headers(request.headers)
+      headers.delete('x-board-profile')
+      return board.fetch(new Request(request, { headers }))
+    }
+    // One that goes by the principal alone for a task's owner-side changes: a profile gives itself its principal's task.
+    const changes = principalOnly((method, path) => method === 'POST' && /\/tasks\/[^/]+\/(assign|block|unblock|reopen|cancel)$/.test(path))
+    expect(owned(await conformance(await clientOf(board.fetch), { withHeaders: withHeaders(changes) }))).toMatchObject({
+      status: 'failed',
+      detail: "assigning its principal's task to itself, by a profile: expected 403 task_not_owned, and it succeeded",
+    })
+    // And one that takes a profile's edit of its thread as its principal's, the task's owner: nothing holds the task.
+    const edits = principalOnly((method, path) => method === 'POST' && /\/messages\/[^/]+\/edit$/.test(path))
+    expect(owned(await conformance(await clientOf(board.fetch), { withHeaders: withHeaders(edits) }))).toMatchObject({
+      status: 'failed',
+      detail: `its principal's task, once the profile that wrote its root edited it: expected "blocked", got "ready"`,
+    })
+  }, 60_000)
 
   it('fails a board that says it made a schema version that was there, or takes another definition for one', async () => {
     const registers = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith('registers a schema version once'))
@@ -386,7 +413,7 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(taskless))
     expect(report.ok).toBe(true)
     const tasks = report.checks.filter((check) => check.group === 'tasks')
-    expect(tasks).toHaveLength(14)
+    expect(tasks).toHaveLength(15)
     // The one that needs no task route is about labels, which a board has either way.
     expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
     expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
