@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
-import type { SandboxMatcher, SandboxPolicy, SandboxRule } from '../src/server/sandbox.ts'
+import type { SandboxMatcher, SandboxPolicy, SandboxPolicyOptions, SandboxRule } from '../src/server/sandbox.ts'
 import { BOARD_URL, deploymentToken, PROJECT_ID, testBoard } from './harness.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
@@ -101,6 +101,21 @@ describe("sandboxPolicy() on a board this deployment keeps", () => {
     await expect(team.sandboxPolicy({ token })).rejects.toMatchObject({ code: 'invalid_profile' })
   })
 
+  it('takes a can in every form its type allows: all, a list for every channel, a map with none, or the header itself', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production')
+    const team = testBoard({ url: BOARD_URL })
+    const token = await deploymentToken('board', PROJECT_ID, 'production', { audience: BOARD_URL })
+    const canOf = async (can: SandboxPolicyOptions['can']) => {
+      const agent = board({ backend: http(BOARD_URL, { fetch: sandboxNetwork(await team.as('fixer').sandboxPolicy({ token, can }), team.fetch).fetch }) }).as(null)
+      return (await agent.me()).can
+    }
+    expect(await canOf('all')).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] })
+    expect(await canOf(['read'])).toEqual({ '*': ['read'] })
+    expect(await canOf({ 'dev/': ['read', 'post'], 'dev/secret': 'none' as never })).toEqual({ 'dev/': ['read', 'post'], 'dev/secret': [] })
+    expect(await canOf('dev/=read;ops=all')).toEqual({ 'dev/': ['read'], ops: ['read', 'post', 'react', 'label', 'sync', 'manage'] })
+    await expect(team.as('fixer').sandboxPolicy({ token, can: ['fly'] as never })).rejects.toMatchObject({ code: 'invalid_scope' })
+  })
+
   it("on a deployment, adds what gets the sandbox through Deployment Protection, and needs a credential off one", async () => {
     const team = testBoard({ url: 'https://board.example/api/board' })
     for (const key of Object.keys(process.env)) if (/^(VERCEL|BOARD)/.test(key)) vi.stubEnv(key, '')
@@ -142,6 +157,41 @@ describe("sandboxPolicy() on Vercel's board", () => {
     for (const path of ['tokens', 'Tokens', 'grants', 'watchers'])
       expect([path, (await network.fetch(`${API}/v1/messageboard/boards/brd_test/${path}?teamId=team_test`, { method: 'POST', body: '{}' })).status]).toEqual([path, 403])
     await expect(pong.as({ name: 'fixer', avatar: 'http://localhost/f.png' }).sandboxPolicy({ token: 'project:prj_pong:production' })).rejects.toMatchObject({ code: 'invalid_profile' })
+  })
+
+  it("hands it only the calls an agent's vb makes there, and none of the board's other routes", async () => {
+    const api = fakeMessageboard()
+    const pong = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }) })
+    const network = sandboxNetwork(await pong.as('fixer').sandboxPolicy({ token: 'project:prj_pong:production', can: 'all' }), (request) => api.fetch(request))
+    // Its files go to the store's own host, which a caller adds beside the board's.
+    const agent = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: network.fetch, files: api.files }) })
+    expect((await agent.me()).actor).toBe('vercel:project:prj_pong:production+fixer')
+    const root = await agent.post('dev', { text: 'on it', id: 'fix-1' })
+    expect((await agent.posted('fix-1'))?.id).toBe(root.id)
+    const reply = await agent.reply(root.id, 'a first look')
+    await agent.edit(reply.id, 'a closer look')
+    await agent.react(root.id, 'eyes')
+    await agent.label(root.id, { set: { status: 'fixing' } })
+    const file = await agent.upload({ data: new TextEncoder().encode('log'), name: 'log.txt', type: 'text/plain' })
+    await agent.reply(root.id, { text: 'the log', attachments: [file.id] })
+    expect(await (await agent.download(file.id)).text()).toBe('log')
+    const { message, replies } = await agent.thread(root.id)
+    expect([message.labels, message.reactions, replies.map((m) => m.text)]).toEqual([{ status: 'fixing' }, { eyes: ['vercel:project:prj_pong:production+fixer'] }, ['a closer look', 'the log']])
+    expect((await agent.threads({ channel: 'dev' })).threads.map((t) => t.message.id)).toEqual([root.id])
+    expect((await agent.messages({ channel: 'dev' })).messages.length).toBeGreaterThan(0)
+    expect((await agent.poll({ channel: 'dev', wait: 0 })).cursor).toEqual(expect.any(String))
+    expect((await agent.actors()).map((actor) => actor.id)).toContain('vercel:project:prj_pong:production+fixer')
+    const later = await agent.schedule({ re: root.id }, { text: 'check back', in: '1h' })
+    expect((await agent.schedules()).map((one) => one.id)).toEqual([later.id])
+    expect((await agent.cancelSchedule(later.id)).canceled).toBe(true)
+    await agent.delete(reply.id)
+    // What a project's credential may do to the board itself, or under it past what vb calls, isn't the sandbox's.
+    const asked = async (method: string, path: string) => {
+      const response = await network.fetch(`${API}/v1/messageboard/boards/brd_test${path}?teamId=team_test`, { method, ...(method === 'GET' || method === 'DELETE' ? {} : { body: '{}' }) })
+      return [method, path, response.status, (await response.json()).error?.message]
+    }
+    for (const [method, path] of [['DELETE', ''], ['PATCH', ''], ['POST', '/members'], ['DELETE', '/channels/ch_1'], ['GET', '/audit'], ['DELETE', `/threads/x/messages/1`], ['PUT', '/channels']])
+      expect(await asked(method!, path!)).toEqual([method, path, 403, "not this board's"])
   })
 
   it('holds the sandbox to its can there too, as the API holds a caller to x-board-can', async () => {

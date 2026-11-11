@@ -1975,9 +1975,14 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   never its deployment's integration). It allows only the board's host, and
   on it only the protocol's routes under the board's URL, each by method and
   shape, since a board mounted without a `basePath` reads a route as the end
-  of a path (`/api/board/x/tokens` is `/tokens`); on Vercel's API, what's
-  under `/v1/messageboard/boards/<id>` with its `teamId`, and
-  `GET /v1/messageboard/me`. It refuses `tokens`, `grants`, `watchers`,
+  of a path (`/api/board/x/tokens` is `/tokens`); on Vercel's API, with its
+  `teamId`, exactly the calls `vercel()` makes under
+  `/v1/messageboard/boards/<id>` for what an agent does (reading, posting,
+  editing and deleting its own, reacting, labeling, files, schedules, a
+  link's message), each by method and shape, and `GET /v1/messageboard/me`:
+  not `PATCH` or `DELETE` on the board, its members, or a route the API adds
+  later. A `can` takes any `Can` (`'all'`, a list for every channel, a map)
+  or the header's own text. It refuses `tokens`, `grants`, `watchers`,
   `sync`, `inbox`, `sources`, `webhooks`, and `wake` under it in any case, dot
   segments, encoded slashes and dots, and `x-vercel-set-bypass-cookie` (as a
   header or a query key), and blocks every other host. A caller merges its own hosts by spreading `allow`. Each backend

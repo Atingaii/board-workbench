@@ -9,7 +9,7 @@ import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { deployedOnVercel } from './registrant.ts'
 import { tailWatchers } from './tails.ts'
-import { withoutToken, type SandboxInput, type SandboxReach } from './sandbox.ts'
+import { PROTOCOL_ROUTES, withoutToken, type SandboxInput, type SandboxReach } from './sandbox.ts'
 import { formatProfileHeader } from '../contract/profile-header.ts'
 
 export type HttpOptions = {
@@ -274,7 +274,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     keeps: false,
     async sandbox({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
       const credential = environment ? await environment.sandbox(remote, token) : token === undefined ? withoutToken(remote) : { authorization: `Bearer ${token}` }
-      return { url: remote, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, protocol: true }
+      return { url: remote, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, routes: PROTOCOL_ROUTES }
     },
     bind(next: BoardBinding) {
       if (binding) throw new Error('http: this backend already serves a board: create one http() per board()')

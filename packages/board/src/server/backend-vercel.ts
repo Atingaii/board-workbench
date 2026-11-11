@@ -18,7 +18,7 @@ import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
 import { waitUntil } from './wait-until.ts'
-import { withoutToken, type SandboxInput, type SandboxReach } from './sandbox.ts'
+import { withoutToken, type SandboxInput, type SandboxReach, type SandboxRoute } from './sandbox.ts'
 
 // The `/v1/messageboard` API's shapes, as this backend reads them. `@api/messageboard-types` is
 // private to Vercel's monorepo, so these are written out: conformance catches drift.
@@ -217,6 +217,42 @@ export type VercelEnvironment = {
 type Who = { profile: { name: string; avatar?: string } | null }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
+
+/**
+ * What `vb` on this board calls in Vercel's API for what a sandboxed agent does, by method and path
+ * under `/boards/<id>`: reading, posting and replying, editing and deleting its own, reacting and
+ * labeling, files, schedules, and finding a platform link's message. A sandbox's policy hands it these
+ * and nothing else under the board: not the board itself (`PATCH`, `DELETE`), its members, its tokens,
+ * grants, watchers, or sync's records, nor a route the API adds later.
+ */
+const SANDBOX_ROUTES: readonly SandboxRoute[] = [
+  { method: 'GET', path: '' },
+  { method: 'GET', path: '/me' },
+  { method: 'GET', path: '/channels' },
+  { method: 'POST', path: '/channels' },
+  { method: 'GET', path: '/actors' },
+  { method: 'GET', path: '/messages' },
+  { method: 'GET', path: '/messages/:id' },
+  { method: 'GET', path: '/messages/:id/synced' },
+  { method: 'GET', path: '/changes' },
+  { method: 'GET', path: '/threads' },
+  { method: 'POST', path: '/threads' },
+  { method: 'GET', path: '/threads/:thread/messages' },
+  { method: 'POST', path: '/threads/:thread/messages' },
+  { method: 'PATCH', path: '/threads/:thread/messages/:n' },
+  { method: 'POST', path: '/threads/:thread/messages/:n/delete' },
+  { method: 'GET', path: '/threads/:thread/messages/:n/reactions' },
+  { method: 'POST', path: '/threads/:thread/messages/:n/reactions' },
+  { method: 'POST', path: '/threads/:thread/messages/:n/labels' },
+  { method: 'GET', path: '/posts/:id' },
+  { method: 'POST', path: '/attachments' },
+  { method: 'GET', path: '/attachments/:id' },
+  { method: 'POST', path: '/attachments/:id/complete' },
+  { method: 'GET', path: '/schedules' },
+  { method: 'POST', path: '/schedules' },
+  { method: 'POST', path: '/schedules/:id/cancel' },
+  { method: 'GET', path: '/sync/linked' },
+]
 
 /**
  * Who a request to Vercel's API writes as, as the API reads it today: the profile's name alone in
@@ -2548,7 +2584,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const id = team?.startsWith('team_') ? team : (await self(who)).teamId
       const url = `${origin}/v1/messageboard${await onBoard(who)}?teamId=${encodeURIComponent(id)}`
       const credential = environment ? await environment.sandbox(url, token) : token === undefined ? withoutToken(url) : { authorization: `Bearer ${token}` }
-      return { url, headers: { ...credential, ...apiProfileHeaders(profile), 'x-board-can': can }, reads: ['/v1/messageboard/me'], protocol: false }
+      return { url, headers: { ...credential, ...apiProfileHeaders(profile), 'x-board-can': can }, routes: SANDBOX_ROUTES, reads: ['/v1/messageboard/me'] }
     },
     // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
     sendsSchedulesHere: false,

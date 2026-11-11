@@ -10,7 +10,7 @@ import type { Watcher } from './watcher.ts'
 import { HttpError } from './errors.ts'
 import { InvalidCan } from './access.ts'
 import { formatProfileHeader } from '../contract/profile-header.ts'
-import { boardPolicy, canHeader, withoutToken, type SandboxInput, type SandboxPolicy, type SandboxPolicyOptions, type SandboxReach } from './sandbox.ts'
+import { boardPolicy, canHeader, PROTOCOL_ROUTES, withoutToken, type SandboxInput, type SandboxPolicy, type SandboxPolicyOptions, type SandboxReach } from './sandbox.ts'
 
 /**
  * `board()`'s options: where the board lives, who may use it and what its writes go through, and
@@ -217,7 +217,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     const url = ownUrl()
     if (url === null) throw new HttpError(400, 'no_url', "A sandbox reaches this board at its URL, and it doesn't know it yet.", { hint: 'Pass board({ url }).', origin: 'handle' })
     const credential = runtime.sandbox ? await runtime.sandbox(url, token) : token === undefined ? withoutToken(url) : { authorization: `Bearer ${token}` }
-    return { url, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, protocol: true }
+    return { url, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, routes: PROTOCOL_ROUTES }
   }
 
   /** The policy that hands this board to a sandbox, for a handle as `caller`. */

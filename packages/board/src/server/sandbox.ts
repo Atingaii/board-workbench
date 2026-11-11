@@ -53,12 +53,15 @@ export type SandboxPolicyOptions = {
   token?: string
 }
 
+/** A route a sandbox reaches: its method, and its path after the board's URL's, `:name` standing for a segment (`/messages/:id`). */
+export type SandboxRoute = { method: string; path: string }
+
 /**
- * How a sandbox reaches a board, from a backend: its URL, the headers its requests carry, what else
- * they ask (`GET`s outside the board's path), and whether its routes are the protocol's, which the
- * policy then names one by one, or another API's, under the board's path.
+ * How a sandbox reaches a board, from a backend: its URL, the headers its requests carry, the routes
+ * under the board's path that carry them, every one by method and shape (the protocol's, or another
+ * API's), and what else they ask (`GET`s outside the board's path).
  */
-export type SandboxReach = { url: string; headers: Record<string, string>; reads?: readonly string[]; protocol: boolean }
+export type SandboxReach = { url: string; headers: Record<string, string>; routes: readonly SandboxRoute[]; reads?: readonly string[] }
 
 /** What a backend gets to say how a sandbox reaches its board. */
 export type SandboxInput = { profile: { name: string; avatar?: string }; can: string; token: string | undefined }
@@ -68,13 +71,23 @@ export const withoutToken = (url: string): never => {
   throw new HttpError(400, 'no_token', `There's no credential here to hand a sandbox for ${url}: pass one, sandboxPolicy({ token }).`, { origin: 'handle' })
 }
 
-/** `x-board-can` for `can`: the header a proxy sends, read here as the board reads it, so a bad one fails before the sandbox does. */
+/**
+ * `x-board-can` for `can`, read here as the board reads it, so a bad one fails before the sandbox
+ * does: any `Can` (`'all'`, a list for every channel, a map from pattern to grant, a grant's `'none'`
+ * included), or a header's own text (`dev/=read,post`).
+ */
 export function canHeader(can: Can | string | undefined): string {
-  if (typeof can === 'string') {
+  if (typeof can === 'string' && can !== 'all') {
     parseCan(can)
     return can
   }
-  return canText(compileAccess(can === undefined ? DEFAULT_CAN : (Object.fromEntries(Object.entries(can as Record<string, unknown>).map(([pattern, grant]) => [pattern, grant === 'none' ? [] : grant])) as Can)))
+  const given: Can =
+    can === undefined
+      ? DEFAULT_CAN
+      : can === 'all' || Array.isArray(can)
+        ? can
+        : (Object.fromEntries(Object.entries(can as Record<string, unknown>).map(([pattern, grant]) => [pattern, grant === 'none' ? [] : grant])) as Can)
+  return canText(compileAccess(given))
 }
 
 /**
@@ -94,21 +107,23 @@ const caseless = (value: string) => [...value].map((char) => (/[a-z]/i.test(char
 const SEGMENT = "(?:[A-Za-z0-9_.@~:+=,!$&'*-]|%[0-9A-Fa-f]{2})+"
 
 /**
- * The protocol's routes a sandbox reaches, by method, as patterns after the board's path: every route
- * but those under a withheld segment. Each is named whole, because a board mounted without a
- * `basePath` matches a route as the end of a path, and `/api/board/x/tokens` would be its
- * `/tokens` under `/api/board/x`.
+ * The protocol's routes a sandbox reaches: every route but those under a withheld segment. Each is
+ * named whole, because a board mounted without a `basePath` matches a route as the end of a path, and
+ * `/api/board/x/tokens` would be its `/tokens` under `/api/board/x`.
  */
-const PROTOCOL_ROUTES: ReadonlyMap<string, string[]> = (() => {
+export const PROTOCOL_ROUTES: readonly SandboxRoute[] = (Object.values(routes) as SandboxRoute[])
+  .filter(({ path }) => !WITHHELD.includes(path.split('/').filter(Boolean)[0] ?? ''))
+  .map(({ method, path }) => ({ method, path: path === '/' ? '' : path }))
+
+/** `routes`' rules: one a method, its paths' shapes in one expression after `prefix`. */
+function routeRules(prefix: string, routes: readonly SandboxRoute[], scoped: (match: SandboxMatch) => SandboxMatch, transform: { headers: Record<string, string> }[]): SandboxRule[] {
   const byMethod = new Map<string, string[]>()
-  for (const { method, path } of Object.values(routes) as { method: string; path: string }[]) {
-    const parts = path.split('/').filter(Boolean)
-    if (parts[0] !== undefined && WITHHELD.includes(parts[0])) continue
-    const pattern = parts.map((part) => (part.startsWith(':') ? `/${SEGMENT}` : `/${escaped(part)}`)).join('')
-    byMethod.set(method, [...(byMethod.get(method) ?? []), pattern])
+  for (const { method, path } of routes) {
+    const shape = path.split('/').filter(Boolean).map((part) => (part.startsWith(':') ? `/${SEGMENT}` : `/${escaped(part)}`)).join('')
+    byMethod.set(method, [...(byMethod.get(method) ?? []), shape])
   }
-  return byMethod
-})()
+  return [...byMethod].map(([method, shapes]) => ({ match: scoped({ method: [method], path: { regex: `^${prefix}(?:${shapes.join('|')})/?$` } }), transform }))
+}
 
 const refused = (why: string) => ({ response: { statusCode: 403, body: JSON.stringify({ error: { code: 'forbidden', message: why } }), contentType: 'application/json' } })
 
@@ -123,9 +138,6 @@ export function boardPolicy(reach: SandboxReach): SandboxPolicy {
   const query = [...url.searchParams].map(([key, value]) => ({ key: { exact: key }, value: { exact: value } }))
   const scoped = (match: SandboxMatch): SandboxMatch => (query.length > 0 ? { ...match, queryString: query } : match)
   const transform = [{ headers: { ...reach.headers } }]
-  const board: SandboxRule[] = reach.protocol
-    ? [...PROTOCOL_ROUTES].map(([method, paths]) => ({ match: scoped({ method: [method], path: { regex: `^${prefix}(?:${paths.join('|')})/?$` } }), transform }))
-    : [{ match: scoped({ path: { regex: `^${prefix}(?:/${SEGMENT})*/?$` } }), transform }]
   return {
     allow: {
       [url.host]: [
@@ -134,9 +146,10 @@ export function boardPolicy(reach: SandboxReach): SandboxPolicy {
         // Deployment Protection's own: a cookie that lets anyone past it, which the sandbox could carry off.
         { match: { queryString: [{ key: { regex: `^${caseless('x-vercel-set-bypass-cookie')}$` } }] }, ...refused('not a board route') },
         { match: { headers: [{ key: { exact: 'x-vercel-set-bypass-cookie' } }] }, ...refused('not a board route') },
-        { match: { path: { regex: `^${prefix}/(?:${WITHHELD.map(caseless).join('|')})(?:/|$)` } }, ...refused("not a route this sandbox's policy hands it") },
-        ...board,
+        ...routeRules(prefix, reach.routes, scoped, transform),
         ...(reach.reads ?? []).map((path) => ({ match: scoped({ path: { exact: path }, method: ['GET'] }), transform })),
+        // Named apart for its answer, in any case, as a router that ignores case would read one.
+        { match: { path: { regex: `^${prefix}/(?:${WITHHELD.map(caseless).join('|')})(?:/|$)` } }, ...refused("not a route this sandbox's policy hands it") },
         refused("not this board's"),
       ],
     },
