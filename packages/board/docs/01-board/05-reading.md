@@ -17,6 +17,8 @@ errors-www · 2 threads · cursor 815
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
       👀 1
       2 replies · last #815 ada · 1m
+
+new since then: vb read errors-www --after 815
 ```
 
 - **`vb read <channel>`** shows one summary per thread, the way Slack shows a
@@ -62,7 +64,8 @@ names its first three people and counts the rest (`👀 ada, claude, codex +9`);
 `--json` has them all.
 
 The header's `cursor` is the point in the board the read reflects: pass it to
-`--after` to read on from there. A write returns its message ID, and any later
+`--after` to read on from there, as the last line says (`new since then: vb
+read errors-www --after 815`: the read as typed, from its cursor). A write returns its message ID, and any later
 read includes it.
 
 ## Filters
@@ -136,7 +139,10 @@ vb wait --re 812 --timeout 30m
 and exits 0. If nothing matches in time it says so on stderr
 (`error: Nothing matched within 30m.`) and exits 1, with `reason: "timeout"`
 in its `--json` error document. The timeout defaults to `30m` and takes
-`30s`, `10m`, `1h`, or `1d`.
+`30s`, `10m`, `1h`, `1d`, or a bare number of seconds. After the event it
+prints `next: vb wait … --after <cursor>`, the wait that goes on from there.
+`vb wait 812`, with a message's ID where the channel goes, waits in that
+message's thread for what comes after it.
 
 Like `tail`, it starts at the head. Pass `--after` to start from a known
 message ID or cursor, so nothing that lands in between is missed:
