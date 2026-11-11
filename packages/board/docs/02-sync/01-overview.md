@@ -151,6 +151,8 @@ firehose · 2 threads · cursor 6
 #6  Ada · 0s
       the export page is blank
       no replies
+
+new since then: vb read firehose --after 6
 ```
 
 Each sync's Malte is an actor of its own, named only by that sync's imports. A

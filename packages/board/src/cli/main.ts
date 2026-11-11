@@ -507,6 +507,19 @@ function filters(channel?: string): Filters & { after?: string } {
   }
 }
 
+/** The filters this run was given, as the words that give them again: for the command an output says to run next. */
+function filterWords(): string[] {
+  const quoted = (value: string) => (/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`)
+  return [
+    ...(flags.re ? ['--re', flags.re.replace(/^#/, '')] : []),
+    ...(flags.by ? ['--by', quoted(flags.by)] : []),
+    ...(flags.mentions ? (flags.mentions === 'me' ? ['--mentions'] : ['--mentions', quoted(flags.mentions)]) : []),
+    ...(flags.label ?? []).flatMap((label) => ['--label', quoted(label)]),
+    ...(flags.source ? ['--source', quoted(flags.source)] : []),
+    ...(flags.text ? ['--text', quoted(flags.text)] : []),
+  ]
+}
+
 /**
  * The board the environment points at. With none, the team's board for an app that has one
  * (null), or else how to point at one, with the commands this app has.
@@ -1120,6 +1133,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const count = `${page.threads.length} ${page.threads.length === 1 ? 'thread' : 'threads'}`
       out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}${page.threads.length ? '\n' : ''}`)
       if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
+      // The cursor is where this read stopped: the next command is the one that reads on from it.
+      out(`\nnew since then: ${[...cli(), 'read', ...(target ? [target] : []), ...filterWords(), '--after', String(page.cursor)].join(' ')}`)
       return 0
     }
 
@@ -1506,17 +1521,35 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'wait': {
       const controller = new AbortController()
       const stop = stopOn(controller)
-      const timeout = flags.timeout ?? '30m'
+      // A bare number is seconds, as `timeout 30` and `sleep 30` are: the client's own bare number is milliseconds.
+      const timeout = /^\d+$/.test(flags.timeout ?? '') ? `${flags.timeout}s` : (flags.timeout ?? '30m')
+      // A message's ID where a channel goes is its thread: a channel of that name would never answer.
+      const thread = args[0] !== undefined && /^#|^\d+$|^msg_/.test(args[0]) && flags.re === undefined ? args[0] : undefined
+      // Its thread is its root's, and what's wanted is what comes after it: an answer already there is one.
+      const root = thread === undefined ? undefined : (await client().thread(messageId(thread))).message.id
+      const waitsOn = root === undefined ? filters(args[0]) : { ...filters(), re: root, ...(flags.after === undefined ? { after: messageId(thread!) } : {}) }
       const event = await client()
-        .wait(filters(args[0]), { timeout, signal: controller.signal })
+        .wait(waitsOn, { timeout, signal: controller.signal })
         .finally(stop.release)
       if (!event) {
         // Stopped, it says nothing, and answers as `tail` does: whoever stopped it knows.
         if (controller.signal.aborted) return stop.interrupted() ? 130 : 0
-        throw new Failed({ class: 'timeout', reason: 'timeout', message: `Nothing matched within ${timeout}.` })
+        throw new Failed({
+          class: 'timeout',
+          reason: 'timeout',
+          message: `Nothing matched within ${timeout}.`,
+          // What was already there when it started never matches: the commonest reason a wait comes back empty.
+          details: [flags.after === undefined ? 'wait sees only what arrives after it starts. For what is already there, read, or pass --after <id>.' : `Nothing came after ${flags.after}.`],
+          next: [{ instruction: 'See what is there now', argv: [...cli(), 'read', ...(thread ?? flags.re ?? args[0] ? [(thread ?? flags.re ?? args[0])!] : [])] }],
+        })
       }
       if (flags.json) result({ event })
-      else out(formatEvent(event))
+      else {
+        out(formatEvent(event))
+        // One event a wait: this is where it stopped, so the next wait misses nothing after it.
+        const words = filterWords().filter((word, at, all) => !(root !== undefined && (word === '--re' || all[at - 1] === '--re')))
+        out(`next: ${[...cli(), 'wait', ...(root === undefined && args[0] ? [args[0]] : []), ...(root !== undefined ? ['--re', root] : []), ...words, '--after', String(event.cursor)].join(' ')}`)
+      }
       return 0
     }
 

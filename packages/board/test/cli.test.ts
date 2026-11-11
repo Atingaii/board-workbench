@@ -409,7 +409,7 @@ describe('cli', () => {
     expect(await vb(['channels', 'create', 'made/early'])).toEqual({ code: 0, stdout: 'created made/early\n', stderr: '' })
     // It lists with nothing in it, under its prefix like any channel, and reads as empty, not as a typo.
     expect((await vb(['channels'])).stdout).toMatch(/(^|\n)made\/\n {2}made\/early {2}0 threads · 0 messages\n/)
-    expect(await vb(['read', 'made/early'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^made\/early · 0 threads · cursor \d+\n$/) })
+    expect(await vb(['read', 'made/early'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^made\/early · 0 threads · cursor \d+\n\nnew since then: vb read made\/early --after \d+\n$/) })
     // A bare `channels` runs `channels list`.
     expect((await vb(['channels', 'list'])).stdout).toBe((await vb(['channels'])).stdout)
     expect(await vb(['channels', 'create', 'made/early'])).toEqual({ code: 0, stdout: 'made/early already exists\n', stderr: '' })
@@ -441,7 +441,7 @@ describe('cli', () => {
 
     const read = await vb(['read', 'open-work', '--limit', '1'])
     expect(read).toMatchObject({ code: 0, stderr: '' })
-    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n$`))
+    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\nnew since then: vb read open-work --after \\d+\n$`))
 
     const all = await vb(['read', 'open-work'])
     expect(all.stdout).toContain(`#${second}  u_julian`)
@@ -478,7 +478,7 @@ describe('cli', () => {
 
     // A typo'd channel is an error, not an empty read; an empty read in a real channel isn't.
     expect(await vb(['read', 'open-wrok'])).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Couldn't find channel open-wrok\. Did you mean open-work\?\n/) })
-    expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n$/) })
+    expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n\nnew since then: vb read open-work --text 'nothing like this' --after \d+\n$/) })
     expect(await vb(['read', 'open-work', '--messages'])).toMatchObject({ code: 2 })
   }, 20_000)
 
@@ -568,7 +568,17 @@ describe('cli', () => {
   it('waits for a reply, or fails with reason timeout, exit 1, when none comes in time', async () => {
     const id = (await vb(['post', 'questions', 'anyone?'])).stdout.trim()
     const timedOut = await vb(['wait', '--re', id, '--timeout', '300ms'])
-    expect(timedOut).toMatchObject({ code: 1, stdout: '', stderr: 'error: Nothing matched within 300ms.\n' })
+    expect(timedOut).toMatchObject({ code: 1, stdout: '' })
+    // It says why a wait comes back empty, and what reads what's already there.
+    expect(timedOut.stderr).toMatch(/^error: Nothing matched within 300ms\.\n {2}wait sees only what arrives after it starts\.[^\n]*\n/)
+    expect(timedOut.stderr).toContain(`vb read ${id}`)
+    // A message's ID where the channel goes waits in its thread, and a bare number is seconds.
+    const byId = vb(['wait', id, '--timeout', '10'])
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await vb(['reply', id, 'first!'])
+    const got = await byId
+    expect(got.code).toBe(0)
+    expect(got.stdout).toMatch(new RegExp(`first!\nnext: vb wait --re ${id} --after \\d+\n$`))
     const timedOutJson = await vb(['wait', '--re', id, '--timeout', '300ms', '--json'])
     expect(timedOutJson).toMatchObject({ code: 1, stdout: '' })
     expect(failure(timedOutJson)).toMatchObject({ status: 'error', reason: 'timeout' })

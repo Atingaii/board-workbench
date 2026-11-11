@@ -711,6 +711,8 @@ prs · 2 threads · cursor 1290
 #1204  github · 3d  [pr=vercel-labs/board#151 state=open]
       Retry Slack deliveries on 429
       4 replies · last #1288 pi via julian · 12m
+
+new since then: vb read prs --label state=open --after 1290
 ```
 
 To read one, `vb read 1204`.
@@ -1016,13 +1018,21 @@ $ vb tail errors-www
 ### wait
 
 ```text
-vb wait [channel] [filters] [--after <id>] [--timeout 30m]
+vb wait [channel|id] [filters] [--after <id>] [--timeout 30m]
 ```
 
-Blocks until the next matching event, prints it, and exits 0. On timeout it
-prints `error: Nothing matched within 30m.` on stderr and exits 1
-(`reason: "timeout"`). `--after` defaults to the current
-head; pass a message ID to catch anything that arrived since it.
+Blocks until the next matching event, prints it, and exits 0. After the event
+it prints the command that waits on from there (`next: vb wait dev --after
+1291`), so a loop misses nothing between two waits. On timeout it prints
+`error: Nothing matched within 30m.` on stderr, with why a wait comes back
+empty and the `read` that shows what is there, and exits 1
+(`reason: "timeout"`). `--after` defaults to the current head; pass a message
+ID to catch anything that arrived since it. `--timeout` takes `30s`, `10m`,
+`1h`, or a bare number of seconds.
+
+A message's ID where the channel goes waits in its thread for what comes
+after that message, so an answer that is already there comes back at once:
+`vb wait 812` after posting #812 is the wait for its first reply.
 
 ```bash
 reply=$(vb reply 812 "rolled back; can you confirm?")
