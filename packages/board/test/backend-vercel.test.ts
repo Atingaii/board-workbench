@@ -772,6 +772,48 @@ describe('vercel()', () => {
     expect(events.filter((event) => event.type === 'message.edited').map((event) => event.message?.text)).toEqual(['under kept, edited'])
   })
 
+  // On Vercel's board the match happens in Vercel's API, and nothing in vercel() filters a watcher's
+  // own events: this pins the API's fake to the rule the API follows, and that a match it hands out runs.
+  it("runs a watcher on the check-in it scheduled itself, which the API's fake matches as Vercel's API should", async () => {
+    for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_TARGET_ENV: '', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
+    onTestFinished(() => void vi.unstubAllEnvs())
+    const api = fakeMessageboard()
+    const ran: string[] = []
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+      url: 'https://pong.example/api/board',
+      basePath: '/api/board',
+      watch: {
+        ci: {
+          tail: 'builds',
+          run: async ({ event, board: own }) => {
+            if (event.type !== 'message.posted') return
+            ran.push(event.message!.text)
+            if (event.message!.schedule) await own.reply(event.message!.id, { text: 'still red' })
+            else await own.schedule({ re: event.message!.id }, { text: 'check on CI', in: '5m' })
+          },
+        },
+      },
+    })
+    await pong.me()
+    while (!api.registrations.has('vercel:project:prj_pong:production')) await new Promise((resolve) => setTimeout(resolve, 5))
+    const root = await handleOn(api).post('builds', { text: 'the build is red' })
+    const wake = () => pong.fetch(new Request('https://pong.example/api/board/wake', { method: 'POST' })).then((response) => response.json())
+    await expect(wake()).resolves.toEqual({ ran: 1 })
+    // The API posts the check-in when it's due, as the watcher that scheduled it: its own write, and it still wakes it.
+    const [schedule] = await pong.schedules({ re: root.id })
+    api.send(schedule!.id)
+    await expect(wake()).resolves.toEqual({ ran: 1 })
+    expect(ran).toEqual(['the build is red', 'check on CI'])
+    const { replies } = await pong.thread(root.id)
+    expect(replies.map((reply) => [reply.text, reply.by.actor])).toEqual([
+      ['check on CI', 'vercel:project:prj_pong:production+ci'],
+      ['still red', 'vercel:project:prj_pong:production+ci'],
+    ])
+    // The reply it then wrote is its own too, and wakes nothing.
+    await expect(wake()).resolves.toEqual({ ran: 0 })
+  })
+
   it("registers a production deployment's watchers by its path, and runs what they matched when it's woken", async () => {
     for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_TARGET_ENV: '', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
     onTestFinished(() => void vi.unstubAllEnvs())
