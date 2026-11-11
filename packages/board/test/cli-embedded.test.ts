@@ -120,6 +120,31 @@ describe('the embedded CLI', () => {
     expect(failures.at(-1)![0]).toMatchObject({ class: 'usage', reason: 'unknown_command', next: [{ argv: ['vercel', 'board', '--help'] }] })
   })
 
+  it("has tasks, names the app in a task's ways out, and keeps a claim between its runs", async () => {
+    const home = await isolated()
+    vi.stubEnv('BOARD_URL', url)
+    vi.stubEnv('BOARD_TOKEN', env.BOARD_TOKEN)
+    const app = createApp({ appName: 'vercel board' })
+    expect((await capture(() => app.run(['help']))).stdout).toMatch(/^ {2}tasks \[channel\] +open tasks, oldest first/m)
+    expect((await capture(() => app.run(['tasks', 'run', '--help']))).stdout).toContain('\n    vercel board tasks run 812 --result "tests pass" -- make test\n')
+
+    const made = await capture(() => app.run(['tasks', 'create', 'embedded', 'fix CVE-123 in acme/web']))
+    expect(made).toMatchObject({ code: 0, stderr: '' })
+    const id = made.stdout.trim()
+    // What to run next is the app's command, not vb's.
+    expect(await capture(() => app.run(['tasks', 'complete', id, 'done']))).toEqual({ code: 1, stdout: '', stderr: `error: You hold no claim on task #${id} as yourself.\n\n  Claim it:\n    vercel board tasks claim ${id}\n` })
+    const reserved = await capture(() => app.run(['label', id, 'board.task=claimed']))
+    expect(reserved).toMatchObject({ code: 2, stdout: '' })
+    expect(reserved.stderr).toMatch(new RegExp(`^error: Can't label #${id}\\. Labels under board\\. are the board's own\\.\\n  [^\\n]+\\n\\n  Claim it:\\n    vercel board tasks claim ${id}\\n$`))
+
+    // One run claims and the next settles: the claim is kept where the app's CLI keeps its state.
+    expect(await capture(() => app.run(['tasks', 'claim', id]))).toEqual({ code: 0, stdout: `#${id}  yours for 15m  fix CVE-123 in acme/web\n`, stderr: '' })
+    expect((await readdir(join(home, 'board', 'claims'))).filter((name) => name.endsWith('.json'))).toHaveLength(1)
+    expect(await capture(() => app.run(['tasks', 'complete', id, 'fixed in a1b2c3']))).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    expect(await readdir(join(home, 'board', 'claims'))).toEqual([])
+    expect(await capture(() => app.run(['tasks', 'embedded', '--state', 'all']))).toEqual({ code: 0, stdout: `#${id}  completed  fix CVE-123 in acme/web         fixed in a1b2c3\n`, stderr: '' })
+  })
+
   it("asks for the app's login and team only when a request needs them, and reaches that team's board with them", async () => {
     const home = await isolated()
     const api = fakeMessageboard({ slug: 'acme' })

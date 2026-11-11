@@ -138,6 +138,16 @@ export const options = {
   port: { type: 'string', value: 'N', description: 'the port to listen on' },
   dir: { type: 'string', value: 'dir', description: 'where the board keeps its log (default: .board/)' },
   'no-inspect': { type: 'boolean', description: "don't start the inspector" },
+  // Tasks.
+  state: { type: 'string', value: 'state', description: 'in a state: waiting, ready, claimed, blocked, completed, failed, canceled, open, or all (default: open)' },
+  needs: { type: 'string', multiple: true, value: 'id', description: 'wait for a task to complete first' },
+  ready: { type: 'boolean', description: 'the oldest ready task in a channel, or under a prefix (work/)' },
+  from: { type: 'string', multiple: true, value: 'id', description: "with --ready: take this owner's tasks too, by their ID" },
+  wait: { type: 'string', value: 'duration', description: 'with --ready: how long to wait for one, e.g. 10m' },
+  lease: { type: 'string', value: 'duration', description: 'how long to hold it: 30s to 1h (default: 15m, or what the board gives)' },
+  result: { type: 'string', value: 'text', description: 'what it came to, when the command exits 0' },
+  kind: { type: 'string', value: 'kind', description: 'what the hold is for: needs_input, awaiting_approval' },
+  pool: { type: 'boolean', description: 'back to anyone who may claim it' },
   // What a turn-end hook an earlier board installed still passes to `hook`.
   agent: { type: 'string', value: 'name', description: "the agent whose turn ended", hidden: true },
 } as const satisfies Record<string, Spec>
@@ -166,6 +176,12 @@ const text = (description = 'what it says: - reads it from stdin, and it may be 
   required: false,
   description,
 })
+
+/** A task's ID: its thread's root's. */
+const task = (description = "a task's ID, as tasks shows it (#812)"): CliArgument => ({ name: 'id', required: true, description })
+
+/** `--claim` on a task: a flag there, where a grant's `--claim` takes a value. Its command's own definition is what the parser reads. */
+const claimNow: CliOption = { name: 'claim', type: 'boolean', description: 'claim it in the same write' }
 
 /** What `--after` means on a reply: a precondition, where on a read it's a position. */
 const AFTER = "a reply only while this is the thread's newest message"
@@ -515,6 +531,139 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     arguments: [],
     options: [option('channel', 'the channel to check in (default: conformance)')],
     examples: [{ name: 'check the board', value: 'conformance' }],
+  },
+  {
+    group: 'agents',
+    name: 'tasks',
+    description: 'open tasks, oldest first: threads agents are to do, each with a state the board keeps',
+    arguments: [{ name: 'channel', required: false, description: 'a channel, or a path prefix (work/); every channel without one' }],
+    options: [
+      option('state'),
+      option('label', 'with a label on its root', 'k[=v|w]'),
+      option('by', 'whose root a handle wrote'),
+      option('for', 'assigned to a profile of yours', 'profile'),
+      option('after', 'after a cursor an earlier page printed', 'cursor'),
+      option('limit', 'tasks to list (default: 50)'),
+    ],
+    runsWithoutSubcommand: true,
+    examples: [
+      { name: "list a queue's open tasks", value: 'tasks work/' },
+      { name: 'list what is ready to fix', value: 'tasks work/ --state ready --label step=fix' },
+    ],
+    subcommands: [
+      {
+        name: 'create',
+        description: 'start a thread as a task, or with an ID, make that thread one: you own it',
+        arguments: [
+          { name: 'channel|id', required: true, description: "a channel, or a thread's ID to make a task of it as it is" },
+          { name: 'text', required: false, description: 'what to do, for a new thread: - reads it from stdin, and it may be left out when you --text-file' },
+        ],
+        options: [
+          option('label', 'label it, to route it', 'k=v'),
+          option('needs'),
+          option('for', 'only this profile of yours claims it', 'profile'),
+          claimNow,
+          option('lease', 'with --claim: how long to hold it'),
+          option('text-file'),
+          option('no-sync'),
+          option('idempotency-key', 'sending the same one again makes it once'),
+        ],
+        examples: [
+          { name: 'hand a fix to whoever takes fixes', value: 'tasks create work "fix CVE-123 in acme/web" --label step=fix' },
+          { name: 'a review that waits for it', value: 'tasks create work "review the fix for CVE-123" --label step=review --needs 812' },
+          { name: 'make a task of a thread that is there', value: 'tasks create 812' },
+        ],
+      },
+      {
+        name: 'claim',
+        description: 'hold a task for a lease, by its ID, or with --ready the oldest ready one in a channel',
+        arguments: [{ name: 'id|channel', required: true, description: "a task's ID, or with --ready a channel or a path prefix (work/)" }],
+        options: [option('ready'), option('label', 'with --ready: one whose root has this label', 'k=v'), option('from'), option('wait'), option('lease')],
+        examples: [
+          { name: 'claim a task', value: 'tasks claim 812' },
+          { name: 'claim the next fix, waiting for one', value: 'tasks claim --ready work/ --label step=fix --wait 10m' },
+        ],
+      },
+      {
+        name: 'run',
+        description: 'claim a task and run a command on it: renew while it runs, complete on exit 0, fail otherwise',
+        arguments: [
+          { name: 'id|channel', required: true, description: "a task's ID, or with --ready a channel or a path prefix" },
+          { name: 'cmd', required: true, multiple: true, description: 'the command, after --: it gets BOARD_TASK, the task\'s ID' },
+        ],
+        options: [option('result'), option('ready'), option('label', 'with --ready: one whose root has this label', 'k=v'), option('from'), option('wait'), option('lease')],
+        examples: [
+          { name: 'run the tests as a task', value: 'tasks run 812 --result "tests pass" -- make test' },
+          { name: 'work the next fix', value: 'tasks run --ready work/ --label step=fix -- ./fix.sh' },
+        ],
+      },
+      {
+        name: 'renew',
+        description: 'extend the lease of a task you hold, from now',
+        arguments: [task()],
+        options: [option('lease')],
+        examples: [{ name: 'hold it for another 30 minutes', value: 'tasks renew 812 --lease 30m' }],
+      },
+      {
+        name: 'release',
+        description: 'give a task you hold back: it is ready again',
+        arguments: [task()],
+        options: [],
+        examples: [{ name: 'give a task back', value: 'tasks release 812' }],
+      },
+      {
+        name: 'complete',
+        description: 'finish a task you hold: what waits only for it is ready',
+        arguments: [task(), { name: 'result', required: false, description: 'what it came to, in a line' }],
+        options: [],
+        examples: [{ name: 'complete a task', value: 'tasks complete 812 "fixed in a1b2c3, tests pass"' }],
+      },
+      {
+        name: 'fail',
+        description: "give up on a task you hold: what waits for it keeps waiting, until it's reopened",
+        arguments: [task(), { name: 'reason', required: true, description: 'why, in a line' }],
+        options: [],
+        examples: [{ name: 'fail a task', value: 'tasks fail 812 "the tests need a database"' }],
+      },
+      {
+        name: 'block',
+        description: 'hold a task for a person: with your claim, which it ends, or as its owner',
+        arguments: [task(), { name: 'reason', required: true, description: 'what you need from them' }],
+        options: [option('kind')],
+        examples: [{ name: 'ask for approval', value: 'tasks block 813 "approve the prod deploy?" --kind awaiting_approval' }],
+      },
+      {
+        name: 'unblock',
+        description: 'lift a hold, as its owner: ready again, or waiting while a task it needs has not completed',
+        arguments: [task()],
+        options: [],
+        examples: [{ name: 'lift a hold', value: 'tasks unblock 813' }],
+      },
+      {
+        name: 'reopen',
+        description: 'make a failed task ready again, as its owner',
+        arguments: [task()],
+        options: [],
+        examples: [{ name: 'retry a failed task', value: 'tasks reopen 812' }],
+      },
+      {
+        name: 'assign',
+        description: "keep a task for one of its owner's profiles, or with --pool, for anyone who may claim it",
+        arguments: [task(), { name: 'profile', required: false, description: "a profile of the task's owner, such as fixer" }],
+        options: [option('pool')],
+        examples: [
+          { name: 'keep it for the fixer', value: 'tasks assign 812 fixer' },
+          { name: 'back to the pool', value: 'tasks assign 812 --pool' },
+        ],
+      },
+      {
+        name: 'cancel',
+        description: 'cancel a task that has not completed, as its owner: any claim ends',
+        arguments: [task(), { name: 'reason', required: true, description: 'why, in a line' }],
+        options: [],
+        examples: [{ name: 'cancel a task', value: 'tasks cancel 812 "superseded by #820"' }],
+      },
+    ],
   },
   {
     group: 'agents',

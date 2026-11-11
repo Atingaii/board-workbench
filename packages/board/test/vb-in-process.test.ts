@@ -6,8 +6,7 @@ import { personToken, testBoard, BOARD_URL } from './harness.ts'
 
 // vb() on a handle over HTTP to an in-process board: the CLI's commands, output, and exit codes,
 // with files from its options. The CLI itself runs through the same code (cli*.test.ts).
-async function handle() {
-  const served = testBoard()
+async function handle(served = testBoard()) {
   const token = await personToken('u_ada', BOARD_URL)
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
@@ -110,5 +109,42 @@ describe('vb()', () => {
     const notes = { readFile: async (path: string) => (path === '/work/note.md' ? new TextEncoder().encode('from the sandbox\n') : null) }
     const written = await vb(team, ['post', 'dev', '--text-file', '/work/note.md', '--no-sync'], notes)
     expect(JSON.parse((await vb(team, ['read', written.stdout.trim(), '--json'])).stdout).message.text).toBe('from the sandbox')
+  })
+
+  it('works a task over several calls on one handle, which keeps its claim, and runs no command', async () => {
+    const served = testBoard()
+    const team = await handle(served)
+    const id = (await vb(team, ['tasks', 'create', 'work', 'fix CVE-123 in acme/web', '--label', 'step=fix', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'work'])).toEqual({ code: 0, stdout: `#${id}  ready      fix CVE-123 in acme/web         step=fix\n`, stderr: '' })
+    const claimed = await vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=fix', '--json'])
+    expect(claimed).toMatchObject({ code: 0, stderr: '' })
+    // The claim, for the program that called: its token stays with the handle that claimed.
+    const { claim, task } = JSON.parse(claimed.stdout) as { claim: Record<string, unknown>; task: { id: string } }
+    expect(task.id).toBe(id)
+    expect(Object.keys(claim).sort()).toEqual(['epoch', 'until'])
+    // Another handle on the same board, the same person's even, holds none.
+    const other = await handle(served)
+    expect(await vb(other, ['tasks', 'complete', id, 'not mine'])).toEqual({ code: 1, stdout: '', stderr: `error: You hold no claim on task #${id} as yourself.\n\n  Claim it:\n    vb tasks claim ${id}\n` })
+    expect(await vb(team, ['tasks', 'renew', id, '--json'])).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'complete', id, 'fixed in a1b2c3'])).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    expect(JSON.parse((await vb(team, ['read', id, '--json'])).stdout).message.task).toMatchObject({ state: 'completed', result: 'fixed in a1b2c3' })
+    // Settled, the handle holds it no longer.
+    expect((await vb(team, ['tasks', 'release', id])).stderr).toMatch(/^error: You hold no claim on task/)
+
+    // A claim is its profile's on a handle too: taken with --as, it isn't the handle's own.
+    const reviewed = (await vb(team, ['tasks', 'create', 'work', 'review the fix', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'claim', reviewed, '--as', 'reviewer'])).toMatchObject({ code: 0, stderr: '' })
+    expect((await vb(team, ['tasks', 'complete', reviewed])).stderr).toBe(`error: You hold no claim on task #${reviewed} as yourself.\n\n  Claim it:\n    vb tasks claim ${reviewed}\n`)
+    expect(await vb(team, ['tasks', 'complete', reviewed, 'reviewed', '--as', 'Reviewer'])).toEqual({ code: 0, stdout: `completed ${reviewed}\n`, stderr: '' })
+
+    // It runs no command on the machine it's called from, and a wait holds every later call: only with a signal.
+    const next = (await vb(team, ['tasks', 'create', 'work', 'run the tests', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'run', next, '--', 'true'])).toEqual({ code: 2, stdout: '', stderr: "error: tasks run isn't available in-process: it runs a command on this machine.\n" })
+    expect(JSON.parse((await vb(team, ['read', next, '--json'])).stdout).message.task.state).toBe('ready')
+    expect(await vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=never', '--wait', '1m'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/pass a signal/) })
+    const controller = new AbortController()
+    const waiting = vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=never', '--wait', '1m'], { signal: controller.signal })
+    controller.abort()
+    expect(await waiting).toEqual({ code: 0, stdout: '', stderr: '' })
   })
 })

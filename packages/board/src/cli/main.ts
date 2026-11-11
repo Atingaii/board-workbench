@@ -4,8 +4,8 @@ import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
-import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { boardUrl, connect, handFetch, handLogin, vercelProjectFile } from '../client/node.ts'
+import { BoardError, type ClaimedTask, type Filters, type ProfileOption } from '../client/client.ts'
+import { boardUrl, connect, environmentProfile, handFetch, handLogin, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { credentialed, credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
@@ -19,7 +19,9 @@ import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, pr
 import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
-import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTasks, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { fileClaims, memoryClaims, type Claims } from './claims.ts'
+import { runCommand } from './run.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
 import { commandHelp, commandPath, rootHelp } from './help.ts'
@@ -145,6 +147,21 @@ export function commandWord(argv: string[]): string | undefined {
 
 const parseAll = (args: string[]) => parseArgs({ args, allowPositionals: true, options: OPTIONS })
 
+/**
+ * What the parser accepts for `word`'s command: every option, with the command's own definition
+ * where it has one. `--claim` takes a value on `grants` and none on `tasks`, and each command's
+ * data says which. The command is found before this applies, so one that's its command's own way
+ * goes after the command's name.
+ */
+function optionsFor(word: string | undefined): typeof OPTIONS {
+  const command = [...commands, ...Object.values(app.commands).map((own) => own.spec)].find((known) => known.name === word)
+  if (!command) return OPTIONS
+  const own = [command, ...(command.subcommands ?? [])].flatMap((c) => c.options)
+  const table: Record<string, { type: 'string' | 'boolean'; short?: string; multiple?: true }> = { ...OPTIONS }
+  for (const { name, type, short, multiple } of own) table[name] = { type, ...(short ? { short } : {}), ...(multiple ? { multiple } : {}) }
+  return table as typeof OPTIONS
+}
+
 /** A command an app adds to board's: `serve`, in the standalone `board`. */
 export type Command = {
   /** What it is, as help shows it, with the options it takes from `commands.ts`'s. */
@@ -238,8 +255,9 @@ function parse(argv: string[]) {
   const removed = removedCommand(word ?? '')
   if (removed) throw removed
   try {
-    const parsed = parseAll(markAttachmentId(args))
-    ordered = parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: OPTIONS, tokens: true }).tokens.flatMap((token) =>
+    const table = optionsFor(word)
+    const parsed = parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: table }) as ReturnType<typeof parseAll>
+    ordered = parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: table, tokens: true }).tokens.flatMap((token) =>
       token.kind === 'option' ? [{ name: token.name, value: token.value }] : [],
     )
     flags = parsed.values
@@ -614,6 +632,15 @@ function doing(): string {
     case 'schedules':
     case 'actors':
       return `list ${command}`
+    case 'tasks': {
+      if (a === undefined || !TASK_VERBS.has(a)) return a === undefined ? 'list tasks' : `list tasks in ${a}`
+      const one = b === undefined ? 'a task' : `task ${ref(b)}`
+      // `run` fails as its claim does, before its command starts, or as what it settles with after.
+      if (a === 'claim' || a === 'run') return flags.ready ? `claim a task in ${b ?? 'a channel'}` : `claim ${one}`
+      if (a === 'create') return b !== undefined && isMessageRef(b) ? `make ${ref(b)} a task` : `create a task in ${b ?? 'a channel'}`
+      if (a === 'renew') return `renew the claim on ${one}`
+      return `${a} ${one}`
+    }
     case 'grants':
       return a === 'create' ? 'create the grant' : a === 'update' ? `update grant ${b}` : a === 'explain' ? `explain ${b ?? 'the channel'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
     case 'schemas':
@@ -648,6 +675,8 @@ function missing(): string | undefined {
   if (command === 'read' && /^https?:\/\//i.test(a)) return "that link's message on this board"
   if (ON_MESSAGE.has(command) || (['read', 'post', 'schedule'].includes(command) && isMessageRef(a))) return `message ${ref(a)}`
   if (command === 'schedule' && a === 'cancel' && b !== undefined) return `schedule ${b}`
+  // A task is its thread: one that isn't there is a message that isn't.
+  if (command === 'tasks' && TASK_VERBS.has(a) && b !== undefined && isMessageRef(b)) return `message ${ref(b)}`
   if (command === 'grants' && (a === 'revoke' || a === 'update') && b !== undefined) return `grant ${b}`
   if (command === 'schemas' && a === 'inspect' && b !== undefined) return `schema ${b}`
   if (command === 'download') return `attachment ${a}`
@@ -736,6 +765,10 @@ function failureOf(error: unknown): Failure {
     data: said,
   })
   const specific = (fallback: string) => (/^[a-z]+(_[a-z]+)+$/.test(code) && code !== 'invalid_request' && code !== 'remote_error' ? code : fallback)
+  // What a board says about a task, said by what this run was doing, with a way on from here.
+  const about = taskFailure(code, status)
+  // Where the headline is all the board said (`#812 isn't a task`), its words aren't said twice.
+  if (about) return { ...theirs(about.class, code, about.message, about.next), ...(about.whole ? { details: [] } : {}) }
   // A block the board refused, written with --schema: what that schema holds is a read away.
   if (status === 400 && code === 'invalid_block' && flags.schema !== undefined && parseSchemaId(flags.schema))
     return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: `See what ${flags.schema} holds`, argv: [...cli(), 'schemas', 'inspect', flags.schema] }])
@@ -1094,7 +1127,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         if (flags.json) return result({ ...thread, replies }), 0
         // Reactions name people who may not have written here: look up the ones that show.
         const authors = new Set([thread.message, ...replies].map((m) => m.by.actor))
-        const unnamed = reactionNames([thread.message, ...replies]).filter((id) => !authors.has(id))
+        // And a task names who holds it, and its owner when that isn't its root's author.
+        const { task } = thread.message
+        const working = task ? [...(task.claim ? [task.claim.actor] : []), ...(task.owner !== thread.message.by.principal ? [task.owner] : [])] : []
+        const unnamed = [...new Set([...reactionNames([thread.message, ...replies]), ...working])].filter((id) => !authors.has(id))
         const known = unnamed.length
           ? new Map((await board.actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, actorName(a)]))
           : new Map<string, string>()
@@ -1549,6 +1585,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
+    case 'tasks':
+      return tasks(args)
+
     case 'inspect':
       // Loaded only now: the page comes with it, and it's most of what the CLI ships.
       return (await import('./inspect.ts')).inspect(context())
@@ -1571,6 +1610,476 @@ async function run(command: string | undefined, args: string[]): Promise<number>
   }
 }
 
+/** What `tasks` does to a task, by the word after it: any other word is a channel to list. */
+const TASK_VERBS = new Set(['create', 'claim', 'run', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'cancel'])
+const TASK_STATES = ['waiting', 'ready', 'claimed', 'blocked', 'completed', 'failed', 'canceled']
+
+/** A task's ID as you'd write it: `#812` or `812`. */
+const taskId = (value: string | undefined) => messageId(value, 'task ID')
+
+/** `--wait` or `--lease` in seconds: a number and a unit, as `schedule` takes a duration. A lease is 30s to 1h. */
+function seconds(flag: 'wait' | 'lease'): number | undefined {
+  const value = flags[flag]
+  if (value === undefined) return undefined
+  const found = /^(\d+(?:\.\d+)?)(s|m|h|d)$/.exec(value)
+  if (!found) throw usage(`--${flag} takes a duration like 30s or 10m, and ${value} isn't one.`)
+  const total = Number(found[1]) * { s: 1, m: 60, h: 3600, d: 86_400 }[found[2] as 's' | 'm' | 'h' | 'd']
+  if (flag === 'lease' && (total < 30 || total > 3600)) throw usage(`--lease takes 30s to 1h, and ${value} isn't in it.`)
+  return total
+}
+
+/** `--claim`, on `tasks create`: a flag there (`optionsFor`), where a grant's takes a value. */
+const claimFlag = () => (flags as { claim?: unknown }).claim === true
+
+/**
+ * The profile this run writes as, as an actor's ID has it: `--as`'s, or the environment's
+ * (`BOARD_PROFILE`), or null as yourself. `vb()`'s board is a handle that already is someone, so
+ * only `--as` names one there.
+ */
+function writesAs(): string | null {
+  const profile = profileFlag() ?? (io.board ? null : environmentProfile())
+  const name = typeof profile === 'string' ? profile : (profile?.name ?? null)
+  return name === null ? null : name.toLowerCase()
+}
+
+/** `--as` as this run typed it, for a way out that claims: the claim it takes is then the one the next command, typed the same way, finds. */
+const asTyped = () => (flags.as ? ['--as', flags.as] : [])
+
+/**
+ * This run's board, and the claims it holds there as whoever it writes as. A claim's token is the
+ * CLI's to keep: in a file under its config directory, by the board's URL, the task, and the
+ * profile this run writes as; or for `vb()`, whose board is a handle, in memory for as long as the
+ * handle lasts.
+ */
+function tasksOn(): { board: Board; claims: Claims } {
+  const profile = writesAs()
+  if (io.board) return { board: client(), claims: memoryClaims(io.board, profile) }
+  const { board, url } = connection()
+  return { board, claims: fileClaims(async () => url ?? (await board.discovery()).url, profile) }
+}
+
+/** The actor `profile` names under `principal`: a task is assigned to one of its owner's profiles. */
+const profileActor = (principal: string, profile: string) => `${principal}+${profile.toLowerCase()}`
+
+/** A write to a task that answers its root: with `--json`, the task and what happened to it. */
+function printTask(task: MessageView, outcome: string, more: object = {}) {
+  if (flags.json) result({ task, outcome, ...more })
+  else out(`${outcome} ${messageRef(task.id)}`)
+}
+
+/** A claim: the task, how long it's yours, and what it is. With `--json`, the task and the claim, without its token, which the CLI keeps. */
+function printClaim(task: MessageView, claim: { epoch: number; until: string }, more: object = {}) {
+  if (flags.json) result({ task, claim: { epoch: claim.epoch, until: claim.until }, ...more })
+  else out(claimLine(task, claim.until))
+}
+
+/**
+ * This run's claim on task `id`, as the board's handle acts on it, or the failure that says it
+ * holds none as whoever it writes as: a claim taken as one profile isn't another's, or yours.
+ */
+async function heldBy(board: Board, claims: Claims, id: string) {
+  const stored = await claims.get(id)
+  if (!stored)
+    throw new Failed({
+      class: 'conflict',
+      reason: 'claim_not_held',
+      message: `You hold no claim on task ${ref(id)} as ${writesAs() ?? 'yourself'}.`,
+      next: [{ instruction: 'Claim it', argv: [...cli(), 'tasks', 'claim', id, ...asTyped()] }],
+    })
+  return board.tasks.held(id, stored)
+}
+
+/** A write a claim makes. One the board answers `claim_lost` is over: the CLI forgets it, and the failure says how to claim again. */
+async function withClaim<T>(claims: Claims, id: string, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write()
+  } catch (error) {
+    if (error instanceof BoardError && error.code === 'claim_lost') await claims.drop(id)
+    throw error
+  }
+}
+
+/**
+ * Claims a task for this run, by its ID or with `--ready` the oldest ready one in `target`, and
+ * keeps the claim. With nothing ready it fails: `nothing_ready`, or `timeout` once `--wait` ran
+ * out, as `wait` does. Stopped while it waits, it answers the exit code instead.
+ */
+async function claimFor(board: Board, claims: Claims, target: string | undefined): Promise<ClaimedTask | number> {
+  const lease = seconds('lease')
+  if (!flags.ready) {
+    for (const given of ['label', 'from', 'wait'] as const)
+      if (flags[given] !== undefined) throw usage(`--${given} goes with --ready, which claims the next ready task in a channel.`)
+    const claim = await board.tasks.claim(taskId(target), lease !== undefined ? { lease } : {})
+    await claims.put(claim.task.id, { epoch: claim.epoch, token: claim.token, until: claim.until })
+    return claim
+  }
+  if (target === undefined) throw usage('Missing the channel to claim a task in: work, or work/ for all under it.', { reason: 'missing_arguments' })
+  const wait = seconds('wait')
+  // In-process, calls run one at a time: one that waits holds the rest, so it needs a way to be stopped, as `wait` does.
+  if (io.board && !io.signal && wait !== undefined)
+    throw usage('--wait holds every later call, as vb() runs one at a time: pass a signal.', { reason: 'not_available', next: [] })
+  const controller = new AbortController()
+  const stop = stopOn(controller)
+  let claim: ClaimedTask | null
+  try {
+    claim = await board.tasks.claim(
+      {
+        channel: target,
+        ...(flags.label?.length ? { label: labelPairs(flags.label) } : {}),
+        // An owner by ID, or by a handle as people write one.
+        ...(flags.from?.length ? { from: flags.from } : {}),
+        ...(wait !== undefined ? { wait } : {}),
+        ...(lease !== undefined ? { lease } : {}),
+      },
+      { signal: controller.signal },
+    )
+  } catch (error) {
+    // Stopped while it waited: it says nothing, as `wait` does.
+    if (controller.signal.aborted) return stop.interrupted() ? 130 : 0
+    throw error
+  } finally {
+    stop.release()
+  }
+  if (claim) {
+    await claims.put(claim.task.id, { epoch: claim.epoch, token: claim.token, until: claim.until })
+    return claim
+  }
+  if (controller.signal.aborted) return stop.interrupted() ? 130 : 0
+  if (wait !== undefined) throw new Failed({ class: 'timeout', reason: 'timeout', message: `Nothing was ready in ${target} within ${flags.wait}.` })
+  throw new Failed({
+    class: 'not_found',
+    reason: 'nothing_ready',
+    message: `Nothing is ready in ${target}.`,
+    next: [
+      { instruction: 'Wait for one', argv: rerun('--wait', '10m') },
+      { instruction: "Or see what's there", argv: [...cli(), 'tasks', target] },
+    ],
+  })
+}
+
+/** `tasks`: the list, or what the word after it does to a task. */
+async function tasks(args: string[]): Promise<number> {
+  const [verb, ...rest] = args
+  if (verb === undefined || !TASK_VERBS.has(verb)) {
+    if (rest.length > 0) {
+      // Two words, the first no verb: the list takes one channel, so it's a command this one doesn't have.
+      const guess = closest(verb!, TASK_VERBS)
+      throw usage(`Unknown command ${verb} for ${named()} tasks.${guess ? ` Did you mean ${guess}?` : ''}`, { reason: 'unknown_command' })
+    }
+    const state = flags.state
+    if (state !== undefined && state !== 'open' && state !== 'all' && !TASK_STATES.includes(state))
+      throw usage(`--state takes a task's state, open, or all, and ${state} isn't one.`)
+    const board = client()
+    const limit = flags.limit ? Number(flags.limit) : 50
+    const page = await board.tasks.list({
+      ...(verb ? { channel: verb } : {}),
+      ...(state ? { state: state as 'open' } : {}),
+      ...(flags.label?.length ? { label: flags.label } : {}),
+      ...(flags.by ? { by: flags.by.replace(/^@/, '') } : {}),
+      ...(flags.for ? { for: profileActor((await board.me()).principal, flags.for) } : {}),
+      ...(flags.after !== undefined ? { after: flags.after.replace(/^#/, '') } : {}),
+      limit,
+    })
+    // Nothing in a channel that doesn't exist is a typo, of a channel or of what to do.
+    if (page.tasks.length === 0 && verb && flags.after === undefined) {
+      const channels = (await board.channels()).map((c) => c.path)
+      if (!channels.some((path) => path === verb || path.startsWith(verb.replace(/\/?$/, '/')))) {
+        const meant = closest(verb, TASK_VERBS)
+        if (meant) throw usage(`Unknown command ${verb} for ${named()} tasks. Did you mean ${meant}?`, { reason: 'unknown_command' })
+        const guess = closest(verb, channels)
+        throw new Failed({
+          class: 'not_found',
+          reason: 'channel_not_found',
+          message: `Couldn't find channel ${verb}.${guess ? ` Did you mean ${guess}?` : ''}`,
+          next: [{ instruction: 'See its channels', argv: [...cli(), 'channels'] }],
+        })
+      }
+    }
+    if (flags.json) return result(page), 0
+    if (page.tasks.length === 0) {
+      const which = state === undefined || state === 'open' ? 'open ' : state === 'all' ? '' : `${state} `
+      return out(`no ${which}tasks${verb ? ` in ${verb}` : ''}`), 0
+    }
+    out(formatTasks(page.tasks))
+    // A full page may not be all of them: where the next one starts.
+    if (page.tasks.length === limit) out(`(more not shown: ${[...rerunWithout(['--after']), '--after', page.cursor].join(' ')})`)
+    return 0
+  }
+
+  if (verb === 'create') {
+    const [target, body, extra] = rest
+    if (!target) throw usage("Missing a channel to start a task in, or a thread's ID to make one of.", { reason: 'missing_arguments' })
+    if (extra !== undefined) throw usage(`tasks create takes a channel and quoted text: ${extra} is one too many.`)
+    const lease = seconds('lease')
+    if (lease !== undefined && !claimFlag()) throw usage('--lease is how long a claim holds the task: pass --claim too.')
+    const { board, claims } = tasksOn()
+    const about = {
+      ...(flags.needs?.length ? { needs: flags.needs.map((id) => taskId(id)) } : {}),
+      ...(flags.for ? { for: profileActor((await board.me()).principal, flags.for) } : {}),
+      ...(claimFlag() ? { claim: true } : {}),
+      ...(lease !== undefined ? { lease } : {}),
+    }
+    let made: Awaited<ReturnType<Board['tasks']['create']>>
+    if (isMessageRef(target)) {
+      // A thread that's there becomes a task as it is: what it says and wears are its author's.
+      const own = body !== undefined ? 'text' : (['text-file', 'label', 'no-sync', 'idempotency-key'] as const).find((name) => flags[name] !== undefined && flags[name] !== false)
+      if (own !== undefined)
+        throw usage(`${ref(target)} becomes a task as it is: ${own === 'text' ? 'text' : `--${own}`} is for a new thread.`, {
+          next: [{ instruction: 'Make it a task as it is', argv: [...cli(), 'tasks', 'create', messageId(target)] }],
+        })
+      made = await board.tasks.create({ re: messageId(target) }, about)
+    } else {
+      made = await board.tasks.create(target, {
+        text: await text(body),
+        ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
+        ...(flags['no-sync'] ? { noSync: true } : {}),
+        ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
+        ...about,
+      })
+    }
+    if (made.claim) {
+      await claims.put(made.task.id, { epoch: made.claim.epoch, token: made.claim.token, until: made.claim.until })
+      printClaim(made.task, made.claim, { outcome: 'created' })
+    } else if (flags.json) result({ task: made.task, outcome: 'created' })
+    else out(messageRef(made.task.id))
+    return 0
+  }
+
+  if (verb === 'claim') {
+    if (rest.length > 1) throw usage(`tasks claim takes one ${flags.ready ? 'channel' : 'task'}: ${rest[1]} is one too many.`)
+    if (!flags.ready && rest[0] === undefined) throw usage('Missing the task to claim: its ID, or --ready and a channel.', { reason: 'missing_arguments' })
+    const { board, claims } = tasksOn()
+    const claim = await claimFor(board, claims, rest[0])
+    if (typeof claim === 'number') return claim
+    printClaim(claim.task, claim)
+    return 0
+  }
+
+  if (verb === 'run') {
+    // What follows `--` is the command, whole: the parser hands it over as arguments, after the task or the channel.
+    const dash = typed.indexOf('--')
+    const command = dash === -1 ? [] : typed.slice(dash + 1)
+    if (command.length === 0)
+      throw usage('Missing the command to run: put it after --.', { reason: 'missing_arguments', next: [{ instruction: 'Run a command on a task', argv: [...cli(), 'tasks', 'run', '<ID>', '--', '<COMMAND>'] }] })
+    const before = rest.slice(0, rest.length - command.length)
+    if (before.length > 1) throw usage(`tasks run takes one ${flags.ready ? 'channel' : 'task'} before --: ${before[1]} is one too many.`)
+    if (!flags.ready && before[0] === undefined) throw usage('Missing the task to run it on: its ID, or --ready and a channel.', { reason: 'missing_arguments' })
+    // It runs a command on this machine, and holds every other call for as long as it runs.
+    if (io.board) throw usage("tasks run isn't available in-process: it runs a command on this machine.", { reason: 'not_available', next: [] })
+    const { board, claims } = tasksOn()
+    const claim = await claimFor(board, claims, before[0])
+    if (typeof claim === 'number') return claim
+    const id = claim.task.id
+    const lease = seconds('lease')
+    const ran = await runCommand(command, {
+      env: { ...process.env, BOARD_TASK: id },
+      // A third of the lease the board gave, so two renewals can fail before it runs out.
+      every: (Date.parse(claim.until) - Date.now()) / 3,
+      async renew() {
+        try {
+          const renewed = await claim.renew(lease)
+          await claims.put(id, { epoch: renewed.epoch, token: renewed.token, until: renewed.until })
+          return true
+        } catch (error) {
+          // Lost, the command works a task that's someone else's now: it stops. Anything else is tried again at the next turn.
+          return !(error instanceof BoardError && error.code === 'claim_lost')
+        }
+      },
+    })
+    if (ran.how === 'lost') {
+      await claims.drop(id)
+      throw new Failed({
+        class: 'conflict',
+        reason: 'claim_lost',
+        message: `Lost the claim on task ${ref(id)} while the command ran, so it was stopped.`,
+        next: [{ instruction: 'See where the task stands', argv: [...cli(), 'read', id] }],
+      })
+    }
+    if (ran.how === 'unstarted') {
+      // Nothing ran, so the task goes back as it was.
+      await claim.release().catch(() => {})
+      await claims.drop(id)
+      throw new Failed({ class: 'not_found', reason: 'command_not_found', message: `Couldn't run ${command[0]}. ${sentence(ran.why)}`, details: [`Task ${ref(id)} was released.`] })
+    }
+    if (ran.how === 'interrupted') {
+      await withClaim(claims, id, () => claim.release())
+      await claims.drop(id)
+      return 130
+    }
+    const settled = ran.code === 0
+      ? await withClaim(claims, id, () => claim.complete(flags.result))
+      : await withClaim(claims, id, () => claim.fail(ran.signal ? `killed by ${ran.signal}` : `exited ${ran.code}`))
+    await claims.drop(id)
+    printTask(settled, ran.code === 0 ? 'completed' : 'failed', ran.code === 0 ? {} : { code: ran.code })
+    return ran.code
+  }
+
+  const id = taskId(rest[0])
+  const one = (extra: string | undefined, takes: string) => {
+    if (extra !== undefined) throw usage(`tasks ${verb} takes ${takes}: ${extra} is one too many.`)
+  }
+  const reason = (what: string) => {
+    const given = rest[1]?.trim()
+    if (!given) throw usage(`Missing ${what}, in a line.`, { reason: 'missing_arguments' })
+    return given
+  }
+  const { board, claims } = tasksOn()
+
+  switch (verb) {
+    case 'renew': {
+      one(rest[1], 'one task')
+      const lease = seconds('lease')
+      const held = await heldBy(board, claims, id)
+      const claim = await withClaim(claims, id, () => held.renew(lease))
+      await claims.put(id, { epoch: claim.epoch, token: claim.token, until: claim.until })
+      printClaim(claim.task, claim)
+      return 0
+    }
+    case 'release': {
+      one(rest[1], 'one task')
+      const held = await heldBy(board, claims, id)
+      const task = await withClaim(claims, id, () => held.release())
+      await claims.drop(id)
+      printTask(task, 'released')
+      return 0
+    }
+    case 'complete': {
+      one(rest[2], 'a task and its result, quoted')
+      const held = await heldBy(board, claims, id)
+      const task = await withClaim(claims, id, () => held.complete(rest[1]))
+      await claims.drop(id)
+      printTask(task, 'completed')
+      return 0
+    }
+    case 'fail': {
+      one(rest[2], 'a task and a reason, quoted')
+      const why = reason('why it failed')
+      const held = await heldBy(board, claims, id)
+      const task = await withClaim(claims, id, () => held.fail(why))
+      await claims.drop(id)
+      printTask(task, 'failed')
+      return 0
+    }
+    case 'block': {
+      one(rest[2], 'a task and a reason, quoted')
+      const why = reason('what you need from a person')
+      const hold = flags.kind !== undefined ? { kind: flags.kind } : {}
+      // With the claim this run holds, which the hold ends; without one, as the task's owner.
+      const stored = await claims.get(id)
+      const task = stored ? await withClaim(claims, id, () => board.tasks.held(id, stored).block(why, hold)) : await board.tasks.block(id, why, hold)
+      await claims.drop(id)
+      printTask(task, 'blocked')
+      return 0
+    }
+    case 'unblock':
+    case 'reopen': {
+      one(rest[1], 'one task')
+      // The board answers the task either way: what it was says whether this changed it.
+      const from = verb === 'unblock' ? 'blocked' : 'failed'
+      const was = (await board.thread(id)).message.task?.state
+      const task = verb === 'unblock' ? await board.tasks.unblock(id) : await board.tasks.reopen(id)
+      if (was === from) printTask(task, verb === 'unblock' ? 'unblocked' : 'reopened')
+      else if (flags.json) result({ task, outcome: 'unchanged' })
+      else out(`${messageRef(id)} wasn't ${from}`)
+      return 0
+    }
+    case 'assign': {
+      one(rest[2], 'a task and a profile')
+      const profile = rest[1]
+      if (flags.pool && profile !== undefined) throw usage(`A profile keeps ${ref(id)} for it, and --pool for no one: pass one of them.`)
+      if (!flags.pool && profile === undefined) throw usage('Missing the profile to assign it to, such as fixer, or --pool for anyone.', { reason: 'missing_arguments' })
+      // One of its owner's profiles, whoever assigns it: its owner, or someone who manages its channel.
+      const owner = profile === undefined ? null : (await board.thread(id)).message.task?.owner
+      const task = await board.tasks.assign(id, profile === undefined ? null : profileActor(owner ?? (await board.me()).principal, profile))
+      if (flags.json) result({ task, outcome: profile === undefined ? 'unassigned' : 'assigned' })
+      else out(profile === undefined ? `unassigned ${messageRef(id)}` : `assigned ${messageRef(id)} to ${profile.toLowerCase()}`)
+      return 0
+    }
+    default: {
+      // cancel
+      one(rest[2], 'a task and a reason, quoted')
+      const task = await board.tasks.cancel(id, reason('why'))
+      // A claim this run held on it ended with it.
+      await claims.drop(id)
+      printTask(task, 'canceled')
+      return 0
+    }
+  }
+}
+
+/** How a board's own word about a task reads from here: the headline, and the way on. Null for any other code. */
+function taskFailure(code: string, status: number): { class: Failure['class']; message: string; next: Recovery[]; whole?: true } | null {
+  const { command, args } = current
+  const named = command === 'tasks' && args[0] !== undefined && TASK_VERBS.has(args[0]) && args[1] !== undefined && isMessageRef(args[1]) ? messageId(args[1]) : undefined
+  const read = (instruction: string): Recovery[] => (named === undefined ? [] : [{ instruction, argv: [...cli(), 'read', named] }])
+  const also = (instruction: string, ...words: string[]): Recovery[] => (named === undefined ? [] : [{ instruction, argv: [...cli(), 'tasks', words[0]!, named, ...words.slice(1)] }])
+  switch (code) {
+    case 'task_claimed':
+      return { class: 'conflict', message: `Can't ${doing()}. Someone holds it.`, next: read('See who holds it, and until when') }
+    case 'task_assigned':
+      return { class: 'conflict', message: `Can't ${doing()}. It's assigned to another profile.`, next: [...read("See whom it's for"), ...also('Or, as its owner, return it to the pool', 'assign', '--pool')] }
+    case 'task_waiting':
+      return { class: 'conflict', message: `Can't ${doing()}. It waits for other tasks.`, next: read('See what it waits for') }
+    case 'task_blocked':
+      return { class: 'conflict', message: `Can't ${doing()}. It's held for a person.`, next: [...read("See what it's held for"), ...also('Or, as its owner, lift the hold', 'unblock')] }
+    case 'task_finished':
+      return { class: 'conflict', message: `Can't ${doing()}. It's finished.`, next: read('See how it ended') }
+    case 'claim_lost':
+      return { class: 'conflict', message: `Lost the claim on ${named === undefined ? 'the task' : `task ${ref(named)}`}. Its lease ran out, or the task moved on.`, next: [...read('See where it stands'), ...also('Or claim it again', 'claim', ...asTyped())] }
+    case 'task_not_owned':
+      return { class: 'permission', message: `You can't ${doing()}. It's someone else's.`, next: read('See whose it is') }
+    case 'not_a_task':
+      return { class: 'not_found', message: `${named === undefined ? 'That' : ref(named)} isn't a task.`, next: also('Make it one', 'create'), whole: true }
+    case 'already_a_task':
+      return { class: 'conflict', message: `${named === undefined ? 'That' : ref(named)} is a task already.`, next: read('See it'), whole: true }
+    case 'invalid_from':
+      return { class: 'usage', message: `Can't ${doing()}. --from takes an owner's ID: several can share a handle.`, next: [{ instruction: "See everyone's IDs", argv: [...cli(), 'actors'] }] }
+    case 'invalid_needs':
+      return { class: 'usage', message: `Can't ${doing()}. --needs takes tasks you can read.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
+    case 'no_tasks':
+      return status === 501 ? { class: 'platform', message: `Can't ${doing()}. This board keeps no tasks.`, next: [] } : null
+    case 'reserved_label':
+      return { class: 'usage', message: `Can't ${doing()}. Labels under board. are the board's own.`, next: stateCommand() }
+    default:
+      return null
+  }
+}
+
+/**
+ * The `tasks` command for the change a write under `board.task` was after, from what this run was
+ * given: a label write names the state it wanted, and a labeled post a task it meant to start.
+ */
+function stateCommand(): Recovery[] {
+  const { command, args } = current
+  const tasksDo = (instruction: string, ...words: string[]): Recovery => ({ instruction, argv: [...cli(), 'tasks', ...words] })
+  if (command === 'label' && args[0] !== undefined) {
+    const id = messageId(args[0])
+    const wanted = args.slice(1).find((pair) => pair.startsWith('board.task='))?.slice('board.task='.length)
+    if (wanted === undefined) return flags.unset?.includes('board.task') ? [tasksDo('Cancel the task', 'cancel', id, '<REASON>')] : []
+    switch (wanted) {
+      case 'ready':
+        return [tasksDo('Make the thread a task', 'create', id), tasksDo('Or lift a hold on one', 'unblock', id)]
+      case 'waiting':
+        return [tasksDo('Make it a task that waits for another', 'create', id, '--needs', '<ID>')]
+      case 'claimed':
+        return [tasksDo('Claim it', 'claim', id)]
+      case 'completed':
+        return [tasksDo('Complete it, with the claim you hold', 'complete', id)]
+      case 'failed':
+        return [tasksDo('Fail it, with the claim you hold', 'fail', id, '<REASON>')]
+      case 'blocked':
+        return [tasksDo('Hold it for a person', 'block', id, '<REASON>')]
+      case 'canceled':
+        return [tasksDo('Cancel it', 'cancel', id, '<REASON>')]
+      default:
+        return [{ instruction: 'See what changes a task', argv: [...cli(), 'tasks', '--help'] }]
+    }
+  }
+  // A new thread labeled as a task is a task to start.
+  const labeled = flags.label?.some((pair) => pair === 'board.task' || pair.startsWith('board.task='))
+  if (labeled && command === 'post' && args[0] !== undefined && !isMessageRef(args[0])) return [tasksDo('Start it as a task', 'create', args[0], '<TEXT>')]
+  return []
+}
 
 /** Words for a command this CLI names otherwise, and the command they mean. */
 const OTHER_NAMES: Record<string, { instruction: string; argv: string[] }> = {
