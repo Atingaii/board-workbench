@@ -53,12 +53,21 @@ that secret as the credential, as `BOARD_TOKEN` sends it. `vb conformance`
 passes it. From code, pass your own, which a backend of your own can make with
 `board({ backend })`, or that check is skipped.
 
+To check who writes, it calls the board through `withHeaders(headers)`: a
+handle on the same board, with the run's own credential and `headers` on every
+request, as a client or a proxy that holds the credential sends them. It
+writes as a profile with its avatar in `x-board-profile`, and sends the
+`x-board-avatar` and `x-board-session` that released clients still send, which
+board's protocol ignores.
+`vb conformance` passes it. From code, pass your own, or those three checks are
+skipped.
+
 To check that `x-board-can` narrows a caller, it calls the board through
-`withCan(can)`: a handle on the same board, with the run's own credential and
-an `x-board-can: <can>` header, as a proxy that holds the credential sends it.
-A caller narrowed so must be refused what its `can` leaves out, and its
-principal's watchers and sync's records, with 403 `forbidden`. `vb conformance`
-passes it. From code, pass your own, or those three checks are skipped.
+`withCan(can)`, or through `withHeaders` with an `x-board-can: <can>` header
+when it's left out: a handle on the same board, as a proxy that holds the
+credential narrows it. A caller narrowed so must be refused what its `can`
+leaves out, and its principal's watchers and sync's records, with 403
+`forbidden`. Without either, those checks are skipped.
 
 Every grant it makes is in `conformance/grants/`, the same subtree and the same
 channels each run, so a run leaves no channel behind and no grant reaches
@@ -119,6 +128,13 @@ The whole protocol, on every board:
   channel.
 - **Errors:** an ID that names nothing is 404 `message_not_found`, and a
   request that doesn't validate is 400 `invalid_request`.
+- **Who writes:** a post with `x-board-profile: conformance-<id>;
+  avatar="https://example.com/conformance.png"` is by that profile of the run's
+  principal, and its author view shows the profile's name and that avatar.
+  `x-board-avatar` and `x-board-session` are ignored: a post that carries them
+  lands as its verified actor, a profile whose header names no avatar shows
+  none, and no session shows. No `by` on a message or an event's payload, and
+  no `/me`, carries a `session`.
 
 Then the rest, a group each in the report:
 
@@ -138,7 +154,12 @@ schedules, grants, schemas, or files, or issue no tokens, and say so: one that a
 one of those groups' checks with a 501 has it skipped, `not kept here`, with
 what the board said. A board that's meant to keep them and doesn't yet answers
 otherwise, and fails: a deployment's own credentials fail the schemas group
-on Vercel's boards until its API lets a project read its team's schemas. A
+on Vercel's boards until its API lets a project read its team's schemas.
+Vercel's API reads who writes as boards did before, so a run there fails two
+core checks until it reads `x-board-profile` as a structured header and its
+avatar from there alone: the profile it shows is the whole header, and the
+avatar is `x-board-avatar`'s. `vercel()` maps no `session` into what it
+answers, so the checks of sessions pass there. A
 [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own) that
 keeps no grants, schedules, schemas, or files answers 501 `no_grants`,
 `no_scheduler`, `no_schemas`, or `no_files`.

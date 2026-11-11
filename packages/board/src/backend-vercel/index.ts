@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import { decodeJwt } from 'jose'
-import { asYou, environmentProfile, loginHanded, vercelLogin, vercelProjectFile } from '../client/node.ts'
+import { asYou, environmentProfile, loginHanded, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
 import { HttpError } from '../server/errors.ts'
 
@@ -83,6 +83,7 @@ const environment: VercelEnvironment = {
   },
   team,
   profile: environmentProfile,
+  sandbox: (url, token) => sandboxHeaders(url, null, token),
 }
 
 /** The fetch `vercel()` sends by default, with the credentials it finds: for the CLI to add a header of its own to. */

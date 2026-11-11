@@ -17,7 +17,7 @@ const texts = async (call: ReturnType<typeof caller>, channel: string) =>
   ((await call('GET', `/messages?channel=${channel}`)).body.messages as { text: string }[]).map((m) => m.text)
 
 async function person(board: { fetch: (request: Request) => Promise<Response> }) {
-  return caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+  return caller(board.fetch, await personToken(), {})
 }
 
 describe('middleware', () => {
@@ -72,9 +72,9 @@ describe('middleware', () => {
     }
     const board = testBoard({ middleware: [noEdits] })
     // Julian wrote it where he reads; the same principal narrowed to posting there didn't, so it isn't its to change.
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const plan = (await julian('POST', '/messages', { channel: 'secret', text: 'the plan' })).body.message
-    const writeOnly = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-can': 'secret=post' })
+    const writeOnly = caller(board.fetch, await personToken(), { 'x-board-can': 'secret=post' })
     const there = await writeOnly('POST', `/messages/${plan.id}/edit`, { text: 'changed' })
     const absent = await writeOnly('POST', '/messages/999/edit', { text: 'changed' })
     expect([there.status, there.body.error.code]).toEqual([404, 'message_not_found'])
@@ -123,7 +123,7 @@ describe('middleware', () => {
     expect(retry.body.message.id).toBe(first.body.message.id)
     expect(calls).toBe(1)
     // Someone else's post with that ID isn't theirs to retry: it goes through, and the board refuses it.
-    const ada = caller(board.fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    const ada = caller(board.fetch, await personToken('u_ada'), {})
     expect((await ada('POST', '/messages', { channel: 'dev', text: 'mine now', id: 'w1' })).body.error.code).toBe('dropped')
     expect(calls).toBe(2)
   })

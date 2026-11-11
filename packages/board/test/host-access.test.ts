@@ -67,26 +67,15 @@ describe("a host's authenticate", () => {
   })
 
   it("accepts who it names, with no audience check, and keeps its handle over the one the CLI sends", async () => {
-    const ada = caller(hosted('team_a').fetch, 'pt_ada', { 'x-board-handle': 'bob', 'x-board-profile': 'pi' })
+    const ada = caller(hosted('team_a').fetch, 'pt_ada', { 'x-board-profile': 'pi' })
     const me = await ada('GET', '/me')
     expect(me.status).toBe(200)
     expect(me.body).toMatchObject({ principal: 'vercel:user:u_ada', actor: 'vercel:user:u_ada+pi', handle: 'user-ada/pi', expiresAt: null })
   })
 
-  it("takes the CLI's handle when its verifier returns it", async () => {
-    const tenant = hosted('team_a', {
-      authenticate: (request) => {
-        const found = authenticate('team_a')(request)
-        return found instanceof Response ? found : { ...found, handle: request.claims.handle ?? found.handle }
-      },
-    })
-    const ada = caller(tenant.fetch, 'pt_ada', { 'x-board-handle': 'ada' })
-    expect((await ada('GET', '/me')).body).toMatchObject({ principal: 'vercel:user:u_ada', handle: 'ada' })
-  })
-
   it('carries its principal through reads, writes, tails and SSE', async () => {
     const tenant = hosted('team_a')
-    const ada = caller(tenant.fetch, 'pt_ada', { 'x-board-handle': 'ada' })
+    const ada = caller(tenant.fetch, 'pt_ada', {})
     const posted = await ada('POST', '/messages', { channel: 'dev', text: 'one' })
     expect(posted.status).toBe(201)
     expect(posted.body.message.by.principal).toBe('vercel:user:u_ada')

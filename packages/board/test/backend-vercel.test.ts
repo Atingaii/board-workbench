@@ -39,6 +39,32 @@ const narrowedOn =
       }),
     })
 
+/** The same handle, with `headers` on every request, as `vb conformance` sends them to Vercel's API. */
+const withHeadersOn =
+  (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
+  (headers: Record<string, string>) =>
+    board({
+      backend: vercel({
+        team: 'team_test',
+        api: API,
+        // In init, where as() reads them: a Request's own headers it would drop.
+        fetch: (input, init = {}) => {
+          const sent = new Headers(init.headers)
+          for (const [name, value] of Object.entries(headers)) sent.set(name, value)
+          return as(api, principal)(input, { ...init, headers: sent })
+        },
+        files: api.files,
+      }),
+    })
+
+/** The checks of who writes: what a run with headers of its own checks. */
+const IDENTITY = [
+  'core: takes a profile and its avatar as one x-board-profile header, and shows both on what it writes',
+  "core: ignores x-board-avatar, which x-board-profile's avatar parameter replaced",
+  'core: ignores x-board-session: who writes is the principal and its profile',
+  'core: shows no session on a message, its event, or you',
+]
+
 /** Someone a host's verifier would name: a request from her is still no one's this board serves. */
 const ADA = { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } as const
 
@@ -65,7 +91,7 @@ describe('vercel()', () => {
   it("passes the conformance kit's core, schedules, grants, and attachments for a person, and skips what Vercel's API takes only from a deployment, and GitHub grants", async () => {
     const api = fakeMessageboard()
     // The API looks names up, so the grants checks name a project, a repository, a viewer, and an app its team has.
-    const report = await conformance(handleOn(api), { withCan: narrowedOn(api), principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com', app: 'ship' } })
+    const report = await conformance(handleOn(api), { withHeaders: withHeadersOn(api), principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com', app: 'ship' } })
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
       'core: says in its discovery where it is': 'passed',
@@ -87,6 +113,12 @@ describe('vercel()', () => {
       'core: lists the channel and you in it': 'passed',
       // Vercel's API doesn't read x-board-can yet: a narrowed caller gets its whole access.
       'core: narrows a caller to what its x-board-can says': 'failed',
+      // It reads x-board-profile as a name alone, and an avatar from x-board-avatar.
+      [IDENTITY[0]!]: 'failed',
+      [IDENTITY[1]!]: 'failed',
+      // It keeps a session on actors, which vercel() maps no view of.
+      [IDENTITY[2]!]: 'passed',
+      [IDENTITY[3]!]: 'passed',
       // Neither registers for a person, narrowed or not.
       "watchers: refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking": 'skipped',
       "sync: refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox": 'skipped',
@@ -125,6 +157,23 @@ describe('vercel()', () => {
     })
     // It leaves the grants as it found them.
     expect([...api.grants.keys()]).toEqual(['g1', 'g2', 'g3'])
+  }, 30_000)
+
+  it("passes the conformance kit's checks of who writes against an API that reads them as board's protocol has it, and says how today's fails", async () => {
+    const statuses = (report: Awaited<ReturnType<typeof conformance>>) =>
+      report.checks.filter((check) => IDENTITY.includes(`${check.group}: ${check.name}`)).map((check) => [check.status, check.detail ?? null])
+    const conforming = fakeMessageboard({ protocolProfile: true })
+    expect(statuses(await conformance(handleOn(conforming), { withHeaders: withHeadersOn(conforming) }))).toEqual(IDENTITY.map(() => ['passed', null]))
+    const today = fakeMessageboard()
+    expect(statuses(await conformance(handleOn(today), { withHeaders: withHeadersOn(today) }))).toEqual([
+      // It takes the whole header as the profile's name.
+      ['failed', expect.stringMatching(/^the profile its header names: expected "conformance-[0-9a-f]{8}", got "conformance-[0-9a-f]{8}; avatar=\\"https:\/\/example\.com\/conformance\.png\\""$/)],
+      // It shows the avatar x-board-avatar names, which board's protocol reads from the profile's header alone.
+      ['failed', `the avatar of a profile whose header names none, whatever x-board-avatar says: expected null, got "https://example.com/conformance.png"`],
+      // It keeps a session, which vercel() maps no view of.
+      ['passed', null],
+      ['passed', null],
+    ])
   }, 30_000)
 
   it('answers only wake-ups and webhooks: it verifies no request, and none reaches the API, while its own code writes as the project', async () => {
@@ -179,6 +228,36 @@ describe('vercel()', () => {
     // Someone who first writes after the names were read is named too.
     await handleOn(api, 'user:u_ada').reply(id, { text: 'me too' })
     expect((await julian.thread(id)).replies[1]!.author).toMatchObject({ handle: 'ada', name: 'Ada Lovelace' })
+  })
+
+  it("sends an agent's avatar as Vercel's API reads it today: its name alone in x-board-profile, and the avatar in x-board-avatar", async () => {
+    const api = fakeMessageboard()
+    const sent: Headers[] = []
+    const recording: typeof fetch = async (input, init) => {
+      sent.push(new Headers(init?.headers))
+      return as(api, 'user:u_jb')(input, init)
+    }
+    const julian = board({ backend: vercel({ team: 'team_test', api: API, fetch: recording, files: api.files }) })
+    const fixer = await julian.as({ name: 'fixer', avatar: 'https://example.com/fixer.png' }).post('dev', { text: 'on it' })
+    expect(fixer.by.actor).toBe('vercel:user:u_jb+fixer')
+    expect(sent.at(-1)!.get('x-board-profile')).toBe('fixer')
+    expect(sent.at(-1)!.get('x-board-avatar')).toBe('https://example.com/fixer.png')
+    expect(sent.some((headers) => headers.has('x-board-session'))).toBe(false)
+  })
+
+  it("shows no session where the API keeps one, as it did for clients that sent it", async () => {
+    const api = fakeMessageboard()
+    // An older client, which sent its session with every request.
+    const older: typeof fetch = async (input, init) => {
+      const headers = new Headers(init?.headers)
+      headers.set('x-board-session', 'claude-1')
+      return as(api, 'user:u_jb')(input, { ...init, headers })
+    }
+    const root = await board({ backend: vercel({ team: 'team_test', api: API, fetch: older, files: api.files }) }).as('claude').post('dev', { text: 'from a session' })
+    const julian = handleOn(api)
+    const { message } = await julian.thread(root.id)
+    expect(message.by).toEqual({ actor: 'vercel:user:u_jb+claude', principal: 'vercel:user:u_jb', profile: 'claude' })
+    expect((await julian.as('claude').me())).not.toHaveProperty('session')
   })
 
   it('names someone after a read of the names fails, and every message of someone new in one read', async () => {
@@ -1122,7 +1201,7 @@ describe('vercel()', () => {
     // Its team turning Messageboard off stops it as a lost grant does, by no one in particular.
     const off = await pong.schedule({ re: root.id }, { text: 'off', in: '1d' })
     Object.assign(api.schedules.get(off.id)!, { state: 'canceled', nextAt: null, canceled: { at: Date.now(), reason: 'disabled' } })
-    expect((await pong.schedules({ all: true })).find((s) => s.id === off.id)?.canceled).toEqual({ reason: 'revoked', by: { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null } })
+    expect((await pong.schedules({ all: true })).find((s) => s.id === off.id)?.canceled).toEqual({ reason: 'revoked', by: { actor: 'board:schedule', principal: 'board:schedule', profile: null } })
     await expect(handleOn(api, 'user:u_ada').cancelSchedule(off.id)).rejects.toMatchObject({ status: 403, code: 'schedule_not_owned' })
     await expect(pong.cancelSchedule('sch_missing')).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
   })
@@ -1250,10 +1329,10 @@ describe('vercel()', () => {
     expect(messages.map((message) => [message.text, message.by, message.author])).toEqual([
       [
         'ship it',
-        { actor: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack-eu:user:U_MALTE', session: null },
+        { actor: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', principal: 'vercel:project:prj_pong:preview', profile: 'slack-eu:user:U_MALTE' },
         { id: 'vercel:project:prj_pong:preview+slack-eu:user:U_MALTE', kind: 'external', handle: 'pong/malte', name: 'Malte', avatar: null, via: { name: 'pong', environment: 'preview' }, platform: 'slack', verified: true },
       ],
-      ['on the board', { actor: 'vercel:user:u_jb', principal: 'vercel:user:u_jb', profile: null, session: null }, expect.not.objectContaining({ via: expect.anything() })],
+      ['on the board', { actor: 'vercel:user:u_jb', principal: 'vercel:user:u_jb', profile: null }, expect.not.objectContaining({ via: expect.anything() })],
     ])
     expect((await julian.actors()).find((actor) => actor.id.endsWith('+slack-eu:user:U_MALTE'))).toMatchObject({ name: 'Malte', via: { name: 'pong', environment: 'preview' }, platform: 'slack' })
     // A profile name covers that agent of anyone's, but a platform user is only ever themselves.
@@ -1311,7 +1390,7 @@ describe('vercel()', () => {
     await preview.syncImport({ op: 'post', author: malte, from: 'slack', channel: 'general', text: 'ship it' })
     const [message] = (await handleOn(api).messages({ channel: 'general' })).messages
     expect([message!.by, message!.author]).toEqual([
-      { actor: 'slack:user:U_MALTE', principal: 'slack:user:U_MALTE', profile: null, session: null },
+      { actor: 'slack:user:U_MALTE', principal: 'slack:user:U_MALTE', profile: null },
       { id: 'slack:user:U_MALTE', kind: 'external', handle: 'malte', name: 'Malte', avatar: null, verified: true },
     ])
   })

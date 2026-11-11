@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { formatMessage, formatSchedule, formatThreads, formatThreadSummaries, principalFlags } from '../src/cli/format.ts'
 import type { MessageView, ScheduleView } from '../src/api/routes.ts'
 
-const by = { actor: 'vercel:user:j', principal: 'vercel:user:j', profile: null, session: null }
+const by = { actor: 'vercel:user:j', principal: 'vercel:user:j', profile: null }
 const author = { kind: 'person', handle: 'julian', name: 'Julian', avatar: null } as unknown as MessageView['author']
 const file = { id: 'nXHY', name: 'after.png', type: 'image/png', size: 17_000 }
 const pictograph = /\p{Extended_Pictographic}/u

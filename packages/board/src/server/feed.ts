@@ -8,6 +8,7 @@ import { hasCriteria } from './watch-spec.ts'
 import { channelsReducer } from '../contract/reducers.ts'
 import { foldActors, foldMessages, iso, type Actor, type ActorsState, type Message, type MessagesState } from '../contract/folds.ts'
 import { blocksIn } from '../contract/blocks.ts'
+import { authorView, type Author } from '../contract/schemas.ts'
 import { actorParts, type Via } from '../contract/profiles.ts'
 import { mentionTerm, mentionTerms } from '../contract/mentions.ts'
 import { own } from '../contract/own.ts'
@@ -118,6 +119,7 @@ export function view(message: Message, actors: ActorsState, reader: Reader): Mes
   const { blind, version, revision, schedule, platformText, mentions: _mentions, ...shown } = message as Message & { mentions?: unknown }
   return {
     ...shown,
+    by: authorView(message.by),
     ...(blind ? { blind } : {}),
     id: ref(message.id),
     re: message.re === null ? null : ref(message.re),
@@ -333,6 +335,7 @@ function payloadView(payload: Record<string, unknown>, links: LinkView[] | undef
   // A post or an edit from before mentions were text alone carries the actor IDs they resolved to.
   const { mentions: _mentions, ...shown }: Record<string, unknown> = payload
   for (const key of ['id', 're', 'replyTo'] as const) if (typeof shown[key] === 'number') shown[key] = ref(shown[key])
+  if (typeof shown.by === 'object' && shown.by !== null) shown.by = authorView(shown.by as Author)
   const schedule = shown.schedule as { id: number; n: number } | undefined
   if (schedule) shown.schedule = { id: scheduleRef(schedule.id), n: schedule.n }
   if (links) shown.links = links

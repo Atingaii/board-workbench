@@ -4,6 +4,8 @@
 import { randomUUID } from 'node:crypto'
 import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
 import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
+import { parseProfileHeader } from '../src/contract/profile-header.ts'
+import { compileAccess, parseCan } from '../src/server/access.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -16,6 +18,10 @@ type Actor = {
   /** An agent's name, or for a platform user a project's sync imported, `<key>:<user>`, with `platform` its key, that key's platform, and the user's ID. */
   profile?: { name: string; avatar?: string; platform?: { key: string; platform: string; userId: string } }
   session?: string
+  /** What it may do at most, past what grants give its principal: the `x-board-can` it sent, where the API reads that. */
+  can?: Record<string, 'all' | string[]>
+  /** It sent an `x-board-can` the API holds it to: never its principal's integration, so no watchers or sync's records. */
+  narrowed?: true
 }
 type Message = {
   id: string
@@ -109,8 +115,13 @@ const principalId = (p: Principal) =>
   p.type === 'external' ? p.id : p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`
 const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
 
-/** Who a request is: its bearer names a principal, or is a credential `tokens` maps to one. */
-function actorOf(request: Request, tokens: Record<string, string> = {}): Actor {
+/**
+ * Who a request is: its bearer names a principal, or is a credential `tokens` maps to one. Its
+ * profile is what `x-board-profile` names, with `x-board-avatar` and `x-board-session` beside it, as
+ * Vercel's API reads them today; `protocol` reads them as board's protocol has it: the profile and
+ * its avatar in one structured `x-board-profile`, and the other two ignored.
+ */
+function actorOf(request: Request, tokens: Record<string, string> = {}, protocol = false, enforcesCan = false): Actor {
   const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
   const token = tokens[bearer] ?? bearer
   const [type, id, environment] = token.split(':')
@@ -123,15 +134,42 @@ function actorOf(request: Request, tokens: Record<string, string> = {}): Actor {
           ? { type, projectId: id, environment }
           : null
   if (!principal) throw new Refused(401, 'invalid_token', 'This token is invalid, expired, or revoked.')
-  const name = request.headers.get('x-board-profile') ?? undefined
-  const avatar = request.headers.get('x-board-avatar') ?? undefined
-  const session = request.headers.get('x-board-session') ?? undefined
+  let { name, avatar, session } = {
+    name: request.headers.get('x-board-profile') ?? undefined,
+    avatar: request.headers.get('x-board-avatar') ?? undefined,
+    session: request.headers.get('x-board-session') ?? undefined,
+  }
+  if (protocol) {
+    // What released clients still send, read by nothing: an avatar comes with a profile's header, and no session is kept.
+    avatar = undefined
+    session = undefined
+    const header = request.headers.get('x-board-profile')
+    if (header !== null) {
+      try {
+        const parsed = parseProfileHeader(header)
+        ;({ name, avatar } = { name: parsed.name, avatar: parsed.avatar ?? undefined })
+      } catch (error) {
+        throw new Refused(400, 'invalid_profile', (error as Error).message)
+      }
+    }
+  }
+  // A proxy that holds the credential narrows it.
+  const header = enforcesCan ? request.headers.get('x-board-can') : null
+  let can: Actor['can']
+  if (header !== null) {
+    try {
+      can = compileAccess(parseCan(header)).summary() as Actor['can']
+    } catch (error) {
+      throw new Refused(400, 'invalid_scope', (error as Error).message)
+    }
+  }
   const base = principalId(principal)
   return {
     id: name ? `${base}+${name.toLowerCase()}` : base,
     principal,
     ...(name ? { profile: { name, ...(avatar ? { avatar } : {}) } } : {}),
     ...(session ? { session } : {}),
+    ...(can ? { can, narrowed: true as const } : {}),
   }
 }
 
@@ -155,7 +193,7 @@ function viewOf(names: Pick<Shared, 'accounts' | 'directory' | 'projectIdHandles
   const project = p.type === 'project' && !names.projectIdHandles ? names.directory.projects[p.projectId] : undefined
   const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : (project ?? `project:${p.projectId}:${p.environment}`)
   if (actor.profile?.platform) return { id: actor.id, kind: 'external', handle: actor.profile.platform.userId, platform: actor.profile.platform.platform }
-  if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
+  if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name, ...(actor.profile.avatar ? { avatar: actor.profile.avatar } : {}) }
   if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
   return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
 }
@@ -173,11 +211,12 @@ const APPS: Record<string, string> = { oac_1: 'ship', oac_2: 'deploy' }
 const whoOf = (actor: Actor): Who => {
   // A platform user a sync imported makes no requests of their own.
   if (actor.principal.type === 'external') throw new Refused(403, 'forbidden')
+  const limit = actor.can ? { limit: actor.can as NonNullable<Who['limit']> } : {}
   return actor.principal.type === 'user'
-    ? { kind: 'user', userId: actor.principal.userId }
+    ? { kind: 'user', userId: actor.principal.userId, ...limit }
     : actor.principal.type === 'project'
-      ? { kind: 'project', projectId: actor.principal.projectId, environment: actor.principal.environment }
-      : { kind: 'app', clientId: actor.principal.clientId }
+      ? { kind: 'project', projectId: actor.principal.projectId, environment: actor.principal.environment, ...limit }
+      : { kind: 'app', clientId: actor.principal.clientId, ...limit }
 }
 
 /**
@@ -379,8 +418,24 @@ function fakeBoard(shared: Shared, boardId: string) {
     return channel
   }
 
+  /** A caller narrowed with `x-board-can` does only what it gives at the channel's closest pattern: the channel, then its parents (`dev/`), then `*`. */
+  function tokenMay(actor: Actor, permission: string, channelId: string) {
+    tokenMayIn(actor, permission, channels.find((channel) => channel.id === channelId)?.name ?? '')
+  }
+  /** The same, by the channel's name, which needn't exist yet. */
+  function tokenMayIn(actor: Actor, permission: string, name: string) {
+    const { can } = actor
+    if (!can) return
+    const parts = name.split('/')
+    const candidates = [name, ...parts.map((_, i) => `${parts.slice(0, parts.length - i).join('/')}/`), '*']
+    const pattern = candidates.find((candidate) => Object.hasOwn(can, candidate))
+    const grant = pattern === undefined ? [] : can[pattern]!
+    if (!(grant === 'all' || grant.includes(permission))) throw new Refused(403, 'forbidden', `This caller may not ${permission} in ${name}.`)
+  }
+
   /** `uploader` is who must have uploaded its files: the caller, which for an import is the sync's project, not the platform user it posts as. */
   function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number; noSync?: boolean }, uploader: Actor = actor) {
+    tokenMay(actor, 'post', thread.channelId)
     // A reply's precondition, checked with the post: the thread's newest is still the one it names.
     if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
     if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
@@ -425,6 +480,16 @@ function fakeBoard(shared: Shared, boardId: string) {
     return message
   }
 
+  /** Whether `actor` may read in the channel: a narrowed caller only where its `x-board-can` gives `read`. */
+  const mayRead = (actor: Actor, channelId: string) => {
+    try {
+      tokenMay(actor, 'read', channelId)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   /** A repeat of a post with the same client ID, by the same principal: the first one. */
   function repeat(actor: Actor, clientId: unknown) {
     if (clientId === undefined) return null
@@ -434,6 +499,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     const [, uuid, sequence] = MESSAGE_ID.exec(id)!
     const thread = threadAt(`thr_${uuid}`)
     const message = thread.messages[Number(sequence) - 1]!
+    if (!mayRead(actor, thread.channelId)) return { thread: { id: thread.id }, message: { id: message.id, threadId: thread.id, sequence: message.sequence } }
     return { thread: showThread(thread), message: show(message) }
   }
 
@@ -930,7 +996,9 @@ function fakeBoard(shared: Shared, boardId: string) {
 
     if (method === 'GET' && rest === '/channels') {
       const name = url.searchParams.get('name')
-      return { channels: name === null ? channels : channels.filter((c) => c.name === name), cursor: null }
+      // It lists only the channels the caller may read.
+      const readable = channels.filter((c) => mayRead(actor, c.id))
+      return { channels: name === null ? readable : readable.filter((c) => c.name === name), cursor: null }
     }
     const makeChannel = (name: unknown) => {
       if (typeof name !== 'string' || name.length > 80 || !CHANNEL.test(name)) throw new Refused(400, 'invalid_channel_name')
@@ -940,6 +1008,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       return channel
     }
     if (method === 'POST' && rest === '/channels') {
+      tokenMayIn(actor, 'read', typeof body.name === 'string' ? body.name : '')
       return { channel: makeChannel(body.name) }
     }
     const granted = access.route(method, rest, whoOf(actor), actor.id, body, url)
@@ -961,8 +1030,10 @@ function fakeBoard(shared: Shared, boardId: string) {
       const again = repeat(actor, body.clientId)
       if (again) return again
       return once(actor, body.operationId, () => {
-      // By `channel`, its name, it makes the channel on its first post, as a board does; or by `channelId`.
+      // By `channel`, its name, it checks `post` there and makes the channel on its first post, as a board does; or by `channelId`.
+      if (body.channel !== undefined) tokenMayIn(actor, 'post', String(body.channel))
       const channel = body.channel !== undefined ? (channels.find((c) => c.name === body.channel) ?? makeChannel(body.channel)) : channelAt(body.channelId)
+      tokenMay(actor, 'post', channel.id)
       const createdAt = now()
       const thread: Thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: actor, messages: [] }
       threads.set(thread.id, thread)
@@ -1065,6 +1136,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       const message = messageAt(thread.id, Number(found[2]))
       const ref = { threadId: thread.id, message: message.sequence, messageId: message.id }
       const action = found[3] ?? ''
+      if (method !== 'GET') tokenMay(actor, action === '/reactions' ? 'react' : action === '/labels' ? 'label' : 'post', thread.channelId)
       if (method === 'PATCH' && action === '') {
         if (!samePrincipal(message.createdBy.principal, actor.principal)) throw new Refused(403, 'message_not_owned')
         if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
@@ -1290,6 +1362,19 @@ export function fakeMessageboard(
     /** A deployment's handle is `project:prj_pong:production`, as Vercel's API named one before it named it by its project (`pong`). */
     projectIdHandles?: boolean
     /**
+     * Who writes is read as board's protocol has it, as Vercel's API will once it conforms: the profile and its avatar
+     * in one structured `x-board-profile` (`fixer;avatar="https://…"`), and `x-board-avatar` and `x-board-session`
+     * ignored, as released clients still send them. Without it, as the API reads them today: the name alone in `x-board-profile`, the avatar in
+     * `x-board-avatar`, and a session it keeps on the actor.
+     */
+    protocolProfile?: boolean
+    /**
+     * A caller is held to the `x-board-can` it sends, as Vercel's API holds one once it reads the header: within what its
+     * grants (and its board token's `can`) give, and never its principal's integration, so its watchers and sync's
+     * records are 403. Without it, as the API answered before: it ignores the header.
+     */
+    enforcesCan?: boolean
+    /**
      * Sync's records aren't kept apart, as board can't take for granted of an API it doesn't run: a thread's binding goes
      * to every registrant that syncs its key, another project's included, and `syncThread` lists every target of a thread.
      */
@@ -1348,7 +1433,7 @@ export function fakeMessageboard(
     if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
     if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
     const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-    const actor = actorOf(request, options.tokens)
+    const actor = actorOf(request, options.tokens, options.protocolProfile ?? false, options.enforcesCan ?? false)
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method
     requests.push(`${method} ${path}`)
@@ -1405,6 +1490,8 @@ export function fakeMessageboard(
     const board = onBoard ? boards().find((candidate) => candidate.id === decodeURIComponent(onBoard[1]!)) : undefined
     if (!onBoard || !board || !mayUse(actor, board)) throw new Refused(404, 'board_not_found')
     const rest = onBoard[2] ?? ''
+    // A narrowed caller is never its principal's integration: a narrowed register would replace its registration.
+    if (actor.narrowed && /^\/(watchers|sync|inbox)(\/|$)/.test(rest)) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't use its principal's watchers or sync's records.")
     if (method === 'GET' && rest === '') return { board: show(board) }
     // A board's own me: what the team's says, within what this board's grants give the caller.
     if (method === 'GET' && rest === '/me') {

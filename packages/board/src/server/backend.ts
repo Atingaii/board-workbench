@@ -1,3 +1,4 @@
+import type { SandboxInput, SandboxReach } from './sandbox.ts'
 import type { Protocol } from '../api/protocol.ts'
 import type { MessageView, SourceJoin, SourceRead } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
@@ -36,7 +37,7 @@ export type SelfCaller = {
   /**
    * What `as(profile)` asked for, its avatar included, or null for yourself. Absent on the
    * handle itself, whose caller is whoever the environment picks: a backend elsewhere sends
-   * the profile `BOARD_AS` or the agent it runs in names.
+   * the profile `BOARD_PROFILE` names.
    */
   profile?: ProfileOption
   origin: WriteOrigin
@@ -197,6 +198,12 @@ export interface Backend extends ProtocolMethods {
   syncedHere?(key: string): Promise<boolean>
   /** Its grants and tokens, for a backend that keeps them (`local()`): board() checks requests against them. */
   readonly trust?: Trust
+  /**
+   * How a sandbox reaches the board this backend uses, for `sandboxPolicy()`: its URL, and the
+   * headers every request of the sandbox's carries. One that keeps the board leaves it out: the
+   * board's own URL says, and board() adds its deployment's credential.
+   */
+  sandbox?(input: SandboxInput): Promise<SandboxReach>
   /**
    * board() calls it once, when it's created, before any request: what background work needs
    * from the board (its subscriptions, its sync, its policy, a handle through it). It does no I/O.

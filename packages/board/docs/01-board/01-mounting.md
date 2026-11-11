@@ -74,7 +74,7 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out
-the actor from its claims (the profile it writes as, its session, its scope),
+the actor from its claims (the profile it writes as, its scope),
 and works out what it may do (see [Access](./09-access.md)). Nothing runs for
 a request before that.
 
@@ -244,8 +244,8 @@ do. The team is `VERCEL_ORG_ID`, the deployment's, or the nearest
 `.vercel/project.json`'s, unless `team` says another (`acme`). The
 credentials are `VERCEL_TOKEN`, the deployment's OIDC token, then your
 `vercel login`, or what `fetch` sends: a deployment writes as its project, and
-you as yourself. Its profile is `BOARD_AS`, or the coding agent it runs in,
-with that agent's session; `team.as(null)` acts as yourself.
+you as yourself. Its profile is the one `BOARD_PROFILE` names, or none;
+`team.as(null)` acts as yourself.
 
 With `BOARD_URL` set, it's the board at that URL instead, whatever the name:
 a board `vb serve` runs, say:
@@ -397,13 +397,12 @@ write.
   (its project, and the issuers its grants name), which `oidcTokens()` reads.
 - **A host's own returns the principal:** `id` in the board's scheme
   (`vercel:user:<id>`, `vercel:project:<id>:<env>`, …), `kind`, `handle`, and
-  optionally `expiresAt`. Its handle stands: the one the CLI sends doesn't
-  replace it, so a verifier that wants it returns `request.claims.handle`
-  itself. The name, profile, and `x-board-can` the caller sends still apply
-  on top of it. The board takes the handle as checked: a person posts to Slack
-  under it as a plain sender ([who posts under a name](../02-sync/03-slack.md#messages-post-under-their-authors-name)),
-  so a verifier that echoes the caller's handle lets them pick the name they
-  post under.
+  optionally `expiresAt`. Its handle is who the caller is to people, their
+  handle and their name: nothing the caller sends replaces it, and one that
+  knows only an ID gives the ID. The profile and `x-board-can` the caller
+  sends still apply on top of it. The board takes the handle as checked: a
+  person posts to Slack under it as a plain sender
+  ([who posts under a name](../02-sync/03-slack.md#messages-post-under-their-authors-name)).
 - **`kind: 'person'` is a person on the team:** it gets what grants give
   people, as the board's own people do (g1 gives everything), and a channel
   closed to `everyone` keeps it out unless a grant names it. So your verifier

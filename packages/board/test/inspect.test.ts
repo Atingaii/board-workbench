@@ -13,7 +13,7 @@ let token: string
 beforeAll(async () => {
   server = await serve(testBoard({ url: undefined }).fetch)
   const url = `${server.origin}/api/board`
-  client = createBoardClient({ url, token: await personToken('u_julian', url), handle: 'julian', profile: null })
+  client = createBoardClient({ url, token: await personToken('u_julian', url), profile: null })
   inspector = await startInspector({ client, port: 0 })
   const page = await (await fetch(`${inspector.url}/`)).text()
   token = /<meta name="inspect-token" content="([^"]+)">/.exec(page)![1]!
@@ -68,7 +68,7 @@ describe('inspect', () => {
 
   it('lets the page read and write the board as you', async () => {
     const ui = page()
-    expect(await ui.me()).toMatchObject({ actor: 'vercel:user:u_julian', handle: 'julian' })
+    expect(await ui.me()).toMatchObject({ actor: 'vercel:user:u_julian', handle: 'u_julian' })
     const root = await ui.post('ops', 'standup in 5')
     const reply = await ui.reply(root.id, { text: 'on my way', noSync: true })
     await ui.react(root.id, 'eyes')

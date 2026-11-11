@@ -694,11 +694,8 @@ function failureOf(error: unknown): Failure {
       case 'wrong_audience':
       case 'redirected':
         return own('usage', 'wrong_url')
-      case 'ambiguous_agent':
-        return own('usage', 'ambiguous_agent', [
-          { instruction: 'Write as one of them', argv: rerun('--as', '<PROFILE>') },
-          { instruction: 'Or as yourself', argv: rerun('--human') },
-        ])
+      case 'renamed_env':
+        return own('usage', 'renamed_env')
       case 'too_large':
         return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
       case 'no_team':
@@ -799,9 +796,9 @@ function vercelBoard(url: string): { board: string; team?: string } | null {
   return { board: decodeURIComponent(found[1]!), ...(team ? { team } : {}) }
 }
 
-/** Who the handle writes as: `--as`'s profile (with `--avatar`), yourself with `--human`, or what the environment says. */
+/** Who the handle writes as: `--as`'s profile (with `--avatar`), or what the environment says (`BOARD_PROFILE`), else yourself. */
 function profileFlag(): ProfileOption | undefined {
-  if (flags.human) return null
+  if (flags.avatar !== undefined && !flags.as) throw usage('--avatar is the avatar of the profile --as names: pass --as too.', { reason: 'missing_arguments' })
   if (!flags.as) return undefined
   return flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as
 }
@@ -812,14 +809,14 @@ function profileFlag(): ProfileOption | undefined {
  * Vercel's API for `--scope` or `--team`; the one the environment points at; or the team's board
  * of the Vercel project it runs in, or, for an app with a team board, your login's.
  */
-function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined; can?: string } = {}) {
+function connection(url: string | undefined = flags.url, options: { token?: string; can?: string; headers?: Record<string, string> } = {}) {
   const profile = profileFlag()
   const team = flags.scope ?? flags.team
   const name = boardNameFlag(url, team)
   // A name names a team's board as --scope does, so it goes before BOARD_URL too.
   const configured = url ?? (team === undefined && name === undefined ? configuredUrl() : null)
   if (configured === null) {
-    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token, options.can) }), ...(name !== undefined ? { name, ensure: flags.ensure === true } : {}) })
+    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token, options.can, options.headers) }), ...(name !== undefined ? { name, ensure: flags.ensure === true } : {}) })
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
@@ -827,11 +824,11 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   // A team's board in Vercel's API (what `whoami` prints for one) is reached through the API, as `--scope` is.
   const onVercel = vercelBoard(at)
   if (onVercel) {
-    const board = boardAt({ backend: vercel({ ...onVercel, ...sending(options.token, options.can) }) })
+    const board = boardAt({ backend: vercel({ ...onVercel, ...sending(options.token, options.can, options.headers) }) })
     return { url: at as string | null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
-  const handle = options.handle ?? flags.handle
-  const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}), ...(options.can !== undefined ? { fetch: narrowing(options.can) } : {}) })
+  const extra = { ...options.headers, ...(options.can !== undefined ? { 'x-board-can': options.can } : {}) }
+  const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(Object.keys(extra).length > 0 ? { fetch: withHeaders(extra) } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
 }
@@ -868,26 +865,27 @@ function boardNameFlag(url: string | undefined, team: string | undefined): strin
   return given
 }
 
-/** For Vercel's API, `token` in place of your own credentials, and `can` narrowing them. */
-function sending(token: string | undefined, can?: string): { fetch?: typeof fetch } {
-  if (token === undefined && can === undefined) return {}
+/** For Vercel's API, `token` in place of your own credentials, `can` narrowing them, and `headers` beside them. */
+function sending(token: string | undefined, can?: string, extra: Record<string, string> = {}): { fetch?: typeof fetch } {
+  if (token === undefined && can === undefined && Object.keys(extra).length === 0) return {}
   return {
     fetch: (input, init = {}) => {
       // The headers go in init: vercel()'s own fetch builds its credentials onto init's, and a Request's would be lost.
       const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
       if (token !== undefined) headers.set('authorization', `Bearer ${token}`)
       if (can !== undefined) headers.set('x-board-can', can)
+      for (const [name, value] of Object.entries(extra)) headers.set(name, value)
       // Without a token of its own, it goes with the credentials vercel() would find.
       return (token === undefined ? credentialed() : globalThis.fetch)(input, { ...init, headers })
     },
   }
 }
 
-/** A fetch that narrows what a board on HTTP lets its credentials do to `can`, as a proxy holding them would. */
-function narrowing(can: string): typeof fetch {
+/** A fetch that adds `headers` to each request to a board on HTTP, as a proxy holding its credentials would: `x-board-can`, say. */
+function withHeaders(headers: Record<string, string>): typeof fetch {
   return (input, init) => {
     const request = new Request(input, init)
-    request.headers.set('x-board-can', can)
+    for (const [name, value] of Object.entries(headers)) request.headers.set(name, value)
     return globalThis.fetch(request)
   }
 }
@@ -895,9 +893,8 @@ function narrowing(can: string): typeof fetch {
 /** A handle on the board this command talks to: `vb()`'s, as `--as` says, or the one `connection()` finds. */
 function client(): Board {
   if (!io.board) return connection().board
-  if (flags.human) return io.board.as(null)
-  if (flags.as) return io.board.as(flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as)
-  return io.board
+  const profile = profileFlag()
+  return profile === undefined ? io.board : io.board.as(profile)
 }
 
 async function readStdin(): Promise<string> {
@@ -985,7 +982,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const minutes = Math.max(0, Math.round((Date.parse(me.expiresAt) - Date.now()) / 60_000))
         rows.push(['token', `expires in ${Math.floor(minutes / 60)}h ${minutes % 60}m`])
       }
-      if (me.session) rows.push(['session', me.session])
       // Full access says nothing; anything less says what it is, one pattern a row.
       ;(me.can === undefined ? [] : formatAccess(me.can)).forEach((line, index) => rows.push([index === 0 ? 'can' : '', line]))
       const width = Math.max(...rows.map(([subject]) => subject.length))
@@ -1007,9 +1003,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         })
       // The same board with a token's secret, which the tokens check mints: what `vb()` was handed can't be opened again.
       const withToken = io.board ? {} : { withToken: (secret: string) => connection(flags.url, { token: secret }).board }
-      // And with this run's own credential, narrowed with x-board-can, as a proxy holding it sends it.
-      const withCan = io.board ? {} : { withCan: (can: string) => connection(undefined, { can }).board }
-      const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken, ...withCan })
+      // And with this run's own credential and headers of the run's (x-board-can, a profile), as a proxy holding it sends them.
+      const withHeaders = io.board ? {} : { withHeaders: (headers: Record<string, string>) => connection(undefined, { headers }).board }
+      const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken, ...withHeaders })
       if (flags.json) result(report)
       else out(formatConformance(report))
       return report.ok ? 0 : 1
@@ -1288,7 +1284,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         name,
         ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}),
         ...(flags.profile !== undefined ? { profile: flags.profile } : {}),
-        ...(flags.session !== undefined ? { session: flags.session } : {}),
         ...(flags.expires !== undefined ? { expires: flags.expires } : {}),
       })
       // The secret alone, so it pipes: BOARD_TOKEN=$(vb tokens create widget --can feedback/=post).
@@ -1615,7 +1610,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
     const command = canonical(word)
     current = { command, args }
     if (io.board) {
-      const given = flags.url ? 'url' : flags.name !== undefined ? 'name' : flags.ensure ? 'ensure' : flags.handle ? 'handle' : null
+      const given = flags.url ? 'url' : flags.name !== undefined ? 'name' : flags.ensure ? 'ensure' : null
       if (given) throw usage(`--${given} doesn't apply in-process: the board handle you pass says which board and who.`, { next: [] })
       if (command !== undefined && MACHINE.has(command))
         throw usage(`${command} isn't available in-process: it's about the machine ${named()} runs on.`, { reason: 'not_available', next: [] })

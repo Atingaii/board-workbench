@@ -825,8 +825,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const actor = actors.byId[message.by.actor]
     // Whose word it is: the principal an actor with a profile writes for, and the platform of the
     // sync key an import came through, which may be another board's. A deployment writing as itself
-    // names its environment in its own name, which is whose word it is too: `www@preview` on a local
-    // board, and `www (preview)` on Vercel's, whose project names have no spaces or parentheses.
+    // names its environment in its own name, which is whose word it is too: `www (preview)`, as
+    // project names have no spaces or parentheses (`www@preview` on what a local board stored before).
     const own = actor?.name ?? message.by.actor
     const after = `${actor?.via ? ` ${viaText(actor.via)}` : ''}${message.from ? ` (${actor?.platform ?? entries[message.from]?.platform ?? message.from})` : ''}`
     const environment = actor?.kind === 'deployment' && !actor.via ? (/(?:@[^@/]+| \([^()]+\))$/.exec(own)?.[0] ?? '') : ''
@@ -844,20 +844,19 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const markdown = await textFor(key, message, actors, body)
     // Where the platform shows a sender per message, it shows one the board checked: anyone else's
     // name is what they sent, so it stays a label in the text, under the app.
-    return actor?.verified ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors), attribution } } : { markdown }
+    return actor?.verified ? { markdown, as: { name, avatar: senderAvatar(message, actor), attribution } } : { markdown }
   }
 
-  /** An author's own picture, or for an agent with the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
-  function senderAvatar(message: MessageView, actor: Actor | undefined, actors: Actors): string | null {
+  /** An author's own picture, or for one with none or the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
+  function senderAvatar(message: MessageView, actor: Actor | undefined): string | null {
     const builtIn = (avatar: string | null | undefined) => !avatar || /\/avatars\/[a-z0-9-]+$/.test(avatar)
     const own = actor?.avatar ?? null
     if (!builtIn(own)) return own
-    // The person's own picture, which their CLI sends from Vercel, when they've posted as themselves.
-    const person = actors.byId[message.by.principal]?.avatar
-    if (!builtIn(person)) return person!
-    // Otherwise their handle, which is their Vercel username unless they changed it or the board made one up.
+    // Otherwise their handle, which a host's verifier may have named them by: their Vercel username. One
+    // that's their user ID, all a Vercel login says, or one the board made up from it before, isn't.
     const username = actor?.handle.split('/')[0] ?? ''
-    if (!message.by.principal.startsWith('vercel:user:') || !username || /^user-/.test(username)) return own
+    const id = message.by.principal.slice('vercel:user:'.length)
+    if (!message.by.principal.startsWith('vercel:user:') || !username || /^user-/.test(username) || username.toLowerCase() === id.toLowerCase()) return own
     return `https://vercel.com/api/www/avatar?u=${encodeURIComponent(username)}&s=64&format=png`
   }
 

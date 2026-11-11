@@ -7,8 +7,8 @@ const pass: Middleware = async ({ next }) => next()
 
 async function twoPeople(middleware?: Middleware[]) {
   const { fetch } = testBoard(middleware ? { middleware } : {})
-  const ada = caller(fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
-  const julian = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
+  const ada = caller(fetch, await personToken('u_ada'), {})
+  const julian = caller(fetch, await personToken('u_julian'), {})
   return { ada, julian }
 }
 

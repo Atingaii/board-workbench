@@ -47,6 +47,13 @@ export type ConformanceOptions = {
    */
   withCan?: (can: string) => Board
   /**
+   * The same board, with this run's credential and `headers` on every request, as a client or a proxy
+   * holding the credential sends them: the checks of who writes call it so, with an
+   * `x-board-profile` that carries an avatar and the headers that one replaced. Without it, they're
+   * skipped, and it stands in for `withCan` when that's left out.
+   */
+  withHeaders?: (headers: Record<string, string>) => Board
+  /**
    * Whom the grants checks name. A board that verifies tokens itself (`vb serve`) takes the made-up
    * IDs they use without it; one that looks names up, as Vercel's API does, needs real ones on its
    * team, or skips the checks that name them: a `project` (its name or ID), a GitHub `repository`
@@ -94,6 +101,25 @@ async function refused(attempt: Promise<unknown>, status: number, what: string) 
 }
 
 const NO_CAN = "this run can't call the board with an x-board-can header"
+const NO_HEADERS = "this run can't call the board with headers of its own"
+
+/** The avatar the checks of who writes give their profile. */
+const AVATAR = 'https://example.com/conformance.png'
+
+/** A post by `poster`, which sends `header`, read back as the run sees it: it lands, and is deleted when the run ends. */
+async function postedWith(ctx: Context, poster: Board, header: string) {
+  const posted = await poster.post(ctx.channel, { text: `conformance: with ${header}`, labels: ctx.labels, noSync: true }).catch((error: unknown) => {
+    throw new Mismatch(`a post with ${header}, which released clients still send: expected it to land, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
+  })
+  ctx.posted.push(posted.id)
+  return (await ctx.board.thread(posted.id)).message
+}
+
+/** That a view's `by` names who wrote it as the protocol has it: an actor, a principal, and a profile, and no session. */
+function noSession(by: unknown, what: string) {
+  check(typeof by === 'object' && by !== null, `${what} should have a by, got ${show(by)}`)
+  check(!('session' in by), `${what} should carry no session, got ${show(by)}`)
+}
 
 /**
  * That `attempt`, by a caller narrowed with `x-board-can`, is refused as one: 403 `forbidden`.
@@ -134,6 +160,7 @@ type Context = {
   posted: string[]
   withToken?: (secret: string) => Board
   withCan?: (can: string) => Board
+  withHeaders?: (headers: Record<string, string>) => Board
   principals: Principals
   /** The board's own Vercel team, as its discovery names it. */
   team: string | null
@@ -692,6 +719,58 @@ const CHECKS: Check[] = [
         return message
       })
       await refused(posting, 403, 'a post by a caller narrowed to read')
+    },
+  },
+  {
+    group: 'core',
+    name: 'takes a profile and its avatar as one x-board-profile header, and shows both on what it writes',
+    run: async (ctx) => {
+      if (!ctx.withHeaders) return NO_HEADERS
+      const name = `conformance-${ctx.labels.conformance}`
+      const agent = ctx.withHeaders({ 'x-board-profile': `${name}; avatar="${AVATAR}"` })
+      const posted = await agent.post(ctx.channel, { text: 'conformance: as a profile, with its avatar', labels: ctx.labels, noSync: true })
+      ctx.posted.push(posted.id)
+      const { message } = await ctx.board.thread(posted.id)
+      same(message.by.principal, ctx.me.principal, "the profile's principal, this run's")
+      same(message.by.profile?.toLowerCase(), name, 'the profile its header names')
+      same(message.author?.kind, 'agent', "the profile's kind")
+      same(message.author?.name, name, "the profile's name")
+      same(message.author?.avatar, AVATAR, "the profile's avatar, from its header's parameter")
+    },
+  },
+  {
+    group: 'core',
+    name: "ignores x-board-avatar, which x-board-profile's avatar parameter replaced",
+    run: async (ctx) => {
+      if (!ctx.withHeaders) return NO_HEADERS
+      // A profile of its own: the one the check before gave an avatar would show it still.
+      const name = `conformance-bare-${ctx.labels.conformance}`
+      const message = await postedWith(ctx, ctx.withHeaders({ 'x-board-profile': name, 'x-board-avatar': AVATAR }), 'x-board-avatar')
+      same(message.by.profile?.toLowerCase(), name, 'the profile its header names')
+      same(message.author?.avatar ?? null, null, "the avatar of a profile whose header names none, whatever x-board-avatar says")
+    },
+  },
+  {
+    group: 'core',
+    name: 'ignores x-board-session: who writes is the principal and its profile',
+    run: async (ctx) => {
+      if (!ctx.withHeaders) return NO_HEADERS
+      const message = await postedWith(ctx, ctx.withHeaders({ 'x-board-session': `conformance-${ctx.labels.conformance}` }), 'x-board-session')
+      same(message.by.actor, ctx.me.actor, 'who a post with x-board-session is by: this run, as itself')
+      noSession(message.by, 'a post with x-board-session')
+    },
+  },
+  {
+    group: 'core',
+    name: 'shows no session on a message, its event, or you',
+    run: async (ctx) => {
+      const { root } = needRoot(ctx)
+      noSession((await ctx.board.thread(root.id)).message.by, 'a message')
+      const { events } = await ctx.board.poll({ channel: ctx.channel, after: ctx.start, label: ctx.labels, wait: 0 })
+      const posted = events.find((event) => event.type === 'message.posted')
+      check(posted !== undefined, `events after the run's start should hold its post, got ${show(events.map((event) => event.type))}`)
+      noSession((posted.payload as { by?: unknown }).by, "a message.posted event's payload")
+      check(!('session' in ctx.me), `you should carry no session, got ${show(ctx.me)}`)
     },
   },
   {
@@ -1437,7 +1516,8 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
     me,
     posted: [],
     ...(options.withToken ? { withToken: options.withToken } : {}),
-    ...(options.withCan ? { withCan: options.withCan } : {}),
+    ...(options.withCan ? { withCan: options.withCan } : options.withHeaders ? { withCan: (can: string) => options.withHeaders!({ 'x-board-can': can }) } : {}),
+    ...(options.withHeaders ? { withHeaders: options.withHeaders } : {}),
     principals: {
       project: options.principals?.project ?? `prj_conformance${label}`,
       repository: options.principals?.repository ?? `acme/conformance-${label}`,

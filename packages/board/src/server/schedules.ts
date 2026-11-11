@@ -8,7 +8,7 @@ import {
   type ScheduleEvent,
   type ScheduleEvents,
 } from '../contract/contract.ts'
-import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
+import { actorKind, authorView, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { authorize, type Access } from './access.ts'
 import { wroteAs, type Granted, type Known, type Principal } from './auth.ts'
 import { actorsReducer } from '../contract/reducers.ts'
@@ -20,6 +20,7 @@ import { DroppedError } from './middleware.ts'
 import { indexOf, ref, scheduleRef, viaOfRecord } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 import { storedPrincipal } from './registry.ts'
+import { ownedActor } from './actors.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
 export const MAX_HOP_MS = 5 * 86_400_000
@@ -59,12 +60,17 @@ export type Schedule = {
 /** `takeover`: the Vercel deployment that sends, the last to take over, and its event's index; null before any has. */
 export type SchedulesState = { byId: Record<string, Schedule>; takeover: { deployment: string; index: number } | null }
 
+/**
+ * Who a schedule sends as: its creator, shown as its principal names it. One made before handles were
+ * checked keeps the actor its creator's client named; it sends as what verified that creator instead.
+ */
 const identityOf = (as: ScheduleEvent & { type: 'schedule.created' }): Schedule['as'] => {
   const { author, principal, actor } = as.payload.as
+  const stored = { ...principal, expiresAt: null }
   return {
     author,
-    principal: { ...principal, expiresAt: null },
-    actor: { ...actor, kind: actorKind(actor.kind) },
+    principal: stored,
+    actor: ownedActor(stored, author, { ...actor, kind: actorKind(actor.kind) }),
   }
 }
 
@@ -165,8 +171,8 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
     next: schedule.next === null ? null : new Date(schedule.next).toISOString(),
     last: schedule.last === null ? null : ref(schedule.last),
     state: schedule.canceled ? 'canceled' : schedule.next === null ? 'done' : 'pending',
-    canceled: schedule.canceled,
-    by: schedule.as.author,
+    canceled: schedule.canceled && { ...schedule.canceled, by: authorView(schedule.canceled.by) },
+    by: authorView(schedule.as.author),
     author: { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(via ? { via } : {}) },
     createdAt: schedule.createdAt,
   }

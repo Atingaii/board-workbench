@@ -33,13 +33,13 @@ describe('sync functions', () => {
     const loud = render(({ message }) => `LOUD ${message.text.toUpperCase()}`, mirror('dev'))
     const quiet = render(({ message }) => `(${message.text})`, mirror('ops'))
     const board = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: loud, C2: quiet, C3: 'random' })) } })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await julian('POST', '/messages', { channel: 'dev', text: 'deploy is out' })
     await julian('POST', '/messages', { channel: 'ops', text: 'disk at 90%' })
     await julian('POST', '/messages', { channel: 'random', text: 'lunch?' })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(3))
     const sent = Object.fromEntries(s.channelPosts.map((post) => [post.channelId, JSON.parse(post.text).markdown]))
-    expect(sent).toEqual({ 'slack:C1': 'LOUD DEPLOY IS OUT', 'slack:C2': '(disk at 90%)', 'slack:C3': '**julian**: lunch?' })
+    expect(sent).toEqual({ 'slack:C1': 'LOUD DEPLOY IS OUT', 'slack:C2': '(disk at 90%)', 'slack:C3': '**u_julian**: lunch?' })
 
     // A reply renders the way its thread's channel does.
     const [root] = await read(julian, 'dev')

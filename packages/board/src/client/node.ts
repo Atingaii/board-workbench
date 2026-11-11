@@ -72,43 +72,15 @@ export function localTokenFile(url: string): string {
 }
 
 /** The token a local board on this machine left for you, if `url` is one. */
-function localToken(url: string): { token: string; handle: string | null } | null {
+function localToken(url: string): { token: string } | null {
   try {
     if (!LOOPBACK.has(new URL(url).hostname)) return null
-    const saved = JSON.parse(readFileSync(localTokenFile(url), 'utf8')) as { url?: string; token?: string; handle?: string }
+    const saved = JSON.parse(readFileSync(localTokenFile(url), 'utf8')) as { url?: string; token?: string }
     if (saved.url !== url.replace(/\/+$/, '') || typeof saved.token !== 'string') return null
-    return { token: saved.token, handle: saved.handle ?? null }
+    return { token: saved.token }
   } catch {
     return null
   }
-}
-
-export type DetectedAgent = { profile: string; session: string | null }
-
-/** fx, Claude Code, Codex, and Grok sessions select their own profile, like Just Chat's CLI. */
-export function detectAgent(env: NodeJS.ProcessEnv = process.env): DetectedAgent | null {
-  const found: DetectedAgent[] = []
-  // fx sets AI_AGENT=fx; it exports no session ID to child processes yet, so FX_SESSION_ID is read if it does.
-  if (env.AI_AGENT?.trim().toLowerCase() === 'fx') found.push({ profile: 'fx', session: env.FX_SESSION_ID || null })
-  if (env.CLAUDECODE === '1' || env.CLAUDE_CODE_SESSION_ID)
-    found.push({ profile: 'claude', session: env.CLAUDE_CODE_SESSION_ID || null })
-  if (env.CODEX_THREAD_ID || env.CODEX_SESSION_ID)
-    found.push({ profile: 'codex', session: env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || null })
-  if (env.GROK_SESSION_ID) found.push({ profile: 'grok', session: env.GROK_SESSION_ID })
-  if (env.CURSOR_AGENT === '1') found.push({ profile: 'cursor', session: null })
-  if (env.PI_CODING_AGENT === 'true' || env.AI_AGENT === 'pi') found.push({ profile: 'pi', session: env.PI_SESSION_ID || null })
-  // AI_AGENT is a generic marker: any agent that sets it gets its own profile.
-  const named = env.AI_AGENT?.trim().toLowerCase()
-  if (named && /^[a-z][a-z0-9-]{0,31}$/.test(named) && !found.some((agent) => agent.profile === named))
-    found.push({ profile: named, session: null })
-  if (found.length > 1)
-    throw new BoardError(
-      'ambiguous_agent',
-      `Several coding agents' environments are set (${found.map((a) => a.profile).join(', ')}), so it can't tell which one is writing.`,
-      0,
-      { hint: 'Pick one with a profile, or none to write as yourself.' },
-    )
-  return found[0] ?? null
 }
 
 const expiry = (token: string): number => {
@@ -120,7 +92,7 @@ const expiry = (token: string): number => {
   }
 }
 
-type Cached = { token: string; expiresAt: number; handle?: string | null; name?: string | null; avatar?: string | null }
+type Cached = { token: string; expiresAt: number }
 
 /**
  * Where `audience`'s token is cached: one per board, and with a login a CLI hands over, one per
@@ -225,14 +197,6 @@ const apiLogin = async (handed: string | null) => handed ?? (await getVercelToke
 async function personToken(audience: string, discovery: Discovery): Promise<Cached> {
   const login = await handedToken()
   const cached = await readCache(audience, login)
-  // Tokens cached before names and avatars were kept get them once.
-  if (cached && cached.name === undefined) {
-    const authToken = await apiLogin(login)
-    const user = authToken ? await vercelUser(authToken) : null
-    const filled = { ...cached, name: user?.name ?? null, avatar: user?.avatar ?? null }
-    await writeCache(audience, login, filled).catch(() => {})
-    return filled
-  }
   if (cached) return cached
   if (!discovery.project_id)
     throw new BoardError('no_project', `The board at ${audience} doesn't know its Vercel project, so there's no Vercel login token to mint for it.`, 0, {
@@ -265,8 +229,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   }
 
   const token = await exchangeVercelOidcToken({ token: development, audience })
-  const user = authToken ? await vercelUser(authToken) : null
-  const fresh: Cached = { token, expiresAt: expiry(token), handle: user?.handle ?? null, name: user?.name ?? null, avatar: user?.avatar ?? null }
+  const fresh: Cached = { token, expiresAt: expiry(token) }
   await writeCache(audience, login, fresh).catch(() => {})
   return fresh
 }
@@ -314,22 +277,6 @@ async function tokenFromVercelCli(project: { id: string; team: string | null }):
   }
 }
 
-/** Your Vercel username, display name, and avatar (Vercel serves avatars publicly). */
-async function vercelUser(authToken: string): Promise<{ handle: string | null; name: string | null; avatar: string | null } | null> {
-  try {
-    const response = await asYou('https://api.vercel.com/v2/user', {}, authToken)
-    if (!response.ok) return null
-    const { user } = (await response.json()) as { user?: { username?: string; name?: string | null; avatar?: string | null } }
-    return {
-      handle: user?.username?.toLowerCase() ?? null,
-      name: user?.name?.trim() || null,
-      avatar: user?.avatar && /^[0-9a-f]+$/i.test(user.avatar) ? `https://vercel.com/api/www/avatar/${user.avatar}?s=128` : null,
-    }
-  } catch {
-    return null
-  }
-}
-
 async function githubActionsToken(audience: string): Promise<string> {
   const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL!)
   url.searchParams.set('audience', audience)
@@ -355,10 +302,7 @@ export function boardUrl(): string {
 
 /** How `vb` reaches a board from Node: a fetch that carries your credentials, and who it found you are. */
 export type NodeTransport = {
-  /**
-   * Every request to the board, through Deployment Protection, with a token for it (all but
-   * discovery) and, when it found one, your handle, and your name and avatar when no profile is set.
-   */
+  /** Every request to the board, through Deployment Protection, with a token for it (all but discovery). */
   fetch: typeof fetch
   /** Where the token came from, in words, once one was minted: `vercel login`, `BOARD_TOKEN`, … */
   source(): string | null
@@ -367,12 +311,12 @@ export type NodeTransport = {
 /**
  * How a client reaches the board at `url` from Node: through Deployment Protection, with a token
  * from `token`, `BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions, the Vercel
- * runtime, or your Vercel CLI login, in that order. `handle` is yours, in place of `BOARD_HANDLE`
- * or your Vercel username.
+ * runtime, or your Vercel CLI login, in that order. Who you are is the token's to say: the board
+ * names you from what it verifies.
  */
 export function connect(
   url: string,
-  options: { token?: Resolvable<string> | undefined; handle?: string | undefined; fetch?: typeof fetch | undefined } = {},
+  options: { token?: Resolvable<string> | undefined; fetch?: typeof fetch | undefined } = {},
 ): NodeTransport {
   url = url.replace(/\/+$/, '')
   const doFetch = guarded(url, options.fetch ?? ((input, init) => globalThis.fetch(input, init)), options.token)
@@ -411,7 +355,7 @@ export function connect(
     const local = localToken(url)
     if (local) {
       source = 'vb serve'
-      return { token: local.token, expiresAt: expiry(local.token), handle: local.handle, name: null, avatar: null }
+      return { token: local.token, expiresAt: expiry(local.token) }
     }
     const discovered = await discover()
     if (process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
@@ -445,13 +389,6 @@ export function connect(
     // Discovery is public: it's what a token is minted from.
     if (!(method === 'GET' && path === '/')) {
       if (!headers.has('authorization')) headers.set('authorization', `Bearer ${await token()}`)
-      const handle = options.handle ?? (process.env.BOARD_HANDLE || (options.token === undefined ? cached?.handle : null))
-      if (handle && !headers.has('x-board-handle')) headers.set('x-board-handle', handle)
-      // Your name and avatar show when you write as yourself, not as a profile.
-      if (!headers.has('x-board-profile') && options.token === undefined) {
-        if (cached?.name && !headers.has('x-board-name')) headers.set('x-board-name', encodeURIComponent(cached.name))
-        if (cached?.avatar && !headers.has('x-board-avatar')) headers.set('x-board-avatar', cached.avatar)
-      }
     }
     return doFetch(input, { ...init, headers })
   }) as typeof fetch
@@ -459,12 +396,17 @@ export function connect(
   return { fetch: send, source: () => source }
 }
 
-/** The profile the environment picks: `BOARD_AS`, or the coding agent it runs in, with its session. */
-export function environmentProfile(): { profile: ProfileOption; session: string | null } {
-  const detected = detectAgent()
-  const name = process.env.BOARD_AS || detected?.profile
+/**
+ * The profile the environment names: `BOARD_PROFILE`, with `BOARD_AVATAR`. Nothing else picks one, a coding
+ * agent included: without it, you write as yourself.
+ */
+export function environmentProfile(): ProfileOption {
+  // The old name, refused rather than ignored: an agent that still sets it would write as its person.
+  if (process.env.BOARD_AS)
+    throw new BoardError('renamed_env', 'BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS.', 0, { hint: 'Set BOARD_PROFILE to the same name, and unset BOARD_AS.' })
+  const name = process.env.BOARD_PROFILE
   const avatar = process.env.BOARD_AVATAR
-  return { profile: name ? (avatar ? { name, avatar } : name) : null, session: detected?.session ?? null }
+  return name ? (avatar ? { name, avatar } : name) : null
 }
 
 const WHERE = 'Project → Settings → Deployment Protection → Protection Bypass for Automation'
@@ -512,6 +454,39 @@ async function hostedToken(url: string): Promise<string> {
 const ownHost = (host: string) =>
   [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
     .some((own) => !!own && own.toLowerCase() === host.toLowerCase())
+
+/**
+ * What a sandbox's requests to the board at `url` carry, from this deployment: `token`, or this
+ * deployment's own Vercel OIDC token, for `audience` (the board's URL; null for Vercel's API, which
+ * takes it as it is), and on a board behind Deployment Protection what a hosted client sends to get
+ * through it: this deployment's bypass secret on its own hosts, or else its OIDC token for Trusted
+ * Sources. Never a person's login or `VERCEL_TOKEN`: what a policy holds, its sandbox can use.
+ */
+export async function sandboxHeaders(url: string, audience: string | null, token?: string): Promise<Record<string, string>> {
+  const oidc = async () => {
+    try {
+      return await getVercelOidcToken(audience === null ? undefined : { audience })
+    } catch (cause) {
+      throw Object.assign(
+        new BoardError('no_token', `There's no Vercel OIDC token here to hand a sandbox for ${url}.`, 0, {
+          hint: 'Run it in a Vercel deployment with OIDC, or pass the credential: sandboxPolicy({ token }).',
+        }),
+        { cause },
+      )
+    }
+  }
+  const credential = token ?? (await oidc())
+  const headers: Record<string, string> = { authorization: `Bearer ${credential}` }
+  if (audience === null) return headers
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+  if (bypass && (process.env.VERCEL !== '1' || ownHost(new URL(url).host))) headers['x-vercel-protection-bypass'] = bypass
+  else if (process.env.VERCEL === '1') {
+    // The edge trusts OIDC tokens only: a board token gets through as this deployment's.
+    const edge = credential.startsWith('board_') ? await oidc().catch(() => null) : credential
+    if (edge !== null) headers['x-vercel-trusted-oidc-idp-token'] = edge
+  }
+  return headers
+}
 
 /** Explicit bypass wins; otherwise hosted calls use OIDC and local people use their saved bypass. */
 function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<string>): typeof fetch {

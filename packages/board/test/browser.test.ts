@@ -193,7 +193,7 @@ describe('a board on another one, on the internal http() of the default build', 
     })
     const seen: string[] = []
     const page = board({ backend, watch: { seen: { tail: 'support', run: ({ event }) => void (event.message && seen.push(event.message.text)) } } })
-    const julian = caller(team.fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
+    const julian = caller(team.fetch, await personToken('u_julian'), {})
     try {
       await page.as('deploys').me()
       await vi.waitFor(() => expect(reads.length).toBeGreaterThan(0))

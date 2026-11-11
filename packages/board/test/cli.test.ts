@@ -326,12 +326,12 @@ describe('cli', () => {
 
     const read = await vb(['read', id])
     expect(read.code).toBe(0)
-    expect(read.stdout).toContain(`#${id}  julian`)
+    expect(read.stdout).toContain(`#${id}  u_julian`)
     expect(read.stdout).toContain('[status=investigating]')
     expect(read.stdout).toContain('deploy failed on a1b2c3')
-    expect(read.stdout).toContain('👀 julian')
+    expect(read.stdout).toContain('👀 u_julian')
     expect(read.stdout).toContain('↳ #')
-    expect(read.stdout).toContain('claude via julian')
+    expect(read.stdout).toContain('claude via u_julian')
     expect(read.stdout).toContain('rolled back to d4e5f6')
 
     const thread = JSON.parse((await vb(['read', id, '--json'])).stdout)
@@ -418,11 +418,11 @@ describe('cli', () => {
 
     const read = await vb(['read', 'open-work', '--limit', '1'])
     expect(read).toMatchObject({ code: 0, stderr: '' })
-    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ julian · \\d+s\n$`))
+    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n$`))
 
     const all = await vb(['read', 'open-work'])
-    expect(all.stdout).toContain(`#${second}  julian`)
-    expect(all.stdout).toMatch(/3 replies · last #\d+ claude via julian · \d+s/)
+    expect(all.stdout).toContain(`#${second}  u_julian`)
+    expect(all.stdout).toMatch(/3 replies · last #\d+ claude via u_julian · \d+s/)
     expect(all.stdout.indexOf(`#${second}`)).toBeLessThan(all.stdout.indexOf(`#${first}`))
 
     const page = JSON.parse((await vb(['read', 'open-work', '--json'])).stdout)
@@ -435,14 +435,14 @@ describe('cli', () => {
     const open = await vb(['read', 'open-work', '--label', 'state=open', '--json'])
     expect(JSON.parse(open.stdout).threads.map((t: { message: { id: string } }) => t.message.id)).toEqual([first])
     // Across channels, each summary names its channel; with no filter, that's every thread.
-    expect((await vb(['read', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  julian`)
+    expect((await vb(['read', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  u_julian`)
     expect((await vb(['read'])).stdout).toMatch(/^all channels · \d+ threads · cursor \d+\n/)
     // One of a thing is one, not ones.
     const lone = (await vb(['post', 'lone-work', 'just me'])).stdout.trim()
     expect((await vb(['channels'])).stdout).toContain(`\nlone-work  1 thread · 1 message · last #${lone}\n`)
 
     // Filters on a thread keep its root and the replies that match.
-    const narrowed = await vb(['read', second, '--by', '@julian/claude', '--text', 'note 2', '--json'])
+    const narrowed = await vb(['read', second, '--by', '@u_julian/claude', '--text', 'note 2', '--json'])
     const kept = JSON.parse(narrowed.stdout)
     expect([kept.message, ...kept.replies].map((m: { text: string }) => m.text)).toEqual(['docs typo', 'note 2'])
     const byLabel = await vb(['read', first, '--label', 'state=open', '--by', '@julian/claude'])
@@ -451,7 +451,7 @@ describe('cli', () => {
 
     // A reaction from someone who hasn't written in the thread shows their name, not their actor ID.
     expect((await vb(['react', first, 'eyes', '--as', 'codex'])).code).toBe(0)
-    expect((await vb(['read', first])).stdout).toContain('👀 codex via julian')
+    expect((await vb(['read', first])).stdout).toContain('👀 codex via u_julian')
 
     // A typo'd channel is an error, not an empty read; an empty read in a real channel isn't.
     expect(await vb(['read', 'open-wrok'])).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Couldn't find channel open-wrok\. Did you mean open-work\?\n/) })
@@ -472,13 +472,14 @@ describe('cli', () => {
 
   it('filters by mentions of me, or of a handle', async () => {
     await vb(['post', 'pings', 'hello'])
-    await vb(['post', 'pings', 'hey @julian, look', '--as', 'claude'])
+    // A Vercel login's handle is its user ID.
+    await vb(['post', 'pings', 'hey @u_julian, look', '--as', 'claude'])
     const texts = async (args: string[]) => {
       const { stdout } = await vb(['read', 'pings', ...args, '--json'])
       return (JSON.parse(stdout) as { threads: { message: { text: string } }[] }).threads.map((thread) => thread.message.text)
     }
-    expect(await texts(['--mentions'])).toEqual(['hey @julian, look'])
-    expect(await texts(['--mentions', '@julian'])).toEqual(['hey @julian, look'])
+    expect(await texts(['--mentions'])).toEqual(['hey @u_julian, look'])
+    expect(await texts(['--mentions', '@u_julian'])).toEqual(['hey @u_julian, look'])
   })
 
   it('filters by author, with or without the @', async () => {
@@ -489,15 +490,15 @@ describe('cli', () => {
       return (JSON.parse(stdout) as { threads: { message: { text: string } }[] }).threads.map((thread) => thread.message.text)
     }
     // A person is everyone they are, their agents included (#113).
-    expect(await texts(['--by', 'julian'])).toEqual(['from julian', 'from claude'])
-    expect(await texts(['--by', '@julian'])).toEqual(['from julian', 'from claude'])
-    expect(await texts(['--by', '@julian/claude'])).toEqual(['from claude'])
+    expect(await texts(['--by', 'u_julian'])).toEqual(['from julian', 'from claude'])
+    expect(await texts(['--by', '@u_julian'])).toEqual(['from julian', 'from claude'])
+    expect(await texts(['--by', '@u_julian/claude'])).toEqual(['from claude'])
   })
 
   it('reports who you are', async () => {
     const { stdout, code } = await vb(['whoami', '--as', 'codex'])
     expect(code).toBe(0)
-    expect(stdout).toContain('codex via julian (vercel:user:u_julian+codex)')
+    expect(stdout).toContain('codex via u_julian (vercel:user:u_julian+codex)')
     expect(stdout).toContain(`board   ${url}\nsource  BOARD_TOKEN\ntoken   expires in `)
     // Full access goes without saying.
     expect(stdout).not.toContain('can ')
@@ -521,11 +522,24 @@ describe('cli', () => {
     }
   })
 
-  it('picks up the profile of a detected agent', async () => {
-    const { stdout } = await vb(['whoami', '--json'], { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's-1' })
-    expect(JSON.parse(stdout)).toMatchObject({ actor: 'vercel:user:u_julian+claude', session: 's-1' })
-    const human = await vb(['whoami', '--json', '--human'], { CLAUDECODE: '1' })
-    expect(JSON.parse(human.stdout)).toMatchObject({ actor: 'vercel:user:u_julian', profile: null })
+  it('writes as --as with --avatar, or BOARD_PROFILE with BOARD_AVATAR, and takes no --avatar without a profile', async () => {
+    const flagged = await vb(['post', 'avatars', 'from fixer', '--as', 'fixer', '--avatar', 'https://example.com/fixer.png', '--json'])
+    expect(JSON.parse(flagged.stdout).message.author).toMatchObject({ kind: 'agent', name: 'fixer', avatar: 'https://example.com/fixer.png' })
+    const set = await vb(['post', 'avatars', 'from mender', '--json'], { BOARD_PROFILE: 'mender', BOARD_AVATAR: 'https://example.com/mender.png' })
+    expect(JSON.parse(set.stdout).message.author).toMatchObject({ kind: 'agent', name: 'mender', avatar: 'https://example.com/mender.png' })
+    expect(await vb(['post', 'avatars', 'from no one', '--avatar', 'https://example.com/x.png'])).toMatchObject({
+      code: 2,
+      stderr: expect.stringMatching(/^error: --avatar is the avatar of the profile --as names: pass --as too\.\n/),
+    })
+    expect(await vb(['whoami'], { BOARD_AS: 'claude' })).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS\.\n/) })
+  })
+
+  it("writes as you inside a coding agent, whatever its environment says, and as a profile only when one is named", async () => {
+    const agent = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's-1', CODEX_THREAD_ID: 't-1', AI_AGENT: 'pi' }
+    expect(JSON.parse((await vb(['whoami', '--json'], agent)).stdout)).toMatchObject({ actor: 'vercel:user:u_julian', profile: null })
+    const named = JSON.parse((await vb(['post', 'agents', 'from claude', '--as', 'claude', '--json'], agent)).stdout).message
+    expect([named.by.actor, named.author.avatar]).toEqual(['vercel:user:u_julian+claude', null])
+    expect(await vb(['whoami', '--human'], agent)).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --human for vb whoami\./) })
   })
 
   it('waits for a reply, or fails with reason timeout, exit 1, when none comes in time', async () => {
@@ -828,7 +842,7 @@ describe('cli', () => {
         if (found) resolve(found[1]!)
       }),
     )
-    expect(stdout).toContain(`inspecting ${url} as julian`)
+    expect(stdout).toContain(`inspecting ${url} as u_julian`)
     expect(await (await fetch(address)).text()).toContain('<div id="root"></div>')
     child.kill('SIGINT')
     expect(await exited).toBe(0)

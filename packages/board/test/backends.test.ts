@@ -29,7 +29,7 @@ async function team(options: Parameters<typeof http>[1] = {}) {
 }
 
 const julianOn = async (fetch: (request: Request) => Promise<Response>, audience?: string) =>
-  caller(fetch, await personToken('u_julian', audience), { 'x-board-handle': 'julian' })
+  caller(fetch, await personToken('u_julian', audience), {})
 
 /** Julian, signed in to each board as `vercel login` leaves it, for a client in this process. */
 async function signedIn(audiences: string[]) {
@@ -72,7 +72,7 @@ describe('board() and its backend', () => {
     } as unknown as Backend
     const { fetch } = projectBoard({ backend: mine, authenticate: oidcTokens(testAuth), url: BOARD_URL })
     const token = await personToken()
-    const julian = caller(fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'claude', 'x-board-can': 'dev/=read' })
+    const julian = caller(fetch, token, { 'x-board-profile': 'claude', 'x-board-can': 'dev/=read' })
 
     expect(await julian('GET', '/messages?channel=dev&label=state=open|draft&limit=5')).toEqual({ status: 200, body: { messages: [], cursor: '0' } })
     expect(await julian('POST', '/messages', { channel: 'dev', text: 'hello' })).toMatchObject({ status: 201, body: { message: { id: 'm1' } } })
@@ -84,8 +84,8 @@ describe('board() and its backend', () => {
     expect(calls[0]!.caller).toMatchObject({
       identity: {
         principal: { id: 'vercel:user:u_julian', kind: 'person', scope: 'dev/=read' },
-        author: { actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude', session: null },
-        actor: { id: 'vercel:user:u_julian+claude', kind: 'agent', handle: 'julian/claude', name: 'claude' },
+        author: { actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' },
+        actor: { id: 'vercel:user:u_julian+claude', kind: 'agent', handle: 'u_julian/claude', name: 'claude' },
       },
       origin: { via: { kind: 'api' } },
     })

@@ -110,9 +110,9 @@ function createVerifier(options: {
     const project = String(claims.project ?? '')
     const ownProject = (await options.projectId()) ?? null
     if (ownProject !== null && claims.project_id === ownProject && environment === 'development') {
-      // A development token minted with someone's Vercel login carries their user ID.
+      // A development token minted with someone's Vercel login carries their user ID, and nothing else of who they are.
       if (typeof claims.user_id !== 'string') throw unauthorized('development token without user_id')
-      return { id: `vercel:user:${claims.user_id}`, kind: 'person', handle: `user-${claims.user_id.slice(0, 6).toLowerCase()}`, expiresAt }
+      return { id: `vercel:user:${claims.user_id}`, kind: 'person', handle: claims.user_id, expiresAt }
     }
     return deployment(facts, project, environment, expiresAt)
   }
@@ -137,7 +137,8 @@ async function localPerson(token: string, local: NonNullable<OidcTokensOptions['
 const deployment = (facts: TokenFacts, project: string, environment: string, expiresAt: Date | null): Principal => ({
   id: `vercel:project:${String(facts.claims.project_id)}:${environment}`,
   kind: 'deployment',
-  handle: environment === 'production' ? project : `${project}@${environment}`,
+  // Its project's name in every environment: the environment shows in its name, `support (preview)`.
+  handle: project,
   expiresAt,
   facts,
 })
