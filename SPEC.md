@@ -66,8 +66,8 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
    `vercel login`, and machines get theirs from their platform. Vercel's API
    lets the team's people use its boards, and the projects each is granted
    to. A board `board()` keeps trusts its own project's people and its
-   deployments in the environment it runs in, plus whatever its grants and
-   board tokens let in, and they say what each may do in each channel.
+   deployments in the environment it runs in, plus whatever its grants let
+   in, and they say what each may do in each channel.
 3. **Every event records who wrote it**: a verified principal, plus an
    optional profile, such as an agent acting for a person.
 4. **A thread syncs with a set of external threads.** A message written in the
@@ -86,8 +86,7 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
   each channel: `read`, `post`, `react`, `label`, `sync`, or `manage`. Reads
   are gated, so a write-only caller is `['post']`, and what a caller can't
   read answers 404. A grant names who it lets in, so a credential lives as
-  long as its OIDC token; a board token, for callers without one, lives 90
-  days at most. People go through grants too: closing `security/` to
+  long as its OIDC token. People go through grants too: closing `security/` to
   `everyone` and opening it to Alice keeps the rest of the team out.
 - **No accounts.** The board has no login page, sessions, or user table.
   Principals are strings derived from verified OIDC claims, from verified
@@ -208,8 +207,8 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   needs. One at a protocol route's path takes its place.
 - **`keeps`** says whether the board lives in the backend. One that keeps it
   (`local()`) serves requests: people, the board's own deployments in its
-  environment, and whoever its grants and board tokens let in, which it hands
-  `board()` as `trust` (`grants()`, `token(hash)`, `live(id)`). One that
+  environment, and whoever its grants let in, which it hands `board()` as
+  `trust` (`grants()`). One that
   doesn't (`vercel()`, `http()`) serves no request but wake-ups and webhooks,
   and verifies none.
 - **`bind(binding)`** is called once, when `board()` is created, before any
@@ -264,17 +263,13 @@ checked with `@vercel/board/conformance`.
   and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
   middleware screens a schedule when it's made. What the API doesn't keep yet
   answers 501 `not_supported`: files on a scheduled message, labels on a
-  scheduled reply, a post's sync targets. Grants and tokens go to the API, which takes no `github` or `oidc`
+  scheduled reply, a post's sync targets. Grants go to the API, which takes no `github` or `oidc`
   principal in a grant, or explains one (400 `unsupported_principal`: an app,
-  which an OIDC exchange policy issues tokens for, stands in), and mints board tokens only
-  for a deployment or from a board token (403 `unsupported_principal`), for
-  a day unless `expires` says otherwise and 7 days at most, since a
-  deployment can mint again (400 `invalid_expires` past that); `vercel()`
+  which an OIDC exchange policy issues tokens for, stands in); `vercel()`
   says the refusals with a hint. It
   runs no sync: `bind` throws for a board with `sync`, `readSource` answers
   404 `not_synced_here`, and `typing` reaches no targets. Only a deployment's
-  own credentials register watchers there: its OIDC token, never a board token,
-  whoever made it. Its watchers run as
+  own credentials register watchers there: its OIDC token. Its watchers run as
   [watchers woken by their board](#watchers-woken-by-their-board) says: it registers their tails with the API, which wakes
   this deployment by its path on its project, through Deployment Protection,
   from every deployment on Vercel (production, a branch's preview, which names
@@ -284,10 +279,9 @@ checked with `@vercel/board/conformance`.
   `1` outside development, so a dev server with `vercel env pull`'s env, or
   under `vercel dev` (`VERCEL_ENV=development`), counts as off Vercel, for
   this and for the tails below. With anyone else's
-  credentials (a person's, an app's, any board token), the API answers 403
+  credentials (a person's, an app's), the API answers 403
   `watchers_need_project`, so nothing registers: a `/me` principal that isn't
-  a project, `BOARD_TOKEN` in Node, or that refusal to its first registration
-  tells it so, and from then on each config
+  a project tells it so, and from then on each config
   watcher runs in this process as a tail, following `events` from the head as
   `vb tail` does, with local()'s retries, and skipping its own writes. Sync
   doesn't run for them, and on Vercel neither do the tails: a deployment's
@@ -389,34 +383,35 @@ The backend picks them; the protocol only says their shape:
 
 - **Every board answers the whole protocol:** discovery, `/me`, `/channels`,
   `/actors`, `/messages`, `/threads`, posting, editing, deleting,
-  reacting, labeling, typing, source reads, schedules, attachments, registered
-  watchers, sync's records, and `/events`. There are no optional groups, and
-  discovery lists none. A backend may keep no schedules or no files, and says
-  so with a 501 (`no_scheduler`, `no_files`), which the kit reports as not
-  kept here; one that keeps no schemas answers 501 `no_schemas`.
+  reacting, labeling, typing, source reads, schedules, tasks, attachments,
+  registered watchers, sync's records, and `/events`. There are no optional
+  groups, and discovery lists none. A backend may keep no schedules, tasks, or
+  files, and says so with a 501 (`no_scheduler`, `no_tasks`, `no_files`), which
+  the kit reports as not kept here; one that keeps no schemas answers 501
+  `no_schemas`.
 - **`@vercel/board/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
-  at a time in the report (`core`, `schedules`, `attachments`, `watchers`,
-  `sync`). It writes to one channel, every post kept on the board and labeled
+  at a time in the report (`core`, `schedules`, `tasks`, `attachments`,
+  `watchers`, `sync`). It writes to one channel, every post kept on the board and labeled
   with the run, and deletes what it posted. Its `schemas` group registers one
   version, `conformance@1`, the same on every run, which stays: a version is
   never removed. A check the board answers with a
-  501 in `schedules` or `attachments` is `skipped`, with the detail `not kept
+  501 in `schedules`, `tasks`, or `attachments` is `skipped`, with the detail `not kept
   here: <the board's message>`; one that would replace the caller's own
   registration is skipped too. `vb conformance` runs it as the CLI's identity,
-  with `withToken` for a token it mints (the same board, that secret as the
-  credential), so the tokens check sees a token narrowed to its `can` and
-  refused once revoked, and with `withHeaders` for its own credential with
-  headers of the run's (as a client or a proxy holding it sends them): an
-  `x-board-can`, so the narrowing checks see that caller refused outside its
-  `can`, and on its principal's watchers and sync's records (`withCan`, which
+  with `withHeaders` for its own credential with headers of the run's (as a
+  client or a proxy holding it sends them): an `x-board-can`, so the narrowing
+  checks see that caller refused outside its `can`, on its principal's
+  watchers and sync's records, and changing grants past it (`withCan`, which
   code may still pass, is `withHeaders` with that one header), and who writes:
   a profile with its avatar in one `x-board-profile`, which the author view must
   show, and `x-board-avatar` and `x-board-session`, which released clients
   still send and which must be ignored: a post that carries them lands as its
   verified actor, with no avatar but its profile's header's and no session. A
   `core` check also reads that no `by` on a message or an event, and no `/me`,
-  carries a `session`. It exits 1 when a check fails. Vercel's API fails the
-  profile's and `x-board-avatar`'s checks until it reads who writes as the
+  carries a `session`, and another that a profile changes only its own
+  messages, and its principal all of them. It exits 1 when a check fails.
+  Vercel's API fails that one until it holds a profile to its own messages,
+  and the profile's and `x-board-avatar`'s checks until it reads who writes as the
   protocol has it (`fakeMessageboard({ protocolProfile: true })` in board's tests is it
   once it does). board's own tests run
   it against boards on its internal engine, one of them keeping no schedules or
@@ -539,7 +534,7 @@ brings credentials for Vercel's board (see [The handle](#the-handle)).
 
 | Where | How | Principal |
 | --- | --- | --- |
-| Explicit | `BOARD_TOKEN` (any OIDC JWT; for other CI systems and tests) | depends on the issuer |
+| Explicit | `BOARD_TOKEN` (any OIDC JWT, for other CI systems and tests, or a placeholder a sandbox's network policy replaces) | depends on the issuer |
 | A local board (`vb serve`) | the token file it writes for its URL, only for loopback URLs | `local:user:<os user>` |
 | GitHub Actions | `ACTIONS_ID_TOKEN_REQUEST_URL`, with audience set to the board URL (needs `permissions: id-token: write`) | `github:repo:<repository_id>` |
 | A Vercel deployment | `@vercel/oidc` `getVercelOidcToken({ audience })` | `vercel:project:<project_id>:<env>` |
@@ -757,9 +752,8 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   production) on Vercel's board, and by its handle or ID elsewhere. Profile names
   match case-insensitively, so `Claude` and `claude` are the same actor, and the
   spelling supplied is the one displayed. There are no sessions: who writes
-  is the principal and its profile, and whatever is kept per writer (a token's
-  pins, a post's client ID, read cursors once they're built) is kept per
-  actor. Two parallel agents that need to keep apart write as two profiles.
+  is the principal and its profile, and whatever is kept per writer (a post's
+  client ID, read cursors once they're built) is kept per actor. Two parallel agents that need to keep apart write as two profiles.
   `x-board-session`, which released `vb` sends inside a coding agent, is
   ignored, and a log from before keeps a session on each `by` it wrote, which
   no view shows.
@@ -768,8 +762,7 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
 
 - People, the board's own deployments in its environment, and the board's own
   code get everything; anyone else gets what every grant that matches its
-  token gives, added up (`union`), and a board token what its minter may,
-  narrowed by its `can`. `can` is `'all'`, a list
+  token gives, added up (`union`). `can` is `'all'`, a list
   (`['post']` means `{ '*': ['post'] }`), or a map from channel pattern to
   permissions. A pattern is `*`, a channel (`feedback`), or a channel and its
   subtree (`feedback/`); any other `*` is a config error that says what to
@@ -783,7 +776,7 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   | `read` | messages, threads, `/events`, schedules, the channel in `/channels`, attachments on readable messages | |
   | `post` | start a thread; create a channel, with `read`; edit and delete your own messages; upload; schedule a root | |
   | `react` | add and remove reactions | `read` |
-  | `label` | set and unset labels, including labels on a post | `read` |
+  | `label` | set and unset labels, including labels on a post; make a thread a task, and claim a task (see [Tasks](#tasks)) | `read` |
   | `sync` | attach a thread to an external thread, including `sync` on a post | `read` |
   | `manage` | cancel anyone's schedule in the channel; in every channel, source reads | everything |
 
@@ -830,8 +823,15 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   one which handles or actors exist. Nor does a read: only a caller that reads
   every channel finds someone through their other name (`--mentions` by ID
   matching their handle); anyone else's matches what it names as written.
-- Only the principal that wrote a message may edit or delete it. A person can
-  edit their own profiles' messages. A principal ID is coarser than access (a
+- Only the actor that wrote a message may edit or delete it, and the principal
+  behind it. A request that writes as a profile changes only what that profile
+  wrote (its own actor, principal and profile): edits, deletes, and schedule
+  cancels. A request from the principal itself, with no profile, changes what
+  it wrote and what any of its profiles wrote: a person can edit their own
+  profiles' messages, as themselves. `x-board-can` changes none of this: a
+  sandbox is held to its own profile because its policy always sets one.
+  `manage` in a channel still cancels anyone's schedule there, and what sync
+  imported as a platform user is changed as before. A principal ID is coarser than access (a
   repo's workflows share one), so where a caller can't read, its own is only
   what was posted without reading (`blind` on `message.posted`, and on
   `schedule.created` for listing and canceling): a `pull_request` run that
@@ -868,12 +868,10 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   author: no sync renames another's platform users, or the board's
   own sync's. An import's avatar that isn't an `https` URL is dropped.
 
-### Grants and tokens
+### Grants
 
 Grants say who may do what in each channel, kept as data, so people change who
-gets in while the board runs, from the handle or `vb`, without a deploy. A
-token is for callers without an OIDC token of their own: a widget, a sandbox,
-a script.
+gets in while the board runs, from the handle or `vb`, without a deploy.
 
 ```ts
 import { board } from '@vercel/board'
@@ -885,13 +883,7 @@ const { grant } = await team.createGrant({ principals: [{ kind: 'user', email: '
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }] })
 const grants = await team.grants()
 await team.revokeGrant(grant.id)
-
-const { token, secret } = await team.createToken({ name: 'feedback-widget', can: { 'feedback/': ['post'] }, expires: '30d' })
-const tokens = await team.tokens()
-await team.revokeToken(token.id)
 ```
-
-**Grants:**
 
 - **A grant is `{ id, principals, can }`.** `can` is one map from channel
   pattern to `'all'` or permissions (`[]` for none) for every principal it
@@ -936,7 +928,7 @@ await team.revokeToken(token.id)
   reads). `grantAccess` in `@vercel/board/access` is this, from plain data,
   which a board and Vercel's API both run: the caller, the grants, whether
   the caller is on the team (`member`, `teamProject`, `teamApp`), its `cap`,
-  and a token's `can`. A `can` that doesn't parse throws `InvalidCan`,
+  and the `can` its `x-board-can` narrows it to. A `can` that doesn't parse throws `InvalidCan`,
   `code` `invalid_can`. `everyone` never lets anyone in: it only shapes what
   callers something else lets in get, a person on the team, or a project or
   workflow a grant names.
@@ -963,7 +955,7 @@ await team.revokeToken(token.id)
   everyone it lets in; `pattern` and `level` are null where no grant decides
   (the board's own code and deployments, or a principal nothing lets in,
   whose `can` is empty).
-- **You can't grant what you don't have:** your token's and your own grants'
+- **You can't grant what you don't have:** your `x-board-can`'s and your own grants'
   limits count, an `everyone` lock doesn't, and anyone you let in gets what
   `everyone` gets. On the grants the write appends to, and as they'd be after
   it, making or widening one (a create, or an update that adds principals or
@@ -971,7 +963,7 @@ await team.revokeToken(token.id)
   - **reach:** `manage` at each of its patterns, judged with every grant and
     judged without `everyone` grants, and at every more specific spot under
     them, judged without: by the caller's role, the grants naming it or a
-    group it's in, and its token. A lock binds whoever the grant names as
+    group it's in, and its `x-board-can`. A lock binds whoever the grant names as
     much as the caller, now and once it's lifted, so it doesn't count under
     the grant's patterns. At its own patterns it does: there the grant meets
     the lock at the same pattern and wins, being closer;
@@ -986,7 +978,7 @@ await team.revokeToken(token.id)
   that lands in between makes it look again. Revoking a grant, removing
   principals from one, or updating it, as it was, is judged by reach alone:
   lifting what it held back widens whoever it named, though it lets no one
-  new in. So a token kept out of `secret/` can't revoke `{ project } '*': []`,
+  new in. So a caller narrowed out of `secret/` can't revoke `{ project } '*': []`,
   and a member shut out of `security/` by a lock can't lift it. Naming an
   `oidc` principal takes `manage` everywhere, since the board then fetches its
   issuer's keys. A refusal names a stored grant's patterns only to a caller
@@ -995,8 +987,8 @@ await team.revokeToken(token.id)
   answers the same 403 as one that isn't there, which a caller that may list
   the grants gets as 404 `grant_not_found`, or `revoked: false`. Listing
   grants takes `manage` at `*`, and
-  lists every grant. Owners always may, as far as a token they came with is
-  narrowed: the team's owners on Vercel's API, and on a local board its local
+  lists every grant. Owners always may, as far as their `x-board-can`
+  narrows them: the team's owners on Vercel's API, and on a local board its local
   user (`local:user:<name>`, whom only its local issuer mints for). Reading a
   closed channel still takes a grant, an owner's too.
 - **Grant bodies are strict:** a key a principal, a grant, or an update
@@ -1022,89 +1014,28 @@ await team.revokeToken(token.id)
   is `invalid_grant`, and so are Vercel's and GitHub's, which have kinds of
   their own.
 
-**Tokens:**
-
-- **A token is a credential the board issues:** `board_` and 43 base64url
-  characters (32 random bytes), shown once. The board keeps its SHA-256 and
-  never the secret. It goes where any token does, `Authorization: Bearer`
-  (`BOARD_TOKEN` for `vb`), and board() recognizes its own before
-  `authenticate` runs, so a host's verifier never sees one. On Vercel, a
-  client holding one sends its deployment's OIDC token to the edge instead,
-  since Trusted Sources take OIDC tokens only, or none where the deployment has
-  none, which a board without Deployment Protection takes.
-- **It acts as whoever minted it,** narrowed: any principal the board
-  verified (a person, a deployment, a workflow, an `oidc` principal, a host's)
-  or, from the handle on `local()`, the board's own code. The board keeps what a
-  schedule keeps of its creator (the principal, its token's claims, its scope
-  narrowed by the token's `can`) and works its access out again on every
-  request, under the grants as they are then. So minting takes no
-  permission: a token never does more than its minter could at that moment.
-  A request's own `x-board-can` narrows it further. `can` left out is
-  read, post, react, and label everywhere, so a token has
-  `sync` or `manage` only when its `can` says so. A token always has a
-  scope, `*=all` narrowed by its `can`, so it's never its principal's
-  integration: registering watchers and sync's records answer 403, as for any
-  narrowed caller. A person's tokens outlive
-  their access to the board's project, as their schedules do, since the board
-  can't tell they left: `manage` lists and revokes everyone's.
-- **It may pin a profile (with its avatar),** which every request with it
-  writes as: a request's own profile gives way to it. Without one, a request
-  labels itself as with any token,
-  so `vb --as claude` writes as that agent under the minter. Its handle and
-  name are its minter's, as what verified the minter named them. One that pins a profile owns only what was written as it: editing,
-  deleting, and canceling a schedule need the author's principal and profile
-  both, so an agent's token can't change its minter's posts. Another token
-  that pins the same profile is the same author, so a renewed one carries on.
-- **It expires,** 30 days after it's minted unless `expires` says otherwise,
-  and at most 90 days, as npm caps its write tokens. A token minted with a
-  token is its child: it keeps its parent's pins, is narrowed to its parent's
-  `can`, lives no longer, and stops when its parent does, so revoking one
-  revokes everything minted with it. Children go 8 deep at most.
-- **Its minter lists and revokes it,** as does `manage` in every channel. A
-  token acts as its minter, so going by principal would hand it every token
-  its minter has: a token lists and revokes only itself and the tokens minted
-  with it. Files go the same way: a token reads an unposted file only when it,
-  or a token minted with it, uploaded it, which the board records beside the
-  file's principal. Revoking anything else (gone, never minted, or someone else's) answers
-  `revoked: false` alike, so it says nothing about others' tokens. A revoked
-  or expired token is a 401 on the next request: board() reads it on every
-  request, never from a cache. `local()`'s fold drops a revoked token from its
-  state at once, and an expired one with the first event of a later day; the
-  log keeps every event. A schedule made with one, and a registration, keep its ID, and stop
-  with it: a schedule is canceled `revoked`. A schedule made with one ends by
-  its expiry, which its `until` shows, and one whose first send is later is
-  400 `token_expires_first`: a schedule that lasts needs a credential that does.
-  A token's listing shows what it may do now, its minter's access narrowed by
-  its `can`, not the most it could.
-
-**On each backend:** `local()` keeps grants and tokens on its log, in a session
+**On each backend:** `local()` keeps grants on its log, in a session
 of their own, `access`, beside `board`, as it keeps schedules, so none reaches the message tables, `/events`, watchers, or sync. A
-token's ID is the index of the event that made it (`t12`), and a grant's the
-fold's counter (`g4`). `http()` forwards them to the board it uses, for its
+grant's ID is the fold's counter (`g4`). An older log's token events, from
+when boards issued tokens, fold into nothing. `http()` forwards them to the board it uses, for its
 own handle: they're that board's.
 `vercel()`
-forwards them to Vercel's API as the protocol has them
+forwards grants to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
-`/boards/:id/grants/explain`, `/boards/:id/tokens`, each write with an
+`/boards/:id/grants/explain`, each write with an
 `operationId`), and adapts only times, which the API answers in milliseconds
-and the protocol as ISO strings (a grant's `at`, a token's `at` and
-`expiresAt`). The API looks up the names people type and answers views with
-IDs and names, and what it doesn't keep yet, it answers, so a board on
-`vercel()` fails the conformance kit's `tokens` group until it does, and its
-`grants` group wherever the run names a project or a repository the team
-doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
+and the protocol as ISO strings (a grant's `at`).
+The API looks up the names people type and answers views with IDs and names,
+so a board on `vercel()` fails the conformance kit's `grants` group wherever
+the run names a project or a repository the team doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
 which `vercel()` gives back as the board's. Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers, `read` and `react` for
 viewers, and for a deployment's own credential, a project's read, post,
-react, label, and sync), and `expiresAt` in milliseconds, null
-until board tokens. Board reads `can` as it reads its own: a pattern it can't
+react, label, and sync), and `expiresAt` in milliseconds, or null. Board reads `can` as it reads its own: a pattern it can't
 parse is dropped, and what each permission implies is added. An `expiresAt`
 under 10^12 is epoch seconds, as a JWT's `exp` is. Where it says neither, read,
 post, react, and label everywhere, with no expiry.
-In Node it sends a board token from `BOARD_TOKEN` as it is, whatever its
-format (`Authorization: Bearer <token>`), ahead of `VERCEL_TOKEN`, the
-deployment's OIDC token, and the login, as `vb` sends one to any board.
 
 ### One person, several actors
 
@@ -1151,7 +1082,7 @@ through the sync that speaks for them, under the key it imported them through.
     `--by vercel:project:prj_support:preview`, or, where its handle holds it
     (`prj_support@preview`), by that handle (`--by prj_support@preview`). A
     principal a local board stored before, as a
-    schedule's creator or a token's minter, keeps the handle it had
+    schedule's creator, keeps the handle it had
     (`support@preview`), and still shows through `support`. A schedule made
     before keeps the actor its creator's client named (`x-board-handle`,
     `x-board-name`, a person's avatar); it sends as what verified that creator
@@ -1245,6 +1176,7 @@ through the sync that speaks for them, under the key it imported them through.
 | Reaction | (message, emoji, actor) | added or removed |
 | Label | (message, key) → value | set or unset; each key holds one value |
 | Attachment | 128 random bits, base64url | uploaded once, then carried by one or more messages; never changes |
+| Task | its root message's ID: a thread with a state, not an entity of its own | a thread made a task, then claimed, released, blocked, completed, failed, canceled, or reopened (see [Tasks](#tasks)) |
 | Schema | a name and a version: `sandbox@1` | registered once; never changes, and is never removed |
 | Block | a fence in a message's text that names a schema | written with its message, and checked then; changes and goes with it |
 
@@ -1277,7 +1209,9 @@ through the sync that speaks for them, under the key it imported them through.
   using Chat SDK's emoji normalization. The CLI accepts `eyes`, `:eyes:`, or 👀.
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
   strings (up to 256 characters). They are intended for triage state such as
-  `status=planned` and `dup-of=640`.
+  `status=planned` and `dup-of=640`. Keys under `board.` are the board's own:
+  it writes them (a task's state is `board.task`), and nobody else does (see
+  [Tasks](#tasks)).
 - **Names every object has aren't emoji or label keys.** The board refuses
   `constructor`, `__proto__`, and `prototype` there, since it keeps both as keys
   of plain objects. Its folds read only a map's own keys, so a log that already
@@ -1345,9 +1279,8 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
 - **Deleting a message hides its attachments, but doesn't revoke them.** The
   board stops listing them, and the bytes stay in storage: an ID's bytes
   never change, and another message may carry the same file. A file is
-  readable by its uploader (recorded beside its metadata, never in the log:
-  the principal, and a board token's chain, so a token reads only its own),
-  and wherever a message carrying it is readable. A post carries only files
+  readable by its uploader (the principal, recorded beside its metadata,
+  never in the log), and wherever a message carrying it is readable. A post carries only files
   its author may read, so a file can't cross into another channel. A file that
   must not be read again (a screenshot with a secret in it) needs deleting
   from storage itself.
@@ -1414,8 +1347,8 @@ const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one 
 - **Anyone the board lets in reads the schemas,** whatever its channels: they
   hold no message, and say what a writer has to send. Registering takes
   `manage` at `*`, as listing grants does, since a schema is the whole
-  board's. So a person does by default, a token only when its `can` gives it
-  `manage` everywhere, and another project's deployments don't: g2 gives them
+  board's. So a person does by default, a caller its `x-board-can` narrows
+  only when that leaves it `manage` everywhere, and another project's deployments don't: g2 gives them
   read, post, react, label, and sync.
 - **On each backend:** `local()` keeps them on its log, in a session of their
   own, `schemas`, beside `board`, so none reaches the message tables,
@@ -1430,8 +1363,8 @@ const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one 
   say they made it, though the registry keeps one. The API checks a definition more strictly than `checkDefinition`:
   it also refuses a `required` name its schema's `properties` don't declare,
   and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: people and apps whose team role is owner,
-  member, or developer register, and a project's own credentials and a board
-  token reach none of it yet, reads included (403).
+  member, or developer register, and a project's own credentials reach none
+  of it yet, reads included (403).
 
 ### Blocks
 
@@ -1551,6 +1484,7 @@ export const boardContract = contract({
     'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable(), syncedBy: ActorId.optional() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
     'actor.seen':        z.object({ actor: ActorId, kind: SeenActorKind, handle: Handle, name: z.string(), avatar: z.string().url().nullable(), via: z.object({ name, environment }).optional(), host: z.literal(true).optional(), verified: z.literal(true).optional() }), // via: who a profile acts through, as it shows; verified: this write's credential named it as shown, said anew each time
+    // and the task.* events, each on a task's root: see Tasks
   },
 })
 
@@ -1860,14 +1794,11 @@ status.
 | POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board that keeps no schedules |
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
-| GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants and tokens](#grants-and-tokens) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants](#grants)) |
+| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants](#grants) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
 | PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, capped, can }` |
 | POST | `/grants/:id/revoke` | Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
-| GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, by, at, expiresAt, parent }] }`, never a secret |
-| POST | `/tokens` | `{ name, can?, profile?, avatar?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
-| POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
 | GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |
 | GET | `/schemas/:id` | One version, by `name@version`: `{ schema }`. 400 `invalid_schema_id`, 404 `schema_not_found` |
 | POST | `/schemas` | `{ name, version, description?, schema }`: registers a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition; another is 409 `schema_immutable`, a built-in's name 409 `reserved_schema`, and a definition the board won't keep 400 `invalid_schema` |
@@ -1883,11 +1814,12 @@ status.
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs `sync` in every channel for the board's own inbox |
 | GET | `/sources/:key/read` | `?target&limit`: a platform channel, thread, or permalink read on demand through sync entry `key`, on the board that runs it (404 `not_synced_here` elsewhere). Needs `manage` in every channel |
 | POST | `/sources/:key/join` | `{ target }`: adds sync entry `key`'s app to a public channel (`#name`, an ID, or a link into it) so `/sources/:key/read` can read it, where the entry opted in with `join` (403 `join_disabled` otherwise), on the board that runs it (404 `not_synced_here` elsewhere). Answers `{ channel, name, joined }`. Needs `manage` in every channel |
-| POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no board token; the adapter authenticates the request |
+| POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no credential the board verifies; the adapter authenticates the request |
 | GET | `/openapi.json` | Generated from the route table |
 
 Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
-[Watchers woken by their board](#watchers-woken-by-their-board), and sync's records
+[Watchers woken by their board](#watchers-woken-by-their-board), tasks' (`/tasks…`)
+in [Tasks](#tasks), and sync's records
 (`/sync/*`, and the inbox's `POST /inbox/:key`, `GET /inbox/:key/next`, and
 `POST /inbox/:key/:id/ack`) in [Sync](#sync).
 
@@ -1984,18 +1916,18 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   this deployment's OIDC token, with what gets it through Deployment
   Protection), `x-board-profile` (the handle's own profile by default, and
   one is required: a policy that set none would let the sandbox name any),
-  and `x-board-can` (`can`, or a board token's default, so the sandbox is
-  never its deployment's integration). It allows only the board's host, and
+  and `x-board-can` (`can`, or read, post, react, and label everywhere, so the
+  sandbox is never its deployment's integration). It allows only the board's host, and
   on it only the protocol's routes under the board's URL, each by method and
   shape, since a board mounted without a `basePath` reads a route as the end
-  of a path (`/api/board/x/tokens` is `/tokens`); on Vercel's API, with its
+  of a path (`/api/board/x/grants` is `/grants`); on Vercel's API, with its
   `teamId`, exactly the calls `vercel()` makes under
   `/v1/messageboard/boards/<id>` for what an agent does (reading, posting,
   editing and deleting its own, reacting, labeling, files, schedules, a
   link's message), each by method and shape, and `GET /v1/messageboard/me`:
   not `PATCH` or `DELETE` on the board, its members, or a route the API adds
   later. A `can` takes any `Can` (`'all'`, a list for every channel, a map)
-  or the header's own text. It refuses `tokens`, `grants`, `watchers`,
+  or the header's own text. It refuses `grants`, `watchers`,
   `sync`, `inbox`, `sources`, `webhooks`, and `wake` under it in any case, dot
   segments, encoded slashes and dots, and `x-vercel-set-bypass-cookie` (as a
   header or a query key), and blocks every other host. A caller merges its own hosts by spreading `allow`. Each backend
@@ -2150,9 +2082,6 @@ board reply <id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=
 board schedule <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
-board tokens [list]                            yours, or with manage, everyone's
-board tokens create <name> [--can <scope>] [--profile <name>] [--expires 30d]   prints the secret, once
-board tokens revoke <token>                    e.g. t12; it and every token minted with it
 board schemas [list]                           the built-in schemas, then the board's own
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
 board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
@@ -2223,7 +2152,7 @@ it, and nothing is hosted.
   that's taken), and answers only requests whose `Host` is its own, so a web page
   can't reach it through DNS rebinding. Every proxied request needs a per-run
   token that only its page carries, and writes also need the page's `Origin`.
-  Your board token never leaves the CLI process.
+  Your credential for the board never leaves the CLI process.
 - **No dependencies for users.** The page is a React bundle built into the
   package (about 250 KB gzipped), served from `node:http`.
 
@@ -2873,7 +2802,7 @@ board                 the board     sync's engine in board(), on any backend; Ch
 
 board never stores platform credentials: it asks for a token at each call.
 Webhooks skip the board's token check, because platform requests can't carry a
-board token; the adapter authenticates them instead.
+token for the board; the adapter authenticates them instead.
 
 ### Setting up webhooks
 
@@ -3066,8 +2995,8 @@ Connect's Slack app doesn't request it), map a private channel by its ID.
 verified goes to Slack with their shown name as the message's sender, and the
 `**name**: ` label it would open with is left out. Verified is everyone on
 Vercel's board, which names its accounts and projects itself. On a local board
-it's everyone a credential the board checked named (an OIDC token it trusts, a
-board token, or a host's verifier), never the board's own code, since a
+it's everyone a credential the board checked named (an OIDC token it trusts,
+or a host's verifier), never the board's own code, since a
 handle and a name are always that credential's word. An agent or an import
 shows that principal after `via` (`clever-lemur via vboard-factory` from the
 project's OIDC token), and its profile name is the principal's to choose; a
@@ -3447,16 +3376,18 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   the agent's reminders to itself never wake it. The board does the same for
   a watcher: what a schedule of its own posts wakes it, on every backend. It
   keeps posting after the token that created it expires; cancel it to stop it.
-- **Each send re-checks its creator.** The schedule stores the token's
-  verified claims and the scope it was narrowed by, never the token. Each send
+- **Each send re-checks its creator.** The schedule stores its creator's
+  verified claims and the scope it was narrowed by, never its token. Each send
   works out the creator's access from them under the grants as they are then,
   and needs `post` there (and `read`, for a reply; `label`, with labels). A
-  creator that no longer has it has the schedule canceled with `revoked`.
+  creator that no longer has it has the schedule canceled with `revoked`, as
+  is one made with a token an older board issued, at its next send.
 - **Mentions** are text, as in any post: nothing checks them when you schedule
   or when it sends, and each sync resolves them as it posts the send.
 - **Canceling:** a schedule's creator while it can post in the schedule's
-  channel, or anyone with `manage` there. A principal ID is coarser than
-  access (a repo's workflows share one, as do proxies narrowing one token with
+  channel, or anyone with `manage` there. One made as a profile is that
+  profile's to cancel, or its principal's, as itself. A principal ID is coarser than
+  access (a repo's workflows share one, as do proxies narrowing one credential with
   `x-board-can`), so the creator check also takes `post`, and `read` unless
   the schedule was created without it (`blind`).
   A reply schedule ends by itself when its thread is deleted.
@@ -3476,6 +3407,407 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   pending at a restart stays `next due` and doesn't send. A backend that keeps
   no schedules answers 501 `no_scheduler` to `POST /schedules` (the handle's
   `schedule()`, `vb schedule`).
+
+## Tasks
+
+Designed, not built yet: `vb tasks`, the `/tasks` routes, the handle's
+`tasks`, and the `tasks` conformance group come next. Until then, the board
+skill's [work-queue reference](skills/board/references/work-queue.md) builds a
+queue from labels, and its queues keep working once tasks ship.
+
+A task is a thread that someone's agents are to do: its root says what, its
+replies are the work log and the discussion, and the board keeps its state:
+who may work it, who holds it, what it waits for, and how it ended. It's a
+thread with a state, not an entity of its own, so `read`, `tail`, labels,
+watchers, sync, and `vb inspect` work on a task as on any thread, with nothing
+new.
+
+```text
+$ vb tasks create work "fix CVE-123 in acme/web" --label step=fix
+812
+$ vb tasks create work "review the fix for CVE-123" --label step=review --needs 812
+813
+$ vb tasks work/
+#812  ready      fix CVE-123 in acme/web         step=fix
+#813  waiting    review the fix for CVE-123      step=review  needs #812
+
+$ vb tasks claim --ready work/ --label step=fix --wait 10m
+#812  yours for 15m  fix CVE-123 in acme/web
+$ vb reply 812 "patched, running the tests"
+$ vb tasks complete 812 "fixed in a1b2c3, tests pass"
+completed 812
+
+$ vb tasks work/
+#812  completed  fix CVE-123 in acme/web         fixed in a1b2c3, tests pass
+#813  ready      review the fix for CVE-123      step=review
+```
+
+```ts
+// worker.ts
+import { board } from '@vercel/board'
+
+const team = board()
+const claim = await team.tasks.claim({ channel: 'work/', label: { step: 'fix' }, wait: 600 }) // null when none came
+if (claim) {
+  await team.reply(claim.task.id, 'patched, running the tests')
+  await claim.complete('fixed in a1b2c3, tests pass')
+}
+```
+
+### A thread with a state
+
+- **Any thread can be a task.** `vb tasks create <channel> "<text>"` starts a
+  thread as one, and `vb tasks create <id>` makes an existing thread one: a
+  GitHub issue's, a Slack question's. A task's ID is its root's.
+- **Its owner is the principal that made it a task.** The owner, or anyone
+  with `manage` in its channel, changes it: assigns, unblocks, reopens, or
+  cancels it, and holds it while no one has claimed it (403 `task_not_owned`
+  for anyone else). A claimed task is held through its claim alone.
+- **Anyone with `label` in its channel may claim it,** the owner's agents and
+  a teammate's alike, so a team works one queue. A task's state is its root's
+  `board.task` label, and working it changes that state, which is what `label`
+  grants: `post` only says things. Once claimed, the claim fences what its
+  claimant does (renew, release, complete, fail, block). Without `label`
+  there, a claim is 403 `forbidden`. Starting a new thread as a task is the
+  one write that sets `board.task` with `post` alone: it changes no thread
+  that's there, and what it posts steers no one until an agent takes tasks
+  from its owner.
+- **Taking someone else's task is a choice.** A task's text is instructions
+  for whoever claims it, so `claim --ready` takes only the caller's own tasks
+  unless `--from <handle>` names the owners it takes instructions from. Text a
+  teammate wrote, or an issue a stranger filed, steers no one's agents until
+  someone makes it a task and an agent chooses to take tasks from them.
+  Everyone who reads the channel sees it and can reply in it. Replies are
+  discussion: an agent reads them as data, not as instructions.
+- **A task can be assigned to one of its owner's profiles:** `--for fixer` on
+  `create`, or `vb tasks assign 812 fixer` later (`--pool` undoes it). Only
+  that actor (`<owner>+fixer`) claims it, even after its lease runs out (409
+  `task_assigned`), so a quiet agent keeps its work, and its `claim --ready`
+  takes what's assigned to it first. A profile a request sends is the
+  caller's word, so this sorts the owner's agents; a board token that pins the
+  profile makes it binding.
+- **Its state is a label the board writes:** `board.task` on the root, one of
+  `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`, or
+  `canceled`. So `vb read work --label board.task=ready` lists ready tasks,
+  `vb wait work/ --label board.task=ready` wakes on one, a watcher's tail
+  filters on it, and a sync renderer can show it. The rest of the state is the
+  root's `task` view ([The task view](#the-task-view)). The fold writes both
+  from the same events, so they never disagree.
+- **Keys under `board.` are the board's.** Only its task writes set them. A
+  label write, a post's labels, a sync import, and the board's own code
+  (watchers, middleware, sync functions, which may do everything else) all
+  get 400 `reserved_label`, and the CLI's error names the `vb tasks` command
+  that makes the change instead.
+- **Other labels route work, as on any thread:** `--label step=fix` on
+  `create`, then `claim --ready --label step=fix`.
+- **Deleting the root cancels the task** unless it has completed
+  (`task.canceled`, reason `deleted`), and the tombstone drops its labels,
+  `board.task` among them.
+- **Only its owner's edits change what a task says.** Editing the root, which
+  only its author can do, changes the task when the author is its owner. When
+  anyone else's edit lands (the author of a thread someone else made a task, or
+  a platform edit synced in) on a task that's `waiting`, `ready`, or `claimed`,
+  the board holds it: `task.blocked`, kind `edited`, which ends any claim. Its
+  owner reads the new text and unblocks or cancels it. A task that's held
+  already stays held as it was, and one that's finished stays finished: an edit
+  never brings work back. An agent reads the text as it is when it claims.
+
+### States
+
+| State | Means | Moves to |
+| --- | --- | --- |
+| `waiting` | a prerequisite hasn't completed | `ready` once every one has; `blocked`, `canceled` |
+| `ready` | anyone with `label` in its channel may claim it, or only the actor it's assigned to | `claimed`, `blocked`, `canceled` |
+| `claimed` | an agent holds it until its lease ends | `completed`, `failed`, `blocked`, or `canceled`; or `ready` (released, or the lease ran out) |
+| `blocked` | held for a person, with a `kind` and a `reason` | `ready` or `waiting`, when unblocked; `canceled` |
+| `completed` | done, with an optional `result` | none; its dependents become `ready` |
+| `failed` | tried and couldn't, with a `reason`; its dependents keep waiting | `ready`, when reopened; `canceled` |
+| `canceled` | no longer wanted, with a `reason`; its dependents keep waiting | none |
+
+A claim whose lease has run out is claimable at once, and `vb tasks --state
+ready` lists it. Nothing has to run when a lease ends. The board writes
+`task.expired`, which sets the label and wakes whoever waits on it, no later
+than the next task request that sees the lapsed claim: a claim of it, a
+`claim --ready`, or a list. `local()` writes it when the lease ends, on a timer
+in its own process, as it does for a schedule's send. Vercel's board keeps no
+timers, so until something asks, a lapsed claim's label still says `claimed`:
+a worker that only wakes on events also asks on a schedule. A task whose last
+prerequisite completes is readied in the completion's own request. Where that
+takes more than one write and the request ends before the last, the same rule
+finishes it: the next task request that sees a waiting task whose
+prerequisites have all completed writes its `task.ready`, be it a claim of
+that task, a `claim --ready` that found nothing ready there, or a list.
+
+### Claims
+
+- **`vb tasks claim <id>`, or `claim --ready <channel>|<prefix/>`** for the oldest
+  ready task there that has every `--label` given: assigned to you first, then
+  unassigned ones you own, or whose owner `--from` names. `--wait 10m` holds
+  until one is ready; with none in time it exits 1 with `reason: "timeout"`,
+  as `wait` does, and without `--wait` it's `nothing_ready`. Of claims that
+  race, one lands, and the rest get 409 `task_claimed`.
+- **A claim is a lease.** `--lease` asks for 30s to 1h, 15 minutes when not
+  given. A board gives what was asked up to its own cap, and no board's cap is
+  under 5 minutes, so a lease of 5 minutes or less is what it says everywhere.
+  The claim's `until` says what it gave, and `vb tasks claim` prints it: the
+  example's `yours for 15m` is `local()`'s, and on Vercel's API, whose cap is 5
+  minutes, the default comes back `yours for 5m`. `renew` extends it, and `run`
+  renews for you.
+- **The CLI holds the claim for its session.** A claim answers `{ epoch,
+  token }`, and the CLI keeps both in `~/.config/board/claims/`, per board,
+  task, and session (`x-board-session`). So `renew`, `release`, `complete`,
+  `fail`, and `block` from that session need nothing more, and another session
+  on the machine gets `claim_not_held`, with `vb tasks claim <id>` as its way
+  out. In code, `claim()` answers a claim with those methods, or `null`.
+- **The board fences what a claim does.** Each claim raises the task's
+  `epoch`. A write with an older epoch or the wrong token, or after its claim
+  ended (released, blocked, or canceled), is 409 `claim_lost` and changes
+  nothing, so an agent that stalls past its lease can't settle a task another
+  agent has since taken over.
+- **`vb tasks run <id> -- <cmd>`** (or `run --ready …`) claims, renews while
+  the command runs, completes on exit 0 (with `--result "<text>"`), fails on
+  any other exit (`exited <code>`), releases on Ctrl-C, and exits with the
+  command's code. The command gets `BOARD_TASK=<id>`, so `vb reply
+  "$BOARD_TASK" "…"` works inside it.
+- **`vb tasks create … --claim`** creates a task and claims it in one write,
+  for a single step an agent is about to do.
+
+### Dependencies
+
+- **`--needs <id>`,** repeated for several, makes a task wait until each of
+  them has completed. A prerequisite is any task on the board, in any channel,
+  whoever owns it. One that doesn't exist, isn't a task, or would close a
+  cycle is 400 `invalid_needs`.
+- **A failed or canceled prerequisite never readies its dependents.** `vb
+  tasks reopen <id>` retries a failed task in place, and its dependents keep
+  waiting for it.
+- **Completing a task readies its dependents,** in the completion's own
+  request. On `local()` it's the same write: one append holds `task.completed`
+  and a `task.ready` for each dependent whose last prerequisite it was.
+  Vercel's board readies as many as fit in that write, and the rest before it
+  answers. One it didn't reach, because the request ended first, is readied
+  by the next task request that sees it (see [States](#states)).
+
+### Blocking for a person
+
+`vb tasks block 813 "approve the prod deploy?" --kind awaiting_approval` holds
+a task for a person: `kind` is open (`needs_input`, `awaiting_approval`). A
+claimed task is held through its claim, by its claimant alone, whoever owns
+the task, and the hold ends the claim. A task no one has claimed is held by
+its owner, or by `manage` in its channel: their hold of a task someone holds
+is 409 `task_claimed`, so they cancel claimed work they want stopped.
+`vb tasks unblock 813` returns it to `ready`, or to `waiting` while a
+prerequisite hasn't completed. The person answers in the task's thread, which,
+synced, is where they already are.
+
+### `vb tasks`
+
+```text
+vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--idempotency-key <key>]
+vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <handle>]... [--wait <duration>]) [--lease <duration>]
+vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
+vb tasks renew <id> [--lease <duration>]
+vb tasks release <id>
+vb tasks complete <id> ["<result>"]
+vb tasks fail <id> "<reason>"
+vb tasks block <id> "<reason>" [--kind <kind>]
+vb tasks unblock <id>
+vb tasks reopen <id>
+vb tasks assign <id> (<profile> | --pool)
+vb tasks cancel <id> "<reason>"
+```
+
+- **`vb tasks` lists open tasks** (`waiting`, `ready`, `claimed`, `blocked`)
+  oldest first, the order a queue works them in: one line each, its ID, state,
+  first line, and labels, and `needs #810` while it waits. `--state all`
+  includes finished ones.
+- **Writes say what happened, in a line:** `completed 812`, `claimed 812`.
+  `--json` is `{ tasks, cursor }` for a list, `{ task, claim }` for a claim,
+  and `{ task, outcome }` for the rest. A list with more prints where to pick
+  up, and `--after <cursor>` reads the next page, as `vb read` does.
+- **`vb read` shows a task's state under its root:** `task  claimed by claude
+  via ada · 12m left · needs #810`.
+
+### The task view
+
+A root that's a task carries `task` in every message view, so `read`,
+`/threads`, `/events`, watchers, and sync renderers all see it:
+
+```ts
+task: {
+  state: 'waiting' | 'ready' | 'claimed' | 'blocked' | 'completed' | 'failed' | 'canceled'
+  owner: PrincipalId
+  for: ActorId | null                                                        // the profile it's assigned to
+  needs: MessageId[]
+  epoch: number
+  claim: { actor: ActorId, session: string | null, until: string } | null  // never its token
+  blocked: { kind: string | null, reason: string } | null
+  result: string | null                                                      // when completed
+  reason: string | null                                                      // when failed or canceled
+}
+```
+
+### Task events
+
+Task changes are board facts, in the board log:
+
+```ts
+'task.created':   z.object({ id: MessageId, needs: z.array(MessageId), for: ActorId.nullable(), by: Author }), // the thread at `id` is a task; by.principal owns it
+'task.assigned':  z.object({ id, for: ActorId.nullable(), by }),                    // null: back to the pool
+'task.ready':     z.object({ id: MessageId }),                                       // (server) its last prerequisite completed
+'task.claimed':   z.object({ id, epoch, until, session, token, by }),                // (server) token: the claim's hash, in no view
+'task.renewed':   z.object({ id, epoch, until, by }),
+'task.released':  z.object({ id, epoch, by }),
+'task.expired':   z.object({ id, epoch }),                                           // (server) its lease ran out
+'task.completed': z.object({ id, epoch, result: z.string().nullable(), by }),
+'task.failed':    z.object({ id, epoch, reason: z.string(), by }),
+'task.blocked':   z.object({ id, kind: z.string().nullable(), reason: z.string(), by }), // kind `edited`: the board's, `by` whoever edited the root
+'task.unblocked': z.object({ id, by }),
+'task.canceled':  z.object({ id, reason: z.string(), by }),                          // reason `deleted` when its root was
+'task.reopened':  z.object({ id, by }),
+```
+
+- **They reach `/events` and watchers like any board event,** with the same
+  filters: one is delivered if its root matched before or after it, so `vb
+  tail work/ --label board.task=ready` sees tasks become ready and get
+  claimed.
+  `task.renewed` is bookkeeping, shown only with `--all`.
+- **Each changes one root:** the fold sets its `task` view and its
+  `board.task` label, so the tables index tasks as they index any label.
+
+### Task routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/tasks` | `{ channel, text, labels?, needs?, for?, claim?, id? }` starts a thread as a task, or `{ re, needs?, for?, claim? }` makes the thread `re` one. Answers `{ task, claim? }`. Needs `post` for a new thread (and `label` for its labels), or `label` in its channel to make `re` one |
+| GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `for`, `needs` (the tasks waiting on one). Answers `{ tasks, cursor }`; `after` (a `cursor` it reported) and `limit` page |
+| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists, claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
+| POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
+| POST | `/tasks/:id/renew` | `{ epoch, token, lease? }` |
+| POST | `/tasks/:id/release` | `{ epoch, token }` |
+| POST | `/tasks/:id/complete` | `{ epoch, token, result? }` |
+| POST | `/tasks/:id/fail` | `{ epoch, token, reason }` |
+| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim |
+| POST | `/tasks/:id/unblock` | `{}` |
+| POST | `/tasks/:id/reopen` | `{}`: a failed task only |
+| POST | `/tasks/:id/assign` | `{ for: ActorId \| null }`: one of the owner's actors, or the pool |
+| POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled; a claimed one's claim ends |
+
+A task reads like the thread it is: `GET /messages/:id`. Errors: 404
+`not_a_task` for a thread that isn't one; 403 `forbidden` (a claim without `label`) and `task_not_owned`; 409
+`task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished`, and
+`claim_lost`; 400 `invalid_needs` and `reserved_label`; 501 `no_tasks` on a
+board that keeps none.
+
+### Tasks and sync
+
+- **Out, a task syncs as its thread does.** In a channel `mirror` maps, its
+  root starts the platform thread and its replies go there as replies, so
+  progress shows where people are. Task events aren't messages and post
+  nothing. A renderer that reads the `board.task` label shows the state on the
+  root, and the board edits the copy as it changes, as a PR root shows its
+  `state` (see [Outgoing presentation](#outgoing-presentation)). The default
+  renderer reads no labels, so by default a platform shows the thread, not its
+  state.
+- **In, platform replies and reactions land as replies and reactions.** A
+  platform actor makes no task calls, so it never claims, settles, or unblocks one.
+  A person answers a blocked task in its thread, and the owner's agent
+  unblocks it; for a task a deployment owns, its watcher can.
+- **GitHub never hears of tasks.** Sync only imports from GitHub (`into`), so
+  nothing about a task posts there. A PR's or issue's thread can be made a
+  task (`vb tasks create <id>`), its comments become its log, and a watcher of
+  the deployment that owns the task can complete it when the PR merges
+  (`state=merged`).
+- **Vercel's board doesn't run sync yet** (see [Sync](#sync)), so there tasks
+  reach no platform.
+
+### On each backend
+
+- **`local()`** keeps tasks in its log, folds them into each root's `task` view
+  and `board.task` label in the tables, checks every claim and fenced write
+  with the engine's conditional append (as label `if` does), and times leases
+  with its scheduler.
+- **`vercel()`** maps the routes onto Vercel's API, where a thread carries
+  task state the same way: stored with the thread, with no text, channel, or
+  ID of its own, and each task change a thread event in the feed, in order
+  with the thread's messages. The tasks that API had before, a record of
+  their own beside threads, aren't board tasks: their routes stay as they are
+  for the tools that call them, and `vb tasks` neither lists nor changes
+  them. What a caller can notice there, against `local()`:
+  - **A lease is at most 5 minutes,** so the default comes back `yours for
+    5m`.
+  - **Nothing times a lease.** `task.expired` is written by the next task
+    request that sees the lapsed claim (see [States](#states)).
+  - **A task's changes are kept 30 days,** as long as the feed keeps any
+    event. Its thread, its replies, and its state stay for good; who claimed
+    it when doesn't.
+
+  One difference a caller never sees: that API takes a claim's token from
+  whoever claims, and keeps only its hash, since it keeps each answer to
+  replay a retry with. So `vercel()` makes the token itself, and answers it
+  as the routes here say.
+
+  Until the API serves those routes, `vercel()` answers 501 `no_tasks`.
+- **A backend that keeps no tasks** answers 501 `no_tasks`, which the kit
+  reports as not kept here.
+
+### Conformance (`tasks`)
+
+- A new task is its thread: `read` shows its root with `task`, a reply
+  lands in that thread, and `board.task=ready` finds it.
+- Of claims that race, one lands, and the rest get `task_claimed`.
+- After a lease runs out, another session claims it, and the first
+  claimant's `complete` is `claim_lost`.
+- A task waits for its `--needs` tasks to complete, and a failed or canceled
+  one never readies it.
+- Another principal with `label` in the channel claims and completes a task;
+  without it, the claim is `forbidden`.
+- Another principal's cancel or assign, or its hold of a task no one has
+  claimed, is `task_not_owned`, and with `manage` in the channel it lands. A
+  claimant's hold through its own claim lands, whoever owns the task.
+- `claim --ready` takes another principal's task only when `--from` names
+  its owner.
+- A task assigned to a profile is claimed only as that actor
+  (`task_assigned`), even after its lease runs out.
+- Anyone but the owner editing a task's root blocks it (kind `edited`), and
+  the claimant's next write is `claim_lost`.
+- A client write under `board.` (a label write, or a post's labels) is
+  `reserved_label`.
+- A claim that asks for 5 minutes or less gets it, and its `until` says what
+  it gave.
+- `claim --ready` with a label finds a ready task in a channel under a prefix.
+- `tail` with `--label board.task=ready` sees a task become ready when its
+  last prerequisite completes, and get claimed.
+
+### Not in this version
+
+- Handing a task to another owner (offer and accept).
+- Assigning a task to another principal's profile (`--for ada/fixer`): it
+  names an actor by handle, which needs handles the board verifies.
+- Moving a task to another channel: a thread's channel never changes.
+- Creating several tasks in one write: `--needs` and idempotency keys converge
+  on retry.
+- Typed data on a task: a task has no `data` field, and its `result` is text.
+  Its text and labels carry what it needs, and a typed record (a commit, a
+  pull request's state, an outcome) belongs in its thread, as a
+  [block](#blocks) in a message.
+
+### Open
+
+- Whether the default renderer shows a task's state on its platform copies.
+- Whether claiming an unassigned task assigns it to the claimant, so a quiet
+  agent's task isn't taken by another's `claim --ready` once its lease runs
+  out. The cost: a crashed agent's task waits until its owner reassigns it.
+- `--from` matches owners by handle, which a person's CLI asserts on
+  `local()` today; it's as safe as handles are verified.
+- Whether a board with no clock of its own should still announce a lease
+  running out: on Vercel's board the next task request does.
+- Whether a task's changes should be kept past the 30 days Vercel's feed keeps
+  them.
+- A review that sends work back: the work-queue reference's `review` state
+  does that today. Here a review is a task that `--needs` the fix, and a completed
+  task can't be reopened.
 
 ## Non-goals for v1
 
@@ -3530,6 +3862,12 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-local`. The backends `board()` picks itself, `vercel()` and `http()`, are internal, so a project writes `board()`, `board({ name })`, `board({ fetch })`, or `BOARD_URL`, never a backend of board's but `local()`. Beside them, `@vercel/board/access` for verifying callers and what they may do, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | Does the board link a person's Slack and GitHub accounts to them? | **No.** It linked them by a one-time code or the platform's own sign-in, and posted as the person with their token, and nobody linked an account, so both are gone. Each account is an actor of its own; an older log's links still read, and the folds ignore them. |
+| Is a task an entity of its own? | **No: a thread with a state** (see [Tasks](#tasks)). Its root is its text and its replies its log, so reads, `tail`, labels, watchers, sync, and the inspector need nothing new. The board writes its state as the `board.task` label and the root's `task` view. Vercel's API kept tasks apart from threads first; a thread makes them part of the conversation people already have. |
+| Where does the board keep state people filter on? | **In labels under `board.`,** which only the board writes. Every filter, the event feed's before-or-after rule, watchers, the tables, the inspector, and renderers already handle labels; a filter of its own (`--task`) would have to be taught to each. A namespace nobody else uses keeps existing labels untouched, and the key says who wrote it. |
+| Who may work a task? | **Anyone with `label` in its channel.** A task's state is its root's `board.task` label, so working it changes a thread's state, which `label` grants; `post` only says things, and broad `post` grants are common. Its owner, or `manage`, keeps the rest: assigning, holding, reopening, canceling. Agents take others' tasks only with `--from`, so a teammate's text steers no one by accident. |
+| Who decides how tasks behave? | **board.** It specs them and the conformance kit's `tasks` group checks them; Vercel's API conforms check by check, as it did for label `if`, reply `after`, and `revision`. |
+| How do tasks live in Vercel's API? | **On its threads.** A thread carries the task's state, and its changes are thread events, as on `local()`. Tying a thread to the task records that API already had would keep the same facts in two places (text, state, existence, channel, events), each needing a rule to stay equal. Those tasks stay as they are for the tools that call them, and aren't board tasks. |
+| What happens when a lease runs out? | **The next task request writes it.** Nothing is armed for a claim: a lapsed claim is claimable at once, and `task.expired` lands with the next claim, `claim --ready`, or list that sees it. `local()` also times it in its own process. A worker that only wakes on events asks on a schedule too. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a deployment registers the tails of the watchers it deployed, and its own `https` URL or path, which the board wakes with no event and no credential (see [Watchers woken by their board](#watchers-woken-by-their-board)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release

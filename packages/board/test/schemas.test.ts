@@ -93,19 +93,19 @@ describe('schemas', () => {
   it("takes manage at * to register, and lets anyone the board let in read them", async () => {
     const { julian, as, register } = await setUp()
     await julian('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
-    const mint = async (can: unknown) => as((await julian('POST', '/tokens', { name: 'agent', can })).body.secret)
+    const narrowed = async (can: string) => as(await personToken(), { 'x-board-can': can })
     const body = { name: 'sandbox', version: 1, schema: SANDBOX }
 
     // A deployment starts with read, post, react, label, and sync: it posts data, and someone with manage says what data there is.
-    const refused = [as(await deploymentToken()), as(await workflowToken()), await mint({ 'dev/': 'all' }), await mint({ '*': ['read', 'post', 'react', 'label', 'sync'] }), as(await personToken(), { 'x-board-can': 'dev/=all' })]
+    const refused = [as(await deploymentToken()), as(await workflowToken()), await narrowed('dev/=all'), await narrowed('*=read,post,react,label,sync')]
     for (const caller of refused) {
       expect(await caller('POST', '/schemas', body)).toMatchObject({ status: 403, body: { error: { code: 'forbidden' } } })
       expect(ids((await caller('GET', '/schemas')).body)).toEqual(['git-commit@1', 'vercel-deployment@1'])
       expect((await caller('GET', '/schemas/git-commit@1')).status).toBe(200)
     }
 
-    // A token that manages the whole board registers, as its minter.
-    expect((await register(body, await mint({ '*': ['manage'] }))).body).toMatchObject({ created: true, schema: { by: 'vercel:user:u_julian' } })
+    // A caller narrowed to manage on the whole board registers, as its principal.
+    expect((await register(body, await narrowed('*=manage'))).body).toMatchObject({ created: true, schema: { by: 'vercel:user:u_julian' } })
     // And everyone reads what it registered.
     for (const caller of refused) expect((await caller('GET', '/schemas/sandbox@1')).body.schema.schema).toEqual(SANDBOX)
   })

@@ -209,6 +209,31 @@ describe('scheduled messages', () => {
     expect(sent.author).toEqual({ kind: 'person', handle: 'u_julian', name: 'u_julian', avatar: null, verified: true })
   })
 
+  it('stop one made with a board token, from when boards issued them, at its next send', async () => {
+    const store = memory()
+    const by = { actor: 'vercel:user:u_julian+helper', principal: 'vercel:user:u_julian', profile: 'helper' }
+    await createServer({ contract: schedulesContract, store: store.log }).session(SCHEDULES_SESSION).append({
+      type: 'schedule.created',
+      payload: {
+        channel: 'dev', re: null, text: 'standup', labels: {}, noSync: false, first: T0 + HOUR, every: DAY, until: null, times: null,
+        as: {
+          author: by,
+          principal: { id: by.principal, kind: 'person', handle: 'julian', scope: '*=read,post', token: 't12' },
+          actor: { id: by.actor, kind: 'agent', handle: 'julian/helper', name: 'helper', avatar: null },
+        },
+      },
+    })
+    const queue = fakeQueue()
+    const board = testBoard({ store, scheduler: queue.scheduler })
+    const julian = fresh(board.fetch, 'u_julian', {})
+    await julian('GET', '/me')
+    await vi.waitFor(() => expect(queue.timers).toHaveLength(1))
+    vi.setSystemTime(T0 + HOUR)
+    await queue.fire()
+    await vi.waitFor(async () => expect((await julian('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ sent: 0, state: 'canceled', canceled: { reason: 'revoked' } }]))
+    expect((await julian('GET', '/messages?channel=dev')).body.messages).toEqual([])
+  })
+
   it('keep sending after a deploy when a schedule has already sent: its next send is armed, not its first', async () => {
     // A daily schedule from before that sent once, its second send waiting on the earlier deployment's queue.
     const store = memory()

@@ -20,7 +20,7 @@ import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
 import type { Via } from '../contract/profiles.ts'
-import type { AccessSummary, Can as AccessCan, Permission, WrittenCan } from '../server/access.ts'
+import type { AccessSummary, Permission, WrittenCan } from '../server/access.ts'
 
 /**
  * A message's, schedule's, or cursor's ID: a string clients pass back as they got it, and never
@@ -180,8 +180,6 @@ export const SchedulesQuery = z.object({
 })
 
 const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
-/** What a grant or token lets do: `'all'`, a list for every channel, or a map from channel pattern to one. board() checks the patterns. */
-const Can = z.union([CanGrant, z.record(z.string().min(1).max(300), CanGrant)])
 const ClaimValue = z.string().min(1).max(1000)
 const Environments = z.array(z.string().min(1).max(100)).min(1).max(16)
 
@@ -254,16 +252,6 @@ export const UpdateGrantBody = z
     can: GrantCan.optional(),
   })
   .refine((body) => body.add !== undefined || body.remove !== undefined || body.can !== undefined, 'name principals to add or remove, or a can')
-
-/** A token acting as the caller: what it may do, and the profile every request with it writes as. */
-export const TokenBody = z.object({
-  name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, 'a token name is up to 64 letters, numbers, and ._-'),
-  can: Can.optional(),
-  profile: z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,31}$/, 'a profile is up to 32 letters, numbers, and hyphens').optional(),
-  avatar: z.string().url().max(2048).optional(),
-  /** How long it lives: `30d` by default, at most `90d`, and on Vercel's board `1d` by default, at most `7d`. */
-  expires: Duration.optional(),
-})
 
 /**
  * A schema version to register, for good: `name` and `version` are its ID (`sandbox@1`), and
@@ -552,8 +540,6 @@ export type GrantCan = Readonly<Record<string, CanAt>>
 export type GrantInput = { principals: readonly PrincipalInput[]; can: GrantCan }
 /** What `updateGrant` takes: principals to add, principals to remove (by who they are, environments aside), and a `can` that replaces the grant's. */
 export type UpdateGrantInput = { add?: readonly PrincipalInput[]; remove?: readonly PrincipalInput[]; can?: GrantCan }
-/** What `token` takes: `can` as `access` writes it, with `'none'` for a pattern it may do nothing in. */
-export type TokenInput = Omit<z.input<typeof TokenBody>, 'can'> & { can?: AccessCan | GrantCan }
 /** What `createSchema` takes: a version's name, its number, and its JSON Schema. */
 export type SchemaInput = z.input<typeof SchemaBody>
 export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
@@ -627,21 +613,6 @@ export type GrantView = {
   /** The actor that changed it last, and when: null for one the board started with. */
   by: string | null
   at: string | null
-}
-
-/** A token, as its minter and `manage` see it: never its secret. */
-export type TokenView = {
-  id: string
-  name: string
-  /** What it may do now: its minter's access, as the board's rules and grants give it, narrowed by the token's `can`. `{}` once its minter may do nothing. */
-  can: AccessSummary
-  profile: string | null
-  /** The actor that minted it, and when. */
-  by: string
-  at: string
-  expiresAt: string
-  /** The token it was minted with, which it stops with. */
-  parent: string | null
 }
 
 /** A schema version, as the board keeps it: it never changes. */
@@ -957,10 +928,6 @@ export const routes = {
   /** Which grant decides a channel, for the caller or, with `manage` at `*`, a principal it names. */
   explain: { method: 'GET', path: '/grants/explain', query: ExplainQuery },
   revokeGrant: { method: 'POST', path: '/grants/:id/revoke' },
-  /** Your tokens, or every one with manage in every channel. A token acts as whoever minted it. */
-  tokens: { method: 'GET', path: '/tokens' },
-  createToken: { method: 'POST', path: '/tokens', body: TokenBody },
-  revokeToken: { method: 'POST', path: '/tokens/:id/revoke' },
   /** Every schema: the built-ins, then the board's own. Anyone the board lets in reads them. */
   schemas: { method: 'GET', path: '/schemas' },
   /** One schema version, by `name@version`. */

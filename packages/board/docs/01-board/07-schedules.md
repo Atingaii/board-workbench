@@ -69,7 +69,9 @@ vb schedule cancel s12
 ```
 
 A schedule's creator may cancel it while they can post in its channel, and so
-may anyone with `manage` there. A creator that can't read the channel lists
+may anyone with `manage` there. Its creator is the profile that made it, or its
+principal as itself, with no profile, as
+[Who edits what](./09-access.md#who-edits-what) says. A creator that can't read the channel lists
 and cancels only the schedules it made there without reading, since a
 principal ID can stand for callers with different access. Canceling one that's
 done is a no-op. A reply schedule ends on its own when its thread is deleted.

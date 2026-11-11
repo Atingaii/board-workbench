@@ -12,7 +12,14 @@ async function setUp(options: Parameters<typeof testBoard>[0] = {}) {
   const board = testBoard(options)
   const owner = caller(board.fetch, await localUserToken())
   const person = caller(board.fetch, await personToken())
-  return { board, owner, person, as: async (token: string | Promise<string>) => caller(board.fetch, await token) }
+  return {
+    board,
+    owner,
+    person,
+    as: async (token: string | Promise<string>) => caller(board.fetch, await token),
+    /** A caller narrowed with `x-board-can`, as a proxy holding its credential sends it. */
+    narrowed: async (token: string | Promise<string>, can: string) => caller(board.fetch, await token, { 'x-board-can': can }),
+  }
 }
 
 const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
@@ -138,11 +145,10 @@ describe('grants', () => {
   })
 
   it("revokes, or removes from, a grant only where the caller's own limits reach, since lifting it widens whoever it named", async () => {
-    const { owner, person, as } = await setUp()
+    const { owner, as, narrowed } = await setUp()
     // A project the grant keeps out of everything: revoking it gives the project g2 back, secret/ included.
     const shut = await owner('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_x', environments: ['production'] }, { kind: 'project', project: 'prj_y', environments: ['production'] }], can: { '*': [] } })
-    const minted = await person('POST', '/tokens', { name: 'no-secret', can: { '*': 'all', 'secret/': [] } })
-    const scoped = await as(minted.body.secret)
+    const scoped = await narrowed(personToken(), '*=all;secret/=')
     const revoked = await scoped('POST', `/grants/${shut.body.grant.id}/revoke`, {})
     // It may list grants, so it's told where.
     expect([revoked.status, revoked.body.error.message]).toEqual([403, `this token can't revoke ${shut.body.grant.id}: it reaches secret/, where you can't manage grants`])
@@ -158,32 +164,30 @@ describe('grants', () => {
     expect((await bob('POST', `/grants/${lock.id}/revoke`, {})).status).toBe(403)
   })
 
-  it('lets no token reach past its own can by granting someone else', async () => {
-    const { owner, person, as } = await setUp()
+  it('lets no caller narrowed with x-board-can reach past it by granting someone else', async () => {
+    const { owner, narrowed } = await setUp()
     // Manage at *, but nothing in security/: a grant on * for a run it controls would be all of security/ too.
-    const minted = await person('POST', '/tokens', { name: 'scoped', can: { '*': 'all', 'security/': [] } })
-    const scoped = await as(minted.body.secret)
+    const scoped = await narrowed(personToken(), '*=all;security/=')
     const run = { kind: 'github', repository: 'acme/web' }
     expect((await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })).status).toBe(403)
     expect((await scoped('POST', '/grants', { principals: [run], can: { 'dev/': 'all' } })).status).toBe(200)
-    // Not even once security/ is closed to everyone: whoever lifts the lock would open it to the run, and not to the token.
+    // Not even once security/ is closed to everyone: whoever lifts the lock would open it to the run, and not to the caller.
     await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
     const locked = await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })
     expect([locked.status, locked.body.error.message]).toEqual([403, "this grant reaches security/, where you can't manage grants"])
   })
 
-  it("lets no token let in a principal it controls where everyone gets more than the token has", async () => {
-    const { owner, person, as } = await setUp()
+  it('lets no narrowed caller let in a principal it controls where everyone gets more than it has', async () => {
+    const { owner, as, narrowed } = await setUp()
     await owner('POST', '/grants', { principals: [everyone], can: { 'secret/': ['read'] } })
-    const minted = await person('POST', '/tokens', { name: 'scoped', can: { '*': 'all', 'secret/': [] } })
-    const scoped = await as(minted.body.secret)
+    const scoped = await narrowed(personToken(), '*=all;secret/=')
     // Nothing narrower is under dev/, but the run it lets in would read secret/ through everyone's grant.
     expect((await scoped('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'dev/': ['post'] } })).status).toBe(403)
     expect((await (await as(workflowToken({ repository: 'acme/web', repository_id: '99' })))('GET', '/me')).status).toBe(403)
   })
 
   it("lets the board's local user, its owner, change any grant, though a closed channel still takes a grant to read", async () => {
-    const { owner, person, as } = await setUp()
+    const { owner, person, narrowed } = await setUp()
     const lock = await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
     // A person on the team is no owner: once security/ is closed to them, they open it to no one, and can't undo it.
     expect((await person('POST', '/grants', { principals: [user('u_julian')], can: { 'security/': 'all' } })).status).toBe(403)
@@ -194,9 +198,8 @@ describe('grants', () => {
     expect((await owner('GET', '/me')).body.can).toEqual({})
     expect((await owner('POST', '/grants', { principals: [user('julian')], can: { 'security/': 'all' } })).status).toBe(200)
     expect((await owner('POST', '/messages', { channel: 'security', text: 'let in' })).status).toBe(201)
-    // A token the owner mints goes no further than its can, owner or not.
-    const minted = await owner('POST', '/tokens', { name: 'reader', can: { 'security/': ['read'] } })
-    const reader = await as(minted.body.secret)
+    // Narrowed with x-board-can, the owner goes no further than it says.
+    const reader = await narrowed(localUserToken(), 'security/=read')
     expect((await reader('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })).status).toBe(403)
     expect((await reader('GET', '/grants')).status).toBe(403)
   })
@@ -216,10 +219,9 @@ describe('grants', () => {
   })
 
   it("tells a caller who can't change a grant nothing of whom it names, or whether it's there", async () => {
-    const { owner, person, as } = await setUp()
+    const { owner, narrowed } = await setUp()
     const { body } = await owner('POST', '/grants', { principals: [{ kind: 'user', userId: 'u_alice' }], can: { 'security/': 'all' } })
-    const minted = await person('POST', '/tokens', { name: 'poster', can: { '*': ['read', 'post'] } })
-    const poster = await as(minted.body.secret)
+    const poster = await narrowed(personToken(), '*=read,post')
     // Guesses at who it names, right or wrong, the last one or not, are all the same refusal.
     for (const remove of [[{ kind: 'user', userId: 'u_alice' }], [{ kind: 'user', userId: 'u_bob' }]])
       expect([JSON.stringify(remove), (await poster('PATCH', `/grants/${body.grant.id}`, { remove })).status]).toEqual([JSON.stringify(remove), 403])
@@ -228,10 +230,9 @@ describe('grants', () => {
   })
 
   it("answers a caller that can't list grants the same for a grant it can't reach as for one that isn't there, since grant IDs count up", async () => {
-    const { owner, person, as } = await setUp()
+    const { owner, narrowed } = await setUp()
     const { body } = await owner('POST', '/grants', { principals: [user('u_alice')], can: { 'security/': 'all' } })
-    const minted = await person('POST', '/tokens', { name: 'dev', can: { '*': ['read', 'post'], 'dev/': 'all' } })
-    const dev = await as(minted.body.secret)
+    const dev = await narrowed(personToken(), '*=read,post;dev/=all')
     const probe = async () => [await dev('POST', `/grants/${body.grant.id}/revoke`, {}), await dev('PATCH', `/grants/${body.grant.id}`, { can: { 'dev/': ['read'] } })]
     const there = await probe()
     expect(there.map((answer) => [answer.status, answer.body.error.code])).toEqual([
@@ -475,7 +476,7 @@ describe('explain', () => {
   })
 
   it('explains the caller when it names no one, and nothing for whom nothing lets in', async () => {
-    const { person, as } = await setUp()
+    const { person, as, narrowed } = await setUp()
     await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })
     const explain = async (query: string) => (await person('GET', `/grants/explain?${query}`)).body
     expect(await explain('channel=ci&github=acme/other')).toEqual({ channel: 'ci', pattern: null, over: [], level: null, grants: [], capped: null, can: [] })
@@ -493,8 +494,8 @@ describe('explain', () => {
     expect((await explain('channel=ci&github=acme/api&workflow=ci.yml&branch=dev')).can).toEqual([])
     expect((await run('GET', '/grants/explain?channel=ci&user=u_julian')).status).toBe(403)
     expect((await run('GET', '/grants/explain?channel=ci&app=cl_ship')).status).toBe(403)
-    // A token says what it may do, narrowed.
-    const reader = await as((await person('POST', '/tokens', { name: 'reader', can: { 'ci/': ['read'] } })).body.secret)
+    // A caller narrowed with x-board-can says what it may do, narrowed.
+    const reader = await narrowed(personToken(), 'ci/=read')
     expect((await reader('GET', '/grants/explain?channel=ci')).body).toMatchObject({ pattern: '*', level: 'group', can: ['read'] })
   })
 

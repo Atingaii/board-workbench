@@ -2,7 +2,7 @@ import type { Explanation, GrantView, Me, MessageView, RegistrationView } from '
 import { BoardError, type ExplainPrincipal } from '../client/client.ts'
 import { block } from '../contract/blocks.ts'
 import { canonical } from '../contract/data-schemas.ts'
-import { compileAccess, type Permission } from '../server/access.ts'
+import { canText, compileAccess, type Permission } from '../server/access.ts'
 import type { Board } from '../server/board.ts'
 
 /**
@@ -14,7 +14,7 @@ import type { Board } from '../server/board.ts'
  */
 
 /** What a check is about, for the report's headings. */
-export type CheckGroup = 'core' | 'schedules' | 'grants' | 'tokens' | 'schemas' | 'attachments' | 'watchers' | 'sync'
+export type CheckGroup = 'core' | 'schedules' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'
 
 export type CheckResult = {
   group: CheckGroup
@@ -34,12 +34,6 @@ export type ConformanceReport = {
 export type ConformanceOptions = {
   /** Where it posts. Default `conformance`. */
   channel?: string
-  /**
-   * The same board, with a board token's secret as the credential (as `BOARD_TOKEN` sends it):
-   * the tokens check calls it so to see that a token does only what its `can` says. Without it,
-   * that check is skipped.
-   */
-  withToken?: (secret: string) => Board
   /**
    * The same board, with this run's credential and an `x-board-can` header that narrows it to
    * `can` (`conformance=read`), as a proxy holding the credential sends it: the checks of a
@@ -158,7 +152,6 @@ type Context = {
   root?: MessageView
   reply?: MessageView
   posted: string[]
-  withToken?: (secret: string) => Board
   withCan?: (can: string) => Board
   withHeaders?: (headers: Record<string, string>) => Board
   principals: Principals
@@ -174,7 +167,7 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
  * answers `no_grants`, and one that keeps no schemas `no_schemas`. A board that's meant to keep something and doesn't yet answers otherwise,
  * and fails.
  */
-const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'schemas', 'attachments'])
+const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'schemas', 'attachments'])
 
 const needRoot = (ctx: Context) => {
   check(ctx.root && ctx.reply, "posting failed, so there's nothing to read")
@@ -226,8 +219,8 @@ type Grants = {
   make(input: GrantInput, by?: Board): Promise<GrantView>
   /** That `by` is refused a grant, with a 403: one a board wrongly makes is revoked too. */
   deny(by: Board, input: GrantInput, what: string): Promise<void>
-  /** A token this run mints with `can`, as a handle: a board that mints none (501, 404, or 403) skips the check. */
-  mint(can: Record<string, 'all' | readonly Permission[]>): Promise<Board>
+  /** This run, narrowed with `x-board-can` to `can`: a run that can't send one skips the check. */
+  narrow(can: Record<string, 'all' | readonly Permission[]>): Board
   /**
    * A grant that keeps this run in `pattern` with `manage`, so it can lift an `everyone` grant
    * there, which would narrow it too: its user, or its project in its environment.
@@ -236,13 +229,12 @@ type Grants = {
 }
 
 /**
- * Runs `check` with what it makes grants and tokens with, and revokes them all afterwards, the
+ * Runs `check` with what it makes grants with, and revokes them all afterwards, the
  * newest grant first, so one that closes a pattern goes while the one keeping this run in is there.
  * A revoke that fails fails the check: what it made would stay on the board.
  */
 async function withGrants(ctx: Context, check: (grants: Grants) => Promise<void | string>): Promise<void | string> {
   const made: string[] = []
-  const tokens: string[] = []
   const grants: Grants = {
     async make(input, by) {
       try {
@@ -266,16 +258,9 @@ async function withGrants(ctx: Context, check: (grants: Grants) => Promise<void 
       }
       throw new Mismatch(`${what}: expected 403, and it made the grant`)
     },
-    async mint(can) {
-      if (!ctx.withToken) throw new Skip("this run can't call the board with a token's secret")
-      try {
-        const { token, secret } = await ctx.board.createToken({ name: `conformance-${ctx.labels.conformance}-grants`, can: can as never, expires: '1h' })
-        tokens.push(token.id)
-        return ctx.withToken(secret)
-      } catch (error) {
-        if (error instanceof BoardError && [403, 404, 501].includes(error.status)) throw new Skip(`this board mints no tokens to check with: ${error.message}`)
-        throw error
-      }
+    narrow(can) {
+      if (!ctx.withCan) throw new Skip(NO_CAN)
+      return ctx.withCan(canText(compileAccess(can)))
     },
     async keep(pattern) {
       const [source, kind, id, environment] = ctx.me.principal.split(':')
@@ -304,10 +289,6 @@ async function withGrants(ctx: Context, check: (grants: Grants) => Promise<void 
   for (const id of made.reverse())
     await ctx.board.revokeGrant(id).catch((error: unknown) => {
       left.push(`${id} (${messageOf(error)})`)
-    })
-  for (const id of tokens)
-    await ctx.board.revokeToken(id).catch((error: unknown) => {
-      left.push(`token ${id} (${messageOf(error)})`)
     })
   if (left.length > 0) throw new Mismatch(`${failure ? `${messageOf(failure)}; and it ` : ''}couldn't revoke what it made: ${left.join(', ')}`)
   if (failure) throw failure
@@ -740,6 +721,39 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: 'lets a profile change only its own messages, and its principal all of them',
+    run: async (ctx) => {
+      if (!ctx.withHeaders) return NO_HEADERS
+      if (ctx.me.actor !== ctx.me.principal) return "this run writes as a profile, so it can't change messages as its principal"
+      const as = (name: string) => ctx.withHeaders!({ 'x-board-profile': `conformance-${name}-${ctx.labels.conformance}` })
+      const by = async (poster: Board, text: string) => {
+        const message = await poster.post(ctx.channel, { text, labels: ctx.labels, noSync: true })
+        ctx.posted.push(message.id)
+        return message
+      }
+      const profile = as('own')
+      const own = await by(profile, "conformance: a profile's own")
+      const other = await by(as('other'), "conformance: another profile's")
+      const principal = await by(ctx.board, "conformance: its principal's")
+      await profile.edit(own.id, "conformance: a profile's own, edited by it")
+      same((await ctx.board.thread(own.id)).message.text, "conformance: a profile's own, edited by it", "a profile's own message, once it edits it")
+      for (const [message, whose] of [[other, "another profile's"], [principal, "its principal's"]] as const) {
+        await refused(profile.edit(message.id, 'conformance: not its own'), 403, `an edit, by a profile, of ${whose} message`)
+        await refused(profile.delete(message.id), 403, `a delete, by a profile, of ${whose} message`)
+      }
+      await ctx.board.edit(other.id, "conformance: another profile's, edited by its principal")
+      const edited = (await ctx.board.thread(other.id)).message
+      same(edited.text, "conformance: another profile's, edited by its principal", "a profile's message, once its principal edits it")
+      same(edited.by.actor, other.by.actor, "who a profile's message is by, once its principal edits it")
+      for (const message of [own, other]) {
+        await ctx.board.delete(message.id)
+        check((await ctx.board.thread(message.id)).message.deleted, "a profile's message, once its principal deletes it, should be deleted")
+      }
+      await profile.delete((await by(profile, "conformance: a profile's own, to delete")).id)
+    },
+  },
+  {
+    group: 'core',
     name: "ignores x-board-avatar, which x-board-profile's avatar parameter replaced",
     run: async (ctx) => {
       if (!ctx.withHeaders) return NO_HEADERS
@@ -969,11 +983,11 @@ const CHECKS: Check[] = [
     group: 'grants',
     name: 'takes manage at each pattern a grant names to change it, and at * to list them',
     run: (ctx) =>
-      withGrants(ctx, async ({ make, deny, mint }) => {
+      withGrants(ctx, async ({ make, deny, narrow }) => {
         const subtree = subtreeOf(ctx)
         const inner = `${subtree}inner/`
-        const poster = await mint({ '*': ['read', 'post'] })
-        // Whether this run may change grants at all, before it asks a token to.
+        const poster = narrow({ '*': ['read', 'post'] })
+        // Whether this run may change grants at all, before it asks a narrowed caller to.
         const probe = await make(grantFor(ctx))
         await deny(poster, grantFor(ctx), 'a grant made without manage')
         await refused(poster.updateGrant(probe.id, { can: { [`${subtree}ci/`]: ['read'] } }), 403, 'an update without manage')
@@ -981,7 +995,7 @@ const CHECKS: Check[] = [
         await refused(poster.grants(), 403, 'listing grants without manage at *')
         await refused(poster.explain(`${subtree}thread`, { project: ctx.principals.project }), 403, "explaining a principal's access without manage at *")
         alike((await poster.explain(`${subtree}thread`)).grants, [], 'which grants decide, for a caller that may not list them')
-        const manager = await mint({ '*': ['read', 'post', 'react', 'label', 'sync'], [inner]: 'all' })
+        const manager = narrow({ '*': ['read', 'post', 'react', 'label', 'sync'], [inner]: 'all' })
         const grant = await make({ principals: [projectFor(ctx)], can: { [inner]: ['read'] } }, manager)
         await deny(manager, { principals: [projectFor(ctx)], can: { [subtree]: ['read'] } }, `a grant on ${subtree} made with manage only at ${inner}`)
         await refused(manager.updateGrant(grant.id, { can: { [subtree]: ['read'] } }), 403, `moving a grant to ${subtree} with manage only at ${inner}`)
@@ -991,34 +1005,34 @@ const CHECKS: Check[] = [
   },
   {
     group: 'grants',
-    name: "lets no token grant past its own can, even where everyone's grant closes it",
+    name: "lets no caller narrowed with x-board-can grant past its can, even where everyone's grant closes it",
     run: (ctx) =>
-      withGrants(ctx, async ({ make, deny, mint, keep }) => {
+      withGrants(ctx, async ({ make, deny, narrow, keep }) => {
         const subtree = subtreeOf(ctx)
         const secret = `${subtree}secret/`
         const run = granteeOf(ctx)
-        const narrowed = await mint({ '*': 'all', [secret]: [] })
-        await deny(narrowed, { principals: [run], can: { [subtree]: ['read'] } }, `a grant on ${subtree} from a token kept out of ${secret}`)
-        // A lock there binds whoever it names as much as the token, until it's lifted: the token's own limit still counts.
+        const narrowed = narrow({ '*': 'all', [secret]: [] })
+        await deny(narrowed, { principals: [run], can: { [subtree]: ['read'] } }, `a grant on ${subtree} from a caller narrowed out of ${secret}`)
+        // A lock there binds whoever it names as much as the caller, until it's lifted: its own limit still counts.
         await keep(secret)
         await make({ principals: [{ kind: 'everyone' }], can: { [secret]: [] } })
-        await deny(narrowed, { principals: [run], can: { [subtree]: ['read'] } }, `a grant on ${subtree} from a token kept out of ${secret}, once everyone is too`)
+        await deny(narrowed, { principals: [run], can: { [subtree]: ['read'] } }, `a grant on ${subtree} from a caller narrowed out of ${secret}, once everyone is too`)
         // What it may manage, it grants.
         await make({ principals: [run], can: { [`${subtree}ci/`]: ['post'] } }, narrowed)
       }),
   },
   {
     group: 'grants',
-    name: 'lets no token let anyone in where everyone gets more than the token has',
+    name: 'lets no caller narrowed with x-board-can let anyone in where everyone gets more than it has',
     run: (ctx) =>
-      withGrants(ctx, async ({ make, deny, mint, keep }) => {
+      withGrants(ctx, async ({ make, deny, narrow, keep }) => {
         const subtree = subtreeOf(ctx)
         const open = `${subtree}open/`
-        const narrowed = await mint({ '*': 'all', [open]: [] })
+        const narrowed = narrow({ '*': 'all', [open]: [] })
         await keep(open)
         await make({ principals: [{ kind: 'everyone' }], can: { [open]: ['read'] } })
         // Anyone it lets in, anywhere, would read open/ through everyone's grant.
-        await deny(narrowed, { principals: [granteeOf(ctx)], can: { [`${subtree}ci/`]: ['post'] } }, `a grant from a token kept out of ${open}, which everyone reads`)
+        await deny(narrowed, { principals: [granteeOf(ctx)], can: { [`${subtree}ci/`]: ['post'] } }, `a grant from a caller narrowed out of ${open}, which everyone reads`)
       }),
   },
   {
@@ -1033,58 +1047,6 @@ const CHECKS: Check[] = [
     name: 'lets a project on another team in, in its environments',
     // A skip, saying why, so a report shows it's left out on purpose.
     run: async () => "grants across teams aren't specified yet: what a project on another team needs, and what all-projects means for one, comes later",
-  },
-  {
-    group: 'tokens',
-    name: 'mints a token, shows its secret only then, lists it, and revokes it',
-    run: async (ctx) => {
-      const name = `conformance-${ctx.labels.conformance}`
-      const { token, secret } = await ctx.board.createToken({ name, can: { [ctx.channel]: ['read'] }, expires: '1h' })
-      try {
-        isRef(token.id, "a token's id")
-        check(typeof secret === 'string' && secret.length >= 32, `a token's secret should be a string of at least 32 characters, got ${typeof secret}`)
-        same(token.name, name, "the token's name")
-        same(show(token.can), show({ [ctx.channel]: ['read'] }), "the token's can")
-        const left = Date.parse(token.expiresAt) - Date.now()
-        check(left > 55 * 60_000 && left <= 60 * 60_000 + 5_000, `a token minted for 1h should expire in an hour, got ${token.expiresAt}`)
-        const listed = await ctx.board.tokens()
-        check(listed.some((found) => found.id === token.id), `tokens should list ${token.id}`)
-        check(!JSON.stringify(listed).includes(secret), "tokens shouldn't show a token's secret")
-      } catch (error) {
-        await ctx.board.revokeToken(token.id).catch(() => {})
-        throw error
-      }
-      same((await ctx.board.revokeToken(token.id)).revoked, true, 'revoking it')
-      same((await ctx.board.revokeToken(token.id)).revoked, false, 'revoking it again')
-      check(!(await ctx.board.tokens()).some((found) => found.id === token.id), "tokens shouldn't list it once it's revoked")
-    },
-  },
-  {
-    group: 'tokens',
-    name: "lets a token do what its can says, as whoever minted it, and nothing once it's revoked",
-    run: async (ctx) => {
-      if (!ctx.withToken) return "this run can't call the board with a token's secret"
-      const { root } = needRoot(ctx)
-      const { token, secret } = await ctx.board.createToken({ name: `conformance-${ctx.labels.conformance}-reads`, can: { [ctx.channel]: ['read'] }, expires: '1h' })
-      const holder = ctx.withToken(secret)
-      try {
-        const me = await holder.me()
-        same(me.principal, ctx.me.principal, "a token's principal, its minter's")
-        const want = { [ctx.channel]: ['read'] }
-        check(show(me.can) === show(want), `what a token that may only read says it may do: expected ${show(want)}, got ${show(me.can)}`)
-        same((await holder.thread(root.id)).message.id, root.id, 'a thread read with a token that may read it')
-        const posting = holder.post(ctx.channel, { text: 'conformance: a token that may only read', labels: ctx.labels, noSync: true }).then((message) => {
-          ctx.posted.push(message.id)
-          return message
-        })
-        await refused(posting, 403, 'a post with a token that may only read')
-      } catch (error) {
-        await ctx.board.revokeToken(token.id).catch(() => {})
-        throw error
-      }
-      same((await ctx.board.revokeToken(token.id)).revoked, true, 'revoking it')
-      await refused(holder.me(), 401, 'a request with a revoked token')
-    },
   },
   {
     group: 'schemas',
@@ -1515,7 +1477,6 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
     start: (await board.messages({ channel, limit: 1 })).cursor,
     me,
     posted: [],
-    ...(options.withToken ? { withToken: options.withToken } : {}),
     ...(options.withCan ? { withCan: options.withCan } : options.withHeaders ? { withCan: (can: string) => options.withHeaders!({ 'x-board-can': can }) } : {}),
     ...(options.withHeaders ? { withHeaders: options.withHeaders } : {}),
     principals: {
@@ -1535,9 +1496,8 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
         if (OPTIONAL.has(group) && error instanceof BoardError && error.status === 501) checks.push({ group, name, status: 'skipped', detail: `not kept here: ${error.message}` })
         // Vercel's API takes watchers only from a deployment: a run as anyone else can't check them.
         else if (group === 'watchers' && error instanceof BoardError && error.code === 'watchers_need_project') checks.push({ group, name, status: 'skipped', detail: 'only a deployment registers watchers here' })
-        // Vercel's API takes no GitHub or OIDC principal in a grant, and mints board tokens only for a deployment.
+        // Vercel's API takes no GitHub or OIDC principal in a grant.
         else if (group === 'grants' && error instanceof BoardError && error.code === 'unsupported_principal') checks.push({ group, name, status: 'skipped', detail: 'this board takes no GitHub or OIDC principals in a grant' })
-        else if (group === 'tokens' && error instanceof BoardError && error.code === 'unsupported_principal') checks.push({ group, name, status: 'skipped', detail: 'this board mints tokens only for a deployment: run as one to check them' })
         else checks.push({ group, name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }
