@@ -534,11 +534,12 @@ describe('cli', () => {
     expect(await vb(['whoami'], { BOARD_AS: 'claude' })).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS\.\n/) })
   })
 
-  it('picks up the profile of a detected agent', async () => {
-    const { stdout } = await vb(['whoami', '--json'], { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's-1' })
-    expect(JSON.parse(stdout)).toMatchObject({ actor: 'vercel:user:u_julian+claude' })
-    const human = await vb(['whoami', '--json', '--human'], { CLAUDECODE: '1' })
-    expect(JSON.parse(human.stdout)).toMatchObject({ actor: 'vercel:user:u_julian', profile: null })
+  it("writes as you inside a coding agent, whatever its environment says, and as a profile only when one is named", async () => {
+    const agent = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's-1', CODEX_THREAD_ID: 't-1', AI_AGENT: 'pi' }
+    expect(JSON.parse((await vb(['whoami', '--json'], agent)).stdout)).toMatchObject({ actor: 'vercel:user:u_julian', profile: null })
+    const named = JSON.parse((await vb(['post', 'agents', 'from claude', '--as', 'claude', '--json'], agent)).stdout).message
+    expect([named.by.actor, named.author.avatar]).toEqual(['vercel:user:u_julian+claude', null])
+    expect(await vb(['whoami', '--human'], agent)).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --human for vb whoami\./) })
   })
 
   it('waits for a reply, or fails with reason timeout, exit 1, when none comes in time', async () => {

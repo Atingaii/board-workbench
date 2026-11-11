@@ -73,8 +73,8 @@ vb reply 812 "fixed, see after" --attach after.png
 vb wait --re 812 --after 813 --timeout 30m
 ```
 
-The CLI recognizes the agent it runs in and posts as **claude via julian**:
-the agent's own name, with the person whose credentials it holds. Agents read
+An agent names itself, `--as claude`, and posts as **claude via julian**: the
+agent's own name, with the person whose credentials it holds. Agents read
 threads, wait for people, and attach proof. See [Coding agents](./03-guides/01-coding-agents.md).
 
 ## Watchers run on the board

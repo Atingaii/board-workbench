@@ -360,11 +360,11 @@ describe('who a post is from', () => {
     ])
   })
 
-  it("gives an agent with the board's built-in avatar its person's Vercel avatar", async () => {
+  it("gives an agent with no avatar, or the board's built-in mark, its person's Vercel avatar", async () => {
     const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
     const people = { pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' }, pt_ada: { id: 'vercel:user:u_ada', kind: 'person', handle: 'user-u_ada' } } as const
     const board = testBoard({ sync: { tickets: provider }, authenticate: hostVerifier(people) })
-    const claude = caller(board.fetch, 'pt_julian', { 'x-board-profile': 'claude' })
+    const claude = caller(board.fetch, 'pt_julian', { 'x-board-profile': 'claude;avatar="https://board.test/api/board/avatars/claude"' })
     // No username to go by: the handle the board made up isn't one.
     const unnamed = caller(board.fetch, 'pt_ada', { 'x-board-profile': 'claude' })
     await claude('POST', '/messages', { channel: 'tickets', text: 'from claude' })
@@ -372,6 +372,6 @@ describe('who a post is from', () => {
     await unnamed('POST', '/messages', { channel: 'tickets', text: 'from another claude' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
     expect(provider.posts[0]!.body.as).toEqual({ name: 'claude via julian', avatar: 'https://vercel.com/api/www/avatar?u=julian&s=64&format=png', attribution: ' via julian' })
-    expect(provider.posts[1]!.body.as?.avatar).toBe(`${BOARD_URL}/avatars/claude`)
+    expect(provider.posts[1]!.body.as?.avatar).toBeNull()
   })
 })

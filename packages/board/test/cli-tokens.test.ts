@@ -10,8 +10,8 @@ describe('cli tokens and grants', () => {
     const secret = minted.stdout.trim()
     expect(secret).toMatch(/^board_[A-Za-z0-9_-]{43}$/)
 
-    // Whoever holds it is you, narrowed: a coding agent with it writes as itself under you.
-    const widget = { BOARD_TOKEN: secret, CLAUDECODE: '1' }
+    // Whoever holds it is you, narrowed: a coding agent with it writes as the profile it names, under you.
+    const widget = { BOARD_TOKEN: secret, BOARD_PROFILE: 'claude' }
     const whoami = await vb(['whoami'], widget)
     expect(whoami.stdout).toMatch(/^claude via julian \(vercel:user:u_julian\+claude\)\n/)
     expect(whoami.stdout).toMatch(/\ncan +feedback\/ +post\n/)

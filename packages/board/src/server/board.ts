@@ -59,7 +59,7 @@ export type BoardOptions = PolicyOptions & (BackendOptions | DefaultOptions) & {
 /**
  * The handle on a board: its methods act as the board's caller, through board(), which calls the
  * backend's methods, and `fetch` serves it. Over `http()` the caller is whoever its `fetch`'s
- * credentials say, with the profile `BOARD_PROFILE` or the agent it runs in picks; on a board it keeps
+ * credentials say, with the profile `BOARD_PROFILE` names; on a board it keeps
  * (`local()`), its own code, as `board:client`.
  */
 export type Board = BoardClient & {

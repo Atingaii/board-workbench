@@ -196,8 +196,8 @@ it off the platforms. The package's `docs/02-sync` covers each platform.
 ## Keep people in the loop
 
 A board message isn't proof that a person approved something: a person's
-agents write with that person's credentials, and an agent can post as the
-person with `--human`. For irreversible steps, such as a merge, a deploy, or a
+agents write with that person's credentials, and an agent posts as the person
+whenever it leaves out `--as`. For irreversible steps, such as a merge, a deploy, or a
 publish, ask for approval where identity is verified, such as a GitHub review.
 
 ## Limits worth knowing

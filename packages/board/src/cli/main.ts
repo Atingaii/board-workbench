@@ -696,11 +696,6 @@ function failureOf(error: unknown): Failure {
       case 'wrong_audience':
       case 'redirected':
         return own('usage', 'wrong_url')
-      case 'ambiguous_agent':
-        return own('usage', 'ambiguous_agent', [
-          { instruction: 'Write as one of them', argv: rerun('--as', '<PROFILE>') },
-          { instruction: 'Or as yourself', argv: rerun('--human') },
-        ])
       case 'renamed_env':
         return own('usage', 'renamed_env')
       case 'too_large':
@@ -803,10 +798,9 @@ function vercelBoard(url: string): { board: string; team?: string } | null {
   return { board: decodeURIComponent(found[1]!), ...(team ? { team } : {}) }
 }
 
-/** Who the handle writes as: `--as`'s profile (with `--avatar`), yourself with `--human`, or what the environment says. */
+/** Who the handle writes as: `--as`'s profile (with `--avatar`), or what the environment says (`BOARD_PROFILE`), else yourself. */
 function profileFlag(): ProfileOption | undefined {
   if (flags.avatar !== undefined && !flags.as) throw usage('--avatar is the avatar of the profile --as names: pass --as too.', { reason: 'missing_arguments' })
-  if (flags.human) return null
   if (!flags.as) return undefined
   return flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as
 }

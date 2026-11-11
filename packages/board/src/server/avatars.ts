@@ -14,7 +14,7 @@ const STYLES: Record<string, Style> = {
   pi: { background: '#1f1f1f', mark: { glyph: 'π' } },
 }
 
-/** A built-in avatar for a detected agent; other names get their initial. */
+/** A known agent's mark, for a caller to pass as its avatar; other names get their initial. */
 export function avatarSvg(name: string): string {
   const style = STYLES[name] ?? { background: '#666666', mark: { glyph: name.slice(0, 1).toUpperCase() } }
   const mark =

@@ -210,7 +210,7 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
       // A token's own scope and the request's both narrow: neither widens the other.
       const scope = found.scope === undefined ? (claims.scope ?? undefined) : claims.scope === null ? found.scope : canText(compileAccess(parseCan(found.scope)).narrow(parseCan(claims.scope)))
       const principal = scope === undefined ? found : { ...found, scope }
-      const { author, actor } = resolveActor(principal, claims, request.audience)
+      const { author, actor } = resolveActor(principal, claims)
       return { principal: { ...principal, access: await authority.grant(principal) }, author, actor }
     },
     explain,

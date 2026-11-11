@@ -27,7 +27,7 @@ export function useBoard() {
     // No fixed URL: the board infers its own from requests, as when mounted.
     server = await serve(localBoard({ url: undefined }).fetch)
     url = `${server.origin}/api/board`
-    // Every variable `detectAgent` reads, so the suite passes inside an agent's session too (Pi's included).
+    // Nothing of the board's or Vercel's from the shell running the suite, nor a coding agent's around it.
     const clean = Object.fromEntries(
       Object.entries(process.env).filter(
         ([key]) => !/^(CLAUDE|CODEX|GROK|PI_|AI_AGENT|BOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key),

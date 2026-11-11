@@ -204,7 +204,7 @@ export type VercelEnvironment = {
   fetch(): typeof fetch
   /** The team, when the environment says which. */
   team(): Promise<string | null>
-  /** The profile the environment picks (`BOARD_PROFILE`, or the coding agent it runs in). */
+  /** The profile the environment names: `BOARD_PROFILE`, with `BOARD_AVATAR`. */
   profile(): ProfileOption
   /** Whether its fetch sends a board token you set (`BOARD_TOKEN`), whoever made it. */
   boardToken(): boolean

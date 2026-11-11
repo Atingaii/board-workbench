@@ -151,7 +151,7 @@ describe('auth', () => {
       kind: 'agent',
       handle: 'julian/claude',
       name: 'Claude',
-      avatar: `${BOARD_URL}/avatars/claude`,
+      avatar: null,
     })
   })
 
@@ -198,13 +198,13 @@ describe('auth', () => {
       name: 'Julián Benegas',
       avatar: null,
     })
-    const pi = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'pi' })
-    expect((await pi('GET', '/me')).body).toMatchObject({ handle: 'julian/pi', avatar: `${BOARD_URL}/avatars/pi` })
+    // A known agent's mark is a URL its caller passes: a profile named for one gets none of its own accord.
+    expect((await caller(fetch, await personToken(), { 'x-board-profile': 'pi' })('GET', '/me')).body).toMatchObject({ profile: 'pi', avatar: null })
+    const pi = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'pi;avatar="https://board.test/api/board/avatars/pi"' })
+    expect((await pi('GET', '/me')).body).toMatchObject({ handle: 'julian/pi', avatar: 'https://board.test/api/board/avatars/pi' })
     const claude = await fetch(new Request(`${BOARD_URL}/avatars/claude`))
     expect(claude.headers.get('content-type')).toContain('svg')
     expect(await claude.text()).toContain('<path') // the mark, not a letter
-    const fx = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'fx' })
-    expect((await fx('GET', '/me')).body).toMatchObject({ handle: 'julian/fx', avatar: `${BOARD_URL}/avatars/fx` })
     const fxAvatar = await (await fetch(new Request(`${BOARD_URL}/avatars/fx`))).text()
     expect(fxAvatar).toContain('<path') // fx's mark, not its initial
   })

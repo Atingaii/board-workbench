@@ -8,7 +8,7 @@ import { http } from '../src/backend-http/index.ts'
 import { board as defaultBoard } from '../src/server/index.default.ts'
 import { http as defaultHttp } from '../src/backend-http/index.default.ts'
 import { bearer, BOARD_URL, caller, personToken, testBoard } from './harness.ts'
-import { connect, detectAgent } from '../src/client/node.ts'
+import { connect } from '../src/client/node.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
 async function setup(userId = 'u_julian', handle = 'julian', profile: string | null = null) {
@@ -167,6 +167,20 @@ describe('board() with no backend', () => {
     expect(meant).not.toHaveBeenCalled()
   })
 
+  it("writes as you inside a coding agent, whatever its environment says, until BOARD_PROFILE names a profile", async () => {
+    clean()
+    const team = testBoard()
+    vi.stubEnv('BOARD_URL', BOARD_URL)
+    vi.stubEnv('BOARD_TOKEN', await personToken())
+    for (const [key, value] of Object.entries({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1', CODEX_THREAD_ID: 't1', AI_AGENT: 'pi', PI_CODING_AGENT: 'true' })) vi.stubEnv(key, value)
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => team.fetch(new Request(input, init)))
+    const posted = await board().post('dev', 'from an agent')
+    expect(posted.by).toEqual({ actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null })
+    vi.stubEnv('BOARD_PROFILE', 'claude')
+    const named = await board().post('dev', 'as claude')
+    expect([named.by.actor, named.author?.avatar]).toEqual(['vercel:user:u_julian+claude', null])
+  })
+
   it('refuses BOARD_AS, which BOARD_PROFILE replaced, rather than write as the person', async () => {
     clean()
     const team = testBoard()
@@ -244,19 +258,6 @@ describe('board() with no backend', () => {
     expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev --after 3', run: () => {} } } })).toThrow("watch fix: --after isn't a filter")
     expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev', run: () => {} } } })).not.toThrow()
     expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), sync: { slack: {} as never } })).toThrow("http: sync doesn't run on a board that uses")
-  })
-})
-
-describe('agent detection', () => {
-  it('knows fx, Claude Code, Codex, Grok, and pi, and any agent that sets AI_AGENT', () => {
-    expect(detectAgent({ AI_AGENT: 'fx' })).toEqual({ profile: 'fx' })
-    expect(detectAgent({ AI_AGENT: 'fx', FX_SESSION_ID: 'f1' })).toEqual({ profile: 'fx' })
-    expect(detectAgent({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1' })).toEqual({ profile: 'claude' })
-    expect(detectAgent({ CODEX_THREAD_ID: 't1' })).toEqual({ profile: 'codex' })
-    expect(detectAgent({ PI_CODING_AGENT: 'true', AI_AGENT: 'pi', PI_SESSION_ID: 'p1' })).toEqual({ profile: 'pi' })
-    expect(detectAgent({ AI_AGENT: 'OpenCode' })).toEqual({ profile: 'opencode' })
-    expect(detectAgent({ AI_AGENT: 'not a name!' })).toBeNull()
-    expect(detectAgent({})).toBeNull()
   })
 })
 

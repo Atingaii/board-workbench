@@ -7,7 +7,7 @@ import type { Claims, Principal } from './auth.ts'
 import { badRequest } from './errors.ts'
 import { parseProfileHeader } from '../contract/profile-header.ts'
 
-/** Agents whose avatars the board serves itself. */
+/** Agents whose marks the board serves at `/avatars/<name>`, for a caller to pass as an avatar. */
 export const KNOWN_AGENTS = ['fx', 'claude', 'codex', 'grok', 'pi'] as const
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
@@ -73,23 +73,21 @@ function profileOf(header: string | null): { profile: string | null; avatar: str
 /**
  * The actor a caller writes as: its principal, plus the profile it claims (`vercel:user:u_123+claude`).
  * A person's name is what they claim, and so is their handle unless a host's verifier named them;
- * anyone else's are their principal's. `audience` is the board's URL, which serves the known
- * agents' avatars.
+ * anyone else's are their principal's. A profile's avatar is the one it sends, or none.
  */
-export function resolveActor(principal: Principal, claims: Claims, audience: string): ResolvedActor {
+export function resolveActor(principal: Principal, claims: Claims): ResolvedActor {
   // A token says only who a person is, so their CLI sends the handle; a host's verifier already said it.
   const claimsHandle = principal.kind === 'person' && principal.facts?.issuer !== 'host'
   const baseHandle = claimsHandle && claims.handle ? claims.handle : principal.handle
   const personName = principal.kind === 'person' ? claims.name : null
   const profile = claims.profile?.toLowerCase() ?? null
   const id = profile === null ? principal.id : `${principal.id}+${profile}`
-  const known = profile !== null && (KNOWN_AGENTS as readonly string[]).includes(profile)
   const actor: Actor = {
     id,
     kind: profile === null ? principal.kind : 'agent',
     handle: profile === null ? baseHandle : `${baseHandle}/${profile}`,
     name: claims.profile ?? personName ?? baseHandle,
-    avatar: claims.avatar ?? (known ? `${audience}/avatars/${profile}` : null),
+    avatar: claims.avatar,
     ...(profile === null ? {} : { via: viaOf({ id: principal.id, handle: baseHandle }) }),
   }
   return {

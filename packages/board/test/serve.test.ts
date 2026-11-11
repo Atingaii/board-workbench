@@ -121,8 +121,8 @@ describe('vb serve', () => {
     expect(whoami.stderr).toBe('')
     expect(JSON.parse(whoami.stdout)).toMatchObject({ actor: 'local:user:julian', handle: 'julian', board: url })
 
-    // An agent in the same checkout is "claude via julian".
-    const posted = await vb(project, { ...at, CLAUDECODE: '1' }, ['post', 'local', 'from claude', '--json'])
+    // An agent in the same checkout that says who it is is "claude via julian".
+    const posted = await vb(project, at, ['post', 'local', 'from claude', '--as', 'claude', '--json'])
     expect(posted.code).toBe(0)
     expect(JSON.parse(posted.stdout).message.by).toMatchObject({ actor: 'local:user:julian+claude' })
     const reply = await vb(join(project), at, ['reply', String(JSON.parse(posted.stdout).message.id), 'from julian'])

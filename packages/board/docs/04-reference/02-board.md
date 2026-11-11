@@ -21,8 +21,8 @@ where the board lives:
 
 | Backend | The handle acts as |
 | --- | --- |
-| none: your team's board in Vercel's API | Whoever its credentials say: a deployment as its project, you as yourself, with the profile `BOARD_PROFILE` or the coding agent it runs in picks |
-| none, with `BOARD_URL` set | Whoever its credentials say, with the profile `BOARD_PROFILE` or the coding agent it runs in picks |
+| none: your team's board in Vercel's API | Whoever its credentials say: a deployment as its project, you as yourself, with the profile `BOARD_PROFILE` names |
+| none, with `BOARD_URL` set | Whoever its credentials say, with the profile `BOARD_PROFILE` names |
 | `local()`, or a backend of your own that keeps the board | The board's own code: `board:client` |
 
 The short samples below act on that `team`, and on `msg`, the message
@@ -67,9 +67,9 @@ and `_`.
 import { board } from '@vercel/board'
 
 const team = board()
-const claude = team.as('claude') // "claude via julian", built-in avatar
+const claude = team.as('claude') // "claude via julian"
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
-const me = team.as(null) // the CLI's --human
+const me = team.as(null) // yourself, whatever BOARD_PROFILE says
 ```
 
 A watcher's `run({ event, board })` gets the handle acting as the watcher, and
@@ -674,7 +674,7 @@ fails with the status its URL answered, or 502.
 | `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |
 | `no_token` | GitHub Actions refused an OIDC token (`permissions: id-token: write`) |
 | `protected` | the board is behind Vercel Deployment Protection: set `VERCEL_AUTOMATION_BYPASS_SECRET` |
-| `ambiguous_agent` | the environment shows several coding agents at once: `as(null)` acts as yourself |
+| `renamed_env` | `BOARD_AS` is set, which `BOARD_PROFILE` replaced: set `BOARD_PROFILE` instead |
 | `invalid_duration` | a `timeout` the handle can't read |
 | `too_many_redirects` | the board's URL redirects more than 20 times |
 | `redirected` | the board's URL redirects to another origin, where none of its credentials follow, and Deployment Protection there turns it away: use the URL it redirects to |
