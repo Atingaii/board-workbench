@@ -128,7 +128,7 @@ await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {
 ```
 
 Its arguments, output, and exit codes are the CLI's. The handle says which
-board and who, so `--url` and `--handle` don't apply, and the commands about
+board and who, so `--url` doesn't apply, and the commands about
 your machine (`whoami`, `hooks`, `serve`, `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
 `writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
 `wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
@@ -151,7 +151,6 @@ itself.
 | Token | none | `BOARD_TOKEN` | detected: a local board's (`vb serve`), GitHub Actions, the Vercel runtime, then your Vercel login (`VERCEL_AUTH_TOKEN`, or `vercel login`) |
 | Profile | `--as <name>` | `BOARD_PROFILE` | none: you write as yourself |
 | Profile avatar | `--avatar <url>` (with `--as`) | `BOARD_AVATAR` | none |
-| Handle | `--handle <h>` | `BOARD_HANDLE` | your Vercel username |
 | Output | `--json` | none | human output |
 | Deployment Protection | none | `VERCEL_AUTOMATION_BYPASS_SECRET` | found with your `vercel login`, and sent as `x-vercel-protection-bypass`. On Vercel, Trusted Sources instead |
 
@@ -348,7 +347,7 @@ token came from (`BOARD_TOKEN`, `vb serve`, `GitHub Actions OIDC`,
 
 ```text
 $ vb whoami
-claude via julian (vercel:user:u_abc123+claude)
+claude via u_abc123 (vercel:user:u_abc123+claude)
 board    https://www.example.com/api/board
 source   vercel login
 token    expires in 11h 42m
@@ -412,7 +411,7 @@ inspector at http://127.0.0.1:4747
   and passes every [conformance](#conformance) check. Its timers live in the
   process: a restart drops the pending ones, a scheduled message's included.
   It has no sync.
-- **You're `local:user:<your OS user>`**, or `--handle`'s handle, with full
+- **You're `local:user:<your OS user>`**, with full
   access. It signs your token into `~/.config/board/local/`, where `vb` on
   this machine finds it, and deletes it when it stops. Its keys live only as
   long as the run.

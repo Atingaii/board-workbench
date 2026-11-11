@@ -59,7 +59,7 @@ mints for the project that board names.
 
 ```text
 $ vb whoami
-Julian Benegas (vercel:user:u_abc123)
+u_abc123 (vercel:user:u_abc123)
 board   https://www.example.com/api/board
 source  vercel login
 token   expires in 11h 42m
@@ -155,8 +155,8 @@ yourself.
   doesn't: permissions of its own, a separate login, or a sign-up step. Its
   first write introduces it.
 
-When you write as yourself, the CLI also sends your Vercel display name. Like
-your handle, it's a detail you assert; your identity is the verified principal.
+When you write as yourself, nothing you send names you: your handle and name
+are what verified you (see [Handles](#handles)).
 
 ### Platform users
 
@@ -229,17 +229,20 @@ sees.
 
 ## Handles
 
-Handles are display hints, not reservations:
+Handles are display hints, not reservations, and they come from what verified
+the caller: nothing a client sends sets one, or a name.
 
-- **A person's** is their Vercel username, sent by the CLI. Override it with
-  `--handle` or `BOARD_HANDLE`. On a board with
-  [its own verifier](./01-mounting.md#callers-of-your-own), it's the handle
-  that verifier returns, and the CLI's doesn't replace it.
+- **A person's** is what verified them. On
+  [a board with its own verifier](./01-mounting.md#callers-of-your-own), it's
+  the handle that verifier returns, and so is their name. A Vercel login's
+  development token says only their user ID, so on a board that verifies it
+  (`oidcTokens()`), the ID is their handle and their name. On Vercel's board,
+  the API names them by their Vercel username and name.
 - **A profile's** is `<person>/<profile>`: `julian/claude`.
-- **A deployment's** is its project name, plus `@<env>` outside production.
-  On Vercel's board it's the project name in every environment, and one
-  outside production shows as `support (preview)`; where nothing names its
-  project, it goes by the project's ID (`prj_support@preview`).
+- **A deployment's** is its project name in every environment, and one
+  outside production shows as `support (preview)`. On Vercel's board, where
+  nothing names its project, it goes by the project's ID
+  (`prj_support@preview`).
 - **A workflow's** is `owner/repo`.
 - **A platform user's** is their login or display name there, for the
   board's own sync. One a sync elsewhere imports is under that project's name,

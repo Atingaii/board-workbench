@@ -71,7 +71,6 @@ export const options = {
   team: { type: 'string', value: 'team', description: 'the same as --scope', hidden: true },
   as: { type: 'string', value: 'profile', description: "write as a profile, such as an agent's name" },
   avatar: { type: 'string', value: 'url', description: "the profile's avatar, with --as" },
-  handle: { type: 'string', value: 'h', description: 'your handle (default: your Vercel username)' },
   json: { type: 'boolean', description: 'JSON, for programs' },
   help: { type: 'boolean', short: 'h', description: "this help, or a command's" },
   version: { type: 'boolean', short: 'v', description: "the CLI's version" },
@@ -157,7 +156,7 @@ export const option = (name: OptionName, description?: string, value?: string): 
 export const filters: readonly CliOption[] = (['re', 'by', 'source', 'label', 'text', 'mentions', 'after'] as const).map((name) => option(name))
 
 /** What every command takes. */
-export const globalOptions: readonly CliOption[] = (['url', 'scope', 'name', 'ensure', 'team', 'as', 'avatar', 'handle', 'json', 'help', 'version'] as const).map((name) =>
+export const globalOptions: readonly CliOption[] = (['url', 'scope', 'name', 'ensure', 'team', 'as', 'avatar', 'json', 'help', 'version'] as const).map((name) =>
   option(name),
 )
 

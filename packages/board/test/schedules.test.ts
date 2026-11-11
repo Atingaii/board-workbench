@@ -19,8 +19,8 @@ const fresh =
 async function setup() {
   const queue = fakeQueue()
   const board = testBoard({ scheduler: queue.scheduler })
-  const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
-  const pi = fresh(board.fetch, 'u_pi', { 'x-board-handle': 'pi' })
+  const julian = fresh(board.fetch, 'u_julian', {})
+  const pi = fresh(board.fetch, 'u_pi', {})
   const root = (await julian('POST', '/messages', { channel: 'dev', text: 'PR #12: add schedules' })).body.message
   const replies = async () => (await julian('GET', `/messages/${root.id}`)).body.replies as { text: string; by: { actor: string }; schedule?: unknown }[]
   /** Moves the clock, then lets the queue deliver what's due and the board settle. */
@@ -128,7 +128,7 @@ describe('scheduled messages', () => {
     })
     const queue = fakeQueue()
     const board = testBoard({ store, scheduler: queue.scheduler })
-    const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+    const julian = fresh(board.fetch, 'u_julian', {})
 
     // Any request starts this deployment arming it again.
     await julian('GET', '/me')
@@ -161,7 +161,7 @@ describe('scheduled messages', () => {
     await before.append({ type: 'schedule.fired', payload: { id: 1, n: 0, message: 1, next: T0 + HOUR + DAY } })
     const queue = fakeQueue()
     const board = testBoard({ store, scheduler: queue.scheduler })
-    const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+    const julian = fresh(board.fetch, 'u_julian', {})
 
     await julian('GET', '/me')
     await vi.waitFor(() => expect(queue.timers).toHaveLength(1))
@@ -181,7 +181,7 @@ describe('scheduled messages', () => {
       const queue = fakeQueue()
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     const before = deploy('dpl_before')
@@ -214,7 +214,7 @@ describe('scheduled messages', () => {
       const queue = fakeQueue()
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     const before = deploy('dpl_before')
@@ -238,7 +238,7 @@ describe('scheduled messages', () => {
       vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     const before = deploy('dpl_before')
@@ -274,7 +274,7 @@ describe('scheduled messages', () => {
       const queue = fakeQueue()
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const before = deploy('dpl_before')
     await before.julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
@@ -296,7 +296,7 @@ describe('scheduled messages', () => {
       vi.stubEnv('VERCEL_DEPLOYMENT_ID', 'dpl_after')
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+      return fresh(deployed.fetch, 'u_julian', {})
     }
     const first = instance()
     await first('POST', '/schedules', { channel: 'dev', text: 'a week later', in: '8d' })
@@ -324,7 +324,7 @@ describe('scheduled messages', () => {
       }
       const deployed = testBoard({ store, scheduler })
       vi.unstubAllEnvs()
-      return { queue, deployed, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, deployed, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const before = deploy('dpl_before')
     await before.julian('GET', '/me')
@@ -356,7 +356,7 @@ describe('scheduled messages', () => {
       },
     }
     const board = testBoard({ scheduler })
-    const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+    const julian = fresh(board.fetch, 'u_julian', {})
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     await julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
     const standups = async () => (await julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)

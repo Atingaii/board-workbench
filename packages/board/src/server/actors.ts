@@ -11,7 +11,6 @@ import { parseProfileHeader } from '../contract/profile-header.ts'
 export const KNOWN_AGENTS = ['fx', 'claude', 'codex', 'grok', 'pi'] as const
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
-const HANDLE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
 
 export type ResolvedActor = {
   author: Author
@@ -31,18 +30,8 @@ export function claimsOf(headers: Headers): Claims {
   // Sessions are gone: who writes is a principal and a profile. Refused, so a client that still sends one hears so.
   if (headers.get('x-board-session') !== null)
     throw badRequest('x-board-session is gone: who writes is the principal and its profile, so leave it out, or write as a profile with x-board-profile', 'invalid_request')
-  const handle = headers.get('x-board-handle')?.trim().toLowerCase() || null
-  if (handle !== null && !HANDLE.test(handle)) throw badRequest(`invalid handle: ${handle}`)
-  // A display name, URI-encoded so any language fits in a header.
-  const encoded = headers.get('x-board-name')
-  let name: string | null = null
-  if (encoded) {
-    try {
-      name = decodeURIComponent(encoded).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 128) || null
-    } catch {
-      throw badRequest('x-board-name must be URI-encoded')
-    }
-  }
+  // A handle and a name come from what verified the caller: `x-board-handle` and `x-board-name`, which
+  // clients sent before, are read by nothing.
   // Set by a proxy that holds the credential (Pi's sandbox); it only narrows.
   // The old name, refused rather than ignored: ignoring it would give a proxy that still sends it the token's whole access.
   if (headers.get('x-board-scope') !== null) throw badRequest('x-board-scope is x-board-can now: send the same value as x-board-can', 'invalid_scope')
@@ -53,7 +42,7 @@ export function claimsOf(headers: Headers): Claims {
     } catch (error) {
       throw badRequest((error as Error).message, 'invalid_scope')
     }
-  return { profile, avatar, handle, name, scope }
+  return { profile, avatar, scope }
 }
 
 /** `x-board-profile`'s profile and avatar, checked: a 400 for a header that isn't one. */
@@ -72,23 +61,21 @@ function profileOf(header: string | null): { profile: string | null; avatar: str
 
 /**
  * The actor a caller writes as: its principal, plus the profile it claims (`vercel:user:u_123+claude`).
- * A person's name is what they claim, and so is their handle unless a host's verifier named them;
- * anyone else's are their principal's. A profile's avatar is the one it sends, or none.
+ * Its handle and name are what verified its principal said: a host's verifier's handle, a Vercel
+ * login's user ID, a deployment's project (named with its environment outside production,
+ * `support (preview)`). A profile's name and avatar are the ones it sends, under that handle.
  */
 export function resolveActor(principal: Principal, claims: Claims): ResolvedActor {
-  // A token says only who a person is, so their CLI sends the handle; a host's verifier already said it.
-  const claimsHandle = principal.kind === 'person' && principal.facts?.issuer !== 'host'
-  const baseHandle = claimsHandle && claims.handle ? claims.handle : principal.handle
-  const personName = principal.kind === 'person' ? claims.name : null
   const profile = claims.profile?.toLowerCase() ?? null
   const id = profile === null ? principal.id : `${principal.id}+${profile}`
+  const via = viaOf(principal)
   const actor: Actor = {
     id,
     kind: profile === null ? principal.kind : 'agent',
-    handle: profile === null ? baseHandle : `${baseHandle}/${profile}`,
-    name: claims.profile ?? personName ?? baseHandle,
+    handle: profile === null ? principal.handle : `${principal.handle}/${profile}`,
+    name: claims.profile ?? (via.environment !== null && via.environment !== 'production' ? `${via.name} (${via.environment})` : principal.handle),
     avatar: claims.avatar,
-    ...(profile === null ? {} : { via: viaOf({ id: principal.id, handle: baseHandle }) }),
+    ...(profile === null ? {} : { via }),
   }
   return {
     author: { actor: id, principal: principal.id, profile },
@@ -98,7 +85,8 @@ export function resolveActor(principal: Principal, claims: Claims): ResolvedActo
 
 /**
  * Who a profile of `principal` acts through, as the board shows it: a deployment by its project's name
- * and its environment (its handle is `www@preview`), anyone else by their handle.
+ * and its environment, anyone else by their handle. A deployment's handle is its project's name in
+ * every environment; one a board stored with its environment after it (`www@preview`) still shows as `www`.
  */
 export function viaOf(principal: { id: string; handle: string }): Via {
   const environment = /^vercel:project:[^:]+:([^:]+)$/.exec(principal.id)?.[1] ?? null

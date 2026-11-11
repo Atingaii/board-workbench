@@ -65,7 +65,7 @@ async function setup() {
 
 /** `vb serve` on a free port, resolved once it says where it's serving. */
 function serveIn(cwd: string, env: NodeJS.ProcessEnv, flags = ['--no-inspect']) {
-  const child = spawn(process.execPath, [CLI, 'serve', '--port', '0', '--handle', 'julian', ...flags], { cwd, env })
+  const child = spawn(process.execPath, [CLI, 'serve', '--port', '0', ...flags], { cwd, env })
   running.push(child)
   let stdout = ''
   let stderr = ''
@@ -106,6 +106,9 @@ function vb(cwd: string, env: NodeJS.ProcessEnv, args: string[]) {
 }
 
 describe('vb serve', () => {
+  /** Who you are on a local board: this machine's user, as its local token names you. */
+  const me = localHandle()
+
   it('runs a board here, says how to reach it, and keeps its log across runs', async () => {
     const { project, env } = await setup()
     const first = serveIn(project, env)
@@ -119,12 +122,12 @@ describe('vb serve', () => {
 
     const whoami = await vb(project, at, ['whoami', '--json'])
     expect(whoami.stderr).toBe('')
-    expect(JSON.parse(whoami.stdout)).toMatchObject({ actor: 'local:user:julian', handle: 'julian', board: url })
+    expect(JSON.parse(whoami.stdout)).toMatchObject({ actor: `local:user:${me}`, handle: me, board: url })
 
-    // An agent in the same checkout that says who it is is "claude via julian".
+    // An agent in the same checkout that says who it is is "claude via <you>".
     const posted = await vb(project, at, ['post', 'local', 'from claude', '--as', 'claude', '--json'])
     expect(posted.code).toBe(0)
-    expect(JSON.parse(posted.stdout).message.by).toMatchObject({ actor: 'local:user:julian+claude' })
+    expect(JSON.parse(posted.stdout).message.by).toMatchObject({ actor: `local:user:${me}+claude` })
     const reply = await vb(join(project), at, ['reply', String(JSON.parse(posted.stdout).message.id), 'from julian'])
     expect(reply.code).toBe(0)
 
@@ -178,7 +181,7 @@ describe('vb serve', () => {
     const page = await (await fetch(`${inspector}/`)).text()
     const token = /<meta name="inspect-token" content="([^"]+)">/.exec(page)![1]!
     const me = await (await fetch(`${inspector}/board/me`, { headers: { 'x-inspect-token': token } })).json()
-    expect(me).toMatchObject({ actor: 'local:user:julian' })
+    expect(me).toMatchObject({ actor: `local:user:${localHandle()}` })
     serving.child.kill('SIGINT')
     expect(await serving.exited).toBe(0)
   })

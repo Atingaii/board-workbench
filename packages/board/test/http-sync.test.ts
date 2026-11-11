@@ -29,8 +29,9 @@ const grant = async (team: ReturnType<typeof testBoard>, projectId: string, can:
 
 type Read = { id: string; text: string; from: string | null; by: { actor: string }; origin: { thread: string; message: string } | null; reactions: Record<string, string[]> }
 
+/** Julian, by a Vercel login whose user ID, his handle, is `julian`. */
 const julianOn = async (fetch: (request: Request) => Promise<Response>, audience?: string) =>
-  caller(fetch, await personToken('u_julian', audience), { 'x-board-handle': 'julian' })
+  caller(fetch, await personToken('julian', audience), {})
 
 const read = async (call: ReturnType<typeof caller>, channel: string) => (await call('GET', `/messages?channel=${channel}`)).body.messages as Read[]
 
@@ -352,11 +353,10 @@ describe('whose records are whose', () => {
 
 /** `vb` as Julian, in process, on the board `team` serves. */
 const vbOn = async (team: ReturnType<typeof testBoard>) => {
-  const token = await personToken('u_julian', BOARD_URL)
+  const token = await personToken('julian', BOARD_URL)
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
     request.headers.set('authorization', `Bearer ${token}`)
-    request.headers.set('x-board-handle', 'julian')
     return team.fetch(request)
   }) as typeof globalThis.fetch
   const handle = board({ backend: http(BOARD_URL, { fetch }) }).as(null)

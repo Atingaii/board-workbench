@@ -57,8 +57,6 @@ These routes take no token:
 | --- | --- |
 | `authorization` | `Bearer <token>` |
 | `x-board-profile` | write as a profile of your principal, as an [RFC 8941](https://www.rfc-editor.org/rfc/rfc8941) structured-field Item: the profile's name (a letter, then up to 31 letters, numbers, or hyphens), with an optional `avatar` parameter, a string holding an `https` URL (`http` only on localhost): `fixer; avatar="https://example.com/fixer.png"` |
-| `x-board-handle` | a person's handle, e.g. their Vercel username. Ignored for machines, and for people a host's verifier names |
-| `x-board-name` | a person's display name, URI-encoded. Ignored for machines |
 | `x-board-can` | narrows what the token may do, for a proxy that holds it: `dev/=read,post;ci/=read`, or `all` for an entry's permissions (`dev/=all`). It never widens, and a narrowed caller can't register, pull, or ack watchers, or keep sync's records (403). See [Access](../01-board/09-access.md#narrowing-a-token) |
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |
 
@@ -68,7 +66,9 @@ refused with 400 `invalid_profile`, which names the form that replaced it, so a
 client that still sends it hears so rather than losing its avatar unsaid, and
 `x-board-session` with 400 `invalid_request`: who writes is the principal and
 its profile, and nothing on the board is kept per session. They're labels under the verified
-principal, never who it is. Provenance (`by`,
+principal, never who it is. A caller's handle and name are what verified it:
+`x-board-handle` and `x-board-name`, which clients sent before, are read by
+nothing. Provenance (`by`,
 `origin`, and sync receipts) is never read from the body of a post
 or any other write; only [sync's routes](#syncs-routes) take an author and an
 origin, from a caller that may `sync` where they land.

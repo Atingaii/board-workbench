@@ -401,13 +401,12 @@ write.
   (its project, and the issuers its grants name), which `oidcTokens()` reads.
 - **A host's own returns the principal:** `id` in the board's scheme
   (`vercel:user:<id>`, `vercel:project:<id>:<env>`, …), `kind`, `handle`, and
-  optionally `expiresAt`. Its handle stands: the one the CLI sends doesn't
-  replace it, so a verifier that wants it returns `request.claims.handle`
-  itself. The name, profile, and `x-board-can` the caller sends still apply
-  on top of it. The board takes the handle as checked: a person posts to Slack
-  under it as a plain sender ([who posts under a name](../02-sync/03-slack.md#messages-post-under-their-authors-name)),
-  so a verifier that echoes the caller's handle lets them pick the name they
-  post under.
+  optionally `expiresAt`. Its handle is who the caller is to people, their
+  handle and their name: nothing the caller sends replaces it, and one that
+  knows only an ID gives the ID. The profile and `x-board-can` the caller
+  sends still apply on top of it. The board takes the handle as checked: a
+  person posts to Slack under it as a plain sender
+  ([who posts under a name](../02-sync/03-slack.md#messages-post-under-their-authors-name)).
 - **`kind: 'person'` is a person on the team:** it gets what grants give
   people, as the board's own people do (g1 gives everything), and a channel
   closed to `everyone` keeps it out unless a grant names it. So your verifier

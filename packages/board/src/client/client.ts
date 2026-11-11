@@ -94,10 +94,6 @@ export type ClientOptions = {
   /** An OIDC token whose audience is the board's URL, or a function returning one. Without one, `fetch` brings the credentials. */
   token?: Resolvable<string>
   profile?: Resolvable<ProfileOption>
-  /** A person's handle; the board falls back to one derived from their user ID. */
-  handle?: Resolvable<string | null>
-  /** Your display name, shown when you write as yourself (not as a profile). */
-  person?: Resolvable<{ name?: string | null } | null>
   /** Extra headers on every request. */
   headers?: Resolvable<Record<string, string>>
   fetch?: typeof fetch
@@ -263,12 +259,6 @@ export function createBoardClient(options: ClientOptions) {
     if (options.token !== undefined) out.authorization = `Bearer ${await resolve(options.token)}`
     const profile = as !== undefined ? as : options.profile === undefined ? null : await resolve(options.profile)
     if (profile !== null) out['x-board-profile'] = formatProfileHeader(typeof profile === 'string' ? { name: profile } : profile)
-    else {
-      const person = options.person === undefined ? null : await resolve(options.person)
-      if (person?.name) out['x-board-name'] = encodeURIComponent(person.name)
-    }
-    const handle = options.handle === undefined ? null : await resolve(options.handle)
-    if (handle) out['x-board-handle'] = handle
     return out
   }
 

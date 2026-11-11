@@ -32,7 +32,7 @@ async function granting(grants: GrantInput[], options: Parameters<typeof testBoa
 
 async function setup(grants: GrantInput[] = [intake]) {
   const board = await granting(grants)
-  const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+  const julian = caller(board.fetch, await personToken(), {})
   const front = caller(board.fetch, await deploymentToken())
   return { board, julian, front }
 }
@@ -90,7 +90,7 @@ describe('a write-only source', () => {
   it('streams bare cursors and nothing else', async () => {
     // A stream's cursor moves past what its caller can't see when a page of events ends: here, as it closes.
     const board = await granting([intake], { streamMaxMs: 1000 })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const controller = new AbortController()
     const response = await board.fetch(
       new Request(`${BOARD_URL}/events?after=0`, {
@@ -117,11 +117,13 @@ describe('a write-only source', () => {
 
   it('answers a write-only caller’s mentions alike, whoever has the handle, and they still reach who they name', async () => {
     const board = await granting([intake], { scheduler: fakeQueue().scheduler })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    // A Vercel login's handle is its user ID: Julian's is `julian`.
+    const julian = caller(board.fetch, await personToken('julian'), {})
     const front = caller(board.fetch, await deploymentToken())
     await julian('POST', '/messages', { channel: 'dev', text: 'hi' })
-    for (const user of ['u_sam1', 'u_sam2']) await caller(board.fetch, await personToken(user), { 'x-board-handle': 'sam' })('POST', '/messages', { channel: 'dev', text: 'hi' })
-    // One person has the handle, two share one, and no one has the last: nothing in the answers tells them apart.
+    // A person and a project's deployments go by sam.
+    for (const sam of [await personToken('sam'), await deploymentToken('sam', 'prj_sam', 'production')]) await caller(board.fetch, sam, {})('POST', '/messages', { channel: 'dev', text: 'hi' })
+    // One has the handle, two share one, and no one has the last: nothing in the answers tells them apart.
     const answers = []
     for (const handle of ['julian', 'sam', 'nobody']) {
       const text = `thanks @${handle}`
@@ -153,23 +155,23 @@ describe('a write-only source', () => {
     const board = await granting([{ ...intake, can: { 'feedback/': ['read', 'post'] } }])
     // Without g2's every project on the team: front may read only feedback.
     await board.revokeGrant('g2')
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const front = caller(board.fetch, await deploymentToken())
     // Sam writes only in secret, which front can't read; feedback mentions @sam, and his agent.
-    await caller(board.fetch, await personToken('u_sam'), { 'x-board-handle': 'sam' })('POST', '/messages', { channel: 'secret', text: 'hi' })
-    for (const text of ['@sam can you look?', 'over to @sam/claude', 'cc @[vercel:user:u_sam]']) await julian('POST', '/messages', { channel: 'feedback', text })
+    await caller(board.fetch, await personToken('u_sam'), {})('POST', '/messages', { channel: 'secret', text: 'hi' })
+    for (const text of ['@u_sam can you look?', 'over to @u_sam/claude', 'cc @[vercel:user:u_sam]']) await julian('POST', '/messages', { channel: 'feedback', text })
     const texts = async (as: typeof julian, mentions: string) =>
       ((await as('GET', `/messages?channel=feedback&mentions=${encodeURIComponent(mentions)}`)).body.messages as { text: string }[]).map((m) => m.text)
-    expect(await texts(julian, 'vercel:user:u_sam')).toEqual(['@sam can you look?', 'over to @sam/claude', 'cc @[vercel:user:u_sam]'])
-    // Front gets what it names, as written: no saying that vercel:user:u_sam goes by sam.
+    expect(await texts(julian, 'vercel:user:u_sam')).toEqual(['@u_sam can you look?', 'over to @u_sam/claude', 'cc @[vercel:user:u_sam]'])
+    // Front gets what it names, as written: no saying that vercel:user:u_sam goes by u_sam.
     expect(await texts(front, 'vercel:user:u_sam')).toEqual(['cc @[vercel:user:u_sam]'])
-    expect(await texts(front, 'sam')).toEqual(['@sam can you look?', 'over to @sam/claude'])
+    expect(await texts(front, 'u_sam')).toEqual(['@u_sam can you look?', 'over to @u_sam/claude'])
   })
 
   for (const middleware of [undefined, [async ({ next }) => next()] satisfies Middleware[]]) {
     it(`gets back a retry as it landed, not what others added since (${middleware ? 'with' : 'without'} middleware)`, async () => {
       const board = await granting([intake], middleware ? { middleware } : {})
-      const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+      const julian = caller(board.fetch, await personToken(), {})
       const front = caller(board.fetch, await deploymentToken())
       const sent = { channel: 'feedback/front', text: 'checkout is slow', id: 'feedback-checkout' }
       const posted = await front('POST', '/messages', sent)
@@ -250,7 +252,7 @@ describe('a reader of some channels', () => {
       },
     }
     board = testBoard({ store: { ...store, tables } })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await julian('POST', '/messages', { channel: 'dev', text: 'old' })
     const pi = caller(board.fetch, await personToken(), { 'x-board-can': 'dev/=read' })
     landInNew = () => julian('POST', '/messages', { channel: 'dev/new', text: 'fresh' })

@@ -89,7 +89,7 @@ describe('slack message links', () => {
 
   it('links a synced message to its board copy', async () => {
     const { board, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await webhook({ type: 'message', threadId: `slack:C1:${TS}`, id: TS, text: 'export is broken', user: 'U_ADA', name: 'Ada' })
     await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
     await webhook(linking('1791322999.000001', permalink('C1')))

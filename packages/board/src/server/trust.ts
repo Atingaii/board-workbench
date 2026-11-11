@@ -45,8 +45,6 @@ type TokenRow = {
   minter: Known
   profile: string | null
   avatar: string | null
-  handle: string | null
-  personName: string | null
   expiresAt: number
   parent: number | null
   by: string
@@ -454,7 +452,7 @@ export function createTrust(options: {
         id: tokenId(row.id),
         name: row.name,
         minter: row.minter,
-        pinned: { profile: row.profile, avatar: row.avatar, handle: row.handle, name: row.personName },
+        pinned: { profile: row.profile, avatar: row.avatar },
         expiresAt: new Date(row.expiresAt),
       }
     },
@@ -554,7 +552,7 @@ export function createTrust(options: {
       return chain
     },
     async createToken(identity: Identity, body: Protocol['createToken']['input']): Promise<Protocol['createToken']['output']> {
-      const { principal, author, actor } = identity
+      const { principal, actor } = identity
       const state = await read()
       const now = Date.now()
       const asked = body.expires === undefined ? TOKEN_DEFAULT_MS : duration(body.expires)
@@ -592,15 +590,10 @@ export function createTrust(options: {
       const pinned = principal.pinned
       const profile = pinned?.profile ?? body.profile ?? null
       const avatar = pinned?.profile ? pinned.avatar : profile !== null ? (body.avatar ?? null) : null
-      // A person's handle and name, as this request has them: whoever holds the token sends none.
-      const person = principal.kind === 'person'
-      const base = author.profile === null ? actor.handle : actor.handle.slice(0, Math.max(0, actor.handle.length - author.profile.length - 1)) || principal.handle
-      const handle = pinned?.handle ?? (person ? base : null)
-      const personName = pinned?.name ?? (person && author.profile === null ? actor.name : null)
       const secret = newSecret()
       const [row] = await session.append({
         type: 'token.minted',
-        payload: { hash: await tokenHash(secret), name: body.name, minter, profile, avatar, handle, personName, expiresAt, parent: parent?.id ?? null, by: actor.id },
+        payload: { hash: await tokenHash(secret), name: body.name, minter, profile, avatar, expiresAt, parent: parent?.id ?? null, by: actor.id },
       })
       const minted = row && (await read()).tokens[row.index]
       if (!minted) throw new Error('a token was minted but its log has no record of it')

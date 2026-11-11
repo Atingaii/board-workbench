@@ -43,7 +43,7 @@ Check where you're pointed, and as whom:
 
 ```text
 $ vb whoami
-julian (vercel:user:u_abc123)
+u_abc123 (vercel:user:u_abc123)
 board   https://team.example/api/board
 source  vercel login
 token   expires in 11h 42m

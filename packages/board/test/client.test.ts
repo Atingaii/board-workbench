@@ -11,14 +11,10 @@ import { bearer, BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 import { connect } from '../src/client/node.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
-async function setup(userId = 'u_julian', handle = 'julian', profile: string | null = null) {
+async function setup(userId = 'u_julian', profile: string | null = null) {
   const team = testBoard()
   const token = await personToken(userId)
-  const fetch = bearer((input, init) => {
-    const request = new Request(input, init)
-    request.headers.set('x-board-handle', handle)
-    return team.fetch(request)
-  }, token)
+  const fetch = bearer((input, init) => team.fetch(new Request(input, init)), token)
   const client = board({ backend: http(BOARD_URL, { fetch }) }).as(profile)
   return { team, client, fetch }
 }
@@ -31,7 +27,7 @@ describe('a handle on a board over http()', () => {
     const thread = await client.thread(root.id)
     expect(thread.message.labels).toEqual({ status: 'open' })
     expect(thread.replies.map((m) => m.text)).toEqual(['rolled back'])
-    expect(thread.message.author).toMatchObject({ handle: 'julian' })
+    expect(thread.message.author).toMatchObject({ handle: 'u_julian' })
   })
 
   it('lists threads by latest activity, each with its root, reply count, and latest reply', async () => {
@@ -114,7 +110,7 @@ describe("a post's id over http()", () => {
     // It goes as a key under the token's principal, which no one else may post with.
     expect(first.thread).toMatch(/^key:vercel:user:u_julian:[0-9a-f]{32}$/)
     // Someone else's post with the same id first doesn't take it.
-    const ada = caller(team.fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    const ada = caller(team.fetch, await personToken('u_ada'), {})
     expect((await ada('POST', '/messages', { channel: 'dev', text: 'mine', id: 'deploy-d4e5f6' })).status).toBe(201)
     expect((await client.post('dev', { text: 'd4e5f6 is live', id: 'deploy-d4e5f6' })).text).toBe('d4e5f6 is live')
     // Another profile's post with the same id is another post.
@@ -359,7 +355,7 @@ describe('the audience a handle mints a token for, in Node', () => {
     await mkdir(join(config, 'board', 'tokens'), { recursive: true })
     await writeFile(
       join(config, 'board', 'tokens', `${createHash('sha256').update(VICTIM).digest('hex').slice(0, 32)}.json`),
-      JSON.stringify({ token: 'cached-person-token-for-victim', expiresAt: Date.now() + 12 * 3600_000, handle: 'julian', name: 'Julian', avatar: null }),
+      JSON.stringify({ token: 'cached-person-token-for-victim', expiresAt: Date.now() + 12 * 3600_000 }),
     )
     const asked = actions()
     const urls: string[] = []
@@ -385,7 +381,7 @@ describe('the audience a handle mints a token for, in Node', () => {
     await mkdir(tokens, { recursive: true })
     await writeFile(
       join(tokens, `${createHash('sha256').update(VICTIM).digest('hex').slice(0, 32)}.json`),
-      JSON.stringify({ token: victimToken, expiresAt: Date.now() + 12 * 3600_000, handle: 'julian', name: 'Julian', avatar: null }),
+      JSON.stringify({ token: victimToken, expiresAt: Date.now() + 12 * 3600_000 }),
     )
     const { fetch, bearers } = evil(VICTIM)
     await expect(against(fetch).channels()).rejects.toMatchObject({ code: 'wrong_audience' })

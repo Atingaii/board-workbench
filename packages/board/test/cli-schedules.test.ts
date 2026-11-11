@@ -16,7 +16,7 @@ describe('cli schedules', () => {
       const root = (await vb(['post', 'dev', 'PR #12 is open'], as)).stdout.trim()
       const once = await vb(['schedule', root, 'friendly ping: review?', '--in', '1s'], as)
       expect(once).toMatchObject({ code: 0, stderr: '' })
-      expect(once.stdout).toMatch(new RegExp(`^s\\d+  #${root} · once · next in 1s \\(.+\\) · by julian\\n    friendly ping: review\\?\\n$`))
+      expect(once.stdout).toMatch(new RegExp(`^s\\d+  #${root} · once · next in 1s \\(.+\\) · by u_julian\\n    friendly ping: review\\?\\n$`))
       const repeat = await vb(['schedule', root, 'check prod', '--every', '30m', '--for', '1d', '--json'], as)
       const { id } = JSON.parse(repeat.stdout).schedule
       expect(id).toMatch(/^s\d+$/)
@@ -28,13 +28,13 @@ describe('cli schedules', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 1100))
       await queue.fire()
-      await vi.waitFor(async () => expect((await vb(['read', root], as)).stdout).toMatch(/↳ #\d+  julian · \d+s · scheduled s1\n {4}friendly ping: review\?/))
+      await vi.waitFor(async () => expect((await vb(['read', root], as)).stdout).toMatch(/↳ #\d+  u_julian · \d+s · scheduled s1\n {4}friendly ping: review\?/))
 
       // What `schedules` prints cancels it, as do the bare number an older client sends and the `ss2` an older CLI prints.
       expect((await vb(['schedule', 'cancel', id], as)).stdout).toBe(`canceled ${id}\n`)
       for (const given of [id.slice(1), `s${id}`]) expect((await vb(['schedule', 'cancel', given], as)).stdout).toBe(`${id} is already canceled\n`)
       expect((await vb(['schedules', root], as)).stdout).toBe('no pending schedules\n')
-      expect((await vb(['schedules', '--all'], as)).stdout).toMatch(/· done · 1 sent · by julian[\s\S]*· canceled · by julian/)
+      expect((await vb(['schedules', '--all'], as)).stdout).toMatch(/· done · 1 sent · by u_julian[\s\S]*· canceled · by u_julian/)
 
       expect(await vb(['schedule', root, 'when?'], as)).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't schedule a message without a time: pass --in 1d, --at <time>, or --every 30m\.\n/) })
       expect((await vb(['schedule', root, 'x', '--at', 'soonish'], as)).code).toBe(2)

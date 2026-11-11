@@ -315,9 +315,6 @@ export const accessContract = contract({
       minter: StoredPrincipal,
       profile: z.string().min(1).max(32).nullable(),
       avatar: z.string().max(2048).nullable(),
-      /** A person's handle and name when they minted it. */
-      handle: Handle.nullable(),
-      personName: z.string().min(1).max(128).nullable(),
       expiresAt: Millis,
       /** The token it was minted with, which it stops with. */
       parent: z.number().int().positive().nullable(),

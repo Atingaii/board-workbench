@@ -298,15 +298,15 @@ providerContract('Chat SDK bridge', chatFixture)
 providerContract('chatSdk() with no hooks', chatSdkFixture)
 
 describe('who a post is from', () => {
-  it("gives a platform a sender only for an author the board verified: a host's person under the handle it named, and their agent", async () => {
+  it("gives a platform a sender for every author a credential named: a host's person by the handle it named, a Vercel login's by its user ID, and their agents", async () => {
     const posted = async (verified: boolean) => {
       const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
       const board = testBoard({ sync: { tickets: provider }, ...(verified ? { authenticate: hostVerifier({ pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' } }) } : {}) })
       const token = verified ? 'pt_julian' : await personToken()
       const writers = [
-        caller(board.fetch, token, { 'x-board-handle': 'julian' }),
-        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-name': encodeURIComponent('Julián Benegas') }),
-        caller(board.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'clever-lemur;avatar="https://example.com/lemur.png"' }),
+        // A handle and a name the client sends change nothing.
+        caller(board.fetch, token, { 'x-board-handle': 'ceo', 'x-board-name': encodeURIComponent('The CEO') }),
+        caller(board.fetch, token, { 'x-board-profile': 'clever-lemur;avatar="https://example.com/lemur.png"' }),
       ]
       // What the board's view of each author says as it posts: sync reads the same from `/actors`.
       const authors: boolean[] = []
@@ -315,36 +315,21 @@ describe('who a post is from', () => {
         authors.push(message.author.verified ?? false)
         await vi.waitFor(() => expect(provider.posts).toHaveLength(i + 1))
       }
-      expect(authors).toEqual(verified ? [true, false, true] : [false, false, false])
+      expect(authors).toEqual([true, true])
       return provider.posts.map((post) => [post.body.as, post.body.markdown])
     }
     expect(await posted(true)).toEqual([
       [{ name: 'julian', avatar: 'https://vercel.com/api/www/avatar?u=julian&s=64&format=png', attribution: '' }, '**julian**: post 0'],
-      // A name the person's client sent is theirs to say, not the verifier's: only the label.
-      [undefined, '**Julián Benegas**: post 1'],
-      [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png', attribution: ' via julian' }, '**clever-lemur via julian**: post 2'],
+      [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png', attribution: ' via julian' }, '**clever-lemur via julian**: post 1'],
     ])
-    // A Vercel login's name and handle are what its CLI sent: no sender, only the label.
-    expect((await posted(false)).map(([as]) => as)).toEqual([undefined, undefined, undefined])
-  })
-
-  it("gives a person a sender only as the handle and name their token gave them, not a handle they send", async () => {
-    const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
-    const board = testBoard({ sync: { tickets: provider } })
-    const token = await personToken('u_julian')
-    const named = (await caller(board.fetch, token)('GET', '/me')).body.handle as string
-    await caller(board.fetch, token)('POST', '/messages', { channel: 'tickets', text: 'as my token names me' })
-    await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
-    // Its name is the token's handle, but the handle it shows is one it sent.
-    await caller(board.fetch, token, { 'x-board-handle': 'someone-else', 'x-board-name': encodeURIComponent(named) })('POST', '/messages', { channel: 'tickets', text: 'as I say' })
-    await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
-    expect(provider.posts.map((post) => [post.body.as?.name ?? null, post.body.markdown])).toEqual([
-      [named, `**${named}**: as my token names me`],
-      [null, `**${named}**: as I say`],
+    // A Vercel login says only who a person is, so they go by their user ID, and no picture is guessed from it.
+    expect(await posted(false)).toEqual([
+      [{ name: 'u_julian', avatar: null, attribution: '' }, '**u_julian**: post 0'],
+      [{ name: 'clever-lemur via u_julian', avatar: 'https://example.com/lemur.png', attribution: ' via u_julian' }, '**clever-lemur via u_julian**: post 1'],
     ])
   })
 
-  it("gives a sender only to a write its verifier named as shown, not to an actor a host once named", async () => {
+  it("gives each write the sender its own credential named: the same person by a host's handle, then by their Vercel login", async () => {
     const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
     // A host that also takes Vercel logins: the same person through either.
     const host = hostVerifier({ pt_julian: { id: 'vercel:user:u_julian', kind: 'person', handle: 'julian' } })
@@ -352,11 +337,11 @@ describe('who a post is from', () => {
     const board = testBoard({ sync: { tickets: provider }, authenticate: (request) => (request.credential === 'pt_julian' ? host(request) : tokens(request)) })
     await caller(board.fetch, 'pt_julian')('POST', '/messages', { channel: 'tickets', text: 'as the host named me' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
-    await caller(board.fetch, await personToken('u_julian'), { 'x-board-handle': 'ceo' })('POST', '/messages', { channel: 'tickets', text: 'as I say I am' })
+    await caller(board.fetch, await personToken('u_julian'), { 'x-board-handle': 'ceo' })('POST', '/messages', { channel: 'tickets', text: 'as my login names me' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
     expect(provider.posts.map((post) => [post.body.as?.name ?? null, post.body.markdown])).toEqual([
       ['julian', '**julian**: as the host named me'],
-      [null, '**ceo**: as I say I am'],
+      ['u_julian', '**u_julian**: as my login names me'],
     ])
   })
 

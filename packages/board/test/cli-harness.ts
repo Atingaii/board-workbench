@@ -37,7 +37,6 @@ export function useBoard() {
       ...clean,
       BOARD_URL: url,
       BOARD_TOKEN: await personToken('u_julian', url),
-      BOARD_HANDLE: 'julian',
       HOME: await tmp('board-home-'),
       XDG_CONFIG_HOME: await tmp('board-'),
     }

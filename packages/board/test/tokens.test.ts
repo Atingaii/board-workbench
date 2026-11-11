@@ -7,7 +7,7 @@ const DAY = 24 * 3600_000
 /** A board, Julian on it with the handle his CLI sends, and a way to call it with any token. */
 async function setUp(options: Parameters<typeof testBoard>[0] = {}) {
   const board = testBoard(options)
-  const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-name': 'Julian' })
+  const julian = caller(board.fetch, await personToken(), {})
   const as = (token: string, headers: Record<string, string> = {}) => caller(board.fetch, token, headers)
   const mint = async (body: Record<string, unknown>, by = julian) => {
     const minted = await by('POST', '/tokens', body)
@@ -26,7 +26,7 @@ describe('tokens', () => {
     expect(secret).toMatch(/^board_[A-Za-z0-9_-]{43}$/)
     const widget = as(secret)
     const me = (await widget('GET', '/me')).body
-    expect(me).toMatchObject({ principal: 'vercel:user:u_julian', actor: 'vercel:user:u_julian', handle: 'julian', name: 'Julian', can: { 'feedback/': ['post'] } })
+    expect(me).toMatchObject({ principal: 'vercel:user:u_julian', actor: 'vercel:user:u_julian', handle: 'u_julian', name: 'u_julian', can: { 'feedback/': ['post'] } })
     expect((await widget('POST', '/messages', { channel: 'feedback/web', text: 'love it' })).status).toBe(201)
     expect((await widget('POST', '/messages', { channel: 'dev', text: 'not here' })).status).toBe(403)
   })
@@ -46,9 +46,9 @@ describe('tokens', () => {
   it('writes as the profile it pins, whatever a request says', async () => {
     const { as, mint } = await setUp()
     const { secret } = await mint({ name: 'eve-1956', profile: 'clever-lemur', avatar: 'https://example.com/lemur.png' })
-    const eve = as(secret, { 'x-board-profile': 'claude;avatar="https://evil.example/x.png"', 'x-board-handle': 'someone-else' })
+    const eve = as(secret, { 'x-board-profile': 'claude;avatar="https://evil.example/x.png"' })
     const me = (await eve('GET', '/me')).body
-    expect(me).toMatchObject({ actor: 'vercel:user:u_julian+clever-lemur', handle: 'julian/clever-lemur', profile: 'clever-lemur', avatar: 'https://example.com/lemur.png' })
+    expect(me).toMatchObject({ actor: 'vercel:user:u_julian+clever-lemur', handle: 'u_julian/clever-lemur', profile: 'clever-lemur', avatar: 'https://example.com/lemur.png' })
     expect(me).not.toHaveProperty('session')
   })
 

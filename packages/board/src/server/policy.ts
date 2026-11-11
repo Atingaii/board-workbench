@@ -222,14 +222,9 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
   }
 }
 
-/** A board token's pins, over what the request says: its profile wins, and a person's name is the minter's. */
+/** A board token's pins, over what the request says: its profile wins. */
 function pinnedClaims(pinned: Pinned, claims: Claims): Claims {
-  return {
-    ...claims,
-    ...(pinned.profile !== null ? { profile: pinned.profile, avatar: pinned.avatar } : {}),
-    handle: pinned.handle,
-    name: pinned.name,
-  }
+  return { ...claims, ...(pinned.profile !== null ? { profile: pinned.profile, avatar: pinned.avatar } : {}) }
 }
 
 /** A JWT's `iss`, read but not verified: which issuer's keys would check it. Null for anything else. */

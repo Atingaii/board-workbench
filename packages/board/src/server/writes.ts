@@ -9,7 +9,7 @@ import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import { platformProfile } from '../contract/profiles.ts'
 import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
-import { actorSeen, viaOf } from './actors.ts'
+import { actorSeen } from './actors.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { syncTarget, type SyncTarget } from './targets.ts'
 import type { BoardSession } from './a2.ts'
@@ -52,17 +52,14 @@ function seenFor(identity: Identity, actors: ActorsState) {
 }
 
 /**
- * Whether the board checked who a write is by, as it shows them: a principal a credential named
- * (an OIDC token it trusts, a board token, or a host's verifier; never the board's own code), under
- * the handle that credential gave it. An agent shows that principal after `via`, and its profile
- * name is the principal's to choose; a person, deployment, or workflow writing as itself shows the
- * handle as its name, which a display name its client sends replaces. An import says for itself.
+ * Whether the board checked who a write is by, as it shows them: a principal a credential named (an
+ * OIDC token it trusts, a board token, or a host's verifier; never the board's own code). Its handle
+ * and name are always that credential's word, and an agent shows that principal after `via`, its
+ * profile name the principal's to choose. An import says for itself.
  */
-function verifiedAs({ principal, author, actor }: Identity): boolean {
+function verifiedAs({ principal, actor }: Identity): boolean {
   if (principal.kind === 'external') return actor.verified === true
-  if (principal.id.startsWith('board:')) return false
-  if (author.profile !== null) return actor.via !== undefined && actor.via.name === viaOf(principal).name
-  return actor.name === principal.handle && actor.handle === principal.handle
+  return !principal.id.startsWith('board:')
 }
 
 /**

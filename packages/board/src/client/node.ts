@@ -72,12 +72,12 @@ export function localTokenFile(url: string): string {
 }
 
 /** The token a local board on this machine left for you, if `url` is one. */
-function localToken(url: string): { token: string; handle: string | null } | null {
+function localToken(url: string): { token: string } | null {
   try {
     if (!LOOPBACK.has(new URL(url).hostname)) return null
-    const saved = JSON.parse(readFileSync(localTokenFile(url), 'utf8')) as { url?: string; token?: string; handle?: string }
+    const saved = JSON.parse(readFileSync(localTokenFile(url), 'utf8')) as { url?: string; token?: string }
     if (saved.url !== url.replace(/\/+$/, '') || typeof saved.token !== 'string') return null
-    return { token: saved.token, handle: saved.handle ?? null }
+    return { token: saved.token }
   } catch {
     return null
   }
@@ -92,7 +92,7 @@ const expiry = (token: string): number => {
   }
 }
 
-type Cached = { token: string; expiresAt: number; handle?: string | null; name?: string | null; avatar?: string | null }
+type Cached = { token: string; expiresAt: number }
 
 /**
  * Where `audience`'s token is cached: one per board, and with a login a CLI hands over, one per
@@ -197,14 +197,6 @@ const apiLogin = async (handed: string | null) => handed ?? (await getVercelToke
 async function personToken(audience: string, discovery: Discovery): Promise<Cached> {
   const login = await handedToken()
   const cached = await readCache(audience, login)
-  // Tokens cached before names and avatars were kept get them once.
-  if (cached && cached.name === undefined) {
-    const authToken = await apiLogin(login)
-    const user = authToken ? await vercelUser(authToken) : null
-    const filled = { ...cached, name: user?.name ?? null, avatar: user?.avatar ?? null }
-    await writeCache(audience, login, filled).catch(() => {})
-    return filled
-  }
   if (cached) return cached
   if (!discovery.project_id)
     throw new BoardError('no_project', `The board at ${audience} doesn't know its Vercel project, so there's no Vercel login token to mint for it.`, 0, {
@@ -237,8 +229,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   }
 
   const token = await exchangeVercelOidcToken({ token: development, audience })
-  const user = authToken ? await vercelUser(authToken) : null
-  const fresh: Cached = { token, expiresAt: expiry(token), handle: user?.handle ?? null, name: user?.name ?? null, avatar: user?.avatar ?? null }
+  const fresh: Cached = { token, expiresAt: expiry(token) }
   await writeCache(audience, login, fresh).catch(() => {})
   return fresh
 }
@@ -286,22 +277,6 @@ async function tokenFromVercelCli(project: { id: string; team: string | null }):
   }
 }
 
-/** Your Vercel username, display name, and avatar (Vercel serves avatars publicly). */
-async function vercelUser(authToken: string): Promise<{ handle: string | null; name: string | null; avatar: string | null } | null> {
-  try {
-    const response = await asYou('https://api.vercel.com/v2/user', {}, authToken)
-    if (!response.ok) return null
-    const { user } = (await response.json()) as { user?: { username?: string; name?: string | null; avatar?: string | null } }
-    return {
-      handle: user?.username?.toLowerCase() ?? null,
-      name: user?.name?.trim() || null,
-      avatar: user?.avatar && /^[0-9a-f]+$/i.test(user.avatar) ? `https://vercel.com/api/www/avatar/${user.avatar}?s=128` : null,
-    }
-  } catch {
-    return null
-  }
-}
-
 async function githubActionsToken(audience: string): Promise<string> {
   const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL!)
   url.searchParams.set('audience', audience)
@@ -327,10 +302,7 @@ export function boardUrl(): string {
 
 /** How `vb` reaches a board from Node: a fetch that carries your credentials, and who it found you are. */
 export type NodeTransport = {
-  /**
-   * Every request to the board, through Deployment Protection, with a token for it (all but
-   * discovery) and, when it found one, your handle, and your name and avatar when no profile is set.
-   */
+  /** Every request to the board, through Deployment Protection, with a token for it (all but discovery). */
   fetch: typeof fetch
   /** Where the token came from, in words, once one was minted: `vercel login`, `BOARD_TOKEN`, … */
   source(): string | null
@@ -339,12 +311,12 @@ export type NodeTransport = {
 /**
  * How a client reaches the board at `url` from Node: through Deployment Protection, with a token
  * from `token`, `BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions, the Vercel
- * runtime, or your Vercel CLI login, in that order. `handle` is yours, in place of `BOARD_HANDLE`
- * or your Vercel username.
+ * runtime, or your Vercel CLI login, in that order. Who you are is the token's to say: the board
+ * names you from what it verifies.
  */
 export function connect(
   url: string,
-  options: { token?: Resolvable<string> | undefined; handle?: string | undefined; fetch?: typeof fetch | undefined } = {},
+  options: { token?: Resolvable<string> | undefined; fetch?: typeof fetch | undefined } = {},
 ): NodeTransport {
   url = url.replace(/\/+$/, '')
   const doFetch = guarded(url, options.fetch ?? ((input, init) => globalThis.fetch(input, init)), options.token)
@@ -383,7 +355,7 @@ export function connect(
     const local = localToken(url)
     if (local) {
       source = 'vb serve'
-      return { token: local.token, expiresAt: expiry(local.token), handle: local.handle, name: null, avatar: null }
+      return { token: local.token, expiresAt: expiry(local.token) }
     }
     const discovered = await discover()
     if (process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
@@ -417,11 +389,6 @@ export function connect(
     // Discovery is public: it's what a token is minted from.
     if (!(method === 'GET' && path === '/')) {
       if (!headers.has('authorization')) headers.set('authorization', `Bearer ${await token()}`)
-      const handle = options.handle ?? (process.env.BOARD_HANDLE || (options.token === undefined ? cached?.handle : null))
-      if (handle && !headers.has('x-board-handle')) headers.set('x-board-handle', handle)
-      // Your name shows when you write as yourself, not as a profile.
-      if (!headers.has('x-board-profile') && options.token === undefined && cached?.name && !headers.has('x-board-name'))
-        headers.set('x-board-name', encodeURIComponent(cached.name))
     }
     return doFetch(input, { ...init, headers })
   }) as typeof fetch

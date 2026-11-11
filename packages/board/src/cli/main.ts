@@ -811,7 +811,7 @@ function profileFlag(): ProfileOption | undefined {
  * Vercel's API for `--scope` or `--team`; the one the environment points at; or the team's board
  * of the Vercel project it runs in, or, for an app with a team board, your login's.
  */
-function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined; can?: string } = {}) {
+function connection(url: string | undefined = flags.url, options: { token?: string; can?: string } = {}) {
   const profile = profileFlag()
   const team = flags.scope ?? flags.team
   const name = boardNameFlag(url, team)
@@ -829,8 +829,7 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
     const board = boardAt({ backend: vercel({ ...onVercel, ...sending(options.token, options.can) }) })
     return { url: at as string | null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
-  const handle = options.handle ?? flags.handle
-  const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}), ...(options.can !== undefined ? { fetch: narrowing(options.can) } : {}) })
+  const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(options.can !== undefined ? { fetch: narrowing(options.can) } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
 }
@@ -1613,7 +1612,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
     const command = canonical(word)
     current = { command, args }
     if (io.board) {
-      const given = flags.url ? 'url' : flags.name !== undefined ? 'name' : flags.ensure ? 'ensure' : flags.handle ? 'handle' : null
+      const given = flags.url ? 'url' : flags.name !== undefined ? 'name' : flags.ensure ? 'ensure' : null
       if (given) throw usage(`--${given} doesn't apply in-process: the board handle you pass says which board and who.`, { next: [] })
       if (command !== undefined && MACHINE.has(command))
         throw usage(`${command} isn't available in-process: it's about the machine ${named()} runs on.`, { reason: 'not_available', next: [] })

@@ -13,7 +13,7 @@ describe('cli tokens and grants', () => {
     // Whoever holds it is you, narrowed: a coding agent with it writes as the profile it names, under you.
     const widget = { BOARD_TOKEN: secret, BOARD_PROFILE: 'claude' }
     const whoami = await vb(['whoami'], widget)
-    expect(whoami.stdout).toMatch(/^claude via julian \(vercel:user:u_julian\+claude\)\n/)
+    expect(whoami.stdout).toMatch(/^claude via u_julian \(vercel:user:u_julian\+claude\)\n/)
     expect(whoami.stdout).toMatch(/\ncan +feedback\/ +post\n/)
     expect((await vb(['post', 'feedback/web', 'love the new board'], widget)).code).toBe(0)
     const refused = await vb(['post', 'dev', 'not here'], widget)
