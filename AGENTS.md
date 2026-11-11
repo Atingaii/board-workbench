@@ -358,7 +358,8 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
   as `vb` commands; change one and change the other.
 - **The page is read-only** (`app/`). A snapshot (`lib/fleet.ts`) reads the
   newest messages and the open tasks by state, and the newest 25 finished ones
-  only when a task leaves the open set: on Vercel's board each thread summary
+  only when one finishes (a task left the open set, or the live route saw the
+  event): on Vercel's board each thread summary
   costs requests, so nothing in it may grow with every task ever made.
   `app/api/live` long-polls the fleet's events and sends a snapshot over
   server-sent events after a change, at most one every 3 seconds. The browser
@@ -368,6 +369,8 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
 - `pnpm test` (`test/queue.test.ts`) runs the queue on `local({ memory: true })`:
   a race for one claim, a takeover fencing out the old holder, and dependents
   readied by done and by a review, 130 of them and only the queue's own.
+  `test/fleet.test.ts` checks what a snapshot holds, a task made and finished
+  between two included.
 
 ## the docs (`packages/board/docs`)
 

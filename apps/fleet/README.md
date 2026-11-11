@@ -67,7 +67,7 @@ started them.
 
 - **A snapshot reads what's in play:** the fleet's newest 100 messages and its
   open tasks (`task.state=ready|claimed|review|blocked`). It reads the newest 25
-  finished tasks only when a task has left the open set, so its cost follows
+  finished tasks only when a task finishes, so its cost follows
   the open tasks and not every task ever made.
 - **The live route** (`app/api/live`) long-polls the board's events under the
   fleet and sends the browser a new snapshot after a change, at most one every

@@ -1,6 +1,6 @@
-import type { MessageView, ThreadSummaryView } from "@vercel/board";
-import { FLEET, NAME, team } from "@/lib/board";
-import { STATES, type State } from "@/lib/queue";
+import type { Board, MessageView, ThreadSummaryView } from "@vercel/board";
+import { FLEET, NAME, team } from "./board.ts";
+import { STATES, type State } from "./queue.ts";
 
 /** A message as the page shows it. */
 export type Line = { id: string; channel: string; re: string | null; author: string; text: string; at: string };
@@ -53,11 +53,15 @@ const OPEN = "ready|claimed|review|blocked";
 const FINISHED = "done|canceled";
 const OPEN_LIMIT = 200;
 const FINISHED_LIMIT = 25;
-/** Finished tasks are read again when a task leaves the open set, or after this long. */
-const FINISHED_FOR_MS = 5 * 60_000;
+/** Finished tasks are read again when one finishes, or after this long. */
+const FINISHED_FOR_MS = 60_000;
 
-/** The last finished read, and which tasks were open then: per instance, and safe to lose. */
-let kept: { finished: Task[]; open: Set<string>; at: number } | undefined;
+/** A board's last finished read, and which tasks were open then: per instance, and safe to lose. */
+const keeps = new WeakMap<Board, { finished: Task[]; open: Set<string>; at: number }>();
+
+/** True for an event about a task that is finished now: the live route's cue that the finished list moved. */
+export const finishes = (event: { message?: MessageView }): boolean =>
+  FINISHED.split("|").includes(event.message?.labels["task.state"] ?? "");
 
 function toTask({ message, replies, last }: ThreadSummaryView): Task[] {
   const state = message.labels["task.state"] as State | undefined;
@@ -82,27 +86,32 @@ function toTask({ message, replies, last }: ThreadSummaryView): Task[] {
 
 /**
  * The fleet as it is now. What it reads grows with the open tasks, not with every task ever made:
- * the newest messages, the open tasks by their state, and the finished ones only when a task has
- * left the open set since the last look. On Vercel's board a thread summary costs requests of its
- * own, so a done task that stayed in every snapshot would cost on every change, forever.
+ * the newest messages, the open tasks by their state, and the finished ones only when one may have
+ * finished since the last look. On Vercel's board a thread summary costs requests of its own, so a
+ * done task that stayed in every snapshot would cost on every change, forever.
+ *
+ * A task may have finished when one left the open set, or when the caller saw it happen
+ * (`finished`, from the events it follows): a task made and finished between two snapshots was
+ * never in an open set to leave.
  */
-export async function snapshot(): Promise<Snapshot> {
-  const board = team();
+export async function snapshot(hint: { finished?: boolean } = {}, board: Board = team(), fleet: string = FLEET): Promise<Snapshot> {
   // The messages first: their cursor is where the live route listens from, so a change that lands
   // between the reads is in the next snapshot rather than in neither.
-  const page = await board.messages({ channel: FLEET, limit: 100 });
-  const open = (await board.threads({ channel: FLEET, label: { "task.state": OPEN }, limit: OPEN_LIMIT })).threads.flatMap(toTask);
+  const page = await board.messages({ channel: fleet, limit: 100 });
+  const open = (await board.threads({ channel: fleet, label: { "task.state": OPEN }, limit: OPEN_LIMIT })).threads.flatMap(toTask);
   const ids = new Set(open.map((task) => task.id));
+  let kept = keeps.get(board);
   const left = kept ? [...kept.open].some((id) => !ids.has(id)) : true;
-  if (!kept || left || Date.now() - kept.at > FINISHED_FOR_MS) {
-    const { threads } = await board.threads({ channel: FLEET, label: { "task.state": FINISHED }, limit: FINISHED_LIMIT });
+  if (!kept || left || hint.finished || Date.now() - kept.at > FINISHED_FOR_MS) {
+    const { threads } = await board.threads({ channel: fleet, label: { "task.state": FINISHED }, limit: FINISHED_LIMIT });
     kept = { finished: threads.flatMap(toTask), open: ids, at: Date.now() };
+    keeps.set(board, kept);
   } else {
     kept.open = ids;
   }
   return {
     name: NAME,
-    fleet: FLEET,
+    fleet,
     cursor: page.cursor,
     at: new Date().toISOString(),
     // The board lists oldest first; the page reads newest first.
