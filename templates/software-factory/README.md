@@ -7,53 +7,89 @@ fixes and features, reviews every PR, and stays quiet when nothing's for it.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel-labs%2Fboard%2Ftree%2Fmain%2Ftemplates%2Fsoftware-factory&project-name=factory&repository-name=factory)
 
-Deploying makes your copy of this repo and a Vercel project, and nothing else: the board is your
-team's, in Vercel's API, which keeps its messages, files, and schedules. Then open the deployment:
-its page is the launcher. Each step checks the deployment and says what to do:
+## Deploy it
 
-1. **Vercel.** Vercel Authentication and a Protection Bypass for Automation, the team's board
-   (this project let in, and allowed to sync), and AI Gateway (the agent's model).
-2. **GitHub.** A Vercel Connect connector whose app is on the repos the factory works on, this one
-   included, so the agent can change the factory itself. This repo's PRs and issues come into
-   `dev/factory`; map each of yours to a channel in `repoChannels`, in the board's route. A fork's PRs stay
-   off the board, and each thread's GitHub token covers only its own repo.
-3. **Slack**, optionally. A channel that mirrors the board.
-4. **Try it.** Open an issue, or post on the board, and the agent replies.
+1. **Click Deploy.** It makes your copy of this repo and a Vercel project, and nothing else: no
+   database and no storage. The board is your team's, in Vercel's API, which keeps its messages,
+   files, and schedules.
+2. **Open the deployment.** Its page is the launcher. Each step checks the deployment as it is now
+   and says what to do, with the command to run or the page to open:
+   - **Vercel.** Vercel Authentication and a Protection Bypass for Automation, the team's board
+     (this project let in, and allowed to sync), and AI Gateway (the agent's model).
+   - **GitHub.** A Vercel Connect connector whose app is on the repos the factory works on, this
+     one included, so the agent can change the factory itself.
+   - **Slack**, optionally. A channel that mirrors the board.
+   - **Try it.** Open an issue, or post on the board, and the agent replies.
+3. **Watch it work.** The launcher ends with the command that opens the board in your browser, as
+   you:
+
+   ```bash
+   npx @vercel/board inspect --scope <your-team>
+   ```
+
+Until the deployment turns strangers away, the launcher shows only how to protect it.
+
+## What it does with what it hears
+
+- **This repo's own PRs and issues come into `dev/factory`,** where people talk with the agent
+  about the factory itself. Map each of your other repos to a channel in `repoChannels`
+  (`app/api/board/[[...path]]/factory.ts`): `"acme/web": "dev"`.
+- **The agent hears every message in `dev` and the channels under it,** and decides what each
+  needs: an answer, a reproduction, a PR, a review, or nothing.
+- **Each thread gets its own session and its own sandbox.** Its GitHub token covers only the
+  thread's repo, and a fork's PRs stay off the board.
+- **A PR the agent opens is its own until it's merged or closed:** it schedules its own check-ins
+  on the board and comes back to it.
+- **Its commits are signed by GitHub,** with no key to manage.
+
+## Make it yours
+
+| To change | Edit |
+| --- | --- |
+| How it works on every turn: what it answers, how it triages, how it writes | `agent/lib/instructions.ts` |
+| What it does sometimes: reviewing, reproducing a bug, seeing a PR through, demos | `agent/skills/` |
+| Which repos and Slack channels come into the board, and where | `app/api/board/[[...path]]/factory.ts` |
+| Its model, and its sandbox | `agent/agent.ts`, `agent/sandbox.ts` |
+| Its name on the board | `agent/lib/identity.ts` |
+
+Ask the agent in `dev/factory`: it changes this repo with a pull request, like any other.
 
 ## How it's built
 
 | Path | What it is |
 | --- | --- |
 | `app/page.tsx`, `lib/setup.ts` | The launcher, and its checks |
-| `app/api/board/[[...path]]/factory.ts` | The board: its sync and its watcher, all configured here. `route.ts` beside it answers Vercel's wake-ups and the platforms' webhooks |
-| `agent/channels/eve.ts` | Where the watcher's wake-ups reach the agent, from this deployment only: one eve session per board thread |
+| `app/api/board/[[...path]]/factory.ts` | The board: its sync and its watcher. `route.ts` beside it answers Vercel's wake-ups and the platforms' webhooks |
 | `agent/` | The agent, an [eve](https://www.npmjs.com/package/eve) agent mounted at `/eve/v1` |
-| `agent/lib/wake.ts` | What the board sees of the agent: `wakeAgent`, which the board's watcher runs on every message |
-| `agent/lib/instructions.ts` | What the agent does on every turn: edit it to change how it works |
-| `agent/skills/` | What it does sometimes: `board`, `review-pr`, `reproduce-bug`, `pr-lifecycle`, `ui-demo`, `update-template` |
-| `agent/extensions/browser.ts`, `agent/tools/narrate.ts` | A browser in the sandbox, and the voice for the narrated videos of `ui-demo` |
-| `agent/instrumentation/otel.ts` | Traces each session with its content, for the project's Agent Runs. Needs a 100% sampling rule: `vercel traces config set 100 --environment any` |
-| `agent/schedules/update-template.ts` | A daily check for a new release of this template |
+| `agent/lib/wake.ts` | All the board sees of the agent: `wakeAgent`, which the board's watcher runs on every message |
+| `agent/channels/eve.ts` | Where wake-ups reach the agent, from this deployment only: one eve session per board thread |
+| `agent/tools/vb.ts` | The agent's hands on the board: `vb`'s commands, as the profile `factory` |
+| `agent/lib/credentials.ts` | A GitHub token per thread, in the sandbox's network policy and never in the sandbox |
 | `agent/lib/git/` | The sandbox's `git`: pushes go through GitHub's API, which signs the agent's commits |
+| `agent/extensions/browser.ts`, `agent/tools/narrate.ts` | A browser in the sandbox, and the voice for the narrated videos of the `ui-demo` skill |
+| `agent/instrumentation/otel.ts` | Traces each session with its content, for the project's Agent Runs. Needs a 100% sampling rule: `vercel traces config set 100 --environment any` |
 
-The board only reaches the agent through the watchers it exports, so another agent swaps in by
-exporting watchers of its own.
+The board reaches the agent only through its watcher, so another agent swaps in by giving the
+board a watcher of its own.
 
 ## Locally
 
 ```bash
 pnpm install
-vercel link && vercel env pull   # the project's OIDC token, for AI Gateway and Connect
+vercel link && vercel env pull   # the project's OIDC token, for the board, AI Gateway, and Connect
 pnpm dev
 ```
 
 Locally, and on previews, the board is one named `factory-dev`, which the first run makes on your
-team, so nothing you try answers production's threads. Open it with `vb inspect --name factory-dev`.
+team, so nothing you try answers production's threads. Open it with
+`npx @vercel/board inspect --name factory-dev`.
+
+```bash
+pnpm typecheck
+pnpm test
+```
 
 ## Updates
 
-This repo is a copy, not a fork: it doesn't follow the template on its own. Once a day,
-`agent/schedules/update-template.ts` compares `package.json`'s `version`, the template release
-this factory is on, with the latest. When there's a newer one, it posts a task on the board, and the
-agent merges the new release into this repo with the `update-template` skill, keeping your changes.
-It opens a PR; nothing merges without a person.
+This repo is a copy, not a fork: it doesn't follow the template on its own. `package.json`'s
+`version` is the release it started from.
