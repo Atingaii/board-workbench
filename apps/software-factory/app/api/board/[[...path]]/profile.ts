@@ -21,5 +21,12 @@ export function asBoardReadsIt(request: Request): Request {
   const headers = new Headers(request.headers);
   headers.set("x-board-profile", found[1]!);
   headers.set("x-board-avatar", found[2]!.replace(/\\(["\\])/g, "$1"));
-  return new Request(request, { headers });
+  // Next.js passes a proxy: Request's constructor cannot read its private slots.
+  // Copy the public request fields instead, including the streaming POST body.
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    signal: request.signal,
+    ...(request.body ? { body: request.body, duplex: "half" } : {}),
+  });
 }
