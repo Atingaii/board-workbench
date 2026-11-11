@@ -749,7 +749,7 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("says what Vercel's board refuses: a grant naming a GitHub run or an OIDC issuer, and a board token, without asking for one", async () => {
+  it("says what Vercel's board refuses: a grant naming a GitHub run or an OIDC issuer", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
     const api = fakeMessageboard()
@@ -769,12 +769,6 @@ describe('the embedded CLI', () => {
       })
       // An app gets in, as the hint says.
       expect((await run('grants', 'create', '--app', 'ship', '--can', 'ci/=post')).stdout).toMatch(/^created g4  --app ship  ci\/=post\n$/)
-      const refused = (method: string) => `This board doesn't support it.\n  Vercel's boards don't support ${method} yet\n`
-      expect(await run('tokens', 'create', 'ci', '--can', 'dev/=read')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't mint token ci. ${refused('createToken')}` })
-      expect(await run('tokens')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't list tokens. ${refused('tokens')}` })
-      expect(await run('tokens', 'revoke', 'tok_1')).toMatchObject({ code: 1, stdout: '', stderr: `error: Can't revoke token tok_1. ${refused('revokeToken')}` })
-      expect(JSON.parse((await run('tokens', 'create', 'ci', '--json')).stderr)).toMatchObject({ reason: 'not_supported', data: { error: { status: 501 } } })
-      expect(api.requests.filter((request) => request.includes('/tokens'))).toEqual([])
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -805,8 +799,6 @@ describe('the embedded CLI', () => {
       const named = await run('conformance', '--name', 'General')
       expect(named.code).not.toBe(2)
       expect(named.stdout).toMatch(/\d+ passed/)
-      // Vercel's board keeps no board tokens: the tokens checks are skipped, not failed.
-      expect(named.stdout).toMatch(/\ntokens\n  skipped  mints a token[^\n]*\n {11}not kept here: Vercel's boards don't support createToken yet\n  skipped  lets a token/)
       expect(writes()).toBeGreaterThan(0)
     } finally {
       fetching.mockRestore()

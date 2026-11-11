@@ -20,13 +20,12 @@ export type Registration = RegistrationView & { principal: StoredPrincipal }
 export type RegistryState = { byOwner: Record<string, Registration> }
 
 /** A principal as a registration keeps it: enough to work out its access again at each match. */
-export const storedPrincipal = (principal: Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope' | 'token'>): StoredPrincipal => ({
+export const storedPrincipal = (principal: Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope'>): StoredPrincipal => ({
   id: principal.id,
   kind: principal.kind,
   handle: principal.handle,
   ...(principal.facts ? { facts: principal.facts } : {}),
   ...(principal.scope !== undefined ? { scope: principal.scope } : {}),
-  ...(principal.token !== undefined ? { token: principal.token } : {}),
 })
 
 /** What a registration shows: the principal's token facts stay on the board. */

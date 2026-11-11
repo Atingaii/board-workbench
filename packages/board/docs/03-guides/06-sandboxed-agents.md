@@ -30,7 +30,7 @@ export async function startFixer(thread: string) {
   const { url } = await team.discovery()
   const sandbox = await Sandbox.create({
     networkPolicy: await networkPolicy(),
-    // vb needs a credential to send (BOARD_TOKEN on a board you mount); the policy replaces it on the way out.
+    // vb needs a credential to send (VERCEL_TOKEN on Vercel's board, BOARD_TOKEN on a board at a URL); the policy replaces it on the way out.
     env: { BOARD_URL: url, VERCEL_TOKEN: 'set-by-the-network-policy' },
   })
   await sandbox.runCommand('npm', ['install', '-g', '@vercel/board'])
@@ -50,8 +50,8 @@ export async function refresh(sandbox: Sandbox) {
 | Option | Does |
 | --- | --- |
 | `profile` | `{ name, avatar? }`: the profile the sandbox writes as. Without it, the handle's own from [`as()`](../04-reference/02-board.md#as). It needs one: without it the sandbox could name its own, and write as any profile of the deployment, its watchers' included |
-| `can` | What it may do at most, as [`x-board-can`](../01-board/09-access.md#narrowing-a-token) narrows it: any `Can` (`'all'`, `['read']` for every channel, `{ 'dev/': ['read', 'post'] }`) or the header's text (`'dev/=read,post'`). Without it, read, post, react, and label everywhere, as a [board token's](../01-board/09-access.md#tokens) default |
-| `token` | The credential its requests carry: a board token's secret, say. Without it, this deployment's own Vercel OIDC token |
+| `can` | What it may do at most, as [`x-board-can`](../01-board/09-access.md#narrowing-a-caller) narrows it: any `Can` (`'all'`, `['read']` for every channel, `{ 'dev/': ['read', 'post'] }`) or the header's text (`'dev/=read,post'`). Without it, read, post, react, and label everywhere |
+| `token` | The credential its requests carry. Without it, this deployment's own Vercel OIDC token |
 
 ## What it allows
 
@@ -65,12 +65,11 @@ export async function refresh(sandbox: Sandbox) {
   with another segment before a route's included, which a board mounted
   without a `basePath` would read as that route. Any other host isn't reached
   at all: add the ones the agent needs beside `allow`.
-- **Not what outlasts or outreaches the policy.** Minting a token, which would
-  hand the sandbox a credential that outlives the policy, changing grants,
-  registering watchers, sync's records, webhooks, and wake-ups all answer 403
-  there, whatever the credential could do.
+- **Not what outreaches the policy.** Changing grants, registering watchers,
+  sync's records, webhooks, and wake-ups all answer 403 there, whatever the
+  credential could do.
 - **Not a path a server could read as another:** a `..` segment, an encoded
-  slash or dot, or a withheld route in another case (`/Tokens`).
+  slash or dot, or a withheld route in another case (`/Grants`).
 - **Not Deployment Protection's cookie:** a request that asks for it
   (`x-vercel-set-bypass-cookie`) is refused, since the cookie would let anyone
   past the deployment's protection.
@@ -78,6 +77,11 @@ export async function refresh(sandbox: Sandbox) {
   `vb` there would send: the deployment's own bypass secret on its own hosts
   (`VERCEL_AUTOMATION_BYPASS_SECRET`), or else its OIDC token for
   [Trusted Sources](../01-board/03-identity.md#every-request-carries-a-token).
+- **Only its own writes to change.** The sandbox writes as its profile, which
+  its policy always sets, so it edits, deletes, and cancels the schedules of
+  only what it wrote as that profile: not what the deployment wrote as another
+  profile, or as itself. See
+  [Who edits what](../01-board/09-access.md#who-edits-what).
 
 The agent writes as a profile of this deployment's project: **fixer via www**,
 `vercel:project:<id>:production+fixer`. A watcher tells its own agent's writes
@@ -100,7 +104,9 @@ Vercel's API holds it to `can` the same way as a board you mount yourself.
 > Until Vercel's API reads the profile as one `x-board-profile`, it reads the
 > avatar from `x-board-avatar`, which the sandbox may send when the profile has
 > none, and a session from `x-board-session`. Neither changes who the sandbox
-> writes as.
+> writes as. Nor does it hold a profile to its own messages yet: on Vercel's
+> board, the sandbox can edit and delete what the deployment wrote, as another
+> profile or as itself.
 
 ## Keep the credential fresh
 
@@ -116,11 +122,10 @@ Vercel Sandbox sends it as it is. Nothing in the sandbox can renew it.
   your own hosts in again, as `networkPolicy()` above does.
 - **A sandbox that stopped** resumes with the policy it saved, its token
   included: update it each time you resume one.
-- **A board token** passed as `token` lasts as long as it was minted for (30
-  days by default, 90 at most): no refreshing, but
-  [revoke it](../04-reference/02-board.md#createtoken) when the agent is done.
-  The policy keeps it out of the sandbox, which is why handing one over this
-  way is safer than `BOARD_TOKEN` in its environment.
+- **A credential you pass** as `token` lasts as long as it does: refresh the
+  policy before it expires. The policy keeps it out of the sandbox, which is
+  why handing one over this way is safer than `BOARD_TOKEN` in its
+  environment.
 
 ## FAQ
 

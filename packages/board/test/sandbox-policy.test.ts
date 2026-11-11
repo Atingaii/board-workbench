@@ -71,14 +71,14 @@ describe("sandboxPolicy() on a board this deployment keeps", () => {
     const network = sandboxNetwork(await team.sandboxPolicy({ token, profile: { name: 'fixer' } }), team.fetch)
     const status = async (path: string, method = 'GET', headers: Record<string, string> = {}) =>
       (await network.fetch(`http://board.test${path}`, { method, headers: { ...(method === 'POST' ? { 'content-type': 'application/json' } : {}), ...headers }, ...(method === 'POST' ? { body: '{}' } : {}) })).status
-    // A token minted from inside would outlive the policy; a grant, a watcher, or sync's records would outreach it.
-    for (const path of ['/api/board/tokens', '/api/board/grants', '/api/board/watchers', '/api/board/sync/imports', '/api/board/webhooks/slack', '/api/board/wake'])
+    // A grant, a watcher, or sync's records would outreach the policy.
+    for (const path of ['/api/board/grants', '/api/board/watchers', '/api/board/sync/imports', '/api/board/webhooks/slack', '/api/board/wake'])
       expect([path, await status(path, 'POST')]).toEqual([path, 403])
     // Nor under another name for them: a board mounted without a basePath reads a route as the end of a path.
-    for (const path of ['/api/board/x/tokens', '/api/board/messages/tokens', '/api/board/posts/tokens', '/api/board/Tokens', '/api/board/x/grants'])
+    for (const path of ['/api/board/x/grants', '/api/board/messages/grants', '/api/board/posts/grants', '/api/board/Grants', '/api/board/x/watchers'])
       expect([path, await status(path, 'POST')]).toEqual([path, 403])
-    expect((await team.tokens()).length).toBe(0)
-    for (const path of ['/api/board/messages/1/../../tokens', '/api/board/attachments/x%2F..%2Ftokens', '/api/other', '/', '/api/boardroom', '/api/board//channels'])
+    expect((await team.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
+    for (const path of ['/api/board/messages/1/../../grants', '/api/board/attachments/x%2F..%2Fgrants', '/api/other', '/', '/api/boardroom', '/api/board//channels'])
       expect([path, await status(path)]).toEqual([path, 403])
     // Deployment Protection's cookie, which would let anyone past it, isn't the sandbox's to ask for.
     expect(await status('/api/board/channels?x-vercel-set-bypass-cookie=true')).toBe(403)
@@ -88,7 +88,7 @@ describe("sandboxPolicy() on a board this deployment keeps", () => {
     expect(network.blocked).toEqual(['example.com'])
   })
 
-  it("reads can left out as a board token's: read, post, react, and label everywhere, and refuses a can or profile that isn't one", async () => {
+  it("reads can left out as read, post, react, and label everywhere, and refuses a can or profile that isn't one", async () => {
     vi.stubEnv('VERCEL_ENV', 'production')
     const team = testBoard({ url: BOARD_URL })
     const token = await deploymentToken('board', PROJECT_ID, 'production', { audience: BOARD_URL })
@@ -154,7 +154,7 @@ describe("sandboxPolicy() on Vercel's board", () => {
     // Another team's board, and the team's other routes, aren't this board.
     expect((await network.fetch(`${API}/v1/messageboard/boards/brd_test/channels?teamId=team_other`)).status).toBe(403)
     expect((await network.fetch(`${API}/v1/messageboard/boards?teamId=team_test`)).status).toBe(403)
-    for (const path of ['tokens', 'Tokens', 'grants', 'watchers'])
+    for (const path of ['grants', 'Grants', 'watchers'])
       expect([path, (await network.fetch(`${API}/v1/messageboard/boards/brd_test/${path}?teamId=team_test`, { method: 'POST', body: '{}' })).status]).toEqual([path, 403])
     await expect(pong.as({ name: 'fixer', avatar: 'http://localhost/f.png' }).sandboxPolicy({ token: 'project:prj_pong:production' })).rejects.toMatchObject({ code: 'invalid_profile' })
   })
@@ -205,7 +205,7 @@ describe("sandboxPolicy() on Vercel's board", () => {
     await agent.react(root.id, 'eyes')
     await expect(agent.reply(root.id, 'not to post')).rejects.toMatchObject({ status: 403 })
     await expect(agent.post('ops', 'nor here')).rejects.toMatchObject({ status: 403 })
-    // Without a can, a board token's default: everything but sync and manage, which this deployment's own credential has.
+    // Without a can, read, post, react, and label everywhere: not sync or manage, which this deployment's own credential has.
     const wider = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: sandboxNetwork(await pong.as('fixer').sandboxPolicy({ token: 'project:prj_pong:production' }), (request) => api.fetch(request)).fetch }) })
     expect((await wider.post('ops', 'here, yes')).by.actor).toBe('vercel:project:prj_pong:production+fixer')
     expect((await wider.me()).can).toEqual({ '*': ['read', 'post', 'react', 'label'] })

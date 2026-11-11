@@ -310,8 +310,8 @@ What a backend has:
 | --- | --- |
 | `discovery`, `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `@vercel/board` says what each takes and answers |
 | `routes` | Routes of its own beside the protocol: `{ method, path, handle(request, { caller, param }) }`. One at a protocol route's path takes its place. `board()` verifies nothing for them: `caller` is null for a request, or the handle's own when its call reaches one |
-| `keeps` | Whether the board lives here. `true` serves its callers: the board's people, its own deployments, and whoever grants and board tokens let in. `false` serves no requests: on Vercel's board, only wake-ups and webhooks, and at `BOARD_URL`, nothing |
-| `trust` | Its [grants](./09-access.md#grants) and [board tokens](./09-access.md#tokens), for a backend that keeps them: `grants()`, `token(hash)`, and `live(id)`. `board()` checks each request against them as they are then. Without it, they let no one in |
+| `keeps` | Whether the board lives here. `true` serves its callers: the board's people, its own deployments, and whoever grants let in. `false` serves no requests: on Vercel's board, only wake-ups and webhooks, and at `BOARD_URL`, nothing |
+| `trust` | Its [grants](./09-access.md#grants), for a backend that keeps them: `grants()`. `board()` checks each request against them as they are then. Without it, they let no one in |
 | `bind(binding)` | Called once, when `board()` is created, before any request. It does no I/O. `binding.name` and `binding.team` are `board({ name, team })`'s, or null |
 
 - **A caller is one `board()` verified, or its own code.** `{ identity, origin }`

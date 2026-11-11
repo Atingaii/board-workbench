@@ -220,7 +220,7 @@ const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
  * What `vb` on this board calls in Vercel's API for what a sandboxed agent does, by method and path
  * under `/boards/<id>`: reading, posting and replying, editing and deleting its own, reacting and
  * labeling, files, schedules, and finding a platform link's message. A sandbox's policy hands it these
- * and nothing else under the board: not the board itself (`PATCH`, `DELETE`), its members, its tokens,
+ * and nothing else under the board: not the board itself (`PATCH`, `DELETE`), its members, its
  * grants, watchers, or sync's records, nor a route the API adds later.
  */
 const SANDBOX_ROUTES: readonly SandboxRoute[] = [

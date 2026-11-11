@@ -106,8 +106,6 @@ export function local(options: LocalOptions = {}): LocalBackend {
     keeps: true,
     trust: {
       grants: async () => (await open()).backend.trust.grants(),
-      token: async (hash: string) => (await open()).backend.trust.token(hash),
-      live: async (id: string) => (await open()).backend.trust.live(id),
     } satisfies Trust,
     bind(given: BoardBinding) {
       if (binding) throw new Error('local: this backend already serves a board: create one local() per board()')

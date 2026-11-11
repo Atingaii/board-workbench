@@ -33,7 +33,7 @@ describe('local()', () => {
           for (const [name, value] of Object.entries(headers)) request.headers.set(name, value)
           return team.fetch(request)
         }, () => personToken())
-      const report = await conformance(over(team.fetch, () => personToken()), { withToken: (secret) => over(team.fetch, async () => secret), withHeaders })
+      const report = await conformance(over(team.fetch, () => personToken()), { withHeaders })
       // All but the grants checks a local board skips: a viewer's cap and an app, which it has neither of, a member under a lock, and grants across teams.
       expect(report.checks.filter((check) => check.status !== 'passed').map((check) => [check.status, check.name])).toEqual([
         ['skipped', 'caps a person by their team role, so a viewer reads but neither posts nor manages'],
@@ -41,7 +41,7 @@ describe('local()', () => {
         ['skipped', 'lets a member grant on a pattern after a lock under it'],
         ['skipped', 'lets a project on another team in, in its environments'],
       ])
-      expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'tokens', 'schemas', 'attachments', 'watchers', 'sync'])
+      expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
     } finally {
       await team.close()
     }

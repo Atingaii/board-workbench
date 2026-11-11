@@ -115,6 +115,7 @@ describe('vercel()', () => {
       'core: narrows a caller to what its x-board-can says': 'failed',
       // It reads x-board-profile as a name alone, and an avatar from x-board-avatar.
       [IDENTITY[0]!]: 'failed',
+      'core: lets a profile change only its own messages, and its principal all of them': 'passed',
       [IDENTITY[1]!]: 'failed',
       // It keeps a session on actors, which vercel() maps no view of.
       [IDENTITY[2]!]: 'passed',
@@ -134,13 +135,12 @@ describe('vercel()', () => {
       'grants: lets everyone narrow what something else lets in, and lets no one in itself': 'skipped',
       'grants: caps a person by their team role, so a viewer reads but neither posts nor manages': 'passed',
       'grants: names an app by its slug or client ID, keeps it by client ID, and every app as a group': 'passed',
-      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'skipped',
-      "grants: lets no token grant past its own can, even where everyone's grant closes it": 'skipped',
-      'grants: lets no token let anyone in where everyone gets more than the token has': 'skipped',
+      // Vercel's API doesn't read x-board-can yet, so a narrowed caller changes grants as its principal would.
+      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'failed',
+      "grants: lets no caller narrowed with x-board-can grant past its can, even where everyone's grant closes it": 'failed',
+      'grants: lets no caller narrowed with x-board-can let anyone in where everyone gets more than it has': 'failed',
       'grants: lets a member grant on a pattern after a lock under it': 'skipped',
       'grants: lets a project on another team in, in its environments': 'skipped',
-      'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'skipped',
-      "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'skipped',
       'schemas: lists the built-in schemas first, and reads a schema by its ID': 'passed',
       'schemas: registers a schema version once: the same definition again changes nothing, and another is refused': 'passed',
       "schemas: refuses a built-in's name, and a definition it couldn't check a value against": 'passed',
@@ -2165,19 +2165,6 @@ describe("callers on Vercel's API", () => {
     })
     for (const attempt of [refusing.matches({}), refusing.ack('mat_1', { lease: 'l' }), refusing.watchers()])
       await expect(attempt).rejects.toMatchObject({ status: 403, code: 'watchers_need_project', origin: 'handle', message: "Vercel's API takes watchers only from a deployment's own credentials." })
-  })
-
-  it('mints, lists, and revokes no board tokens, for a deployment or a person, and never asks the API', async () => {
-    const api = fakeMessageboard()
-    const refusal = { status: 501, code: 'not_supported' }
-    for (const handle of [handleOn(api, 'project:prj_pong:production'), handleOn(api)]) {
-      await handle.me()
-      const before = api.requests.length
-      await expect(handle.createToken({ name: 'deploy', can: { 'ci/': ['post'] } })).rejects.toMatchObject(refusal)
-      await expect(handle.tokens()).rejects.toMatchObject(refusal)
-      await expect(handle.revokeToken('tok_1')).rejects.toMatchObject(refusal)
-      expect(api.requests.slice(before)).toEqual([])
-    }
   })
 })
 

@@ -1,4 +1,4 @@
-import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, ThreadSummaryView, TokenView } from '../api/routes.ts'
+import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
@@ -188,15 +188,6 @@ export function formatAccess(access: Me['can']): string[] {
   })
 }
 
-/** What a grant or token may do, as `--can` takes it: `dev/=read,post;ci/=read`, or `all`. */
-export function formatCan(can: Me['can']): string {
-  const patterns = Object.keys(can)
-  if (patterns.length === 1 && patterns[0] === '*' && can['*']!.includes('manage')) return 'all'
-  if (patterns.length === 0) return 'nothing'
-  const permissions = (list: readonly string[]) => (list.includes('manage') ? 'all' : list.length === 0 ? 'none' : list.join(','))
-  return patterns.map((pattern) => `${pattern}=${permissions(can[pattern]!)}`).join(';')
-}
-
 /** Rows of cells, each column padded to its widest, two spaces apart. */
 const table = (rows: string[][]) => {
   const widths = rows[0]!.map((_, column) => Math.max(...rows.map((row) => row[column]!.length)))
@@ -256,18 +247,6 @@ export function formatGrants(grants: GrantView[]): string {
 
 /** One grant as its row: `g3  --everyone  security/=none`. */
 export const grantRow = (grant: GrantView) => grantCells(grant).join('  ')
-
-/** Each token on a row: its ID, its name, what it may do, and when it expires. */
-export function formatTokens(tokens: TokenView[], now = Date.now()): string {
-  return table(
-    tokens.map((token) => [
-      token.id,
-      token.name,
-      formatCan(token.can),
-      `expires ${until(token.expiresAt, now)}${token.profile !== null ? ` · as ${token.profile}` : ''}${token.parent !== null ? ` · minted with ${token.parent}` : ''}`,
-    ]),
-  )
-}
 
 /** `90m` → `1h30m`, `1d`: milliseconds as a duration flag would say them. */
 export function span(ms: number): string {

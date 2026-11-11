@@ -467,7 +467,7 @@ methods, and nothing reaches around them. The policy is `board()`'s, in one
 place on every backend: it routes and validates each request, verifies its
 caller (`authenticate`, `oidcTokens()` from `@vercel/board/access` by default),
 works out what it may do (its people and its own deployments everything,
-anyone else what the board's grants and board tokens give), runs the
+anyone else what the board's grants give), runs the
 `middleware`, and calls the backend with the caller it verified
 (`{ identity, origin }`), which the backend trusts because only `board()`
 makes one. Nothing with side effects runs for a request before its access

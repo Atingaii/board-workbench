@@ -1,6 +1,6 @@
 ---
 title: Access
-description: "Grants say who may do what in each channel: read, post, react, label, sync, or manage, and board tokens narrow what their minter may. Anything out of reach answers 404."
+description: "Grants say who may do what in each channel: read, post, react, label, sync, or manage, and x-board-can narrows a caller behind a proxy. A profile changes only what it wrote. Anything out of reach answers 404."
 ---
 
 ## Who gets what
@@ -26,7 +26,6 @@ name them give:
 | A project's deployments on the board's team, the board's own previews included | read, post, react, label, and [sync](../04-reference/03-http.md#what-sync-grants) everywhere, from g2 |
 | The board's own deployments in the environment it runs in | everything |
 | Another project on the team, a GitHub Actions workflow, any other OIDC issuer | what its grants give, or nothing |
-| A [board token](#tokens) | what its minter may do, narrowed to its `can` |
 | The board's own code: watchers, sync, middleware, its [handle](./01-mounting.md#the-handle) | everything |
 
 A caller that only `everyone` names is refused with 403, whatever it asks,
@@ -166,8 +165,7 @@ more specific pattern decides first.
   project moved to another team keeps none of its grants. A board that
   doesn't know its team, such as `vb serve`'s outside a linked project, keeps
   none, and lets a project in by its ID alone. Until cross-team access exists,
-  a caller on another team gets in only with a [board token](#tokens) that
-  someone on the board's team mints for it.
+  no grant lets in a project on another team.
 - **A GitHub principal matches a run's token:** `workflow` by the
   token's `workflow_ref` (`ci.yml` is `.github/workflows/ci.yml`), `branch` as
   `refs/heads/<branch>`, and `event` by `event_name`.
@@ -182,8 +180,8 @@ more specific pattern decides first.
   they are (a project whatever its environments), and replaces its `can`.
   Adding a project it names already adds its environments; to narrow one,
   remove it and add it back in the same update.
-- **You can't grant what you don't have:** your token's and your own grants'
-  limits count, an `everyone` lock doesn't, and anyone you let in gets what
+- **You can't grant what you don't have:** your `x-board-can`'s and your own
+  grants' limits count, an `everyone` lock doesn't, and anyone you let in gets what
   `everyone` gets. So making or widening a grant takes `manage` at each pattern
   it names, and under each wherever your own limits narrow you, and you let no
   one in while `everyone` gets something somewhere that you don't.
@@ -214,79 +212,6 @@ more specific pattern decides first.
   wrote.
 - **A revoke holds from the next request,** and a schedule a principal made
   stops as any creator's does when it loses access.
-
-## Tokens
-
-A token is a credential the board issues, for what has no OIDC token of its
-own: a widget, a sandbox, a script on a laptop. It acts as whoever minted it,
-narrowed to its `can`. Vercel's board issues none: tokens are a `local()`
-feature.
-
-```text
-$ vb tokens create feedback-widget --can feedback/=post
-board_7pQ…
-$ BOARD_TOKEN=board_7pQ… vb post feedback/web "love the new board"
-2
-$ BOARD_TOKEN=board_7pQ… vb post dev hi
-error: You can't post to dev.
-  this token can't post in dev
-$ vb tokens
-t1  feedback-widget  feedback/=post  expires in 30d
-$ vb tokens revoke t1
-revoked t1
-```
-
-```ts scripts/sandbox-token.ts
-import { board } from '@vercel/board'
-
-// The board at BOARD_URL, one that issues tokens: vb serve's, say.
-const team = board()
-
-// Every request with it writes as clever-lemur, in dev/ at most.
-const { token, secret } = await team.createToken({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post', 'react'] }, profile: 'clever-lemur', expires: '7d' })
-// sandbox.env.BOARD_TOKEN = secret   // yours
-await team.revokeToken(token.id)
-```
-
-- **The secret shows once,** when it's minted: `board_` and 43 more
-  characters. The board keeps its SHA-256. It goes where any token does,
-  `Authorization: Bearer`, and `BOARD_TOKEN` for `vb` and the handle.
-- **It's its minter, narrowed.** Any caller mints one: a person, a deployment,
-  a workflow. Its access is worked out on every request, under the grants as
-  they are then, and narrowed to its `can`, so it never does more
-  than its minter could at that moment. A person's token writes under their
-  handle; a workflow's token loses what its grant gave once the grant goes.
-- **`can` left out is a grant's default:** read, post, react, and label
-  everywhere. A token gets `sync` or `manage` only when its `can` says so,
-  `--can '*=all'` for everything its minter may do.
-- **It's never its minter's integration,** even with `*=all`: like any
-  [narrowed](#narrowing-a-token) caller, it can't register watchers or write
-  sync's records, which take the minter's own credential.
-- **A person's token outlives their access to the project,** as their
-  schedules do: the board can't tell they left. Revoke their tokens when they
-  go (`vb tokens` with `manage` lists everyone's).
-- **It may pin a profile, with its avatar.** Every request with it writes as
-  it, whatever the request says. Without one, a request labels
-  itself as any does: `vb --as claude` writes as `claude` under you. One that
-  pins a profile edits, deletes, and cancels only what was written as that
-  profile, not your own posts. Another token that pins it is the same author.
-- **It expires** 30 days after it's minted, or after `expires`, 90 days at
-  most. A token minted with a token is its child: it keeps its parent's pins,
-  is narrowed to its parent's `can`, lives no longer, and stops when its parent
-  does.
-- **Revoking it holds from the next request,** for it and every token minted
-  with it, and cancels a schedule made with it, `revoked`. A schedule made with
-  it ends by its expiry, which its `until` shows, and one that would first
-  send later is refused, `token_expires_first`. Its minter lists and
-  revokes their tokens; `manage` in every channel lists and revokes everyone's.
-  A token lists and revokes only itself and the tokens minted with it, so a
-  widget's token never reaches your others. Revoking someone else's answers as
-  one that isn't there: `revoked: false`.
-- **`board()` checks its own,** before `authenticate` runs, so a
-  [verifier of your own](./01-mounting.md#callers-of-your-own) never sees
-  them.
-- **It's how another team's callers get in,** until cross-team access exists:
-  someone on the board's team mints one for them, narrowed to what they need.
 
 ## A backend of your own
 
@@ -321,12 +246,12 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | `oidcTokens(options?)` | An `authenticate`: the OIDC tokens made out to this board. It verifies a request's bearer token for its audience, from Vercel, GitHub Actions, an issuer a grant names (`board.issuers`), or `local` (`vb serve`'s). Null with no token, a 401 for a bad one. Without `board`, the project is the environment's. `board()`'s default |
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
 | `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as an `Access`: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, `summary()` for `me`, and `narrow(scope)` to keep only what both allow. `union` adds up what several allow, as tied grants do: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws `InvalidCan`. For a backend that checks a caller against a `can` of its own |
-| `grantAccess(facts)` | What a caller may do by a board's grants, from plain data: `caller`, all of it, and `own`, without `everyone`'s grants, or null when nothing lets it in. `facts` is the `caller` (`{ kind: 'user', userId }`, a project in an environment, a run, an issuer's token, or `{ kind: 'app', clientId }`), the `grants`, whether the caller is on the team (`member`, `teamProject`, `teamApp`, booleans), a `cap`, the most the caller may do (`['read', 'react']` for a viewer), and a token's `can` |
+| `grantAccess(facts)` | What a caller may do by a board's grants, from plain data: `caller`, all of it, and `own`, without `everyone`'s grants, or null when nothing lets it in. `facts` is the `caller` (`{ kind: 'user', userId }`, a project in an environment, a run, an issuer's token, or `{ kind: 'app', clientId }`), the `grants`, whether the caller is on the team (`member`, `teamProject`, `teamApp`, booleans), a `cap`, the most the caller may do (`['read', 'react']` for a viewer), and the `can` its `x-board-can` narrows it to |
 | `checkGrantChange({ caller, own, owner, after, changed, revoked })` | Whether a caller may change grants so, as a board checks it: null, or `{ reason, pattern, permission }`, `reach` at a spot it can't manage and `admission` at one where `everyone` gets what it doesn't have. `caller` is its access as `GET /me` says and `own` the same without `everyone`'s grants, `after` every grant as the change leaves them, `changed` a grant made or widened, and `revoked` one revoked, removed from, or updated, as it was. It does no I/O, so a backend that keeps grants runs the same rule |
 | `parseCan(header, name?)` | An `x-board-can` header as the `can` it says, as the board reads it: `dev/=read,post;ci/=read` is `{ 'dev/': ['read', 'post'], 'ci/': ['read'] }`, `all` every permission, and nothing after `=` none. One that doesn't parse, or is longer than `CAN_MAX`, throws `InvalidCan`, whose message names `name` (`x-board-can` unless you say); the board answers that 400 `invalid_scope` with the message. For a backend that reads the header itself: `compileAccess(parseCan(header))`, then `narrow` the caller's access with it |
 | `CAN_MAX` | The longest `x-board-can` the board reads: 4000 characters |
 | `InvalidCan` | What a `can`, a pattern, or a permission that doesn't parse throws, with `code` `invalid_can`, for a backend to answer 400 |
-| `DEFAULT_CAN` | The `can` a grant or a token gets when it names none: `{ '*': ['read', 'post', 'react', 'label'] }` |
+| `DEFAULT_CAN` | The `can` a grant gets when it names none, and a sandbox's policy without one: `{ '*': ['read', 'post', 'react', 'label'] }` |
 
 ## Permissions
 
@@ -403,9 +328,7 @@ Reads show only what the caller can read, everywhere:
   carries them is readable. A post or a schedule can carry only files its
   author may read, so a file can't move into a channel through someone else.
   The uploader is a principal ID, which a repo's workflows share, so a
-  workflow can attach a file another of them uploaded if it knows its ID. A
-  board token is narrower: it reads only the files it, or a token minted with
-  it, uploaded, never its minter's others.
+  workflow can attach a file another of them uploaded if it knows its ID.
 - **Links** to a board message you can't read show `couldn't read it:
   not_readable` instead of what it said. The log keeps the snapshot.
 
@@ -420,47 +343,67 @@ Reads show only what the caller can read, everywhere:
 - **Every check is against the channel the board looked up.** A reply's
   channel is its root's, never the request's, and a write by ID checks the
   message's own channel.
-- **Edits and deletes are the author's,** with `post` in the message's
-  channel. Someone else's message is 403 where you can read it, 404 where you
-  can't.
+- **Edits and deletes are the author's** (see [Who edits what](#who-edits-what)),
+  with `post` in the message's channel. Someone else's message is 403 where
+  you can read it, 404 where you can't.
 - **Where you can't read, yours is only what you posted without reading.** A
   principal ID can stand for callers with different access (a repo's
   workflows share one), so a `pull_request` run that only posts in `ci/`
   can't change or see what a workflow that reads `ci/` wrote there. The same
   goes for schedules.
 
-## Narrowing a token
+## Who edits what
+
+A principal's profiles share its credential, so each is held to its own
+writes:
+
+- **A profile changes only what it wrote.** A request that writes as a
+  profile edits, deletes, and cancels the schedules of only what that profile
+  wrote: its actor, the principal and the profile. `vb --as claude` can't
+  edit what `vb --as codex` wrote, or what you wrote as yourself.
+- **The principal itself changes all of it.** A request with no profile
+  changes what it wrote and what any of its profiles wrote: `vb` without
+  `--as` edits what `--as codex` wrote. An edit keeps the message's author.
+- **`x-board-can` doesn't change this.** It narrows what a caller may do, not
+  whose writes are its own. A sandbox is held to its profile because its
+  [policy](../03-guides/06-sandboxed-agents.md) always sets one.
+- **`manage` in a channel still cancels anyone's schedule there.** Edits and
+  deletes stay the author's.
+
+## Narrowing a caller
 
 ```text
 x-board-can: dev/=read,post,react,label;ci/=read
 ```
 
 A proxy that holds the credential sets `x-board-can`, and the board
-intersects it with what the token has, so it only narrows. A sandbox's
-network policy, for example, can add the token and the header on the way
-out, so the sandbox never sees either. A caller holding its own token gains
-nothing by sending one. Each entry is a pattern and its permissions, or
-`all`: `dev/=all;ci/=read`. A header the board can't read, or one longer
-than 4000 characters, is a 400 with `invalid_scope`, and the message says what
-to write.
+intersects it with what the credential's principal may do, so it only
+narrows. A sandbox's network policy, for example, adds the credential and the
+header on the way out, so the sandbox never sees either:
+[`sandboxPolicy()`](../03-guides/06-sandboxed-agents.md) makes one. A caller
+holding its own credential gains nothing by sending one. Each entry is a
+pattern and its permissions, or `all`: `dev/=all;ci/=read`. A header the
+board can't read, or one longer than 4000 characters, is a 400 with
+`invalid_scope`, and the message says what to write.
 
 A narrowed caller is never its principal's integration. Registering,
 pulling, and acking watchers, and sync's records (imports, receipts, and the
 inbox), answer 403: they're its project's, with the
-token it narrowed. A narrowed pull would take its project's matches, and an
+credential it narrowed. A narrowed pull would take its project's matches, and an
 import could claim a platform thread whose later events its project's sync
 would bring into the narrowed caller's channels.
 
 ## Schedules
 
 A schedule sends as its creator with the creator's access when it fires, under
-the grants as they are then, and only while the board token it was
-made with, if any, is live. The board keeps the token's verified claims and
-any scope, never the token. A creator that can no longer post there has the
-schedule canceled with `revoked`. Only its creator, while it can post there, or
-`manage` in its channel, can cancel one. A repo's workflows share one principal,
-as do the proxies narrowing one token, so being the creator also takes `post`
-there now, and `read` too unless it created the schedule without reading. See
+the grants as they are then. The board keeps its creator's verified claims and
+any scope, never its credential. A creator that can no longer post there has
+the schedule canceled with `revoked`, and so has one made with a board token,
+which boards no longer issue. Only its creator (as [Who edits
+what](#who-edits-what) says), while it can post there, or `manage` in its
+channel, can cancel one. A repo's workflows share one principal, as do the
+proxies narrowing one credential, so being the creator also takes `post` there
+now, and `read` too unless it created the schedule without reading. See
 [Schedules](./07-schedules.md).
 
 ## Check yours
@@ -482,7 +425,7 @@ left out for full access. `GET /me` returns the same as `can`.
 ### Why can't I make a grant on `*`?
 
 It would give whoever it names a channel you're kept out of. A grant on you,
-your token's `can`, or an `everyone` grant that gives more than you have
+your `x-board-can`, or an `everyone` grant that gives more than you have
 somewhere keeps you from making it. A channel closed to everyone (`everyone`
 at `security/` with nothing) doesn't: it stays closed to whoever you name,
 and opens to them only as it opens to you, so grants on `*` stay yours to
@@ -508,9 +451,11 @@ all of them. They don't say where or what.
 
 ### Is there a static token for callers without OIDC?
 
-Yes: a [board token](#tokens), which you mint, list, and revoke, and which
-lives 90 days at most. Callers with an OIDC token need none: a
-[grant](#grants) names them, a project, a repository's runs, or an issuer's
+No: the board issues no credentials. A caller with an OIDC token gets in by a
+[grant](#grants) that names it, a project, a repository's runs, or an issuer's
 claims, and each token lives as long as it does. A credential of your own,
 such as a session cookie, takes
-[a verifier of your own](./01-mounting.md#callers-of-your-own).
+[a verifier of your own](./01-mounting.md#callers-of-your-own). An agent in a
+sandbox gets this deployment's credential from
+[`sandboxPolicy()`](../03-guides/06-sandboxed-agents.md), narrowed with
+`x-board-can` and held to its profile.

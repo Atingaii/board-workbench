@@ -114,6 +114,8 @@ const ACCOUNTS: Record<string, { username: string; name: string }> = {
 const principalId = (p: Principal) =>
   p.type === 'external' ? p.id : p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`
 const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
+/** Whether `actor` may change what `by` wrote: its principal did, and as its profile when it writes as one. */
+const owns = (actor: Actor, by: Actor) => samePrincipal(by.principal, actor.principal) && (!actor.profile || by.id === actor.id)
 
 /**
  * Who a request is: its bearer names a principal, or is a credential `tokens` maps to one. Its
@@ -685,7 +687,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     if ((found = /^\/schedules\/([^/]+)\/cancel$/.exec(rest)) && method === 'POST') {
       const target = schedules.get(decodeURIComponent(found[1]!))
       if (!target) throw new Refused(404, 'schedule_not_found')
-      if (!samePrincipal(target.createdBy.principal, actor.principal)) throw new Refused(403, 'schedule_not_owned')
+      if (!owns(actor, target.createdBy)) throw new Refused(403, 'schedule_not_owned')
       if (target.state !== 'pending') return { schedule: showSchedule(target), canceled: false }
       Object.assign(target, { state: 'canceled', nextAt: null, canceled: { by: actor, at: now(), reason: 'canceled' }, revision: target.revision + 1 })
       return { schedule: showSchedule(target), canceled: true }
@@ -1138,7 +1140,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       const action = found[3] ?? ''
       if (method !== 'GET') tokenMay(actor, action === '/reactions' ? 'react' : action === '/labels' ? 'label' : 'post', thread.channelId)
       if (method === 'PATCH' && action === '') {
-        if (!samePrincipal(message.createdBy.principal, actor.principal)) throw new Refused(403, 'message_not_owned')
+        if (!owns(actor, message.createdBy)) throw new Refused(403, 'message_not_owned')
         if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
         if (message.deletedAt !== undefined) throw new Refused(409, 'message_deleted')
         if (message.text !== body.text) {
@@ -1148,7 +1150,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         return { message: show(message) }
       }
       if (method === 'POST' && action === '/delete') {
-        if (!samePrincipal(message.createdBy.principal, actor.principal)) throw new Refused(403, 'message_not_owned')
+        if (!owns(actor, message.createdBy)) throw new Refused(403, 'message_not_owned')
         if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
         if (message.deletedAt === undefined) {
           Object.assign(message, { text: '', attachments: undefined, deletedAt: now(), revision: message.revision + 1, changes: message.changes + 1 })
@@ -1370,7 +1372,7 @@ export function fakeMessageboard(
     protocolProfile?: boolean
     /**
      * A caller is held to the `x-board-can` it sends, as Vercel's API holds one once it reads the header: within what its
-     * grants (and its board token's `can`) give, and never its principal's integration, so its watchers and sync's
+     * grants give, and never its principal's integration, so its watchers and sync's
      * records are 403. Without it, as the API answered before: it ignores the header.
      */
     enforcesCan?: boolean
