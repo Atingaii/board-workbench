@@ -9,6 +9,8 @@ import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { deployedOnVercel } from './registrant.ts'
 import { tailWatchers } from './tails.ts'
+import { PROTOCOL_ROUTES, withoutToken, type SandboxInput, type SandboxReach } from './sandbox.ts'
+import { formatProfileHeader } from '../contract/profile-header.ts'
 
 export type HttpOptions = {
   /**
@@ -29,8 +31,10 @@ export type Environment = {
   url(): string
   /** The fetch for the board at `url` when none is given: the credentials `vb` uses, through Deployment Protection. */
   fetch(url: string): typeof fetch
-  /** The profile the environment picks (`BOARD_AS`, or the coding agent it runs in), and that agent's session. */
-  profile(): { profile: ProfileOption; session: string | null }
+  /** The profile the environment names: `BOARD_PROFILE`, with `BOARD_AVATAR`. */
+  profile(): ProfileOption
+  /** What a sandbox's requests to the board at `url` carry from this deployment: `token`, or its own OIDC token, and what gets them through Deployment Protection. */
+  sandbox(url: string, token: string | undefined): Promise<Record<string, string>>
 }
 
 /** A watcher's or client's name is the profile its writes are by. */
@@ -101,25 +105,23 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   }
 
   /**
-   * The SDK against the remote, as this deployment with `profile`. `quiet` names no session: this
-   * deployment's own code. Otherwise a profile chosen in code keeps the environment's session, and
-   * yourself (`null`) has none. Who the token's holder is, `fetch` says.
+   * The SDK against the remote, as this deployment with `profile`, or the environment's for
+   * `undefined`. Who the token's holder is, `fetch` says.
    */
-  const sdk = (profile: ProfileOption | undefined, quiet: boolean) =>
+  const sdk = (profile: ProfileOption | undefined) =>
     createBoardClient({
       url: remote,
       fetch: doFetch,
-      profile: profile !== undefined ? profile : () => environment?.profile().profile ?? null,
-      session: quiet || profile === null ? null : () => environment?.profile().session ?? null,
+      profile: profile !== undefined ? profile : () => environment?.profile() ?? null,
     })
 
-  const own = sdk(null, true)
+  const own = sdk(null)
   const profiles = new Map<string, BoardClient>()
   /** This deployment as `profile`: a watcher's ID, or the middleware. */
   function asProfile(profile: string): BoardClient {
     if (!PROFILE.test(profile)) throw new HttpError(400, 'invalid_request', `as: ${profile}: profiles start with a letter and use up to 32 letters, numbers, and hyphens`)
     let client = profiles.get(profile)
-    if (!client) profiles.set(profile, (client = sdk(profile, true)))
+    if (!client) profiles.set(profile, (client = sdk(profile)))
     return client
   }
   const holders = new Map<string, BoardClient>()
@@ -127,7 +129,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   function holder(profile: ProfileOption | undefined): BoardClient {
     const key = JSON.stringify(profile ?? (profile === null ? null : '\u0000'))
     let client = holders.get(key)
-    if (!client) holders.set(key, (client = sdk(profile, false)))
+    if (!client) holders.set(key, (client = sdk(profile)))
     return client
   }
 
@@ -270,6 +272,10 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     routes: [],
     // The log is the board it uses'.
     keeps: false,
+    async sandbox({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
+      const credential = environment ? await environment.sandbox(remote, token) : token === undefined ? withoutToken(remote) : { authorization: `Bearer ${token}` }
+      return { url: remote, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, routes: PROTOCOL_ROUTES }
+    },
     bind(next: BoardBinding) {
       if (binding) throw new Error('http: this backend already serves a board: create one http() per board()')
       for (const [id, spec] of Object.entries(next.subscriptions)) {

@@ -1,20 +1,20 @@
 import type { WatcherContext } from "@vercel/board";
-import { eveName, eveSession, type Task } from "./harness.ts";
+import { eveName, type Task } from "./harness.ts";
 import { sendToEve, type EveMessage } from "./eve.ts";
 
 export { INSTRUCTIONS, eveAvatar, eveName, evePreview, policy, type Task } from "./harness.ts";
 
 
 /**
- * Whether a message was written by the Eve working on `thread` (named `pi` before it had a name of its own). Every Eve
- * posts as the factory's production deployment, whose OIDC token its network policy adds; its profile and session
- * are headers anyone who can write may send, so they only say which thread's Eve it is.
+ * Whether a message was written by the Eve working on `thread`: the actor its network policy makes it, the factory's
+ * production deployment, whose OIDC token the policy adds, as the profile named for the thread. A profile is a header
+ * anyone who can write may send, so it only says which thread's Eve it is. One named `pi`, before Eves had names of
+ * their own, is every thread's at once, so it's no thread's.
  */
-export const byEve = (thread: string, by: { principal: string; profile: string | null; session: string | null }) =>
+export const byEve = (thread: string, by: { principal: string; profile: string | null }) =>
   !!process.env.VERCEL_PROJECT_ID &&
   by.principal === `vercel:project:${process.env.VERCEL_PROJECT_ID}:production` &&
-  (by.profile === eveName(thread) || by.profile === "pi") &&
-  by.session === eveSession(thread);
+  by.profile === eveName(thread);
 
 /**
  * Whether a message is one of the board's watchers' own notes (a crosspost, `:security:`'s answer, or saying Eve

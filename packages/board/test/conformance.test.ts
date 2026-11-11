@@ -48,6 +48,28 @@ const withCan =
       }),
     }).as(null)
 
+/** The same handle as `token` gives, with `headers` on every request, as `vb conformance` opens one. */
+const withHeaders =
+  (fetch: Fetch, token: () => Promise<string> = () => personToken()) =>
+  (headers: Record<string, string>) =>
+    board({
+      backend: http(BOARD_URL, {
+        fetch: bearer((input, init) => {
+          const request = new Request(input, init)
+          for (const [name, value] of Object.entries(headers)) request.headers.set(name, value)
+          return fetch(request)
+        }, token),
+      }),
+    }).as(null)
+
+/** The checks of who writes that send headers of their own, which a run that can't send them skips. */
+const HEADERS = [
+  'takes a profile and its avatar as one x-board-profile header, and shows both on what it writes',
+  "ignores x-board-avatar, which x-board-profile's avatar parameter replaced",
+  'ignores x-board-session: who writes is the principal and its profile',
+]
+const NO_HEADERS = "this run can't call the board with headers of its own"
+
 /** The checks of a caller narrowed with x-board-can, which a run that can't send the header skips. */
 const NARROWED = [
   'narrows a caller to what its x-board-can says',
@@ -130,9 +152,11 @@ describe('the conformance kit', () => {
   it('passes a board on a2(), checking the whole protocol, and deletes what it posted', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const client = await clientOf(board.fetch)
-    const report = await conformance(client, { withToken: withToken(board.fetch), withCan: withCan(board.fetch) })
+    const report = await conformance(client, { withToken: withToken(board.fetch), withHeaders: withHeaders(board.fetch) })
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
+    // withHeaders stands in for withCan, so the narrowing checks run too.
     expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => check.status)).toEqual(['passed', 'passed', 'passed', 'passed'])
+    expect(report.checks.filter((check) => [...HEADERS, 'shows no session on a message, its event, or you'].includes(check.name)).map((check) => check.status)).toEqual(['passed', 'passed', 'passed', 'passed'])
     expect(skipped(report)).toEqual([NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM])
     expect(tokenUse(report)?.status).toBe('passed')
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
@@ -147,7 +171,7 @@ describe('the conformance kit', () => {
     const team = testBoard({ scheduler: fakeQueue().scheduler })
     const report = await conformance(team, { withToken: withToken(team.fetch) })
     // The board's own code needs no grant to keep it in what it closes, and no proxy narrows it.
-    expect(skipped(report)).toEqual([[NARROWED[0], NO_CAN], NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM, [NARROWED[1], NO_CAN], [NARROWED[2], NO_CAN], [NARROWED[3], NO_CAN]])
+    expect(skipped(report)).toEqual([[NARROWED[0], NO_CAN], ...HEADERS.map((name) => [name, NO_HEADERS]), NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM, [NARROWED[1], NO_CAN], [NARROWED[2], NO_CAN], [NARROWED[3], NO_CAN]])
     expect((await team.me()).actor).toBe('board:client')
   })
 
@@ -273,10 +297,36 @@ describe('the conformance kit', () => {
     expect((await preview('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', branch: 'jb/watchers', watch: {} }])
   })
 
+  it("fails a board that reads who writes as boards did before: a profile's name alone, an avatar from x-board-avatar, and a session on each by", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const older: Fetch = async (request) => {
+      const headers = new Headers(request.headers)
+      // The name alone, with the avatar x-board-avatar names, and the session it kept.
+      const name = headers.get('x-board-profile')?.split(';')[0]!.trim()
+      const avatar = headers.get('x-board-avatar')
+      if (name) headers.set('x-board-profile', avatar ? `${name};avatar="${avatar}"` : name)
+      headers.delete('x-board-avatar')
+      const session = headers.get('x-board-session')
+      headers.delete('x-board-session')
+      const response = await board.fetch(new Request(request, { headers }))
+      if (!response.headers.get('content-type')?.includes('application/json')) return response
+      return new Response((await response.text()).replaceAll('"profile":', `"session":${JSON.stringify(session)},"profile":`), { status: response.status, headers: response.headers })
+    }
+    const report = await conformance(await clientOf(older), { withHeaders: withHeaders(older) })
+    expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.name, check.detail])).toEqual([
+      [HEADERS[0], `the profile's avatar, from its header's parameter: expected "https://example.com/conformance.png", got null`],
+      [HEADERS[1], `the avatar of a profile whose header names none, whatever x-board-avatar says: expected null, got "https://example.com/conformance.png"`],
+      [HEADERS[2], expect.stringMatching(/^a post with x-board-session should carry no session, got \{.*"session":/)],
+      ['shows no session on a message, its event, or you', expect.stringMatching(/^a message should carry no session, got \{.*"session":/)],
+    ])
+    const { messages } = await board.messages({ channel: 'conformance', limit: 500 })
+    expect(messages.filter((message) => !message.deleted)).toEqual([])
+  })
+
   it('reports schedules and files as not kept here on a board without a scheduler or a blob store', async () => {
     // A board on a2() with only its store answers 501 for each, and the kit reads that.
     const bare = testBoard({ blob: undefined })
-    const report = await conformance(await clientOf(bare.fetch), { withToken: withToken(bare.fetch), withCan: withCan(bare.fetch) })
+    const report = await conformance(await clientOf(bare.fetch), { withToken: withToken(bare.fetch), withHeaders: withHeaders(bare.fetch) })
     expect(report.ok).toBe(true)
     expect(report.checks.filter((check) => check.status !== 'passed').map((check) => [check.group, check.status, check.detail])).toEqual([
       ['schedules', 'skipped', "not kept here: this board has no scheduler, so it can't send later"],

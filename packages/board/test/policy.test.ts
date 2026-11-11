@@ -40,7 +40,7 @@ const withCookie = (fetch: (request: Request) => Promise<Response>, cookie: stri
   return { status: response.status, body: text ? JSON.parse(text) : null }
 }
 
-const julianOn = async (fetch: (request: Request) => Promise<Response>) => caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+const julianOn = async (fetch: (request: Request) => Promise<Response>) => caller(fetch, await personToken(), {})
 
 afterEach(() => vi.useRealTimers())
 

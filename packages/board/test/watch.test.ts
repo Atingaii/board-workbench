@@ -66,7 +66,7 @@ describe('watchers', () => {
   it('run on what the same `vb tail` prints, exactly as it prints it', async () => {
     const triage = recorder('firehose')
     const { fetch } = testBoard({ watch: { triage: triage.watcher } })
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken(), {})
 
     const root = await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })
     await julian('POST', '/messages', { channel: 'other', text: 'unrelated' })
@@ -80,7 +80,7 @@ describe('watchers', () => {
   it('wake when a thread enters their view, then on its replies', async () => {
     const wake = recorder('--label status=needs-agent')
     const { fetch } = testBoard({ watch: { wake: wake.watcher } })
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken(), {})
 
     const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
     await julian('POST', `/messages/${root.id}/labels`, { set: { status: 'needs-agent' } })
@@ -93,7 +93,7 @@ describe('watchers', () => {
   it('wake on replies in labeled threads only, like a review watcher on `prs --label pr`', async () => {
     const review = recorder('prs --label pr')
     const { fetch } = testBoard({ watch: { review: review.watcher } })
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken(), {})
 
     const pr = (await julian('POST', '/messages', { channel: 'prs', text: 'PR #12', labels: { pr: 'acme/www#12' } })).body.message
     const chat = (await julian('POST', '/messages', { channel: 'prs', text: 'who owns the release?' })).body.message
@@ -106,7 +106,7 @@ describe('watchers', () => {
   it('wake for any of a label\'s values, and not for others', async () => {
     const wake = recorder('--label kind=bug|feature|question')
     const { fetch } = testBoard({ watch: { wake: wake.watcher } })
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken(), {})
 
     const noise = (await julian('POST', '/messages', { channel: 'firehose', text: 'lunch?' })).body.message
     await julian('POST', `/messages/${noise.id}/labels`, { set: { kind: 'noise' } })
@@ -122,8 +122,8 @@ describe('watchers', () => {
   it('match mentions by handle', async () => {
     const pinged = recorder('--mentions @ada')
     const { fetch } = testBoard({ watch: { pinged: pinged.watcher } })
-    const ada = caller(fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const ada = caller(fetch, await personToken('u_ada'), {})
+    const julian = caller(fetch, await personToken(), {})
 
     await ada('POST', '/messages', { channel: 'firehose', text: 'hi' })
     await julian('POST', '/messages', { channel: 'firehose', text: '@ada can you look?' })
@@ -134,8 +134,9 @@ describe('watchers', () => {
   it('match authors by handle, with or without the @', async () => {
     const fromAda = recorder('firehose --by @ada')
     const { fetch } = testBoard({ watch: { 'from-ada': fromAda.watcher } })
-    const ada = caller(fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    // A Vercel login's handle is its user ID: Ada's is `ada`.
+    const ada = caller(fetch, await personToken('ada'), {})
+    const julian = caller(fetch, await personToken(), {})
 
     await julian('POST', '/messages', { channel: 'firehose', text: 'from julian' })
     await ada('POST', '/messages', { channel: 'firehose', text: 'from ada' })
@@ -156,7 +157,7 @@ describe('watchers', () => {
         seen: seen.watcher,
       },
     })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
 
     await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })
     await vi.waitFor(() => expect(seen.types()).toEqual(['message.posted', 'message.posted']))
@@ -190,7 +191,7 @@ describe('watchers', () => {
         },
       },
     })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
 
     const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
     await vi.waitFor(() => expect(results).toEqual([1]))
@@ -211,7 +212,7 @@ describe('watchers', () => {
         ok: ok.watcher,
       },
     })
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken(), {})
 
     const root = await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })
     expect(root.status).toBe(201)
@@ -233,7 +234,7 @@ describe('watchers', () => {
         },
       },
     })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const root = await julian('POST', '/messages', { channel: 'firehose', text: 'boom' })
     await julian('POST', '/messages', { re: root.body.message.id, text: 'are you alive?' })
 
@@ -292,7 +293,7 @@ describe("the board's handle in its own deployment", () => {
   it('writes as `board:client`, or `board:client:<profile>` with `as`, and wakes watchers', async () => {
     const report = recorder('firehose --label state=done')
     const app = testBoard({ watch: { report: report.watcher } })
-    const julian = caller(app.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(app.fetch, await personToken(), {})
     const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
 
     const hook = app.as('v0-hook')
@@ -307,7 +308,7 @@ describe("the board's handle in its own deployment", () => {
 
   it("posts once per id, so a redelivered webhook does not post twice, and keeps each profile's ids its own", async () => {
     const app = testBoard()
-    const julian = caller(app.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(app.fetch, await personToken(), {})
     const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
 
     const hook = app.as('v0-hook')

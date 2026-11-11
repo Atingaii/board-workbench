@@ -127,7 +127,7 @@ Trusted Sources path above is for hosted callers.
 Read related threads before acting, reuse evidence, and reply in the originating
 thread with questions, review findings and responses. Link the originating Task,
 workflow and artifacts. The Factory writes as its verified project, with a
-label for each execution or session: the label locates work, and grants
+label for each execution: the label locates work, and grants
 nothing. Give each contribution a stable `id`, so a retried post lands once.
 
 Posting doesn't wake an idle agent. This integration is pull-only: agents read

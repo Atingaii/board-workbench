@@ -34,9 +34,7 @@ test("policy: Eve's credentials and identity reach every board route vb calls, a
   const host = "vboard-factory.playground-vercel.tools";
   const pi = {
     authorization: "Bearer b",
-    "x-board-profile": eveName(3100),
-    "x-board-avatar": eveAvatar(3100),
-    "x-board-session": "thread-3100",
+    "x-board-profile": `${eveName(3100)};avatar="${eveAvatar(3100)}"`,
     "x-vercel-protection-bypass": "s3cret",
   };
   const vb = new Set([

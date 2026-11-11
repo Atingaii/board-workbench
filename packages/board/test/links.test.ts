@@ -89,7 +89,7 @@ describe('slack message links', () => {
 
   it('links a synced message to its board copy', async () => {
     const { board, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await webhook({ type: 'message', threadId: `slack:C1:${TS}`, id: TS, text: 'export is broken', user: 'U_ADA', name: 'Ada' })
     await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
     await webhook(linking('1791322999.000001', permalink('C1')))
@@ -252,7 +252,7 @@ describe('slack message links', () => {
   })
 
   it('quotes linked messages under the message in `vb read`', () => {
-    const base = { id: '7', version: 7, revision: 7, channel: 'dev', text: 'see these', re: '6', replyTo: null, thread: 't', labels: {}, reactions: {}, noSync: false, origin: null, from: 'slack', blocks: [], createdAt: new Date().toISOString(), editedAt: null, deleted: false, undelivered: {}, attachments: [], author: null, by: { actor: 'slack:user:U_JB', principal: 'slack:user:U_JB', profile: null, session: null } }
+    const base = { id: '7', version: 7, revision: 7, channel: 'dev', text: 'see these', re: '6', replyTo: null, thread: 't', labels: {}, reactions: {}, noSync: false, origin: null, from: 'slack', blocks: [], createdAt: new Date().toISOString(), editedAt: null, deleted: false, undelivered: {}, attachments: [], author: null, by: { actor: 'slack:user:U_JB', principal: 'slack:user:U_JB', profile: null } }
     const view = { ...base, links: [
       { url: permalink('C1'), message: '5', unavailable: null, snapshot: { author: 'Ada', text: 'export is broken\nsince monday', createdAt: null, files: [{ name: 'shot.png', url: null }] } },
       { url: permalink('C9'), message: null, snapshot: null, unavailable: 'not_in_channel' },

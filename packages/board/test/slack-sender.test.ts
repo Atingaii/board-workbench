@@ -150,8 +150,8 @@ describe('what board copies to Slack', () => {
     const token = verified ? 'pt_julian' : await personToken('u_julian')
     return {
       // On a host's board, a person is checked under the handle its verifier gives, not a name they send.
-      julian: caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-avatar': 'https://example.com/julian.png', ...(verified ? {} : { 'x-board-name': encodeURIComponent('Julián Benegas') }) }),
-      claude: caller(team.fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'claude', 'x-board-avatar': 'https://example.com/claude.png' }),
+      julian: caller(team.fetch, token, { ...(verified ? {} : {}) }),
+      claude: caller(team.fetch, token, { 'x-board-profile': 'claude;avatar="https://example.com/claude.png"' }),
       support: caller(team.fetch, verified ? 'pt_support' : await deploymentToken('support', 'prj_support', 'preview')),
     }
   }
@@ -172,7 +172,7 @@ describe('what board copies to Slack', () => {
     await post(board)
     await vi.waitFor(() => expect(posted).toHaveLength(3))
     expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([
-      ['julian', 'https://example.com/julian.png', 'the deploy is red'],
+      ['julian', 'https://vercel.com/api/www/avatar?u=julian&s=64&format=png', 'the deploy is red'],
       ['claude via julian', 'https://example.com/claude.png', 'looking'],
       ['Malte via support (preview) (slack)', 'https://example.com/malte.png', 'same for us'],
     ])
@@ -194,15 +194,19 @@ describe('what board copies to Slack', () => {
     expect(markdown_text).toBe('same for us')
   })
 
-  it("go out as the app, each labeled with its author, when the name it shows is one its caller sent", async () => {
+  it("go out under the names a Vercel login gives: a person by their user ID, and their agent through it", async () => {
     const board = mirrored(['chat:write', 'chat:write.customize'], false)
     const { s, posted } = board
     await post(board)
-    await vi.waitFor(() => expect(s.channelPosts.length + posted.length).toBe(3))
-    // A Vercel login's handle and name are what its CLI sent, and so is the person its agent shows after `via`.
-    expect(s.channelPosts.map((p) => JSON.parse(p.text).markdown)).toEqual(['**Julián Benegas**: the deploy is red', '**claude via julian**: looking'])
-    // A deployment's OIDC token names its project, which the import shows after `via`.
-    expect(posted.map(({ username }) => username)).toEqual(['Malte via support (preview) (slack)'])
+    await vi.waitFor(() => expect(posted).toHaveLength(3))
+    // A Vercel login says only who a person is: the user ID it names is their handle and their name.
+    expect(posted.map(({ username, icon_url }) => [username, icon_url])).toEqual([
+      ['u_julian', undefined],
+      ['claude via u_julian', 'https://example.com/claude.png'],
+      // A deployment's OIDC token names its project, which the import shows after `via`.
+      ['Malte via support (preview) (slack)', 'https://example.com/malte.png'],
+    ])
+    expect(s.channelPosts).toEqual([])
   })
 
   it("go out as the app, labeled, for the board's own code, what it imports, and its own sync's platform users", async () => {
@@ -231,7 +235,7 @@ describe('what board copies to Slack', () => {
     }
     await vi.waitFor(() => expect(posted).toHaveLength(2))
     const [preview, production] = posted.map(({ username }) => username as string)
-    expect(preview).toMatch(/^www-x+…@preview$/)
+    expect(preview).toMatch(/^www-x+… \(preview\)$/)
     expect(production).toMatch(/^www-x+…$/)
     for (const username of [preview!, production!]) expect(Array.from(username).length).toBeLessThanOrEqual(80)
   })
@@ -240,7 +244,7 @@ describe('what board copies to Slack', () => {
     const { team, s, posted } = mirrored(['chat:write', 'chat:write.customize'], false)
     // The factory's own deployments, as a grant on the project lets them in.
     await team.createGrant({ principals: [{ kind: 'project', project: 'prj_factory', environments: ['production'] }], can: { '*': ['read', 'post'] } })
-    const eve = caller(team.fetch, await deploymentToken('vboard-factory', 'prj_factory', 'production'), { 'x-board-profile': 'clever-lemur-1956', 'x-board-avatar': 'https://example.com/lemur.png' })
+    const eve = caller(team.fetch, await deploymentToken('vboard-factory', 'prj_factory', 'production'), { 'x-board-profile': 'clever-lemur-1956;avatar="https://example.com/lemur.png"' })
     expect((await eve('POST', '/messages', { channel: 'firehose', text: 'on it' })).status).toBe(201)
     await vi.waitFor(() => expect(posted).toHaveLength(1))
     expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([['clever-lemur-1956 via vboard-factory', 'https://example.com/lemur.png', 'on it']])

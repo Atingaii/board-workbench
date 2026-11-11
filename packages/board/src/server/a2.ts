@@ -155,7 +155,7 @@ function externalIdentity(author: ExternalAuthor, through: Granted | null, platf
   const principal: Granted = { id: through?.id ?? author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null, ...host }
   return {
     principal,
-    author: { actor: id, principal: principal.id, profile: through === null ? null : author.id, session: null },
+    author: { actor: id, principal: principal.id, profile: through === null ? null : author.id },
     actor: {
       id,
       kind: 'external',
@@ -440,7 +440,6 @@ function build(options: A2Options, binding: BoardBinding) {
         avatar: actor.avatar,
         profile: author.profile,
         ...(actor.via ? { via: { ...actor.via } } : {}),
-        session: author.session,
         expiresAt: principal.expiresAt?.toISOString() ?? null,
         can: principal.access.summary(),
       }

@@ -210,7 +210,7 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
       // A token's own scope and the request's both narrow: neither widens the other.
       const scope = found.scope === undefined ? (claims.scope ?? undefined) : claims.scope === null ? found.scope : canText(compileAccess(parseCan(found.scope)).narrow(parseCan(claims.scope)))
       const principal = scope === undefined ? found : { ...found, scope }
-      const { author, actor } = resolveActor(principal, claims, request.audience)
+      const { author, actor } = resolveActor(principal, claims)
       return { principal: { ...principal, access: await authority.grant(principal) }, author, actor }
     },
     explain,
@@ -222,15 +222,9 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
   }
 }
 
-/** A board token's pins, over what the request says: its profile and session win, and a person's name is the minter's. */
+/** A board token's pins, over what the request says: its profile wins. */
 function pinnedClaims(pinned: Pinned, claims: Claims): Claims {
-  return {
-    ...claims,
-    ...(pinned.profile !== null ? { profile: pinned.profile, avatar: pinned.avatar } : {}),
-    ...(pinned.session !== null ? { session: pinned.session } : {}),
-    handle: pinned.handle,
-    name: pinned.name,
-  }
+  return { ...claims, ...(pinned.profile !== null ? { profile: pinned.profile, avatar: pinned.avatar } : {}) }
 }
 
 /** A JWT's `iss`, read but not verified: which issuer's keys would check it. Null for anything else. */
