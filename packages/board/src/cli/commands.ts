@@ -388,8 +388,8 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'schedules',
-    description: "pending schedules, or a thread's with an ID",
-    arguments: [{ name: 'id', required: false, description: 'a message in the thread' }],
+    description: "pending schedules, a thread's with a message ID, or one by its own ID",
+    arguments: [{ name: 'id', required: false, description: 'a message in the thread, or a schedule (s12): sent, canceled, or pending' }],
     options: [option('by', 'scheduled by a handle'), option('channel', 'posting in a channel'), option('all', 'done and canceled ones too')],
     examples: [{ name: 'list pending schedules', value: 'schedules' }],
   },

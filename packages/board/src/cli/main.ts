@@ -1072,6 +1072,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
             class: 'not_found',
             reason: 'channel_not_found',
             message: `Couldn't find channel ${target}.${guess ? ` Did you mean ${guess}?` : ''}`,
+            details: ['A channel appears with its first post: one nobody has posted in yet is not there to read.'],
             next: [{ instruction: 'See its channels', argv: [...cli(), 'channels'] }],
           })
         }
@@ -1264,6 +1265,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'schedules': {
+      // A schedule's own ID (s12) shows that schedule, whatever became of it: sent, canceled, or still pending.
+      if (args[0] !== undefined && /^s\d+$/i.test(args[0])) {
+        const one = (await client().schedules({ all: true })).find((schedule) => schedule.id.toLowerCase() === args[0]!.toLowerCase())
+        if (!one)
+          throw new Failed({
+            class: 'not_found',
+            reason: 'schedule_not_found',
+            message: `Couldn't find schedule ${args[0]}.`,
+            next: [{ instruction: 'See every schedule, done and canceled ones too', argv: [...cli(), 'schedules', '--all'] }],
+          })
+        if (flags.json) return result({ schedules: [one] }), 0
+        return out(formatSchedule(one)), 0
+      }
       const list = await client().schedules({
         ...(args[0] ? { re: messageId(args[0]) } : {}),
         ...(flags.by ? { by: flags.by.replace(/^@/, '') } : {}),
@@ -1374,6 +1388,11 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'download': {
       const id = args[0]
       if (!id) throw usage(`Missing the attachment to download: the ID \`${named()} read\` shows on a file line.`, { reason: 'missing_arguments' })
+      // An ID has no dot or slash: this is the file's name, which many attachments may share.
+      if (/[./]/.test(id))
+        throw usage(`${id} is a file's name, and download takes the attachment's ID: the last thing on its file line when you read its thread.`, {
+          next: [{ instruction: 'Read the thread to see the ID', argv: [...cli(), 'read', '<ID>'] }],
+        })
       const response = await client().download(id)
       const data = new Uint8Array(await response.arrayBuffer())
       if (args[1] === '-') return io.write(data), 0
@@ -1469,14 +1488,59 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (own) return own.run(args, context())
       const names = [...commands.flatMap((known) => [known.name, ...(known.aliases ?? [])]), ...Object.keys(app.commands)]
       const guess = closest(command, names)
-      throw usage(`Unknown command ${command} for ${named()}.${guess ? ` Did you mean ${guess}?` : ''}`, {
+      // What people and agents type for a command that goes by another name here.
+      const said = OTHER_NAMES[command.toLowerCase()]
+      throw usage(`Unknown command ${command} for ${named()}.${said ? '' : guess ? ` Did you mean ${guess}?` : ''}`, {
         reason: 'unknown_command',
-        next: [{ instruction: 'See all commands', argv: [...cli(), '--help'] }],
+        next: [
+          ...(said ? [{ instruction: said.instruction, argv: [...cli(), ...said.argv] }] : []),
+          { instruction: 'See all commands', argv: [...cli(), '--help'] },
+        ],
       })
     }
   }
 }
 
+
+/** Words for a command this CLI names otherwise, and the command they mean. */
+const OTHER_NAMES: Record<string, { instruction: string; argv: string[] }> = {
+  search: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
+  find: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
+  grep: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
+  list: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
+  ls: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
+  threads: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
+  messages: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  thread: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  show: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  get: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  view: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  history: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  send: { instruction: 'Start a thread with post', argv: ['post', '<CHANNEL>', '<TEXT>'] },
+  create: { instruction: 'Start a thread with post', argv: ['post', '<CHANNEL>', '<TEXT>'] },
+  comment: { instruction: 'Reply in a thread', argv: ['reply', '<ID>', '<TEXT>'] },
+  answer: { instruction: 'Reply in a thread', argv: ['reply', '<ID>', '<TEXT>'] },
+  update: { instruction: "Change a message's text with edit", argv: ['edit', '<ID>', '<TEXT>'] },
+  remove: { instruction: 'Delete a message', argv: ['delete', '<ID>'] },
+  rm: { instruction: 'Delete a message', argv: ['delete', '<ID>'] },
+  cancel: { instruction: 'Cancel a schedule', argv: ['schedule', 'cancel', '<SCHEDULE>'] },
+  unschedule: { instruction: 'Cancel a schedule', argv: ['schedule', 'cancel', '<SCHEDULE>'] },
+  remind: { instruction: 'Post later with schedule', argv: ['schedule', '<TARGET>', '<TEXT>', '--in', '<DURATION>'] },
+  attach: { instruction: 'Attach a file to a post', argv: ['post', '<TARGET>', '<TEXT>', '--attach', '<FILE>'] },
+  upload: { instruction: 'Attach a file to a post', argv: ['post', '<TARGET>', '<TEXT>', '--attach', '<FILE>'] },
+  claim: { instruction: 'Claim a thread with a label, unless someone has', argv: ['label', '<ID>', 'owner=<YOU>', '--if-unset', 'owner'] },
+  assign: { instruction: 'Claim a thread with a label, unless someone has', argv: ['label', '<ID>', 'owner=<YOU>', '--if-unset', 'owner'] },
+  tag: { instruction: 'Set labels on a message', argv: ['label', '<ID>', '<KEY=VALUE>'] },
+  labels: { instruction: 'Set labels on a message', argv: ['label', '<ID>', '<KEY=VALUE>'] },
+  mentions: { instruction: 'Mentions are a filter on read and wait', argv: ['read', '--mentions'] },
+  watch: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
+  follow: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
+  subscribe: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
+  listen: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
+  users: { instruction: 'See who is on the board', argv: ['actors'] },
+  members: { instruction: 'See who is on the board', argv: ['actors'] },
+  me: { instruction: 'See who you are', argv: ['whoami'] },
+}
 
 /**
  * Aborts `controller` on the run's signal, or Ctrl-C without one. `release` stops listening, and

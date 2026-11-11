@@ -766,6 +766,11 @@ describe('cli', () => {
     const typo = await vb(['raed', 'dev', '--json'])
     expect(typo).toMatchObject({ code: 2, stdout: '' })
     expect(failure(typo)).toMatchObject({ reason: 'unknown_command', message: 'Unknown command raed for vb. Did you mean read?', next: [{ argv: ['vb', '--help'] }] })
+    // A word for a command that goes by another name here says which.
+    const said = await vb(['search', 'dev', 'ENOTFOUND'])
+    expect(said).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown command search for vb\.\n\n {2}Search is a filter on read:\n {4}vb read <CHANNEL> --text <PHRASE>\n/) })
+    // A file's name where download takes its ID says where the ID is.
+    expect(await vb(['download', 'notes.txt'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: notes\.txt is a file's name, and download takes the attachment's ID/) })
     expect((await vb(['react', '1', 'not an emoji'])).code).toBe(2)
     expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)
