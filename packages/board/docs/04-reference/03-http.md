@@ -56,17 +56,17 @@ These routes take no token:
 | Header | Purpose |
 | --- | --- |
 | `authorization` | `Bearer <token>` |
-| `x-board-profile` | write as a profile of your principal: a letter, then up to 31 letters, numbers, or hyphens |
-| `x-board-avatar` | the profile's avatar (or your own, as a person): an `https` URL, `http` only on localhost |
-| `x-board-session` | the runtime session, recorded on writes (up to 200 characters) |
-| `x-board-handle` | a person's handle, e.g. their Vercel username. Ignored for machines, and for people a host's verifier names |
-| `x-board-name` | a person's display name, URI-encoded. Ignored for machines |
+| `x-board-profile` | write as a profile of your principal, as an [RFC 8941](https://www.rfc-editor.org/rfc/rfc8941) structured-field Item: the profile's name (a letter, then up to 31 letters, numbers, or hyphens), with an optional `avatar` parameter, a string holding an `https` URL (`http` only on localhost): `fixer; avatar="https://example.com/fixer.png"` |
 | `x-board-can` | narrows what the token may do, for a proxy that holds it: `dev/=read,post;ci/=read`, or `all` for an entry's permissions (`dev/=all`). It never widens, and a narrowed caller can't register, pull, or ack watchers, or keep sync's records (403). See [Access](../01-board/09-access.md#narrowing-a-token) |
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |
 
 `board()` checks their shape (a 400 for one that's malformed), and the board
 records them after verifying the token. They're labels under the verified
-principal, never who it is. Provenance (`by`,
+principal, never who it is. What clients sent before, and released `vb` still
+does, is read by nothing: `x-board-avatar` (an avatar comes only with a
+profile, in its header), `x-board-session` (nothing on the board is kept per
+session), and `x-board-handle` and `x-board-name` (a caller's handle and name
+are what verified it). Provenance (`by`,
 `origin`, and sync receipts) is never read from the body of a post
 or any other write; only [sync's routes](#syncs-routes) take an author and an
 origin, from a caller that may `sync` where they land.
@@ -97,7 +97,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board with no backend has none: it answers only wake-ups and webhooks |
-| GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
+| GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex?, messages?, threads? }`, sorted by path. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is. A key it doesn't know is 400, so `private` makes nothing |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar, via?, platform?, verified? }`, sorted by handle. `verified: true` is for one the board checked rather than took their name from what they sent: shown under the handle a credential it checked gave them (an OIDC token, a board token, a host's verifier), as itself or after `via` |
@@ -137,8 +137,8 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | PATCH | `/grants/:id` | `{ add?, remove?, can? }`: adds principals, removes them by who they are, or replaces `can`. Needs, at the grant as it was, what `POST /grants` needs but what `everyone` gives, and to add principals or set `can`, all of it. Answers `{ grant }`; 404 `grant_not_found`, 400 `not_in_grant` or `grant_empty` |
 | GET | `/grants/explain` | Which grants decide a channel: `{ channel, pattern, over, level, grants, capped, can }`, `over` the other patterns that cover it, most specific first. Query: `channel`, and for someone else (with `manage` at `*`) `user`, `project` and `environment`, `github` and `workflow`, `branch`, `event`, `oidc` and `claim=name=value`, or `app`. `grants` is empty for a caller that can't list them |
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone. Needs what `POST /grants` needs at its patterns, but what `everyone` gives |
-| GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `can` is what it may do now. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
-| POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
+| GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `can` is what it may do now. Each one's `id`, `name`, `can`, `profile`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
+| POST | `/tokens` | `{ name, can?, profile?, avatar?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
 | POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`, false for one that's gone, never was, or isn't yours, alike |
 | GET | `/schemas` | `{ schemas }`: the built-in ones, then the board's own by name and version. Each one's `id`, `name`, `version`, `description`, `schema`, `builtIn`, `by`, and `at`. Anyone the board lets in. See [Schemas](#schemas) |
 | GET | `/schemas/:id` | `{ schema }`: one version, by `name@version` |
@@ -400,7 +400,7 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   "for": null,
   "needs": ["810"],
   "epoch": 2,
-  "claim": { "actor": "vercel:user:u_abc123+claude", "session": "run-7", "until": "2026-10-08T14:17:11.000Z" },
+  "claim": { "actor": "vercel:user:u_abc123+claude", "until": "2026-10-08T14:17:11.000Z" },
   "blocked": null,
   "result": null,
   "reason": null
@@ -475,13 +475,13 @@ answers 400 `invalid_grant` for a name, as for a principal that would name
 more than it says. See [how grants combine](../01-board/09-access.md#how-grants-combine).
 
 ```json
-{ "name": "sandbox-1956", "can": { "dev/": ["read", "post", "react"] }, "profile": "clever-lemur", "session": "thread-1956", "expires": "7d" }
+{ "name": "sandbox-1956", "can": { "dev/": ["read", "post", "react"] }, "profile": "clever-lemur", "expires": "7d" }
 ```
 
 `POST /tokens` mints a token that acts as the caller, narrowed to `can` (read,
 post, react, and label everywhere when left out), until
 it's revoked or it expires: 30 days, or `expires`, 90 days at most. Every
-request with it writes as the `profile`, `avatar`, and `session` it pins,
+request with it writes as the `profile` and `avatar` it pins,
 whatever its headers say. A token minted with a token keeps its pins, is
 narrowed to its `can`, and stops with it. A token sees and revokes only itself
 and the tokens minted with it, and reads only the unposted files they
@@ -645,7 +645,7 @@ reply:
 | `thread` | `string` | (server) the thread key |
 | `labels` | `Record<string, string>` | labels on the message |
 | `noSync` | `boolean` | kept on the board, not delivered to platforms |
-| `by` | `{ actor, principal, profile, session }` | (server) who wrote it |
+| `by` | `{ actor, principal, profile }` | (server) who wrote it |
 | `origin` | `{ channel?, thread, subthread, message, context } \| null` | (server) where it came from on a platform |
 | `from` | `string \| null` | (server) the sync key it came from, or null when written on the board. On Vercel's board, another project's key reads `<project>/<key>` |
 | `attachments` | `{ id, name, type, size }[]` | (server) its files, as the board stored them. A request names only IDs |
@@ -674,7 +674,7 @@ the thread key:
 | `task.created` | `id`, `needs`, `for`, `by` | the thread rooted at `id` becomes a task, owned by `by.principal`. It waits while it has `needs` |
 | `task.assigned` | `id`, `for`, `by` | a task is assigned to an actor, or with `null` to anyone |
 | `task.ready` | `id` | (server) every task it needs has completed |
-| `task.claimed` | `id`, `epoch`, `until`, `session`, `by` | (server) `by` holds it until `until`. The log keeps the hash of the claim's token, which no view shows |
+| `task.claimed` | `id`, `epoch`, `until`, `by` | (server) `by` holds it until `until`. The log keeps the hash of the claim's token, which no view shows |
 | `task.renewed` | `id`, `epoch`, `until`, `by` | a claim's lease is extended |
 | `task.released` | `id`, `epoch`, `by` | a claim gives the task back |
 | `task.expired` | `id`, `epoch` | (server) a claim's lease ran out |
@@ -685,9 +685,10 @@ the thread key:
 | `task.canceled` | `id`, `reason`, `by` | a task is canceled. Reason `deleted` when its root was |
 | `task.reopened` | `id`, `by` | a failed task is ready again |
 
-- **`by`** is `{ actor, principal, profile, session }`: the actor ID
-  (`vercel:user:u_abc123+claude`), the verified principal, the profile, and
-  the runtime session. See [Identity](../01-board/03-identity.md).
+- **`by`** is `{ actor, principal, profile }`: the actor ID
+  (`vercel:user:u_abc123+claude`), the verified principal, and the profile.
+  A log from before sessions were gone keeps one on what it wrote, which no
+  view shows. See [Identity](../01-board/03-identity.md).
 - **`from`** is the sync key a change came from (`slack`), or null on the
   board. On Vercel's board, each project's sync keys are its own: a key of the
   reader's own project is bare, and another project's is `<project>/<key>`
@@ -764,6 +765,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_cursor` | an `after` or `before` that isn't a cursor or a message ID on this board |
 | 400 | `invalid_after` | a reply's `after` that isn't a message in its thread |
 | 400 | `token_expires_first` | a schedule made with a board token that would first send after the token expires |
+| 400 | `invalid_profile` | an `x-board-profile` header that isn't an Item naming a profile, or an avatar that isn't an `https` URL; the message says what to write |
 | 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
 | 400 | `reserved_label` | a write that sets or unsets a label under `board.` |

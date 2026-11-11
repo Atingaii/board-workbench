@@ -2,11 +2,10 @@ import { board as boardAt, type Board } from "@vercel/board";
 import { http } from "@vercel/board/backend-http";
 import { commandWord, vb } from "@vercel/board/cli";
 import { z } from "zod";
-import { BOARD, eveAvatar, eveHeaders, eveName, SANDBOX_USER, VB_ROUTES } from "../../app/api/board/[[...path]]/harness.ts";
+import { BOARD, eveHeaders, eveName, SANDBOX_USER, VB_ROUTES } from "../../app/api/board/[[...path]]/harness.ts";
 
 // The vb tool: vb's board commands, run in the function against the board, without starting `vb` in
-// the sandbox. It's who `vb` is there: the same token, profile, and session the sandbox's network
-// policy adds. Files (--attach, download) are the sandbox's.
+// the sandbox. It's who `vb` is there: the same token and profile the sandbox's network policy adds. Files (--attach, download) are the sandbox's.
 
 export const inputSchema = z.object({
   args: z
@@ -33,11 +32,13 @@ export function eveBoard(
       throw new Error(`the vb tool can't reach ${url.pathname.replace(new URL(BOARD).pathname, "") || "/"}: it's not a route Eve uses`);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     for (const [name, value] of Object.entries(eveHeaders(thread, await options.token(), options.bypass))) headers.set(name, value);
+    // Who Eve is, and nothing the board this vb was built with adds when it finds an agent's session around it.
+    headers.delete("x-board-session");
     // A call's signal reaches every request it makes, so a hung read or upload ends with it.
     const signals = [init?.signal, options.signal].filter((signal): signal is AbortSignal => !!signal);
     return send(input, { ...init, headers, ...(signals.length ? { signal: AbortSignal.any(signals) } : {}) });
   };
-  return boardAt({ backend: http(BOARD, { fetch: withEve }) }).as({ name: eveName(thread), avatar: eveAvatar(thread) });
+  return boardAt({ backend: http(BOARD, { fetch: withEve }) }).as(eveName(thread));
 }
 
 /** The sandbox's home, where clones and skills live. */

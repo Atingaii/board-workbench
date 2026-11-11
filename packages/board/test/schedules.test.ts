@@ -19,8 +19,8 @@ const fresh =
 async function setup() {
   const queue = fakeQueue()
   const board = testBoard({ scheduler: queue.scheduler })
-  const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
-  const pi = fresh(board.fetch, 'u_pi', { 'x-board-handle': 'pi' })
+  const julian = fresh(board.fetch, 'u_julian', {})
+  const pi = fresh(board.fetch, 'u_pi', {})
   const root = (await julian('POST', '/messages', { channel: 'dev', text: 'PR #12: add schedules' })).body.message
   const replies = async () => (await julian('GET', `/messages/${root.id}`)).body.replies as { text: string; by: { actor: string }; schedule?: unknown }[]
   /** Moves the clock, then lets the queue deliver what's due and the board settle. */
@@ -114,7 +114,7 @@ describe('scheduled messages', () => {
   it('keep sending after a deploy: a timer an earlier deployment armed goes only to it', async () => {
     // A schedule from before, whose first send waits on the earlier deployment's queue.
     const store = memory()
-    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
     await createServer({ contract: schedulesContract, store: store.log }).session(SCHEDULES_SESSION).append({
       type: 'schedule.created',
       payload: {
@@ -128,7 +128,7 @@ describe('scheduled messages', () => {
     })
     const queue = fakeQueue()
     const board = testBoard({ store, scheduler: queue.scheduler })
-    const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+    const julian = fresh(board.fetch, 'u_julian', {})
 
     // Any request starts this deployment arming it again.
     await julian('GET', '/me')
@@ -142,10 +142,38 @@ describe('scheduled messages', () => {
     expect((await julian('GET', '/schedules')).body.schedules).toMatchObject([{ sent: 1, next: new Date(T0 + HOUR + DAY).toISOString() }])
   })
 
+  it("send one made before handles were checked as what verified its creator, not the name its creator's client sent", async () => {
+    // A board from before kept the actor a person's CLI named: any handle and name it chose.
+    const store = memory()
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
+    const before = createServer({ contract: schedulesContract, store: store.log }).session(SCHEDULES_SESSION)
+    await before.append({
+      type: 'schedule.created',
+      payload: {
+        channel: 'dev', re: null, text: 'from the CEO', labels: {}, noSync: false, first: T0 + HOUR, every: null, until: null, times: null,
+        as: {
+          author: by,
+          principal: { id: by.principal, kind: 'person', handle: 'u_julian' },
+          actor: { id: by.actor, kind: 'person', handle: 'ceo', name: 'The CEO', avatar: 'https://example.com/ceo.png' },
+        },
+      },
+    })
+    const queue = fakeQueue()
+    const board = testBoard({ store, scheduler: queue.scheduler })
+    const julian = fresh(board.fetch, 'u_julian', {})
+    await julian('GET', '/me')
+    await vi.waitFor(() => expect(queue.timers).toHaveLength(1))
+    vi.setSystemTime(T0 + HOUR)
+    await queue.fire()
+    await vi.waitFor(async () => expect((await julian('GET', '/messages?channel=dev')).body.messages).toHaveLength(1))
+    const [sent] = (await julian('GET', '/messages?channel=dev')).body.messages
+    expect(sent.author).toEqual({ kind: 'person', handle: 'u_julian', name: 'u_julian', avatar: null, verified: true })
+  })
+
   it('keep sending after a deploy when a schedule has already sent: its next send is armed, not its first', async () => {
     // A daily schedule from before that sent once, its second send waiting on the earlier deployment's queue.
     const store = memory()
-    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
     const before = createServer({ contract: schedulesContract, store: store.log }).session(SCHEDULES_SESSION)
     await before.append({
       type: 'schedule.created',
@@ -161,7 +189,7 @@ describe('scheduled messages', () => {
     await before.append({ type: 'schedule.fired', payload: { id: 1, n: 0, message: 1, next: T0 + HOUR + DAY } })
     const queue = fakeQueue()
     const board = testBoard({ store, scheduler: queue.scheduler })
-    const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+    const julian = fresh(board.fetch, 'u_julian', {})
 
     await julian('GET', '/me')
     await vi.waitFor(() => expect(queue.timers).toHaveLength(1))
@@ -181,7 +209,7 @@ describe('scheduled messages', () => {
       const queue = fakeQueue()
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     const before = deploy('dpl_before')
@@ -214,7 +242,7 @@ describe('scheduled messages', () => {
       const queue = fakeQueue()
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     const before = deploy('dpl_before')
@@ -238,7 +266,7 @@ describe('scheduled messages', () => {
       vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     const before = deploy('dpl_before')
@@ -274,7 +302,7 @@ describe('scheduled messages', () => {
       const queue = fakeQueue()
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const before = deploy('dpl_before')
     await before.julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
@@ -296,7 +324,7 @@ describe('scheduled messages', () => {
       vi.stubEnv('VERCEL_DEPLOYMENT_ID', 'dpl_after')
       const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+      return fresh(deployed.fetch, 'u_julian', {})
     }
     const first = instance()
     await first('POST', '/schedules', { channel: 'dev', text: 'a week later', in: '8d' })
@@ -324,7 +352,7 @@ describe('scheduled messages', () => {
       }
       const deployed = testBoard({ store, scheduler })
       vi.unstubAllEnvs()
-      return { queue, deployed, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+      return { queue, deployed, julian: fresh(deployed.fetch, 'u_julian', {}) }
     }
     const before = deploy('dpl_before')
     await before.julian('GET', '/me')
@@ -356,7 +384,7 @@ describe('scheduled messages', () => {
       },
     }
     const board = testBoard({ scheduler })
-    const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+    const julian = fresh(board.fetch, 'u_julian', {})
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
     await julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
     const standups = async () => (await julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)

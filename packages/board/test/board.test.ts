@@ -76,9 +76,36 @@ describe('auth', () => {
     expect(body.actors).toContainEqual(expect.objectContaining({ id: 'vercel:user:u_ada+claude', kind: 'agent' }))
   })
 
+  it('shows no session on what an older board wrote with one: a message, its event, and its author', async () => {
+    const store = memory()
+    const by = { actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude', session: 'claude-1' }
+    const older = createServer({ contract: contract({ name: 'board', events: { ...boardEvents, 'message.posted': boardEvents['message.posted'].extend({ by: z.unknown() }) } }), store: store.log }).session(BOARD_SESSION)
+    await older.append({ type: 'actor.seen', payload: { actor: by.actor, kind: 'agent', handle: 'julian/claude', name: 'claude', avatar: null } })
+    await older.append({ type: 'message.posted', id: 'old-post', payload: { channel: 'dev', text: 'from a session', re: null, replyTo: null, thread: 'old-post', labels: {}, noSync: true, by, origin: null, from: null } })
+
+    const julian = caller(testBoard({ store }).fetch, await personToken())
+    // A write brings the board's tables up to the log.
+    await julian('POST', '/messages', { channel: 'elsewhere', text: 'now' })
+    const [message] = (await julian('GET', '/messages?channel=dev')).body.messages
+    expect(message).toMatchObject({ text: 'from a session' })
+    expect(message.by).toEqual({ actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' })
+    const { events } = (await julian('GET', '/events?channel=dev&after=0')).body
+    expect(events.map((event: { payload: { by: unknown } }) => event.payload.by)).toEqual([{ actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' }])
+  })
+
+  it('ignores x-board-session, which released vb still sends inside a coding agent: it writes as its verified actor, and keeps none', async () => {
+    const { fetch } = testBoard()
+    const claude = caller(fetch, await personToken(), { 'x-board-profile': 'claude', 'x-board-session': 'claude-1' })
+    const { status, body } = await claude('POST', '/messages', { channel: 'dev', text: 'hi' })
+    expect(status).toBe(201)
+    expect(body.message.by).toEqual({ actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' })
+    expect((await claude('GET', '/me')).body).not.toHaveProperty('session')
+    expect(JSON.stringify((await claude('GET', '/events?channel=dev&after=0')).body)).not.toContain('claude-1')
+  })
+
   it('reads a log an older board wrote events in that board no longer has: account links', async () => {
     const store = memory()
-    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
     const older = createServer({
       contract: contract({
         name: 'board',
@@ -95,28 +122,49 @@ describe('auth', () => {
     await older.append({ type: 'actor.unlinked', payload: { actor: 'slack:user:U_JB', by } })
 
     const board = testBoard({ store })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await julian('POST', '/messages', { channel: 'dev', text: 'still here' })
     expect((await julian('GET', '/messages?channel=dev')).body.messages).toMatchObject([{ text: 'still here' }])
     expect((await julian('GET', '/actors')).body.actors).toContainEqual(expect.objectContaining({ id: 'slack:user:U_JB', handle: 'jb', kind: 'external' }))
     expect((await julian('GET', '/events?after=0&all=true&wait=0')).status).toBe(200)
   })
 
-  it('identifies a person by the user_id on a development token', async () => {
+  it('identifies a person by the user_id on a development token, and names them by it', async () => {
     const { fetch } = testBoard()
-    const call = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const call = caller(fetch, await personToken(), {})
     const { body } = await call('GET', '/me')
     expect(body).toMatchObject({
       actor: 'vercel:user:u_julian',
       kind: 'person',
-      handle: 'julian',
+      handle: 'u_julian',
+      name: 'u_julian',
     })
+  })
+
+  it('names people only by what verified them: a handle or a name they send changes nothing', async () => {
+    const { fetch } = testBoard()
+    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'ceo', 'x-board-name': encodeURIComponent('The CEO') })
+    const posted = await julian('POST', '/messages', { channel: 'dev', text: 'as I say I am' })
+    expect(posted.body.message.author).toEqual({ kind: 'person', handle: 'u_julian', name: 'u_julian', avatar: null, verified: true })
+    const claude = caller(fetch, await personToken(), { 'x-board-handle': 'ceo', 'x-board-profile': 'claude' })
+    expect((await claude('GET', '/me')).body).toMatchObject({ handle: 'u_julian/claude', name: 'claude', via: { name: 'u_julian', environment: null } })
+    expect((await julian('GET', '/actors')).body.actors.map((actor: { handle: string }) => actor.handle)).toEqual(['u_julian'])
+  })
+
+  it("names a deployment by its project in every environment, and its environment in its name", async () => {
+    const { fetch } = testBoard()
+    const preview = caller(fetch, await deploymentToken('support', 'prj_support', 'preview'))
+    const posted = await preview('POST', '/messages', { channel: 'dev', text: 'from a preview' })
+    expect(posted.body.message.author).toMatchObject({ kind: 'deployment', handle: 'support', name: 'support (preview)', verified: true })
+    const agent = caller(fetch, await deploymentToken('support', 'prj_support', 'preview'), { 'x-board-profile': 'helper' })
+    expect((await agent('GET', '/me')).body).toMatchObject({ handle: 'support/helper', via: { name: 'support', environment: 'preview' } })
+    const production = caller(fetch, await deploymentToken('support', 'prj_support', 'production'))
+    expect((await production('POST', '/messages', { channel: 'dev', text: 'from production' })).body.message.author).toMatchObject({ handle: 'support', name: 'support' })
   })
 
   it('gives a profile its own actor under the same principal', async () => {
     const { fetch } = testBoard()
     const call = caller(fetch, await personToken(), {
-      'x-board-handle': 'julian',
       'x-board-profile': 'Claude',
     })
     const { body } = await call('GET', '/me')
@@ -124,32 +172,55 @@ describe('auth', () => {
       actor: 'vercel:user:u_julian+claude',
       principal: 'vercel:user:u_julian',
       kind: 'agent',
-      handle: 'julian/claude',
+      handle: 'u_julian/claude',
       name: 'Claude',
-      avatar: `${BOARD_URL}/avatars/claude`,
+      avatar: null,
     })
   })
 
-  it("shows a person's own name and avatar, and an agent's mark", async () => {
+  it("takes a profile's avatar from its header's parameter, into the author of what it writes", async () => {
     const { fetch } = testBoard()
-    const julian = caller(fetch, await personToken(), {
-      'x-board-handle': 'julian',
-      'x-board-name': encodeURIComponent('Julián Benegas'),
-      'x-board-avatar': 'https://vercel.com/api/www/avatar/abc123?s=128',
-    })
-    expect((await julian('GET', '/me')).body).toMatchObject({
-      kind: 'person',
-      handle: 'julian',
-      name: 'Julián Benegas',
-      avatar: 'https://vercel.com/api/www/avatar/abc123?s=128',
-    })
-    const pi = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'pi' })
-    expect((await pi('GET', '/me')).body).toMatchObject({ handle: 'julian/pi', avatar: `${BOARD_URL}/avatars/pi` })
+    const fixer = caller(fetch, await personToken(), { 'x-board-profile': 'fixer; avatar="https://example.com/fixer.png"' })
+    const posted = await fixer('POST', '/messages', { channel: 'dev', text: 'on it' })
+    expect(posted.status).toBe(201)
+    expect(posted.body.message.author).toMatchObject({ kind: 'agent', handle: 'u_julian/fixer', name: 'fixer', avatar: 'https://example.com/fixer.png' })
+    const read = await fixer('GET', `/messages/${posted.body.message.id}`)
+    expect(read.body.message.author.avatar).toBe('https://example.com/fixer.png')
+    // As RFC 8941 serializes it, with the name as a string, and with a parameter it doesn't know.
+    const canonical = caller(fetch, await personToken(), { 'x-board-profile': '"fixer";avatar="https://example.com/2.png";size=2' })
+    expect((await canonical('GET', '/me')).body).toMatchObject({ profile: 'fixer', avatar: 'https://example.com/2.png' })
+  })
+
+  it('ignores x-board-avatar, which released vb still sends for a person: an avatar comes only with a profile, in its header', async () => {
+    const { fetch } = testBoard()
+    const post = async (headers: Record<string, string>) => (await caller(fetch, await personToken(), headers)('POST', '/messages', { channel: 'dev', text: 'hi' })).body.message
+    expect((await post({ 'x-board-avatar': 'https://example.com/me.png' })).author).toMatchObject({ kind: 'person', handle: 'u_julian', avatar: null })
+    expect((await post({ 'x-board-profile': 'fixer', 'x-board-avatar': 'https://example.com/fixer.png' })).author).toMatchObject({ kind: 'agent', name: 'fixer', avatar: null })
+    expect((await post({ 'x-board-profile': 'fixer;avatar="https://example.com/2.png"', 'x-board-avatar': 'https://example.com/fixer.png' })).author).toMatchObject({ name: 'fixer', avatar: 'https://example.com/2.png' })
+  })
+
+  it('refuses a profile header that is not one, naming the form it takes', async () => {
+    const { fetch } = testBoard()
+    const as = async (headers: Record<string, string>) => {
+      const { status, body } = await caller(fetch, await personToken(), headers)('POST', '/messages', { channel: 'dev', text: 'hi' })
+      return [status, body.error?.code, body.error?.message]
+    }
+    for (const header of ['fixer;avatar=https://example.com/f.png', 'fixer ;avatar="https://example.com/f.png"', 'fixer;avatar="https://example.com/f.png', '1fixer', 'fixer, claude', 'fixer;x=', 'fixer;x=1"a;avatar="https://example.com/f.png"'])
+      expect([header, ...(await as({ 'x-board-profile': header })).slice(0, 2)]).toEqual([header, 400, 'invalid_profile'])
+    expect((await as({ 'x-board-profile': 'fixer;avatar=https://example.com/f.png' }))[2]).toMatch(/^x-board-profile is a structured header, like fixer;avatar="https:\/\/example\.com\/fixer\.png": /)
+    expect(await as({ 'x-board-profile': 'fixer;avatar="ftp://example.com/f.png"' })).toEqual([400, 'invalid_profile', 'avatars must be https URLs (http only on localhost)'])
+    expect((await caller(fetch, await personToken())('GET', '/messages?channel=dev')).body.messages).toEqual([])
+  })
+
+  it("serves known agents' marks, for an agent to pass as its avatar", async () => {
+    const { fetch } = testBoard()
+    // A known agent's mark is a URL its caller passes: a profile named for one gets none of its own accord.
+    expect((await caller(fetch, await personToken(), { 'x-board-profile': 'pi' })('GET', '/me')).body).toMatchObject({ profile: 'pi', avatar: null })
+    const pi = caller(fetch, await personToken(), { 'x-board-profile': 'pi;avatar="https://board.test/api/board/avatars/pi"' })
+    expect((await pi('GET', '/me')).body).toMatchObject({ handle: 'u_julian/pi', avatar: 'https://board.test/api/board/avatars/pi' })
     const claude = await fetch(new Request(`${BOARD_URL}/avatars/claude`))
     expect(claude.headers.get('content-type')).toContain('svg')
     expect(await claude.text()).toContain('<path') // the mark, not a letter
-    const fx = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'fx' })
-    expect((await fx('GET', '/me')).body).toMatchObject({ handle: 'julian/fx', avatar: `${BOARD_URL}/avatars/fx` })
     const fxAvatar = await (await fetch(new Request(`${BOARD_URL}/avatars/fx`))).text()
     expect(fxAvatar).toContain('<path') // fx's mark, not its initial
   })
@@ -187,7 +258,7 @@ describe('auth', () => {
 describe('messages', () => {
   it('posts, replies, and reads a thread', async () => {
     const { fetch } = testBoard()
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken(), {})
 
     const root = await julian('POST', '/messages', { channel: 'errors-www', text: 'deploy failed' })
     expect(root.status).toBe(201)
@@ -219,8 +290,8 @@ describe('messages', () => {
 
   it('posts mentions as written: no handle or actor ID fails a write, whoever has it', async () => {
     const { fetch } = testBoard()
-    const julian = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
-    for (const id of ['u_ada', 'u_ada2']) await caller(fetch, await personToken(id), { 'x-board-handle': 'ada' })('POST', '/messages', { channel: 'x', text: 'hi' })
+    const julian = caller(fetch, await personToken('u_julian'), {})
+    for (const id of ['u_ada', 'u_ada2']) await caller(fetch, await personToken(id), {})('POST', '/messages', { channel: 'x', text: 'hi' })
 
     // Two people go by ada, no one by nobody, and the board knows no u_nobody.
     for (const text of ['thanks @ada', 'thanks @nobody', 'cc @[vercel:user:u_nobody]', 'cc @[ada@vercel.com]']) {
@@ -264,8 +335,9 @@ describe('messages', () => {
 
   it('filters by channel subtree, label, author, and mentions', async () => {
     const { fetch } = testBoard()
-    const julian = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
-    const ada = caller(fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    // People a Vercel login names by user ID, readable here so their handles are.
+    const julian = caller(fetch, await personToken('julian'), {})
+    const ada = caller(fetch, await personToken('ada'), {})
     await julian('POST', '/messages', { channel: 'www/production', text: 'one', labels: { status: 'open' } })
     await julian('POST', '/messages', { channel: 'www/staging', text: 'two' })
     await ada('POST', '/messages', { channel: 'docs', text: 'hey @julian' })
@@ -280,29 +352,29 @@ describe('messages', () => {
 
   it('finds mentions by what the text says: a handle, an actor ID, or an email, never in code', async () => {
     const { fetch } = testBoard()
-    const julian = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
-    const claude = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian', 'x-board-profile': 'claude' })
-    const ada = caller(fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    const julian = caller(fetch, await personToken('julian'), {})
+    const claude = caller(fetch, await personToken('julian'), { 'x-board-profile': 'claude' })
+    const ada = caller(fetch, await personToken('ada'), {})
     await julian('POST', '/messages', { channel: 'docs', text: 'hi' })
     await claude('POST', '/messages', { channel: 'docs', text: 'hi' })
-    for (const text of ['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:u_julian]', 'cc @[vercel:user:u_julian+claude]', 'ask @[Julian@vercel.com]', 'run `@julian`', '@juliana hi'])
+    for (const text of ['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]', 'ask @[Julian@vercel.com]', 'run `@julian`', '@juliana hi'])
       await ada('POST', '/messages', { channel: 'docs', text })
 
     const texts = async (as: typeof julian, mentions: string) =>
       (await as('GET', `/messages?channel=docs&mentions=${encodeURIComponent(mentions)}`)).body.messages.map((m: { text: string }) => m.text)
     // A person is everyone they are: their handle and ID, and their agents'.
-    expect(await texts(ada, 'julian')).toEqual(['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:u_julian]', 'cc @[vercel:user:u_julian+claude]'])
-    expect(await texts(ada, 'vercel:user:u_julian')).toEqual(await texts(ada, 'julian'))
-    expect(await texts(ada, 'julian/claude')).toEqual(['over to @julian/claude', 'cc @[vercel:user:u_julian+claude]'])
+    expect(await texts(ada, 'julian')).toEqual(['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]'])
+    expect(await texts(ada, 'vercel:user:julian')).toEqual(await texts(ada, 'julian'))
+    expect(await texts(ada, 'julian/claude')).toEqual(['over to @julian/claude', 'cc @[vercel:user:julian+claude]'])
     expect(await texts(ada, 'julian@vercel.com')).toEqual(['ask @[Julian@vercel.com]'])
     // Me is my handle and my ID.
-    expect(await texts(julian, 'me')).toEqual(['@Julian look', 'cc @[vercel:user:u_julian]'])
-    expect(await texts(claude, 'me')).toEqual(['over to @julian/claude', 'cc @[vercel:user:u_julian+claude]'])
+    expect(await texts(julian, 'me')).toEqual(['@Julian look', 'cc @[vercel:user:julian]'])
+    expect(await texts(claude, 'me')).toEqual(['over to @julian/claude', 'cc @[vercel:user:julian+claude]'])
   })
 
   it('filters by source, text, a label key or any of its values, and a thread root\'s labels', async () => {
     const { fetch } = testBoard()
-    const julian = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken('u_julian'), {})
     const { body: pr } = await julian('POST', '/messages', {
       channel: 'prs',
       text: 'PR #1: Add filters',
@@ -360,7 +432,7 @@ describe('events', () => {
 
   it("tails a PR's conversation by its label, and says who did what", async () => {
     const { fetch } = testBoard()
-    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken(), {})
     const { body: pr } = await julian('POST', '/messages', { channel: 'prs', text: 'PR #1', labels: { pr: 'x/y#1' } })
     const start = (await julian('GET', '/events?label=pr%3Dx%2Fy%231&wait=0')).body.cursor
     await julian('POST', '/messages', { channel: 'prs', text: 'elsewhere' })
@@ -371,7 +443,7 @@ describe('events', () => {
       ['message.posted', 'a comment on the PR'],
       ['reaction.added', 'PR #1'],
     ])
-    expect(body.events[1].actor).toMatchObject({ id: 'vercel:user:u_julian', name: 'julian' })
+    expect(body.events[1].actor).toMatchObject({ id: 'vercel:user:u_julian', name: 'u_julian' })
   })
 
   it('streams server-sent events from a cursor', async () => {

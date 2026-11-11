@@ -9,7 +9,7 @@ import { EDITED_HOLD, type Attachment, type Author, type Labels } from '../contr
 import { platformProfile } from '../contract/profiles.ts'
 import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
-import { actorSeen, viaOf } from './actors.ts'
+import { actorSeen, ownedActor } from './actors.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { syncTarget, type SyncTarget } from './targets.ts'
 import type { BoardSession } from './a2.ts'
@@ -29,7 +29,7 @@ export type { Identity }
 export function deploymentIdentity(actor: string, handle: string): Identity {
   return {
     principal: { id: actor, kind: 'deployment', handle, access: FULL_ACCESS, expiresAt: null },
-    author: { actor, principal: actor, profile: null, session: null },
+    author: { actor, principal: actor, profile: null },
     actor: { id: actor, kind: 'deployment', handle, name: handle, avatar: null },
   }
 }
@@ -52,17 +52,17 @@ export function seenFor(identity: Identity, actors: ActorsState) {
 }
 
 /**
- * Whether the board checked who a write is by, as it shows them: a principal a credential named
- * (an OIDC token it trusts, a board token, or a host's verifier; never the board's own code), under
- * the handle that credential gave it. An agent shows that principal after `via`, and its profile
- * name is the principal's to choose; a person, deployment, or workflow writing as itself shows the
- * handle as its name, which a display name its client sends replaces. An import says for itself.
+ * Whether the board checked who a write is by, as it shows them: a principal a credential named (an
+ * OIDC token it trusts, a board token, or a host's verifier; never the board's own code), shown as
+ * that principal names it: its handle and name, and for an agent, that principal after `via`, its
+ * profile name the principal's to choose. A stored actor that shows otherwise (a schedule's, from
+ * before handles were checked) isn't. An import says for itself.
  */
 function verifiedAs({ principal, author, actor }: Identity): boolean {
   if (principal.kind === 'external') return actor.verified === true
   if (principal.id.startsWith('board:')) return false
-  if (author.profile !== null) return actor.via !== undefined && actor.via.name === viaOf(principal).name
-  return actor.name === principal.handle && actor.handle === principal.handle
+  const named = ownedActor(principal, author, actor)
+  return named.handle === actor.handle && named.name === actor.name && named.avatar === actor.avatar && named.via?.name === actor.via?.name && named.via?.environment === actor.via?.environment
 }
 
 /**
@@ -296,7 +296,7 @@ export async function landedFor(ctx: WriteContext, identity: Identity, landed: M
 export const blindText = (text: string, own: string) => replaceMentions(text, (token) => (token.kind === 'actor' && token.actor !== own ? '@…' : null))
 
 const sameAuthor = (a: Author, b: Author) =>
-  a.actor === b.actor && a.principal === b.principal && a.profile === b.profile && a.session === b.session
+  a.actor === b.actor && a.principal === b.principal && a.profile === b.profile
 
 async function commitPost(
   ctx: WriteContext,

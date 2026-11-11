@@ -250,7 +250,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     return {
       events: [
         ...(task?.state === 'claimed' ? [{ type: 'task.expired' as const, payload: { ...about, epoch: task.epoch } }] : []),
-        { type: 'task.claimed', payload: { ...about, epoch, until, session: identity.author.session, token: hashOf(token), by: identity.author } },
+        { type: 'task.claimed', payload: { ...about, epoch, until, token: hashOf(token), by: identity.author } },
       ],
       claim: { epoch, token, until },
     }

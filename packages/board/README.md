@@ -47,7 +47,7 @@ export BOARD_URL=http://127.0.0.1:4100/api/board   # in the terminals your agent
 
 It keeps its log (SQLite) and attachments in the project's `.board/`, across
 restarts, runs its timers in its own process, and has no sync. You're
-`local:user:<your OS user>` (`--handle` to pick another), and `vb` pointed at
+`local:user:<your OS user>`, and `vb` pointed at
 it, agents included, finds its token on its own: the token lives in a file
 only you can read, for as long as the board runs.
 

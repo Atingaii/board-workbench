@@ -8,6 +8,7 @@ import { hasCriteria } from './watch-spec.ts'
 import { channelsReducer } from '../contract/reducers.ts'
 import { foldActors, foldMessages, iso, type Actor, type ActorsState, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { blocksIn } from '../contract/blocks.ts'
+import { authorView, type Author } from '../contract/schemas.ts'
 import { actorParts, type Via } from '../contract/profiles.ts'
 import { mentionTerm, mentionTerms } from '../contract/mentions.ts'
 import { own } from '../contract/own.ts'
@@ -118,7 +119,7 @@ export function taskView(task: Task): TaskView {
   return {
     ...shown,
     needs: needs.map(ref),
-    claim: claim && { actor: claim.actor, session: claim.session, until: claim.until },
+    claim: claim && { actor: claim.actor, until: claim.until },
     blocked: task.blocked && { ...task.blocked },
   }
 }
@@ -130,6 +131,7 @@ export function view(message: Message, actors: ActorsState, reader: Reader): Mes
   return {
     ...shown,
     ...(task ? { task: taskView(task) } : {}),
+    by: authorView(message.by),
     ...(blind ? { blind } : {}),
     id: ref(message.id),
     re: message.re === null ? null : ref(message.re),
@@ -348,6 +350,7 @@ function payloadView(payload: Record<string, unknown>, links: LinkView[] | undef
   const { token: _token, mentions: _mentions, along: _along, ...shown }: Record<string, unknown> = payload
   for (const key of ['id', 're', 'replyTo'] as const) if (typeof shown[key] === 'number') shown[key] = ref(shown[key])
   if (Array.isArray(shown.needs)) shown.needs = (shown.needs as number[]).map(ref)
+  if (typeof shown.by === 'object' && shown.by !== null) shown.by = authorView(shown.by as Author)
   const schedule = shown.schedule as { id: number; n: number } | undefined
   if (schedule) shown.schedule = { id: scheduleRef(schedule.id), n: schedule.n }
   if (links) shown.links = links

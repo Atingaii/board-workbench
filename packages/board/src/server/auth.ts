@@ -12,13 +12,8 @@ import { admits, grantAccess, type GrantFacts, type GrantSource } from './grants
 export type Claims = {
   /** `x-board-profile`: the agent or tool it writes as, `claude`, say. */
   profile: string | null
-  /** `x-board-avatar`: an https URL for its picture. */
+  /** The `avatar` parameter of `x-board-profile`: an https URL for its picture. */
   avatar: string | null
-  /** `x-board-session`: the agent session it writes from. */
-  session: string | null
-  /** `x-board-handle` and `x-board-name`: a person's handle and display name. */
-  handle: string | null
-  name: string | null
   /** `x-board-can`: what it narrows itself to, `dev/=read,post`. It only narrows. */
   scope: string | null
 }
@@ -45,7 +40,7 @@ export type Principal = {
   /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, `github:repo:<id>`, `oidc:<issuer>:<sub>`. */
   id: string
   kind: PrincipalKind
-  /** The default handle; a person's is replaced by the handle their CLI sends, unless a host's verifier named them. */
+  /** Its handle, as what verified it says: a host's verifier's, a Vercel login's user ID, a deployment's project. */
   handle: string
   expiresAt: Date | null
   /** The verified token's claims, so its access can be worked out again later, as a schedule's sends do. Absent for people and the board's own code. */
@@ -57,7 +52,7 @@ export type Principal = {
    * made with one stops when the token does.
    */
   token?: string
-  /** What a board token pins for every request with it: the profile, avatar, and session it writes as, and a person's handle and name. */
+  /** What a board token pins for every request with it: the profile and avatar it writes as. */
   pinned?: Pinned
 }
 
@@ -65,10 +60,6 @@ export type Principal = {
 export type Pinned = {
   profile: string | null
   avatar: string | null
-  session: string | null
-  /** A person's handle and display name as they were when they minted it: whoever holds the token sends none. */
-  handle: string | null
-  name: string | null
 }
 
 /** A principal and what it may do in each channel, as board()'s `access` worked it out. */
@@ -610,8 +601,8 @@ export type HostPrincipal = {
   id: string
   kind: PrincipalKind
   /**
-   * Kept as it is: `x-board-handle` doesn't replace it. Return `request.claims.handle` to take the caller's, which
-   * the board then takes as checked: a person posts to Slack under it as a plain sender.
+   * Who it is to people, its handle and its name: the board takes it as checked, so a person posts to Slack under
+   * it as a plain sender. A verifier that knows only an ID gives that.
    */
   handle: string
   expiresAt?: Date | null

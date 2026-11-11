@@ -157,7 +157,7 @@ export const boardEvents = {
     /** (server) Every task it needs has completed. */
     'task.ready': z.object(Task),
     /** (server) `by` holds it until `until`. `token` is the SHA-256 of the claim's secret, hex: no view shows it. */
-    'task.claimed': z.object({ ...Task, epoch: Epoch, until: Until, session: z.string().nullable(), token: z.string().regex(/^[0-9a-f]{64}$/), by: Author }),
+    'task.claimed': z.object({ ...Task, epoch: Epoch, until: Until, token: z.string().regex(/^[0-9a-f]{64}$/), by: Author }),
     'task.renewed': z.object({ ...Task, epoch: Epoch, until: Until, by: Author }),
     'task.released': z.object({ ...Task, epoch: Epoch, by: Author }),
     /** (server) Its lease ran out. */

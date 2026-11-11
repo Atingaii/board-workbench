@@ -18,6 +18,7 @@ import { renderForSlack } from "./render";
 import { issues, pulls } from "./quiet";
 import { CONNECTOR, REPO } from "./github";
 import { vercelTrustedSources } from "./trusted-sources";
+import { asBoardReadsIt } from "./profile";
 
 // The software factory: board running on its own repo and Vercel's Slack. Its log is
 // in `a2.ts`; locally there's no VERCEL_ENV, so attachments are files in .a2/attachments.
@@ -180,5 +181,7 @@ const factory = board({
   },
 });
 
-export const GET = factory.fetch, POST = factory.fetch;
+/** The board, reading the profile header as board's protocol has it (`profile.ts`). */
+const serve = (request: Request) => factory.fetch(asBoardReadsIt(request));
+export const GET = serve, POST = serve;
 export const scheduler = queues.handler(...backend.servers);

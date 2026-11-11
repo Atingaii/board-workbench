@@ -1,6 +1,7 @@
-import type { NetworkPolicy } from "@vercel/sandbox";
+import type { NetworkPolicy, NetworkPolicyRule } from "@vercel/sandbox";
 import pkg from "@vercel/board/package.json" with { type: "json" };
 import { REPO } from "./github.ts";
+import { profileHeader } from "./profile.ts";
 
 export const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 export const MODEL = "anthropic/claude-opus-5.5";
@@ -12,8 +13,6 @@ export const AGENT_BROWSER = "0.38.2";
 /** ffmpeg 6.0 with libass, for burned-in captions. */
 export const FFMPEG_STATIC = "5.2.0";
 export const SANDBOX_USER = "vercel-sandbox";
-
-export const eveSession = (thread: string) => `thread-${thread}`;
 
 const ADJECTIVES = [
   "amber", "brave", "brisk", "calm", "clever", "cosmic", "crisp", "dapper",
@@ -130,10 +129,21 @@ export const VB_ROUTES = `^${new URL(BOARD).pathname}(/(${[
 export function eveHeaders(thread: string, token: string, bypass: string | undefined): Record<string, string> {
   return {
     authorization: `Bearer ${token}`,
-    "x-board-profile": eveName(thread),
-    "x-board-avatar": eveAvatar(thread),
-    "x-board-session": eveSession(thread),
+    "x-board-profile": profileHeader(eveName(thread), eveAvatar(thread)),
     ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+  };
+}
+
+/**
+ * The factory's board, handed to a thread's Eve: the routes vb calls, with the board's token and who Eve is. It's the
+ * shape board's `sandboxPolicy()` returns, merged the way a caller merges that, which replaces it once the factory runs
+ * a release that has it (0.32.0 doesn't).
+ */
+export function boardPolicy(thread: string, token: string, bypass: string | undefined): { allow: Record<string, NetworkPolicyRule[]> } {
+  return {
+    allow: {
+      [new URL(BOARD).host]: [{ match: { path: { regex: VB_ROUTES } }, transform: [{ headers: eveHeaders(thread, token, bypass) }] }],
+    },
   };
 }
 
@@ -150,12 +160,7 @@ export function policy(
       "ai-gateway.vercel.sh": [
         { transform: [{ headers: { "x-api-key": tokens.gateway, authorization: `Bearer ${tokens.gateway}` } }] },
       ],
-      [new URL(BOARD).host]: [
-        {
-          match: { path: { regex: VB_ROUTES } },
-          transform: [{ headers: eveHeaders(thread, tokens.board, bypass) }],
-        },
-      ],
+      ...boardPolicy(thread, tokens.board, bypass).allow,
       ...(bypass ? { [evePreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
       "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
       "github.com": [{ transform: [{ headers: { authorization: `Basic ${git}` } }] }],

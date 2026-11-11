@@ -19,6 +19,7 @@ export function board(options: BoardOptions = {}): Board {
     },
     sync: () => import('../sync/engine.ts'),
     serving: null,
+    sandbox: null,
   })
 }
 

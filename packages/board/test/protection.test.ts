@@ -223,7 +223,7 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     vi.stubEnv(own, HOST.toUpperCase())
     runtimeToken.mockRejectedValue(new Error('runtime OIDC is unavailable'))
     const { fetch, api, sent } = protectedBoard()
-    const client = handle({ url: BOARD_URL, token: await personToken(), handle: 'jb', fetch })
+    const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
     expect((await client.discovery()).url).toBe(BOARD_URL)
     await client.post('dev', 'hosted with a bypass')
     expect(sent.every((header) => header === SECRET)).toBe(true)
@@ -253,7 +253,7 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
       request.headers.delete('x-vercel-trusted-oidc-idp-token')
       return board.fetch(request)
     }) as typeof globalThis.fetch
-    const client = handle({ url: BOARD_URL, token, handle: 'jb', fetch })
+    const client = handle({ url: BOARD_URL, token, fetch })
     expect((await client.discovery()).url).toBe(BOARD_URL)
     const root = await client.post('dev', 'from another project')
     await client.thread(root.id)
@@ -279,7 +279,7 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
       request.headers.delete('x-vercel-trusted-oidc-idp-token')
       return board.fetch(request)
     }) as typeof globalThis.fetch
-    const client = handle({ url: BOARD_URL, token: await personToken(), handle: 'jb', fetch })
+    const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
     expect((await client.discovery()).url).toBe(BOARD_URL)
     await client.post('dev', 'past a stale secret')
     // Once rejected, the secret isn't sent again.
@@ -321,7 +321,7 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
 
   it("gets through with the project's automation bypass, read with your Vercel login, and caches it", async () => {
     const { fetch, api, sent } = protectedBoard({ bypass: { [SECRET]: { scope: 'automation-bypass' } } })
-    const client = handle({ url: BOARD_URL, token: await personToken(), handle: 'jb', fetch })
+    const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
     expect((await client.discovery()).url).toBe(BOARD_URL)
     const root = await client.post('dev', 'through the wall')
     expect((await client.thread(root.id)).message.text).toBe('through the wall')
@@ -339,7 +339,7 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     api.length = 0
     sent.length = 0
     login.token = null
-    const again = handle({ url: BOARD_URL, token: await personToken(), handle: 'jb', fetch })
+    const again = handle({ url: BOARD_URL, token: await personToken(), fetch })
     expect((await again.discovery()).url).toBe(BOARD_URL)
     expect(api).toEqual([])
     expect(sent).toEqual([SECRET])
@@ -359,7 +359,7 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
       return fetch(request)
     })
     try {
-      const client = handle({ url: BOARD_URL, token: await personToken(), handle: 'jb', fetch })
+      const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
       expect((await client.discovery()).url).toBe(BOARD_URL)
       expect(signed).toContain('GET /v9/projects/prj_board')
       expect(api).toContain('GET /v9/projects/prj_board?teamId=team_board')

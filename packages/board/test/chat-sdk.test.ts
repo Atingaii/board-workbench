@@ -79,7 +79,7 @@ const read = async (call: ReturnType<typeof caller>, channel: string) =>
 describe('chatSdk() on a real adapter, with no hooks', () => {
   it('mirrors a Telegram group both ways', async () => {
     const { api, board, say } = await setup({ [String(GROUP)]: 'support' })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
 
     expect((await say(10, 'export is broken')).status).toBe(200)
     await vi.waitFor(async () => expect(await read(julian, 'support')).toHaveLength(1))
@@ -93,7 +93,7 @@ describe('chatSdk() on a real adapter, with no hooks', () => {
 
   it('keeps a new board root on the board, since a group is one conversation', async () => {
     const { api, board } = await setup({ [String(GROUP)]: 'support' })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const { body } = await julian('POST', '/messages', { channel: 'support', text: 'board only' })
 
     const attach = await julian('POST', `/messages/${body.message.id}/sync`, { target: `telegram:${GROUP}` })
@@ -188,7 +188,7 @@ describe('chatSdk() hooks', () => {
         await sync.import('leads', { text: `${sync.event.author.name} on ${sync.event.platform}: ${sync.event.text}` })
       },
     }, { platform: 'tg', resolveChannel: async (name) => (name === 'support group' ? String(GROUP) : name) })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
 
     await say(10, 'do you ship to Lima?')
     await vi.waitFor(async () => expect(await read(julian, 'leads')).toHaveLength(1))

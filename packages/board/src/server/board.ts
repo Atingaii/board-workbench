@@ -7,6 +7,10 @@ import type { Middleware } from './middleware.ts'
 import { createPolicy, type Policy, type PolicyOptions, type Serving } from './policy.ts'
 import { createServe, type PlatformCaller, type Serve } from './serve.ts'
 import type { Watcher } from './watcher.ts'
+import { HttpError } from './errors.ts'
+import { InvalidCan } from './access.ts'
+import { formatProfileHeader } from '../contract/profile-header.ts'
+import { boardPolicy, canHeader, PROTOCOL_ROUTES, withoutToken, type SandboxInput, type SandboxPolicy, type SandboxPolicyOptions, type SandboxReach } from './sandbox.ts'
 
 /**
  * `board()`'s options: where the board lives, who may use it and what its writes go through, and
@@ -59,7 +63,7 @@ export type BoardOptions = PolicyOptions & (BackendOptions | DefaultOptions) & {
 /**
  * The handle on a board: its methods act as the board's caller, through board(), which calls the
  * backend's methods, and `fetch` serves it. Over `http()` the caller is whoever its `fetch`'s
- * credentials say, with the profile `BOARD_AS` or the agent it runs in picks; on a board it keeps
+ * credentials say, with the profile `BOARD_PROFILE` names; on a board it keeps
  * (`local()`), its own code, as `board:client`.
  */
 export type Board = BoardClient & {
@@ -73,6 +77,16 @@ export type Board = BoardClient & {
    * on `local()`. `null` acts as yourself, outside any agent session.
    */
   as(profile: ProfileOption): Board
+  /**
+   * A Vercel Sandbox network policy that hands this board, and nothing else, to a sandboxed agent:
+   * `Sandbox.create({ networkPolicy })` takes it. The sandbox's proxy adds the credential (this
+   * deployment's own OIDC token, or `token`), the profile (`profile`, or this handle's from `as()`),
+   * and `x-board-can` (`can`, or read, post, react, and label everywhere) to its requests for the
+   * board's own routes, so none of them enters the sandbox; every other host is blocked. Spread
+   * `allow` beside your own hosts' rules to merge them. An OIDC token dies with the function that got
+   * it: hand the sandbox a new policy (`sandbox.update({ networkPolicy })`) before it expires.
+   */
+  sandboxPolicy(options?: SandboxPolicyOptions): Promise<SandboxPolicy>
 }
 
 /** A board on a backend you pass, which says how it reaches the board itself. */
@@ -108,6 +122,8 @@ export type Runtime = {
   sync: () => Promise<typeof import('../sync/engine.ts')>
   /** Loads what the policy finds in the environment, the first time a board serves: null where nothing does, so pass `authenticate`. */
   serving: (() => Promise<Serving>) | null
+  /** What a sandbox's requests to this board, at `url`, carry from this deployment: `token`, or its own OIDC token. Null where nothing finds one. */
+  sandbox: ((url: string, token: string | undefined) => Promise<Record<string, string>>) | null
 }
 
 /** What the board's pipeline shares with its handle. */
@@ -128,6 +144,15 @@ export type BoardContext = {
 
 /** How long a handle's live events wait for the next, in seconds, before asking again. */
 const EVENTS_WAIT_S = 25
+
+/** A profile's name, as the board takes one in `x-board-profile`. */
+const SANDBOX_PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
+
+/** An avatar the board takes: an https URL, or http on localhost. */
+const avatarUrl = (value: string) => {
+  const url = URL.parse(value)
+  return url !== null && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname)))
+}
 
 /** A board's name: 1 to 64 characters, no `/`. */
 const BOARD_NAME = /^[^/]{1,64}$/
@@ -187,9 +212,43 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
 
   const serve = async (request: Request): Promise<Response> => (await server()).dispatch(request, null)
 
+  /** How a sandbox reaches this board, where it keeps the board itself: at its own URL, with this deployment's credential. */
+  async function ownReach({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
+    const url = ownUrl()
+    if (url === null) throw new HttpError(400, 'no_url', "A sandbox reaches this board at its URL, and it doesn't know it yet.", { hint: 'Pass board({ url }).', origin: 'handle' })
+    const credential = runtime.sandbox ? await runtime.sandbox(url, token) : token === undefined ? withoutToken(url) : { authorization: `Bearer ${token}` }
+    return { url, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, routes: PROTOCOL_ROUTES }
+  }
+
+  /** The policy that hands this board to a sandbox, for a handle as `caller`. */
+  async function sandboxPolicy(caller: Caller, options: SandboxPolicyOptions = {}): Promise<SandboxPolicy> {
+    const own = 'profile' in caller ? caller.profile : null
+    const named = options.profile ?? (own === null || own === undefined ? null : typeof own === 'string' ? { name: own } : own)
+    if (named === null)
+      throw new BoardError('invalid_profile', "A sandbox writes as a profile of this deployment, and this names none: the sandbox could send its own, and write as any.", 400, {
+        hint: "Name one: sandboxPolicy({ profile: { name } }), or team.as('<name>').sandboxPolicy().",
+      })
+    if (!SANDBOX_PROFILE.test(named.name)) throw new BoardError('invalid_profile', `${named.name} isn't a profile's name: one starts with a letter and uses up to 32 letters, numbers, and hyphens.`, 400)
+    if (named.avatar !== undefined && !avatarUrl(named.avatar)) throw new BoardError('invalid_profile', `${named.avatar} isn't an avatar: one is an https URL, or http on localhost.`, 400)
+    let can: string
+    try {
+      can = canHeader(options.can)
+    } catch (error) {
+      if (error instanceof InvalidCan) throw new BoardError('invalid_scope', error.message, 400)
+      throw error
+    }
+    const input: SandboxInput = { profile: named, can, token: options.token }
+    try {
+      return boardPolicy(backend.sandbox ? await backend.sandbox(input) : await ownReach(input))
+    } catch (error) {
+      if (error instanceof HttpError) throw new BoardError(error.code, error.message, error.status, { ...(error.hint !== undefined ? { hint: error.hint } : {}), origin: error.origin })
+      throw error
+    }
+  }
+
   /** A handle on `client`, which `as` gives other profiles of. */
-  function handle(client: BoardClient, url: (() => string) | null): Board {
-    const made = { ...client, fetch: serve, as } as Board
+  function handle(client: BoardClient, url: (() => string) | null, caller: Caller): Board {
+    const made = { ...client, fetch: serve, as, sandboxPolicy: (options?: SandboxPolicyOptions) => sandboxPolicy(caller, options) } as Board
     if (url) Object.defineProperty(made, 'url', { get: url, enumerable: true })
     return made
   }
@@ -201,7 +260,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
    */
   function handleOf(caller: Caller, trigger: string | null): Board {
     const client = clientAs(caller, trigger)
-    if ('identity' in caller) return handle({ ...client, events: (query, opts) => events(client, query, opts) }, () => ownUrl() ?? inProcess)
+    if ('identity' in caller) return handle({ ...client, events: (query, opts) => events(client, query, opts) }, () => ownUrl() ?? inProcess, caller)
     const via = caller.origin.via?.kind ?? 'client'
     const id = (given: string) => derivedId(`board-${via === 'watcher' ? 'watch' : via}`, caller.self ?? '', given)
     const owned = async <T extends { id?: string }>(input: string | T): Promise<string | T> =>
@@ -226,6 +285,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
         events: (query, opts) => events(client, query, opts),
       },
       () => ownUrl() ?? inProcess,
+      caller,
     )
   }
 

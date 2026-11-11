@@ -41,7 +41,6 @@ function vercel(hosts: Record<string, { projectId: string; ownerId: string }>) {
     const found = host ? hosts[decodeURIComponent(host)] : undefined
     if (found && (!team || team === found.ownerId)) return Response.json({ ...found, url: 'board-abc123.vercel.app' })
     if (url.pathname === '/v2/teams') return Response.json({ teams: [{ id: 'team_test' }, { id: 'team_victim' }] })
-    if (url.pathname === '/v2/user') return Response.json({ user: { username: 'julian', name: 'Julian' } })
     const minted = url.pathname.match(/^\/v1\/projects\/(prj_board|prj_victim)\/token$/)?.[1]
     if (minted && request.method === 'POST') return Response.json({ token: `development-token-for-${minted}` })
     return Response.json({ error: { code: 'not_found' } }, { status: 404 })
@@ -106,8 +105,7 @@ describe("a person's token from `vercel login`", () => {
     expect(await client(BOARD_URL).channels()).toEqual([])
     expect(api.calls).toEqual([
       'GET /v13/deployments/board.test',
-      'POST /v1/projects/prj_board/token?source=board&teamId=team_test',
-      'GET /v2/user',
+      'POST /v1/projects/prj_board/token?source=board&teamId=team_test'
     ])
     expect(exchange).toHaveBeenCalledWith({ token: 'development-token-for-prj_board', audience: BOARD_URL })
     expect(bearers).toEqual([`Bearer ${await exchange.mock.results[0]!.value}`])
@@ -145,7 +143,7 @@ describe("a person's token from `vercel login`", () => {
     const board = testBoard({ url: LOCAL })
     const bearers = network(api, (request) => board.fetch(request))
     expect(await client(LOCAL).channels()).toEqual([])
-    expect(api.calls).toEqual(['POST /v1/projects/prj_board/token?source=board&teamId=team_test', 'GET /v2/user'])
+    expect(api.calls).toEqual(['POST /v1/projects/prj_board/token?source=board&teamId=team_test'])
     expect(exchange).toHaveBeenCalledWith({ token: 'development-token-for-prj_board', audience: LOCAL })
     expect(bearers).toHaveLength(1)
   })
@@ -206,8 +204,7 @@ describe("a person's token from `vercel login`", () => {
     expect(await client(BOARD_URL).channels()).toEqual([])
     expect(api.calls).toEqual([
       'GET /v13/deployments/board.test',
-      'POST /v1/projects/prj_board/token?source=board&teamId=team_test',
-      'GET /v2/user',
+      'POST /v1/projects/prj_board/token?source=board&teamId=team_test'
     ])
     expect(unsigned).not.toHaveBeenCalled()
     expect(bearers).toEqual([`Bearer ${await exchange.mock.results[0]!.value}`])

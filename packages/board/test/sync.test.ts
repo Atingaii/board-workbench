@@ -82,7 +82,8 @@ const read = async (call: ReturnType<typeof caller>, channel: string) =>
 describe('sync', () => {
   it("keeps a platform's mentions as its text says them, which mention filters find", async () => {
     const { board, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    // A Vercel login's handle is its user ID: Julian's is `julian`.
+    const julian = caller(board.fetch, await personToken('julian'), {})
     await julian('POST', '/messages', { channel: 'firehose', text: 'hi' })
 
     await webhook('slack', { type: 'message', threadId: 'slack:C1:500', id: '500', text: '@julian and @nobody, look', user: 'U_ADA' })
@@ -107,7 +108,7 @@ describe('sync', () => {
         seen: { tail: 'firehose', run: ({ event }) => void seen.push(event.type) },
       },
     })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'export is broken', user: 'U_ADA' })
     await vi.waitFor(() => expect(s.posts.map((p) => p.threadId)).toEqual(['slack:C1:100']))
     expect(s.posts[0]!.text).toContain('Thanks! Tracking it.')
@@ -133,7 +134,7 @@ describe('sync', () => {
         },
       },
     })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await julian('POST', '/messages', { channel: 'prs', text: 'no PR here' })
     const pr = (await julian('POST', '/messages', { channel: 'prs', text: 'PR #12', labels: { pr: 'acme/www#12' } })).body.message
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(2))
@@ -145,7 +146,7 @@ describe('sync', () => {
 
   it('mirrors a Slack thread into the board, and board replies back into Slack', async () => {
     const { board, s, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
 
     expect((await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'export is broken', user: 'U_ADA' })).status).toBe(200)
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
@@ -164,7 +165,7 @@ describe('sync', () => {
 
   it("cleans NUL and lone surrogates from what Slack sends, which the board refuses and stores can't keep", async () => {
     const { board, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     expect((await julian('POST', '/messages', { channel: 'firehose', text: 'a\u0000b' })).status).toBe(400)
     expect((await julian('POST', '/messages', { channel: 'firehose', text: 'a\ud800b' })).status).toBe(400)
     expect((await julian('POST', '/messages', { channel: 'firehose', text: 'ok', id: '\ud800' })).status).toBe(400)
@@ -200,7 +201,7 @@ describe('sync', () => {
       },
     }
     const { board, webhook } = setup({ store: { ...store, tables } })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const { body: root } = await julian('POST', '/messages', { channel: 'firehose', text: 'incident', noSync: true })
     expect((await julian('POST', `/messages/${root.message.id}/sync`, { target: 'slack:C9:900.1' })).status).toBe(200)
 
@@ -214,7 +215,7 @@ describe('sync', () => {
 
   it("never sends text its author edited away, when a label change's delivery runs after the edit", async () => {
     const { board, s } = setup({ slackRender: ({ message }) => `[${message.labels.state ?? '-'}] ${message.text}` })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     // The thread's deliveries back up behind its root's, which waits on Slack.
     let open!: () => void
     const slack = new Promise<void>((resolve) => (open = resolve))
@@ -234,7 +235,7 @@ describe('sync', () => {
 
   it('posts a reply to Slack as written, with no quote of the message it answers', async () => {
     const { board, s, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
 
     await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'export is broken', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
@@ -331,7 +332,7 @@ describe('sync', () => {
       formatConverter: { toResponseUrlText: ({ markdown }: { markdown: string }) => `mrkdwn(${markdown})` },
     })
     const token = await personToken()
-    const julian = caller(board.fetch, token, { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, token, {})
     const upload = async () => {
       const response = await board.fetch(
         new Request(`${BOARD_URL}/attachments`, {
@@ -384,7 +385,7 @@ describe('sync', () => {
       formatConverter: { toResponseUrlText: ({ markdown }: { markdown: string }) => `mrkdwn(${markdown})` },
     })
     const token = await personToken()
-    const julian = caller(board.fetch, token, { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, token, {})
     const response = await board.fetch(
       new Request(`${BOARD_URL}/attachments`, {
         method: 'POST',
@@ -410,7 +411,7 @@ describe('sync', () => {
   it("posts a root's text, then its files under it, where the Slack client can't upload them together", async () => {
     const { board, s } = setup({ slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}) }, files: { delete: async () => ({}) } } })
     const token = await personToken()
-    const julian = caller(board.fetch, token, { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, token, {})
     const response = await board.fetch(
       new Request(`${BOARD_URL}/attachments`, {
         method: 'POST',
@@ -584,7 +585,7 @@ describe('sync', () => {
   it('delivers a reply, and an edit, as the message is when it goes out: never text its author took back', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { board, s } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'incident' })).body.message
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
     // Slack is down for a while, so the thread's deliveries back up behind the first.
@@ -608,7 +609,7 @@ describe('sync', () => {
     const sent = JSON.stringify([s.posts, s.edits, s.deletes])
     expect(sent).not.toContain('hunter2')
     expect(sent).not.toContain('swordfish')
-    expect(s.posts.map((p) => JSON.parse(p.text).markdown)).toEqual(['**julian**: looking', '**julian**: the password is in the vault'])
+    expect(s.posts.map((p) => JSON.parse(p.text).markdown)).toEqual(['**u_julian**: looking', '**u_julian**: the password is in the vault'])
     error.mockRestore()
   })
 
@@ -638,7 +639,7 @@ describe('sync', () => {
 
   it('starts a Slack thread for a board root in a mirrored channel, then follows it', async () => {
     const { board, s, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
 
     const { body } = await julian('POST', '/messages', { channel: 'firehose', text: 'deploy failed' })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
@@ -673,7 +674,7 @@ describe('sync', () => {
 
   it('syncs reactions both ways', async () => {
     const { board, s, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await webhook('slack', { type: 'message', threadId: 'slack:C1:200', id: '200', text: 'bug', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
     const [message] = await read(julian, 'firehose')
@@ -691,7 +692,7 @@ describe('sync', () => {
 
   it('shows typing in every platform thread a board thread is synced to, skipping one that fails', async () => {
     const { board, s, g, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await webhook('slack', { type: 'message', threadId: 'slack:C1:200', id: '200', text: 'bug', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
     const [root] = await read(julian, 'firehose')
@@ -711,7 +712,7 @@ describe('sync', () => {
 
   it('passes a typing status through to Slack, which shows it instead of "Typing…"', async () => {
     const { board, s, webhook } = setup()
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await webhook('slack', { type: 'message', threadId: 'slack:C1:200', id: '200', text: 'bug', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
     const [root] = await read(julian, 'firehose')
@@ -942,7 +943,7 @@ describe('sync', () => {
     }
     const { board, g, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() }, issues: { get: vi.fn() }, reactions } } })
     Object.assign(g.adapter, { botUserId: '1', emojiToGitHubReaction: (emoji: string) => ({ rocket: 'rocket', eyes: 'eyes' })[emoji] ?? '+1' })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const item = { number: 41, title: 'Ship it', html_url: 'https://github.com/vercel-labs/board/pull/41' }
     await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'julianbenegas' }, [key]: item },
       { 'x-github-event': event, 'x-github-delivery': `react-${key}` })
@@ -1277,7 +1278,7 @@ describe('sync', () => {
   it("keeps GitHub's markdown and avatars, and posts markdown to platforms", async () => {
     const get = vi.fn(async () => ({ data: { number: 3, title: 'Deploy previews', html_url: 'https://github.com/vercel-labs/board/pull/3', state: 'open', user: { id: 42, login: 'julianbenegas' } } }))
     const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get } } } })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const table = '| Project | Status |\n| --- | --- |\n| www | Ready |'
     await webhook('github', {
       type: 'message',
@@ -1301,12 +1302,12 @@ describe('sync', () => {
     await julian('POST', '/messages', { channel: 'firehose', text: '**ship it**' })
     // The GitHub thread mirrored to Slack too: each starts a thread in its channel.
     await vi.waitFor(() => expect(s.channelPosts.map((p) => p.channelId).sort()).toEqual(['slack:C1', 'slack:C2']))
-    expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(JSON.stringify({ markdown: '**julian**: **ship it**' }))
+    expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(JSON.stringify({ markdown: '**u_julian**: **ship it**' }))
   })
 
   it('re-renders a copy when a label change changes its rendering, and only then', async () => {
     const { board, s } = setup({ slackRender: ({ message }) => `[${message.labels.state ?? '-'}] ${message.text}` })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     const { body } = await julian('POST', '/messages', { channel: 'prs', text: 'PR #1', labels: { state: 'draft' } })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
     expect(s.channelPosts[0]!.text).toBe(JSON.stringify({ markdown: '[draft] PR #1' }))
@@ -1319,7 +1320,7 @@ describe('sync', () => {
 
   it.each([false, true])('posts mentions natively without changing code (custom renderer: %s)', async (customRender) => {
     const { board, s, webhook } = setup({ slackRender: customRender ? ({ message }) => message.text : undefined })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
     await julian('POST', '/messages', { channel: 'prs', text: 'hi' })
     await webhook('slack', { type: 'message', threadId: 'slack:C2:500', id: '500', text: 'hello', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(2))
@@ -1327,7 +1328,7 @@ describe('sync', () => {
     await julian('POST', '/messages', { channel: 'firehose', text: '@[slack:user:U_ADA] and @julian, see \`@julian\`' })
     await vi.waitFor(() => expect(s.channelPosts.some((p) => p.channelId === 'slack:C1')).toBe(true))
     expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(
-      JSON.stringify({ markdown: `${customRender ? '' : '**julian**: '}<@U_ADA> and @julian, see \`@julian\`` }),
+      JSON.stringify({ markdown: `${customRender ? '' : '**u_julian**: '}<@U_ADA> and @julian, see \`@julian\`` }),
     )
   })
 
@@ -1339,7 +1340,7 @@ describe('sync', () => {
     })
     const conversations = { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }
     const { board, s } = setup({ slackClient: { conversations, users: { info: async () => ({}), lookupByEmail } } })
-    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, await personToken(), {})
 
     const text = 'owner: @[ada@vercel.com], cc @[nobody@vercel.com], missing: @[missing-id@vercel.com]'
     const { body } = await julian('POST', '/messages', { channel: 'firehose', text })
@@ -1349,7 +1350,7 @@ describe('sync', () => {
     expect(((await julian('GET', '/actors')).body.actors as { id: string }[]).map((actor) => actor.id)).not.toContain('slack:user:U_ADA')
     await vi.waitFor(() => expect(s.channelPosts.some((p) => p.channelId === 'slack:C1')).toBe(true))
     expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(
-      JSON.stringify({ markdown: '**julian**: owner: <@U_ADA>, cc nobody@vercel.com, missing: missing-id@vercel.com' }),
+      JSON.stringify({ markdown: '**u_julian**: owner: <@U_ADA>, cc nobody@vercel.com, missing: missing-id@vercel.com' }),
     )
   })
 
@@ -1358,7 +1359,7 @@ describe('sync', () => {
     const conversations = { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }
     const { board } = setup({ slackClient: { conversations, users: { info: async () => ({}), lookupByEmail } } })
     const token = await personToken()
-    const julian = caller(board.fetch, token, { 'x-board-handle': 'julian' })
+    const julian = caller(board.fetch, token, {})
     const { cursor } = (await julian('GET', '/events?wait=0')).body
 
     // `vb tail` (a stream) and `vb wait` (a long poll) for mentions of Ada's email, in a channel nothing syncs.

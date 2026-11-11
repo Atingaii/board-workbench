@@ -64,7 +64,7 @@ function recorder(tail: string, then?: Watcher['run']) {
   return { seen, watcher: { tail, run: async (context: WatcherContext) => (seen.push(context.event), then?.(context)) } satisfies Watcher }
 }
 
-const julianOn = async (fetch: (request: Request) => Promise<Response>) => caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+const julianOn = async (fetch: (request: Request) => Promise<Response>) => caller(fetch, await personToken(), {})
 
 describe('watchers on a board on http()', () => {
   afterEach(() => {

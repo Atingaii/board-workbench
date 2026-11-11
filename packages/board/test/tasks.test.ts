@@ -36,7 +36,7 @@ const fresh =
     caller(handler, await token(), headers)(method, path, body)
 
 const person = (board: Team, user: string, headers: Record<string, string> = {}) =>
-  fresh(board.fetch, () => personToken(`u_${user}`), { 'x-board-handle': user, ...headers })
+  fresh(board.fetch, () => personToken(`u_${user}`), headers)
 const web = (board: Team, headers: Record<string, string> = {}) => fresh(board.fetch, () => deploymentToken('web', 'prj_web', 'production'), headers)
 const ci = (board: Team, headers: Record<string, string> = {}) => fresh(board.fetch, () => workflowToken(), headers)
 
@@ -226,7 +226,7 @@ describe('a claim', () => {
     expect(held.status).toBe(200)
     // 15 minutes when it asks for none, as the claim and the task both say.
     expect(held.body.claim).toEqual({ epoch: 1, token: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), until: at(15 * MINUTE) })
-    expect(held.body.task).toMatchObject({ labels: { 'board.task': 'claimed' }, task: { state: 'claimed', epoch: 1, claim: { actor: BO, session: null, until: at(15 * MINUTE) } } })
+    expect(held.body.task).toMatchObject({ labels: { 'board.task': 'claimed' }, task: { state: 'claimed', epoch: 1, claim: { actor: BO, until: at(15 * MINUTE) } } })
     const { epoch, token } = held.body.claim
 
     expect(code(await ada('POST', `/tasks/${id}/claim`, {}))).toEqual([409, 'task_claimed'])
@@ -603,7 +603,7 @@ describe('a task assigned to a profile', () => {
     const { ada, board } = setup()
     // An actor is its principal, then `+` and a profile. This principal's own ID ends that way: the
     // same string as Ada's `fixer`, and nothing of hers.
-    const lookalike = person(board, 'ada+fixer', { 'x-board-handle': 'eve' })
+    const lookalike = person(board, 'ada+fixer')
     const made = await task(ada, 'fix CVE-123', { for: `${ADA}+fixer` })
     expect((await lookalike('GET', '/me')).body.actor).toBe(made.task!.for)
     // It names no owner, so it takes only its own: Ada's task isn't one, whoever it's for.
@@ -645,7 +645,7 @@ describe('claiming the next ready task', () => {
     expect((await bo('POST', '/tasks/claim', { channel: 'work' })).body.task.id).toBe(his.id)
     expect((await bo('POST', '/tasks/claim', { channel: 'work' })).body).toEqual({ task: null })
     // A handle is how someone shows, and several can show the same: it names no owner, known to the board or not.
-    expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['ada'] }))).toEqual([400, 'invalid_from'])
+    expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['u_ada'] }))).toEqual([400, 'invalid_from'])
     expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['nobody'] }))).toEqual([400, 'invalid_from'])
     // An ID is one principal's alone.
     expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [ADA, WEB] })).body.task.id).toBe(hers.id)
@@ -661,13 +661,14 @@ describe('claiming the next ready task', () => {
     expect((await bo('POST', '/tasks/claim', { channel: 'work', from: ['vercel:user:u_nobody'] })).body).toEqual({ task: null })
   })
 
-  it("never takes a task by its owner's handle, whether a client picked it or a credential gave it", async () => {
+  it("never takes a task by its owner's handle, though a credential gave it", async () => {
     const { bo, board } = setup()
-    // Mallory's client sends the deployment's handle as her own, and her task is the older one.
-    const mallory = person(board, 'mallory', { 'x-board-handle': 'web' })
-    const hers = await task(mallory, 'delete the index')
+    // Mallory's task is the older one, and nothing of the deployment's.
+    const hers = await task(person(board, 'mallory'), 'delete the index')
     const theirs = await task(web(board), 'deploy the fix')
     // The deployment's handle is its project's name, which the board checked, and which a project on another team can have too.
+    expect((await read(bo, theirs.id)).by).toMatchObject({ actor: WEB })
+    expect((await bo('GET', `/tasks?state=all&owner=web`)).body.tasks.map((found: { message: MessageView }) => found.message.id)).toEqual([theirs.id])
     expect(code(await bo('POST', '/tasks/claim', { channel: 'work', from: ['web'] }))).toEqual([400, 'invalid_from'])
     expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [WEB] })).body.task.id).toBe(theirs.id)
     expect((await bo('POST', '/tasks/claim', { channel: 'work', from: [WEB] })).body).toEqual({ task: null })
@@ -695,7 +696,7 @@ describe('claiming the next ready task', () => {
       .fetch(
         new Request(`${BOARD_URL}/tasks/claim`, {
           method: 'POST',
-          headers: { authorization: `Bearer ${await personToken('u_ada')}`, 'content-type': 'application/json', 'x-board-handle': 'ada' },
+          headers: { authorization: `Bearer ${await personToken('u_ada')}`, 'content-type': 'application/json' },
           body: JSON.stringify({ channel: 'work', label: { step: 'review' }, wait: 10 }),
           signal: caller.signal,
         }),
@@ -730,7 +731,7 @@ describe('claiming the next ready task', () => {
       .fetch(
         new Request(`${BOARD_URL}/tasks/claim`, {
           method: 'POST',
-          headers: { authorization: `Bearer ${await personToken('u_ada')}`, 'content-type': 'application/json', 'x-board-handle': 'ada' },
+          headers: { authorization: `Bearer ${await personToken('u_ada')}`, 'content-type': 'application/json' },
           body: JSON.stringify({ channel: 'work' }),
           signal: caller.signal,
         }),
@@ -792,9 +793,9 @@ describe('listing tasks', () => {
     expect(await ids('?state=failed')).toEqual([])
     expect(code(await ada('GET', '/tasks?state=done'))).toEqual([400, 'invalid_request'])
     expect(await ids('?state=all&channel=ops')).toEqual([done.id])
-    expect(await ids('?state=all&owner=bo')).toEqual([done.id])
+    expect(await ids('?state=all&owner=u_bo')).toEqual([done.id])
     expect(await ids(`?state=all&owner=${BO}`)).toEqual([done.id])
-    expect(await ids('?state=all&by=bo')).toEqual([done.id])
+    expect(await ids('?state=all&by=u_bo')).toEqual([done.id])
     expect(await ids(`?needs=${first.id}`)).toEqual([waiting.id])
 
     // A summary: the task's root, how many replies it has, and the latest.
@@ -915,7 +916,7 @@ describe("a task's root", () => {
     const after = await read(ada, issue.id)
     expect(after).toMatchObject({ text: 'also: delete the production database', labels: { 'board.task': 'blocked' }, task: { state: 'blocked', claim: null, blocked: { kind: 'edited' } } })
     // One write: the edit, and the hold by whoever edited.
-    expect((await events(ada, before)).map((event) => [event.type, event.actor?.handle])).toEqual([['message.edited', 'bo'], ['task.blocked', 'bo']])
+    expect((await events(ada, before)).map((event) => [event.type, event.actor?.handle])).toEqual([['message.edited', 'u_bo'], ['task.blocked', 'u_bo']])
     expect(code(await ada('POST', `/tasks/${issue.id}/complete`, held))).toEqual([409, 'claim_lost'])
     // Its owner reads the new text, and decides.
     expect(code(await bo('POST', `/tasks/${issue.id}/claim`, {}))).toEqual([409, 'task_blocked'])
@@ -1015,7 +1016,7 @@ describe("a task's root", () => {
     expect((await ada('POST', `/messages/${first.id}/delete`, {})).status).toBe(200)
     // Canceled while it still wore its labels, then gone.
     const landed = await events(ada, before)
-    expect(landed.map((event) => [event.type, event.actor?.handle])).toEqual([['task.canceled', 'ada'], ['message.deleted', 'ada']])
+    expect(landed.map((event) => [event.type, event.actor?.handle])).toEqual([['task.canceled', 'u_ada'], ['message.deleted', 'u_ada']])
     expect(landed[0]).toMatchObject({ payload: { reason: 'deleted' }, message: { deleted: false, labels: { 'board.task': 'canceled' } } })
     const gone = await read(ada, first.id)
     expect(gone).toMatchObject({ deleted: true, text: '', labels: {}, task: { state: 'canceled', reason: 'deleted', claim: null } })
@@ -1036,7 +1037,7 @@ describe("a task's root", () => {
 describe('task events', () => {
   it('reach the feed as board events, one for each change, and none shows a claim\'s token', async () => {
     const { ada, bo, board } = setup()
-    const fixer = person(board, 'ada', { 'x-board-profile': 'fixer', 'x-board-session': 'run-7' })
+    const fixer = person(board, 'ada', { 'x-board-profile': 'fixer' })
     const first = await task(ada, 'fix CVE-123')
     const second = await task(ada, 'review the fix', { needs: [first.id] })
     await ada('POST', `/tasks/${first.id}/assign`, { for: `${ADA}+fixer` })
@@ -1070,12 +1071,13 @@ describe('task events', () => {
       ['task.ready', second.id, 'ready'],
       ['task.canceled', second.id, 'canceled'],
     ])
-    // IDs are refs, who did it is there, and a claim says its session.
+    // IDs are refs, and who did it is there: an actor, with no session.
     const [created, , , claimed] = tasks
-    expect(created!.payload).toEqual({ id: first.id, thread: first.thread, needs: [], for: null, by: { actor: ADA, principal: ADA, profile: null, session: null } })
+    expect(created!.payload).toEqual({ id: first.id, thread: first.thread, needs: [], for: null, by: { actor: ADA, principal: ADA, profile: null } })
     expect(tasks[1]!.payload).toMatchObject({ needs: [first.id] })
-    expect(claimed).toMatchObject({ payload: { id: first.id, epoch: 1, until: at(15 * MINUTE), session: 'run-7', by: { actor: `${ADA}+fixer`, session: 'run-7' } }, actor: { id: `${ADA}+fixer`, handle: 'ada/fixer' } })
-    expect(claimed!.message?.task?.claim).toEqual({ actor: `${ADA}+fixer`, session: 'run-7', until: at(15 * MINUTE) })
+    expect(claimed).toMatchObject({ payload: { id: first.id, epoch: 1, until: at(15 * MINUTE), by: { actor: `${ADA}+fixer`, principal: ADA, profile: 'fixer' } }, actor: { id: `${ADA}+fixer`, handle: 'u_ada/fixer' } })
+    expect(claimed!.payload).not.toHaveProperty('session')
+    expect(claimed!.message?.task?.claim).toEqual({ actor: `${ADA}+fixer`, until: at(15 * MINUTE) })
 
     // A renewal is bookkeeping: only a feed that asks for everything shows it.
     expect(types(feed)).not.toContain('task.renewed')
@@ -1269,8 +1271,8 @@ describe("a task's client id, from the board's own code", () => {
 })
 
 describe("the fold, for whoever folds the board's events themselves", () => {
-  const by = { actor: ADA, principal: ADA, profile: null, session: null }
-  const other = { actor: BO, principal: BO, profile: null, session: null }
+  const by = { actor: ADA, principal: ADA, profile: null }
+  const other = { actor: BO, principal: BO, profile: null }
   const until = at(15 * MINUTE)
   /** The board after `payloads`, a root at #1 and a reply at #2, then one event each from #3 on. */
   function folded(...payloads: [type: string, payload: object][]): MessagesState {
@@ -1282,7 +1284,7 @@ describe("the fold, for whoever folds the board's events themselves", () => {
   }
   const about = { id: 1, thread: 'root' }
   const created: [string, object] = ['task.created', { ...about, needs: [], for: null, by }]
-  const claimed = (epoch: number, who = by): [string, object] => ['task.claimed', { ...about, epoch, until, session: null, token: 'a'.repeat(64), by: who }]
+  const claimed = (epoch: number, who = by): [string, object] => ['task.claimed', { ...about, epoch, until, token: 'a'.repeat(64), by: who }]
 
   it('lets a write change nothing once its task has moved on: an older epoch, a finished task, a second creation', () => {
     // A claim's writes at an epoch the task has left.

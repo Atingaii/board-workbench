@@ -861,7 +861,7 @@ describe('the embedded CLI', () => {
     const help = await capture(() => main(['help'], { name: 'board', commands: local }))
     expect(help.stdout).toMatch(/^usage: board <command> \[options\]      \(also installed as `vb`\)$/m)
     // inspect after wait, serve after them in a section of its own, and then the options every command takes.
-    expect(help.stdout).toMatch(/\n  wait \[channel\][^\n]*\n  inspect +the board in your browser[^\n]*\n(?: {4,}[^\n]*\n)*\n  serve +run a board on this machine[\s\S]*\(or\s+--handle\)\n\nfilters:/)
+    expect(help.stdout).toMatch(/\n  wait \[channel\][^\n]*\n  inspect +the board in your browser[^\n]*\n(?: {4,}[^\n]*\n)*\n  serve +run a board on this machine[\s\S]*local:user:<your OS\s+user>\n\nfilters:/)
   })
 
   it("takes the login the Vercel CLI hands it in VERCEL_AUTH_TOKEN, never a token cached for someone else's", async () => {
@@ -959,7 +959,7 @@ describe('the embedded CLI', () => {
       const handed = join(dir, 'page.js')
       await writeFile(handed, "document.body.dataset.page = 'the app\\'s'")
       const served = await inspecting([join(dir, 'app.mjs')], { PAGE_FROM: handed })
-      expect(served.stdout()).toContain(`inspecting ${url} as julian`)
+      expect(served.stdout()).toContain(`inspecting ${url} as u_julian`)
       const app = await fetch(`${served.address}/app.js`)
       expect(app.status).toBe(200)
       expect(await app.text()).toBe(await readFile(handed, 'utf8'))
