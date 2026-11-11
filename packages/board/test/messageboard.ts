@@ -520,6 +520,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     const thread = threads.get(message.threadId)!
     const channel = channels.find((c) => c.id === thread.channelId)!
     const rootLabels = thread.messages[0]?.labels ?? {}
+    const scheduled = change.type === 'message.posted' && (message as { schedule?: unknown }).schedule !== undefined
     const hasLabel = (labels: Record<string, string>, { key, values }: { key: string; values?: string[] }) =>
       Object.hasOwn(labels, key) && (values === undefined || values.includes(labels[key]!))
     const sees = (filter: Filter) =>
@@ -536,7 +537,9 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
     for (const registration of registrations.values())
       for (const [watcher, spec] of Object.entries(registration.watch)) {
-        if ((change.actor as Actor).id !== `${registration.owner}+${watcher.toLowerCase()}` && sees(spec.filter)) {
+        // A watcher's own writes never wake it, but for what a schedule of its own posted.
+        const own = (change.actor as Actor).id === `${registration.owner}+${watcher.toLowerCase()}`
+        if ((!own || scheduled) && sees(spec.filter)) {
           queue(registration.owner, watcher)
         }
       }

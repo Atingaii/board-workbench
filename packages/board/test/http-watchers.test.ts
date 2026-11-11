@@ -8,6 +8,7 @@ import { canonicalWatchers } from '../src/server/watchers-hash.ts'
 import { slack } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import { fakePlatform } from './sync-fixtures.ts'
+import { fakeQueue } from './queue.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
@@ -30,8 +31,8 @@ const grant = async (on: ReturnType<typeof testBoard>, projectId: string, can: C
  * The team's board on a2(), and v0's board on http() using it, in-process. v0 may do what `can`
  * says there, until a test changes it, and marketing everything.
  */
-async function team(watch: Record<string, Watcher> = {}, can: Can = 'all') {
-  const remote = testBoard()
+async function team(watch: Record<string, Watcher> = {}, can: Can = 'all', kept: Parameters<typeof testBoard>[0] = {}) {
+  const remote = testBoard(kept)
   /** Each feed read v0's board made of the team's board. */
   const reads: string[] = []
   const route = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -122,6 +123,42 @@ describe('watchers on a board on http()', () => {
       await new Promise((resolve) => setTimeout(resolve, 100))
       expect(echo.seen.map((event) => event.message?.text)).toEqual(['hello'])
     } finally {
+      t.backend.close()
+    }
+  })
+
+  it('runs on the check-in it scheduled itself', async () => {
+    const queue = fakeQueue()
+    const ci = recorder('feedback', async ({ event, board }) => {
+      if (event.type !== 'message.posted') return
+      if (!event.message!.schedule) return void (await board.schedule({ re: event.message!.id }, { text: 'check on CI', in: '5m' }))
+      await board.react(event.message!.id, 'eyes')
+      await board.reply(event.message!.id, 'still red')
+    })
+    const t = await team({ ci: ci.watcher }, 'all', { scheduler: queue.scheduler })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      await t.started()
+      const julian = await julianOn(t.remote.fetch)
+      const root = (await julian('POST', '/messages', { channel: 'feedback', text: 'the build is red' })).body.message
+      const scheduled = async () => (await julian('GET', `/schedules?re=${root.id}`)).body.schedules as unknown[]
+      while ((await scheduled()).length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
+      vi.setSystemTime(Date.now() + 5 * 60_000)
+      await queue.fire()
+      const replies = async () => (await julian('GET', `/messages/${root.id}`)).body.replies as { text: string; by: { actor: string } }[]
+      while ((await replies()).length < 2) await new Promise((resolve) => setTimeout(resolve, 5))
+      expect((await replies()).map((reply) => [reply.text, reply.by.actor])).toEqual([
+        ['check on CI', `${V0}+ci`],
+        ['still red', `${V0}+ci`],
+      ])
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      // It ran on its check-in, and on nothing it then wrote: not its reaction to the check-in, nor its reply.
+      expect(ci.seen.map((event) => [event.type, event.message?.text])).toEqual([
+        ['message.posted', 'the build is red'],
+        ['message.posted', 'check on CI'],
+      ])
+    } finally {
+      vi.useRealTimers()
       t.backend.close()
     }
   })

@@ -141,6 +141,10 @@ watcher.
   own.
 - **A watcher's own writes never wake it.** Writes by other watchers do, so two
   watchers that answer each other loop.
+- **But a message it scheduled does.** Scheduling one is how a watcher asks to
+  be woken later ("check on CI in 5 minutes"), so each send wakes it like
+  anyone's post. What it then writes on that message (a reaction, an edit, a
+  label) doesn't.
 - **Scheduled messages post as the person who scheduled them.** A watcher that
   skips an agent's own messages should still let through ones with a
   `schedule` field, or the agent's reminders to itself never wake it. See
@@ -229,8 +233,10 @@ matches the tails, and the route at the top of this page runs `run`:
   pull that finds nothing.
 - **It sees what its deployment may read** on the team's board.
 - **Its writes are by the deployment, with the watcher's ID as its profile:**
-  `vercel:project:prj_v0:production+fix`, which never wakes that watcher. IDs
-  are profile names, so they start with a letter and use up to 32 letters,
+  `vercel:project:prj_v0:production+fix`, which never wakes that watcher but
+  for its scheduled sends. A handle with that profile, `team.as('fix')`, is
+  the same actor, so its writes don't wake `fix` either: give an agent a
+  profile no watcher is named for. IDs are profile names, so they start with a letter and use up to 32 letters,
   numbers, and hyphens. Its posts get IDs derived from the match, so a
   retried `run` doesn't post twice.
 
