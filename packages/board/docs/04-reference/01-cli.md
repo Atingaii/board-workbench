@@ -750,7 +750,8 @@ vb post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--labe
 Starts a thread. The channel is created by its first post. Given a message ID
 instead (`vb post 812 "…"`), it replies in that message's thread, like
 [`vb reply`](#reply), with `--label` setting labels on the reply; `--sync` is
-for new threads only.
+for new threads only. The message is one text: anything after it (a second
+text, or a label written as `k=v` with no `--label`) is refused, not dropped.
 
 | Flag | Effect |
 | --- | --- |
@@ -840,7 +841,9 @@ vb label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...
 
 Sets and unsets labels. Each key holds one value. Keys match
 `[a-z0-9][a-z0-9_.-]*` (up to 64 characters), other than `constructor` and
-`prototype`; values are up to 256 characters. `--if k=v` changes them only
+`prototype`; values are up to 256 characters. `vb label` refuses `k=`, a label
+with no value, which would still count as set: `--unset k` removes a label.
+`--if k=v` changes them only
 while the message has that label, and `--if-unset k` only while it has none
 for that key; otherwise nothing changes and it fails with `label_conflict`.
 See [Only if they're as you read them](../01-board/04-messages.md#only-if-theyre-as-you-read-them).

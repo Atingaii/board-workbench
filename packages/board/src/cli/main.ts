@@ -363,14 +363,41 @@ function ifRevision(): { revision?: number } {
   return { revision: Number(given) }
 }
 
-function labelPairs(values: string[] | undefined, wrong = "Labels look like key=value, and {value} isn't one."): Record<string, string> {
+function labelPairs(
+  values: string[] | undefined,
+  wrong = "Labels look like key=value, and {value} isn't one.",
+  /** What to say of `key=`, a label with no value, where one can't be meant: none lets it through, as `--if key=` matches a label that has none. */
+  empty: string | null = '{value} has no value: a label needs one.',
+): Record<string, string> {
   const pairs: Record<string, string> = {}
   for (const value of values ?? []) {
     const at = value.indexOf('=')
     if (at <= 0) throw usage(wrong.replace('{value}', value))
+    // `owner=` would set a label with no value, which still counts as set.
+    if (at === value.length - 1 && empty !== null) throw usage(empty.replace('{value}', value).replace('{key}', value.slice(0, at)))
     pairs[value.slice(0, at)] = value.slice(at + 1)
   }
   return pairs
+}
+
+/**
+ * A post or reply takes one text. What follows it was meant to be part of the message, or a label,
+ * and would be dropped without a word: say so, and how each is written.
+ */
+function oneText(command: string, target: string, extra: string[]) {
+  if (flags.text !== undefined)
+    throw usage(`--text is a filter for read, tail, and wait. ${command} takes its text as an argument, in quotes.`)
+  const [first] = extra
+  if (first === undefined) return
+  if (/^[\w.-]+=/.test(first))
+    throw usage(`${first} looks like a label, and ${command} takes labels with --label.`, {
+      next: [{ instruction: 'Label it as you post it', argv: [...cli(), command, target, '<TEXT>', '--label', first] }],
+    })
+  throw usage(
+    first === '-'
+      ? `${command} takes one text, and - (stdin) is a second. For a long message, pass - alone as the text: it has no title.`
+      : `${command} takes one text, and ${first.length > 40 ? `${first.slice(0, 40)}…` : first} is one too many. Quote the whole message as one argument: it has no title.`,
+  )
 }
 
 /**
@@ -380,7 +407,7 @@ function labelPairs(values: string[] | undefined, wrong = "Labels look like key=
 async function text(value: string | undefined, { optional = false } = {}): Promise<string> {
   const file = flags['text-file']
   if (file !== undefined) {
-    if (value !== undefined) throw usage("Can't use --text-file with text: pass one or the other.")
+    if (value !== undefined) throw usage("Can't use --text-file with text: a message has no title, so its whole text comes from one or the other.")
     if (file === '-') return (await io.stdin()).replace(/\n$/, '')
     const data = await io.readFile(file).catch((error: unknown) => {
       // A file too big to attach is far too long for a message: say it of the text, not of --attach.
@@ -404,6 +431,12 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
   const files: { path: string; data: Uint8Array }[] = []
   for (const path of flags.attach ?? []) {
     const data = await io.readFile(path)
+    // `--attach -` is someone piping the message's text: stdin is the text's, as `-` or `--text-file -`.
+    if (!data && path === '-')
+      throw usage("Can't attach -: stdin is for the message's text. Pass - as the text to read it from stdin.", {
+        reason: 'file_not_found',
+        next: [{ instruction: 'Post text from stdin', argv: [...cli(), current.command ?? 'post', '<channel|id>', '-'] }],
+      })
     if (!data) throw usage(`Can't attach ${path}. There's no such file.`, { reason: 'file_not_found', next: [] })
     if (data.byteLength > DIRECT_UPLOAD_BYTES_MAX) throw tooLarge(path)
     files.push({ path, data })
@@ -1093,6 +1126,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'post': {
       const [target, body] = args
       if (!target) throw usage('Missing the channel or message to post to.', { reason: 'missing_arguments' })
+      oneText('post', target, args.slice(2))
       const re = isMessageRef(target) ? messageId(target) : undefined
       if (re !== undefined && flags.sync?.length)
         throw usage("Can't use --sync on a reply. It syncs whole threads.", {
@@ -1120,6 +1154,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'reply': {
       const id = messageId(args[0])
+      oneText('reply', args[0]!, args.slice(2))
       const board = client()
       const said = await content(args[1], { optional: !!flags.attach?.length })
       const files = await attachments(board)
@@ -1354,12 +1389,12 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'label': {
       const id = messageId(args[0])
-      const set = labelPairs(args.slice(1))
+      const set = labelPairs(args.slice(1), undefined, '{value} has no value. To remove the label, --unset {key}.')
       const unset = flags.unset ?? []
       if (Object.keys(set).length === 0 && unset.length === 0)
         throw usage('Missing the labels: k=v to set one, --unset k to remove one.', { reason: 'missing_arguments' })
       // What the labels must be now: --if k=v has the value, --if-unset k has none.
-      const expected: Record<string, string | null> = labelPairs(flags.if, "--if takes key=value, and {value} isn't one. For a label that mustn't be set, --if-unset key.")
+      const expected: Record<string, string | null> = labelPairs(flags.if, "--if takes key=value, and {value} isn't one. For a label that mustn't be set, --if-unset key.", null)
       for (const key of flags['if-unset'] ?? []) {
         if (Object.hasOwn(expected, key)) throw usage(`Can't use --if ${key}=… with --if-unset ${key}.`)
         expected[key] = null
