@@ -1,10 +1,8 @@
-import { compileAccess, parseCan, PERMISSIONS, canText, type Access, type Level, type Permission } from './access.ts'
+import { compileAccess, parseCan, PERMISSIONS, type Access, type Level, type Permission } from './access.ts'
 import { explainGrants } from './grants.ts'
 import { resolveActor } from './actors.ts'
 import {
-  BOARD_TOKEN_PREFIX,
   createAuthority,
-  tokenHash,
   fromTokens,
   GITHUB_ISSUER,
   grantIssuers,
@@ -15,10 +13,8 @@ import {
   type Authenticate,
   type AuthenticateContext,
   type CallerRequest,
-  type Claims,
   type HostPrincipal,
   type Known,
-  type Pinned,
   type Principal,
   type StoredGrant,
 } from './auth.ts'
@@ -111,13 +107,6 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
     if (issuers.join('\n') !== context.issuers.join('\n')) context.issuers = issuers
   }
 
-  /** Who a board token is: the principal that minted it, narrowed, until it's revoked or expires. */
-  async function tokenPrincipal(secret: string): Promise<Principal> {
-    if (!trust) throw unauthorized("this board issues no tokens: send a board token to the board that minted it")
-    const found = await trust.token(await tokenHash(secret))
-    if (!found || found.expiresAt.getTime() <= Date.now()) throw unauthorized("invalid token: revoked, expired, or not this board's")
-    return { ...found.minter, expiresAt: found.expiresAt, token: found.id, pinned: found.pinned }
-  }
   /** Verified principals by credential, until they expire, so a stream's polls don't verify from scratch. */
   const verified = new Map<string, { principal: Promise<Principal>; until: number }>()
   /** And by request, for one with no credential (a session cookie), for as long as it's served. */
@@ -143,8 +132,7 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
       principal.then(
         (found) => {
           // A host's principals may lose access any time, so only a token's are kept: until it expires.
-          // A board token is revoked any time, so it's looked up again on every request.
-          if (found.facts?.issuer === 'host' || found.expiresAt === null || found.token !== undefined) return
+          if (found.facts?.issuer === 'host' || found.expiresAt === null) return
           if (verified.size >= 1000) verified.delete(verified.keys().next().value!)
           verified.set(key, { principal, until: found.expiresAt.getTime() })
         },
@@ -154,8 +142,6 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
   }
 
   async function verify(request: CallerRequest): Promise<Principal> {
-    // The board's own tokens are its to check, whatever verifies the rest.
-    if (request.credential?.startsWith(BOARD_TOKEN_PREFIX)) return tokenPrincipal(request.credential)
     if (request.credential !== null) await learnIssuers(request.credential)
     const authenticate = await verifier()
     let result: Awaited<ReturnType<Authenticate>>
@@ -206,30 +192,17 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
      */
     async identify(request: CallerRequest): Promise<Identity> {
       const found = await principalOf(request)
-      const claims = found.pinned ? pinnedClaims(found.pinned, request.claims) : request.claims
-      // A token's own scope and the request's both narrow: neither widens the other.
-      const scope = found.scope === undefined ? (claims.scope ?? undefined) : claims.scope === null ? found.scope : canText(compileAccess(parseCan(found.scope)).narrow(parseCan(claims.scope)))
-      const principal = scope === undefined ? found : { ...found, scope }
-      const { author, actor } = resolveActor(principal, claims, request.audience)
+      const { claims } = request
+      const principal = claims.scope === null ? found : { ...found, scope: claims.scope }
+      const { author, actor } = resolveActor(principal, claims)
       return { principal: { ...principal, access: await authority.grant(principal) }, author, actor }
     },
     explain,
-    /** What a stored principal (a schedule's creator, a watcher's registrant) may do now: null once nothing, its board token's revoking included. */
+    /** What a stored principal (a schedule's creator, a watcher's registrant) may do now: null once nothing, or once it was made with a board token. */
     async accessNow(principal: Known, grants?: readonly StoredGrant[]): Promise<Access | null> {
-      if (principal.token !== undefined && !(await trust?.live(principal.token))) return null
+      if (principal.token !== undefined) return null
       return authority.accessNow(principal, grants)
     },
-  }
-}
-
-/** A board token's pins, over what the request says: its profile and session win, and a person's name is the minter's. */
-function pinnedClaims(pinned: Pinned, claims: Claims): Claims {
-  return {
-    ...claims,
-    ...(pinned.profile !== null ? { profile: pinned.profile, avatar: pinned.avatar } : {}),
-    ...(pinned.session !== null ? { session: pinned.session } : {}),
-    handle: pinned.handle,
-    name: pinned.name,
   }
 }
 

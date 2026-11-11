@@ -52,7 +52,7 @@ const CSP = [
  * 127.0.0.1. Because the proxy acts as you, it answers only its own page: every
  * request must name this server's host (no DNS rebinding) and carry the per-run
  * token that only the page has, and writes must also come from its origin. Your
- * board token never leaves this process.
+ * credential for the board never leaves this process.
  */
 export async function startInspector(options: { client: BoardClient; port?: number; page?: string }): Promise<Inspector> {
   const { client } = options

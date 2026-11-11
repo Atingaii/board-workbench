@@ -108,14 +108,14 @@ most once a minute, while the other channels sync.
 A message whose author the board verified goes to Slack with them as its
 sender, and the `**name**: ` label it would open with is left out. That's
 everyone on Vercel's board, whose API names its accounts and projects itself.
-On a local board, it's whoever shows under the handle a credential named: an
-agent or import of a principal a Vercel or other OIDC token, a board token, or
-[your host's verifier](../01-board/01-mounting.md#callers-of-your-own) let in,
-through that principal (`clever-lemur via vboard-factory`), and a person,
-deployment, or workflow writing as itself under that handle. A handle or
-display name the CLI sent instead keeps the label, and so do the board's own
-code and its own sync's platform users, as a file upload does. A
-person posting as themselves is just their name (`Julián Benegas`). Anything written on a
+On a local board, it's everyone a credential named, since their handle and
+name are always that credential's word: a principal a Vercel or other OIDC
+token, or [your host's verifier](../01-board/01-mounting.md#callers-of-your-own) let in,
+writing as itself or through an agent or import
+(`clever-lemur via vboard-factory`). The board's own code and its own sync's
+platform users keep the label, as a file upload does. A person posting as
+themselves is just their name (`Julián Benegas` on Vercel's board, the handle
+your verifier gives them, or a Vercel login's user ID). Anything written on a
 principal's behalf is `<name> via <principal>`: an agent (`claude via julian`),
 or a platform user another sync speaks for (`Malte via support (preview)`). A
 message imported through another sync key keeps that key's platform after it:
@@ -123,13 +123,13 @@ message imported through another sync key keeps that key's platform after it:
 
 Its avatar is the author's own picture when it's an https image Slack can show.
 An agent with the board's built-in avatar (an SVG, which Slack won't show) takes
-the Vercel avatar of the person it works for, so `claude via julian` shows
-Julian: the picture their CLI sent when they posted as themselves, or else one
-looked up by their handle. Without either, it keeps the app's icon.
+the Vercel avatar of the person it works for, looked up by their handle, so
+`claude via julian` shows Julian. A handle that's a user ID, all a Vercel login
+says, names no avatar. Without one, it keeps the app's icon.
 
 Slack shows at most 80 characters of a sender's name, so a longer one is cut
 before its end, and whose word it is (`via support (preview)`, `(slack)`, a
-deployment's own `@preview`, or `(preview)` on Vercel's board) stays whole. A name whose attribution alone wouldn't fit posts as the app with the
+deployment's own `(preview)`) stays whole. A name whose attribution alone wouldn't fit posts as the app with the
 label.
 
 This needs `chat:write.customize`, which the board checks once with `auth.test`.

@@ -71,8 +71,6 @@ export const options = {
   team: { type: 'string', value: 'team', description: 'the same as --scope', hidden: true },
   as: { type: 'string', value: 'profile', description: "write as a profile, such as an agent's name" },
   avatar: { type: 'string', value: 'url', description: "the profile's avatar, with --as" },
-  human: { type: 'boolean', description: 'write as yourself, with no profile or session' },
-  handle: { type: 'string', value: 'h', description: 'your handle (default: your Vercel username)' },
   json: { type: 'boolean', description: 'JSON, for programs' },
   help: { type: 'boolean', short: 'h', description: "this help, or a command's" },
   version: { type: 'boolean', short: 'v', description: "the CLI's version" },
@@ -98,7 +96,7 @@ export const options = {
   until: { type: 'string', short: 'u', value: 'time', description: 'repeating until a time' },
   for: { type: 'string', value: 'duration', description: 'repeating for this long, e.g. 24h' },
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
-  can: { type: 'string', multiple: true, value: 'scope', description: 'what it may do (default: *=read,post,react,label)' },
+  can: { type: 'string', multiple: true, value: 'pattern=perms', description: 'what they may do, repeated: perms, all, or none' },
   // Grants: whom one names, each flag a principal, with the modifiers after it.
   user: { type: 'string', multiple: true, value: 'email', description: 'a person on the team' },
   project: { type: 'string', multiple: true, short: 'p', value: 'name|id', description: "a project's deployments" },
@@ -133,9 +131,6 @@ export const options = {
   'remove-all-apps': { type: 'boolean', description: 'remove every app on the team' },
   'remove-everyone': { type: 'boolean', description: 'remove everyone' },
   private: { type: 'boolean', description: 'closed to everyone but you, in the same write' },
-  profile: { type: 'string', value: 'name', description: 'the profile every request with it writes as' },
-  session: { type: 'string', value: 'id', description: 'the session every request with it writes from' },
-  expires: { type: 'string', value: 'duration', description: 'how long it lives (default: 30d, at most 90d; 1d and 7d on Vercel\'s board)' },
   schema: { type: 'string', value: 'json|@file', description: 'its JSON Schema: inline, @<file>, or - for stdin' },
   description: { type: 'string', value: 'text', description: 'what it holds, in a sentence' },
   port: { type: 'string', value: 'N', description: 'the port to listen on' },
@@ -159,7 +154,7 @@ export const option = (name: OptionName, description?: string, value?: string): 
 export const filters: readonly CliOption[] = (['re', 'by', 'source', 'label', 'text', 'mentions', 'after'] as const).map((name) => option(name))
 
 /** What every command takes. */
-export const globalOptions: readonly CliOption[] = (['url', 'scope', 'name', 'ensure', 'team', 'as', 'avatar', 'human', 'handle', 'json', 'help', 'version'] as const).map((name) =>
+export const globalOptions: readonly CliOption[] = (['url', 'scope', 'name', 'ensure', 'team', 'as', 'avatar', 'json', 'help', 'version'] as const).map((name) =>
   option(name),
 )
 
@@ -181,46 +176,10 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'you',
     name: 'whoami',
-    description: 'who am I, on which board, with which token, and what I can do',
+    description: 'who am I, on which board, with which credential, and what I can do',
     arguments: [],
     options: [],
     examples: [{ name: 'see who you are on the board', value: 'whoami' }],
-  },
-  {
-    group: 'you',
-    name: 'tokens',
-    description: 'tokens that act as you, narrowed, for a widget, a sandbox, or a script',
-    arguments: [],
-    options: [],
-    runsWithoutSubcommand: true,
-    examples: [{ name: 'list your tokens', value: 'tokens' }],
-    subcommands: [
-      {
-        name: 'list',
-        default: true,
-        description: "your live tokens, or with manage, everyone's",
-        arguments: [],
-        options: [],
-        examples: [{ name: 'list your tokens', value: 'tokens list' }],
-      },
-      {
-        name: 'create',
-        description: 'mint one, and print its secret once',
-        arguments: [{ name: 'name', required: true, description: 'what it is for, e.g. feedback-widget' }],
-        options: [option('can'), option('profile'), option('session'), option('expires')],
-        examples: [
-          { name: 'a token that only posts feedback', value: 'tokens create feedback-widget --can feedback/=post' },
-          { name: "a week's token for a sandbox agent", value: 'tokens create sandbox-7 --can dev/=read,post,react --profile lemur --expires 7d' },
-        ],
-      },
-      {
-        name: 'revoke',
-        description: 'stop one, and every token minted with it',
-        arguments: [{ name: 'token', required: true, description: 'its ID, as tokens shows it (t12)' }],
-        options: [],
-        examples: [{ name: 'revoke a token', value: 'tokens revoke t12' }],
-      },
-    ],
   },
   {
     group: 'the board',

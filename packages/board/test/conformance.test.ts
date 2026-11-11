@@ -30,10 +30,6 @@ const clientOf = async (fetch: Fetch) => clientAs(fetch, () => personToken())
 const clientAs = async (fetch: Fetch, token: () => Promise<string>) =>
   board({ backend: http(BOARD_URL, { fetch: bearer((input, init) => fetch(new Request(input, init)), token) }) }).as(null)
 
-/** A handle on the board behind `fetch`, with a board token's secret, as `vb conformance` opens one. */
-const withToken = (fetch: Fetch) => (secret: string) =>
-  board({ backend: http(BOARD_URL, { fetch: bearer((input, init) => fetch(new Request(input, init)), async () => secret) }) }).as(null)
-
 /** The same handle as `token` gives, narrowed with `x-board-can`, as `vb conformance` opens one. */
 const withCan =
   (fetch: Fetch, token: () => Promise<string> = () => personToken()) =>
@@ -47,6 +43,29 @@ const withCan =
         }, token),
       }),
     }).as(null)
+
+/** The same handle as `token` gives, with `headers` on every request, as `vb conformance` opens one. */
+const withHeaders =
+  (fetch: Fetch, token: () => Promise<string> = () => personToken()) =>
+  (headers: Record<string, string>) =>
+    board({
+      backend: http(BOARD_URL, {
+        fetch: bearer((input, init) => {
+          const request = new Request(input, init)
+          for (const [name, value] of Object.entries(headers)) request.headers.set(name, value)
+          return fetch(request)
+        }, token),
+      }),
+    }).as(null)
+
+/** The checks of who writes that send headers of their own, which a run that can't send them skips. */
+const HEADERS = [
+  'takes a profile and its avatar as one x-board-profile header, and shows both on what it writes',
+  'lets a profile change only its own messages, and its principal all of them',
+  "ignores x-board-avatar, which x-board-profile's avatar parameter replaced",
+  'ignores x-board-session: who writes is the principal and its profile',
+]
+const NO_HEADERS = "this run can't call the board with headers of its own"
 
 /** The checks of a caller narrowed with x-board-can, which a run that can't send the header skips. */
 const NARROWED = [
@@ -65,9 +84,12 @@ const CROSS_TEAM = ['lets a project on another team in, in its environments', "g
 const LOCKED_OUT = ['lets a member grant on a pattern after a lock under it', "a run can't be shut out by a lock and lift it afterwards: the board's own tests check it"]
 const skipped = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.status !== 'passed').map((check) => [check.name, check.detail])
 
-/** The tokens check that calls the board with a token's secret. */
-const tokenUse = (report: Awaited<ReturnType<typeof conformance>>) =>
-  report.checks.find((check) => check.group === 'tokens' && check.name.startsWith('lets a token do what its can says'))
+/** The grants checks of a caller narrowed with x-board-can, which a run that can't send the header skips too. */
+const GRANTS_NARROWED = [
+  'takes manage at each pattern a grant names to change it, and at * to list them',
+  "lets no caller narrowed with x-board-can grant past its can, even where everyone's grant closes it",
+  'lets no caller narrowed with x-board-can let anyone in where everyone gets more than it has',
+]
 
 /** A board in front of `fetch` that rewrites what it answers, or what it's asked. */
 function broken(fetch: Fetch, change: { request?: (url: URL) => void; body?: (text: string) => string }): Fetch {
@@ -130,40 +152,62 @@ describe('the conformance kit', () => {
   it('passes a board on a2(), checking the whole protocol, and deletes what it posted', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const client = await clientOf(board.fetch)
-    const report = await conformance(client, { withToken: withToken(board.fetch), withCan: withCan(board.fetch) })
+    const report = await conformance(client, { withHeaders: withHeaders(board.fetch) })
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
-    expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => check.status)).toEqual(['passed', 'passed', 'passed', 'passed'])
+    // withHeaders stands in for withCan, so the narrowing checks run too.
+    expect(report.checks.filter((check) => [...NARROWED, ...GRANTS_NARROWED].includes(check.name)).map((check) => check.status)).toEqual(Array(7).fill('passed'))
+    expect(report.checks.filter((check) => [...HEADERS, 'shows no session on a message, its event, or you'].includes(check.name)).map((check) => check.status)).toEqual(Array(5).fill('passed'))
     expect(skipped(report)).toEqual([NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM])
-    expect(tokenUse(report)?.status).toBe('passed')
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'tokens', 'schemas', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
   })
 
   it("passes through a board's own handle, in-process", async () => {
     const team = testBoard({ scheduler: fakeQueue().scheduler })
-    const report = await conformance(team, { withToken: withToken(team.fetch) })
+    const report = await conformance(team)
     // The board's own code needs no grant to keep it in what it closes, and no proxy narrows it.
-    expect(skipped(report)).toEqual([[NARROWED[0], NO_CAN], NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM, [NARROWED[1], NO_CAN], [NARROWED[2], NO_CAN], [NARROWED[3], NO_CAN]])
+    expect(skipped(report)).toEqual([
+      [NARROWED[0], NO_CAN],
+      ...HEADERS.map((name) => [name, NO_HEADERS]),
+      NO_ROLES,
+      NO_APPS,
+      ...GRANTS_NARROWED.map((name) => [name, NO_CAN]),
+      LOCKED_OUT,
+      CROSS_TEAM,
+      [NARROWED[1], NO_CAN],
+      [NARROWED[2], NO_CAN],
+      [NARROWED[3], NO_CAN],
+    ])
     expect((await team.me()).actor).toBe('board:client')
   })
 
-  it("fails a board whose tokens do more than their can says, and skips the check where it can't call the board with one", async () => {
+  it("fails a board that lets a profile change another profile's messages, or keeps its principal from changing them", async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
-    // A board that takes a token for whoever minted it, unnarrowed.
-    const person = await personToken()
-    const unnarrowed: Fetch = (request) => {
-      if (!request.headers.get('authorization')?.startsWith('Bearer board_')) return board.fetch(request)
+    const owns = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name === HEADERS[1])
+    // A board that takes an edit or a delete as the principal's, whatever profile sent it.
+    const principalOnly: Fetch = (request) => {
+      if (request.method !== 'POST' || !/\/messages\/[^/]+\/(edit|delete)$/.test(new URL(request.url).pathname)) return board.fetch(request)
       const headers = new Headers(request.headers)
-      headers.set('authorization', `Bearer ${person}`)
+      headers.delete('x-board-profile')
       return board.fetch(new Request(request, { headers }))
     }
-    const report = await conformance(await clientOf(board.fetch), { withToken: withToken(unnarrowed) })
-    expect(tokenUse(report)).toMatchObject({ status: 'failed', detail: 'what a token that may only read says it may do: expected {"conformance":["read"]}, got {"*":["read","post","react","label","sync","manage"]}' })
-    expect(tokenUse(await conformance(await clientOf(board.fetch)))).toMatchObject({ status: 'skipped', detail: "this run can't call the board with a token's secret" })
+    expect(owns(await conformance(await clientOf(board.fetch), { withHeaders: withHeaders(principalOnly) }))).toMatchObject({
+      status: 'failed',
+      detail: "an edit, by a profile, of another profile's message: expected 403, and it succeeded",
+    })
+    // And one that holds the principal itself to what it wrote as no profile.
+    const strict: Fetch = async (request) => {
+      const path = new URL(request.url).pathname
+      if (request.method !== 'POST' || !/\/messages\/[^/]+\/(edit|delete)$/.test(path) || request.headers.has('x-board-profile')) return board.fetch(request)
+      const read = await board.fetch(new Request(`${BOARD_URL}/messages/${path.split('/').at(-2)}`, { headers: request.headers }))
+      if ((await read.json()).message.by.profile === null) return board.fetch(request)
+      return Response.json({ error: { code: 'forbidden', message: 'only the author can edit a message' } }, { status: 403 })
+    }
+    expect(owns(await conformance(await clientOf(strict), { withHeaders: withHeaders(board.fetch) }))).toMatchObject({ status: 'failed', detail: expect.stringContaining('only the author can edit a message') })
   })
 
   it('fails a board that says it made a schema version that was there, or takes another definition for one', async () => {
@@ -273,10 +317,36 @@ describe('the conformance kit', () => {
     expect((await preview('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', branch: 'jb/watchers', watch: {} }])
   })
 
+  it("fails a board that reads who writes as boards did before: a profile's name alone, an avatar from x-board-avatar, and a session on each by", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const older: Fetch = async (request) => {
+      const headers = new Headers(request.headers)
+      // The name alone, with the avatar x-board-avatar names, and the session it kept.
+      const name = headers.get('x-board-profile')?.split(';')[0]!.trim()
+      const avatar = headers.get('x-board-avatar')
+      if (name) headers.set('x-board-profile', avatar ? `${name};avatar="${avatar}"` : name)
+      headers.delete('x-board-avatar')
+      const session = headers.get('x-board-session')
+      headers.delete('x-board-session')
+      const response = await board.fetch(new Request(request, { headers }))
+      if (!response.headers.get('content-type')?.includes('application/json')) return response
+      return new Response((await response.text()).replaceAll('"profile":', `"session":${JSON.stringify(session)},"profile":`), { status: response.status, headers: response.headers })
+    }
+    const report = await conformance(await clientOf(older), { withHeaders: withHeaders(older) })
+    expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.name, check.detail])).toEqual([
+      [HEADERS[0], `the profile's avatar, from its header's parameter: expected "https://example.com/conformance.png", got null`],
+      [HEADERS[2], `the avatar of a profile whose header names none, whatever x-board-avatar says: expected null, got "https://example.com/conformance.png"`],
+      [HEADERS[3], expect.stringMatching(/^a post with x-board-session should carry no session, got \{.*"session":/)],
+      ['shows no session on a message, its event, or you', expect.stringMatching(/^a message should carry no session, got \{.*"session":/)],
+    ])
+    const { messages } = await board.messages({ channel: 'conformance', limit: 500 })
+    expect(messages.filter((message) => !message.deleted)).toEqual([])
+  })
+
   it('reports schedules and files as not kept here on a board without a scheduler or a blob store', async () => {
     // A board on a2() with only its store answers 501 for each, and the kit reads that.
     const bare = testBoard({ blob: undefined })
-    const report = await conformance(await clientOf(bare.fetch), { withToken: withToken(bare.fetch), withCan: withCan(bare.fetch) })
+    const report = await conformance(await clientOf(bare.fetch), { withHeaders: withHeaders(bare.fetch) })
     expect(report.ok).toBe(true)
     expect(report.checks.filter((check) => check.status !== 'passed').map((check) => [check.group, check.status, check.detail])).toEqual([
       ['schedules', 'skipped', "not kept here: this board has no scheduler, so it can't send later"],
@@ -307,12 +377,12 @@ describe('the conformance kit', () => {
   it('makes every grant inside conformance/grants/, and no channel but the one it posts in', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const patterns: string[] = []
-    // Every grant write it sends, by itself or by a token it minted, refused or not.
+    // Every grant write it sends, by itself or narrowed with x-board-can, refused or not.
     const recording = (fetch: Fetch): Fetch => async (request) => {
       if (/\/grants(\/[^/]+)?$/.test(new URL(request.url).pathname) && ['POST', 'PATCH'].includes(request.method)) patterns.push(...Object.keys((await request.clone().json()).can ?? {}))
       return fetch(request)
     }
-    const report = await conformance(await clientOf(recording(board.fetch)), { withToken: withToken(recording(board.fetch)) })
+    const report = await conformance(await clientOf(recording(board.fetch)), { withCan: withCan(recording(board.fetch)) })
     expect(report.ok).toBe(true)
     expect(patterns.length).toBeGreaterThan(20)
     expect(patterns.filter((pattern) => !pattern.startsWith('conformance/grants/'))).toEqual([])
@@ -330,37 +400,31 @@ describe('the conformance kit', () => {
     await expect(conformance(asRun, { principals: { repository: 'acme/web' } })).rejects.toThrow("principals.repository is this run's own repository, acme/web")
   })
 
-  it("fails a board that lets a token grant past its can, and still revokes what that board made", async () => {
+  it('fails a board that lets a caller narrowed with x-board-can grant past its can, and still revokes what that board made', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
-    // A board that takes a token for whoever minted it, unnarrowed.
-    const person = await personToken()
-    const unnarrowed: Fetch = (request) => {
-      if (!request.headers.get('authorization')?.startsWith('Bearer board_')) return board.fetch(request)
+    // A board that answers as if no proxy narrowed the caller.
+    const ignoring: Fetch = (request) => {
       const headers = new Headers(request.headers)
-      headers.set('authorization', `Bearer ${person}`)
+      headers.delete('x-board-can')
       return board.fetch(new Request(request, { headers }))
     }
-    const report = await conformance(await clientOf(board.fetch), { withToken: withToken(unnarrowed) })
-    const find = (start: string) => report.checks.find((check) => check.name.startsWith(start))
-    expect(find('lets no token grant past its own can')).toMatchObject({ status: 'failed', detail: 'a grant on conformance/grants/ from a token kept out of conformance/grants/secret/: expected 403, and it made the grant' })
-    expect(find('lets no token let anyone in')).toMatchObject({ status: 'failed', detail: 'a grant from a token kept out of conformance/grants/open/, which everyone reads: expected 403, and it made the grant' })
+    const report = await conformance(await clientOf(board.fetch), { withCan: withCan(ignoring) })
+    const find = (name: string) => report.checks.find((check) => check.name === name)
+    expect(find(GRANTS_NARROWED[1]!)).toMatchObject({ status: 'failed', detail: 'a grant on conformance/grants/ from a caller narrowed out of conformance/grants/secret/: expected 403, and it made the grant' })
+    expect(find(GRANTS_NARROWED[2]!)).toMatchObject({ status: 'failed', detail: 'a grant from a caller narrowed out of conformance/grants/open/, which everyone reads: expected 403, and it made the grant' })
     expect((await board.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
+    // And skips them where it can't send the header.
+    const without = await conformance(await clientOf(board.fetch))
+    expect(without.checks.filter((check) => GRANTS_NARROWED.includes(check.name)).map((check) => [check.status, check.detail])).toEqual(GRANTS_NARROWED.map(() => ['skipped', NO_CAN]))
   })
 
-  it("fails a check whose grants it can't revoke, and one whose token the board answers otherwise than minting none", async () => {
+  it("fails a check whose grants it can't revoke", async () => {
     const stuck = testBoard({ scheduler: fakeQueue().scheduler })
     const revokes = (status: number): Fetch => async (request) =>
       request.method === 'POST' && /\/grants\/[^/]+\/revoke$/.test(new URL(request.url).pathname) ? Response.json({ error: { code: 'error', message: 'down' } }, { status }) : stuck.fetch(request)
-    const report = await conformance(await clientOf(revokes(500)), { withToken: withToken(stuck.fetch) })
+    const report = await conformance(await clientOf(revokes(500)))
     expect(report.checks.find((check) => check.name === 'grants a principal, lists it, and revokes it')).toMatchObject({ status: 'failed', detail: expect.stringMatching(/couldn't revoke what it made: g\d+ \(/) })
-    const plain = testBoard({ scheduler: fakeQueue().scheduler })
-    const mints = (status: number): Fetch => async (request) =>
-      request.method === 'POST' && new URL(request.url).pathname.endsWith('/tokens') ? Response.json({ error: { code: 'error', message: 'down' } }, { status }) : plain.fetch(request)
-    const manage = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith('takes manage at each pattern'))
-    expect(manage(await conformance(await clientOf(mints(500)), { withToken: withToken(plain.fetch) }))).toMatchObject({ status: 'failed' })
-    for (const status of [403, 404, 501])
-      expect([status, manage(await conformance(await clientOf(mints(status)), { withToken: withToken(plain.fetch) }))]).toMatchObject([status, { status: 'skipped', detail: 'this board mints no tokens to check with: down' }])
-  }, 30_000)
+  })
 
   it('fails a board that lets a grant on * decide a subtree everyone is closed out of, or adds up grants across levels', async () => {
     const decides = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith('lets the most specific pattern decide'))

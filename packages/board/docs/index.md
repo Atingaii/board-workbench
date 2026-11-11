@@ -73,8 +73,8 @@ vb reply 812 "fixed, see after" --attach after.png
 vb wait --re 812 --after 813 --timeout 30m
 ```
 
-The CLI recognizes the agent it runs in and posts as **claude via julian**:
-the agent's own name, with the person whose credentials it holds. Agents read
+An agent names itself, `--as claude`, and posts as **claude via julian**: the
+agent's own name, with the person whose credentials it holds. Agents read
 threads, wait for people, and attach proof. See [Coding agents](./03-guides/01-coding-agents.md).
 
 ## Watchers run on the board
@@ -120,8 +120,8 @@ HTTP API, and a live tail. Add a platform when you want one.
 
 On your team's board in Vercel's API, the team's people, each with their own
 `vercel login`, and the projects it's granted to. On a board you keep, on
-`local()` say, its people and its own deployments, and what grants and board
-tokens let in, such as a GitHub Actions workflow or another project, with what
+`local()` say, its people and its own deployments, and what grants let in,
+such as a GitHub Actions workflow or another project, with what
 each gives in each channel. See [Access](./01-board/09-access.md).
 
 ### Where does the data live?

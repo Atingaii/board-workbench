@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { env, url, useBoard, vb } from './cli-harness.ts'
-import { localUserToken } from './tokens.ts'
+import { localUserToken, workflowToken } from './tokens.ts'
 
 useBoard()
 // As `vb serve`'s own user, the board's owner, whom no grant limits.
@@ -163,9 +163,9 @@ describe('cli grants', () => {
     expect(JSON.parse(await explain('--user', 'u_bob', 'security', '--json'))).toEqual({
       explanation: { channel: 'security', pattern: 'security/', over: ['*'], level: 'principal', grants: [expect.objectContaining({ id: people.id })], capped: null, can: ['read', 'post', 'react', 'label', 'sync', 'manage'] },
     })
-    // A token that can't list grants sees that one decides, not which.
-    const secret = (await vb(['tokens', 'create', 'reader', '--can', 'dev/=read'])).stdout.trim()
-    expect((await vb(['grants', 'explain', 'dev'], { BOARD_TOKEN: secret })).stdout).toBe("* wins. Closest grant for you: one you can't list: read.\n")
+    // A caller that can't list grants sees that one decides, not which.
+    await create('--github', 'acme/web', '--can', '*=read')
+    expect((await vb(['grants', 'explain', 'dev'], { BOARD_TOKEN: await workflowToken({}, url) })).stdout).toBe("* wins. Closest grant for you: one you can't list: read.\n")
 
     const refused = async (...args: string[]) => {
       const { code, stderr } = await vb(['grants', 'explain', ...args])
@@ -193,17 +193,4 @@ describe('cli grants', () => {
     expect((await vb(['channels', 'create', 'open-plan'])).stdout).toBe('created open-plan\n')
   }, 30_000)
 
-  it('takes none for no permissions on a token, and lists an empty pattern as none', async () => {
-    const minted = await vb(['tokens', 'create', 'no-security', '--can', '*=read', '--can', 'security/=none'])
-    expect(minted.code).toBe(0)
-    expect((await vb(['tokens'])).stdout).toMatch(/^t\d+ +no-security +\*=read;security\/=none +expires in 30d\n/m)
-    expect((await vb(['tokens', 'create', 'x', '--can', 'ci=read,none'])).stderr.split('\n')[0]).toBe('error: --can: none is no permissions, so it goes alone: ci=none.')
-  }, 30_000)
-
-  it("names --can, not the header, in a token's --can errors", async () => {
-    const refused = async (can: string) => (await vb(['tokens', 'create', 'x', '--can', can])).stderr.split('\n')[0]
-    expect(await refused('ci=write')).toBe('error: --can: unknown permission write: use read, post, react, label, sync, manage, all, or none.')
-    expect(await refused('ci')).toBe('error: --can entry ci needs =: write pattern=permissions, like dev/=read,post.')
-    expect(await refused('ci=read;ci=post')).toBe('error: --can lists ci twice.')
-  }, 30_000)
 })

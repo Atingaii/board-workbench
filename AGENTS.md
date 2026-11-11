@@ -228,12 +228,19 @@ thread rather than starting one.
   found at a turn's start, so it gets them then. The OIDC tokens die with the function's own,
   which Vercel reuses for 90 of its 120 minutes, and GitHub's are asked for with
   30m left, so a long turn renews them as it goes. The policy also pins who Eve
-  is on the board (a profile named for the thread, like `clever-lemur-1956`, and
-  session `thread-<id>`), so watchers can tell a thread's Eve from everyone else.
-  Anyone who can write can send those headers, so `byEve` also needs the
+  is on the board (a profile named for the thread, like `clever-lemur-1956`), so
+  watchers can tell a thread's Eve from everyone else by its actor. Anyone who
+  can write can send that header, so `byEve` also needs the
   factory's production deployment as the principal
   (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Eve's policy adds).
   Its `vb` talks to the production board, the only one a sandbox can reach.
+  The policy sends the profile as board's protocol has it now, one
+  `x-board-profile` with the avatar as a parameter, and the factory's route
+  reads it into the name and `x-board-avatar` that 0.32.0 reads (`profile.ts`),
+  so a newer `vb` with `--avatar` works on it too. The policy's board part
+  (`boardPolicy` in `harness.ts`) has the shape board's `sandboxPolicy()`
+  returns, merged with the other hosts as a caller merges that; it's replaced
+  by `sandboxPolicy()` once the factory runs a release that has it.
   Its `vb` tool (`agent/tools/vb.ts`) runs a vb command straight from the function, in one
   request, with `vb()` from `@vercel/board/cli`: what the CLI prints, `--attach` and `download` on
   the sandbox's files. It sends the headers the policy adds (`eveHeaders`), so Eve is the same author
@@ -488,7 +495,7 @@ methods, and nothing reaches around them. The policy is `board()`'s, in one
 place on every backend: it routes and validates each request, verifies its
 caller (`authenticate`, `oidcTokens()` from `@vercel/board/access` by default),
 works out what it may do (its people and its own deployments everything,
-anyone else what the board's grants and board tokens give), runs the
+anyone else what the board's grants give), runs the
 `middleware`, and calls the backend with the caller it verified
 (`{ identity, origin }`), which the backend trusts because only `board()`
 makes one. Nothing with side effects runs for a request before its access

@@ -16,7 +16,7 @@ test("verify-board: a local board driven by this checkout's vb, with Eve's board
     VERIFY_BOARD_DIR: dir,
     BOARD_URL: "http://127.0.0.1:9/api/board",
     BOARD_TOKEN: "pi-token",
-    BOARD_AS: "pi",
+    BOARD_PROFILE: "pi",
   };
   const run = (...args) => spawnSync(script, args, { env, encoding: "utf8" });
   t.after(() => {

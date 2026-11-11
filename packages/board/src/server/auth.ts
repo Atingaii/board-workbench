@@ -12,13 +12,8 @@ import { admits, grantAccess, type GrantFacts, type GrantSource } from './grants
 export type Claims = {
   /** `x-board-profile`: the agent or tool it writes as, `claude`, say. */
   profile: string | null
-  /** `x-board-avatar`: an https URL for its picture. */
+  /** The `avatar` parameter of `x-board-profile`: an https URL for its picture. */
   avatar: string | null
-  /** `x-board-session`: the agent session it writes from. */
-  session: string | null
-  /** `x-board-handle` and `x-board-name`: a person's handle and display name. */
-  handle: string | null
-  name: string | null
   /** `x-board-can`: what it narrows itself to, `dev/=read,post`. It only narrows. */
   scope: string | null
 }
@@ -45,30 +40,13 @@ export type Principal = {
   /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, `github:repo:<id>`, `oidc:<issuer>:<sub>`. */
   id: string
   kind: PrincipalKind
-  /** The default handle; a person's is replaced by the handle their CLI sends, unless a host's verifier named them. */
+  /** Its handle, as what verified it says: a host's verifier's, a Vercel login's user ID, a deployment's project. */
   handle: string
   expiresAt: Date | null
   /** The verified token's claims, so its access can be worked out again later, as a schedule's sends do. Absent for people and the board's own code. */
   facts?: TokenFacts
   /** The `x-board-can` a proxy sent, which narrows whatever it may do. */
   scope?: string
-  /**
-   * The board token it came with (its ID), kept with what it stores: a schedule or a registration
-   * made with one stops when the token does.
-   */
-  token?: string
-  /** What a board token pins for every request with it: the profile, avatar, and session it writes as, and a person's handle and name. */
-  pinned?: Pinned
-}
-
-/** What a board token says about who writes, beside its principal: labels, but the board's, so a request can't change them. */
-export type Pinned = {
-  profile: string | null
-  avatar: string | null
-  session: string | null
-  /** A person's handle and display name as they were when they minted it: whoever holds the token sends none. */
-  handle: string | null
-  name: string | null
 }
 
 /** A principal and what it may do in each channel, as board()'s `access` worked it out. */
@@ -76,13 +54,13 @@ export type Granted = Principal & { access: Access }
 
 /**
  * Whether a caller wrote what `by` says, as far as changing it goes (editing, deleting, canceling a
- * schedule): its principal did, and when a board token pins the profile it writes as, as that
- * profile. A token acts as its minter, so the principal alone would let one agent's token change
- * what its minter or another agent wrote. Another token that pins the same profile writes as the
- * same author, so a renewed one picks up where the last left off.
+ * schedule): its principal did, and when it writes as a profile, as that profile. A principal's
+ * profiles share its credential (a sandbox's agent writes as one through its deployment's), so the
+ * principal alone would let one profile change what another wrote. The principal itself, as no
+ * profile, changes what any of them wrote.
  */
-export const wroteAs = (caller: { principal: Pick<Principal, 'id' | 'pinned'>; actor: { id: string } }, by: { principal: string; actor: string }) =>
-  by.principal === caller.principal.id && ((caller.principal.pinned?.profile ?? null) === null || by.actor === caller.actor.id)
+export const wroteAs = (caller: { principal: Pick<Principal, 'id'>; actor: { id: string } }, by: { principal: string; actor: string }) =>
+  by.principal === caller.principal.id && (caller.actor.id === caller.principal.id || by.actor === caller.actor.id)
 
 /**
  * Principal IDs a board authenticates: its people, deployments, workflows, and its own code. No
@@ -147,8 +125,11 @@ export function trustedIssuers(issuers: readonly string[]): Set<string> {
   return new Set(issuers)
 }
 
-/** A principal as the board keeps it to work its access out again: who it is, its token's facts, its scope, and the board token it came with. */
-export type Known = Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope' | 'token'>
+/** A principal as the board keeps it to work its access out again: who it is, its token's facts, and its scope. */
+export type Known = Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope'> & {
+  /** The board token a schedule was made with, from when boards issued them: it stopped with them. */
+  token?: string
+}
 
 /**
  * Who a grant names, as the board keeps it: IDs, with the names it knows beside them. A board
@@ -169,20 +150,8 @@ export type GrantPrincipal =
 /** A grant the board keeps: who it names, and one `can` for all of them, as written. */
 export type StoredGrant = { id: string; principals: readonly GrantPrincipal[]; can: WrittenCan }
 
-/** What a board token starts with, so board() knows its own before it tries any other verifier. */
-export const BOARD_TOKEN_PREFIX = 'board_'
-
 /**
- * A board token's SHA-256, hex: what the board keeps instead of the secret, both when it mints one
- * and when a request carries one. A token is 32 random bytes, so no salt or key is needed.
- */
-export async function tokenHash(secret: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)))
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
-/**
- * What a grant or a token left without `can` gives: what Vercel's API gives a project it lets use a
+ * What a grant left without `can` gives: what Vercel's API gives a project it lets use a
  * board. Frozen all the way down: board reads it for every such grant, and @vercel/board/access
  * exports it, so code that imports it can't widen them.
  */
@@ -610,8 +579,8 @@ export type HostPrincipal = {
   id: string
   kind: PrincipalKind
   /**
-   * Kept as it is: `x-board-handle` doesn't replace it. Return `request.claims.handle` to take the caller's, which
-   * the board then takes as checked: a person posts to Slack under it as a plain sender.
+   * Who it is to people, its handle and its name: the board takes it as checked, so a person posts to Slack under
+   * it as a plain sender. A verifier that knows only an ID gives that.
    */
   handle: string
   expiresAt?: Date | null

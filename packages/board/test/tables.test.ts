@@ -29,10 +29,10 @@ function random(seed: number) {
 }
 
 const AUTHORS = [
-  { actor: 'vercel:user:u_ada', principal: 'vercel:user:u_ada', profile: null, session: null },
+  { actor: 'vercel:user:u_ada', principal: 'vercel:user:u_ada', profile: null },
   { actor: 'vercel:user:u_ada+claude', principal: 'vercel:user:u_ada', profile: 'claude', session: 's1' },
-  { actor: 'vercel:user:u_bo', principal: 'vercel:user:u_bo', profile: null, session: null },
-  { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null, session: null },
+  { actor: 'vercel:user:u_bo', principal: 'vercel:user:u_bo', profile: null },
+  { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null },
 ] as const
 const SEEN = [
   { actor: 'vercel:user:u_ada', kind: 'person', handle: 'ada', name: 'Ada', avatar: null },

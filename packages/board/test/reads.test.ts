@@ -16,7 +16,7 @@ describe('list reads', () => {
     // A log from before the tables: posts no tables consumer has read.
     const log = a2Memory()
     const earlier = createServer({ contract: boardContract, store: log }).session(BOARD_SESSION)
-    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
     for (const [n, text] of ['one', 'two', 'three'].entries()) {
       await earlier.append({
         id: `post-${n}`,
@@ -76,7 +76,7 @@ describe('list reads', () => {
     // Another session of the board's contract, further along, run through the same projection.
     const projection = tablesConsumer(tables)
     const other = createServer({ contract: boardContract, store: log, consumers: [projection] }).session('other')
-    const by = { actor: 'vercel:user:u_other', principal: 'vercel:user:u_other', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_other', principal: 'vercel:user:u_other', profile: null }
     for (let n = 0; n < head + 5; n += 1) {
       await other.append({
         id: `other-${n}`,
@@ -97,7 +97,7 @@ describe('reads by ID', () => {
     // A log from before the tables: a thread, a reply, then a reaction on the root.
     const log = a2Memory()
     const earlier = createServer({ contract: boardContract, store: log }).session(BOARD_SESSION)
-    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null }
     const post = (id: string, text: string, re: number | null) => ({
       id, type: 'message.posted' as const,
       payload: { channel: 'dev', text, re, replyTo: null, thread: 'root', labels: {}, noSync: false, by, origin: null, from: null },

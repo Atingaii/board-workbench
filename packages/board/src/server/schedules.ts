@@ -8,7 +8,7 @@ import {
   type ScheduleEvent,
   type ScheduleEvents,
 } from '../contract/contract.ts'
-import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
+import { actorKind, authorView, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { authorize, type Access } from './access.ts'
 import { wroteAs, type Granted, type Known, type Principal } from './auth.ts'
 import { actorsReducer } from '../contract/reducers.ts'
@@ -20,6 +20,7 @@ import { DroppedError } from './middleware.ts'
 import { indexOf, ref, scheduleRef, viaOfRecord } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 import { storedPrincipal } from './registry.ts'
+import { ownedActor } from './actors.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
 export const MAX_HOP_MS = 5 * 86_400_000
@@ -59,12 +60,17 @@ export type Schedule = {
 /** `takeover`: the Vercel deployment that sends, the last to take over, and its event's index; null before any has. */
 export type SchedulesState = { byId: Record<string, Schedule>; takeover: { deployment: string; index: number } | null }
 
+/**
+ * Who a schedule sends as: its creator, shown as its principal names it. One made before handles were
+ * checked keeps the actor its creator's client named; it sends as what verified that creator instead.
+ */
 const identityOf = (as: ScheduleEvent & { type: 'schedule.created' }): Schedule['as'] => {
   const { author, principal, actor } = as.payload.as
+  const stored = { ...principal, expiresAt: null }
   return {
     author,
-    principal: { ...principal, expiresAt: null },
-    actor: { ...actor, kind: actorKind(actor.kind) },
+    principal: stored,
+    actor: ownedActor(stored, author, { ...actor, kind: actorKind(actor.kind) }),
   }
 }
 
@@ -139,9 +145,9 @@ export function nextSend(schedule: Pick<Schedule, 'every' | 'until' | 'times'>, 
  * needs `post` there now, as it would to create it. Where it can't read, the
  * schedule is its own only if it was created without reading too, so a
  * principal ID shared with a caller that reads doesn't reach that caller's.
- * A board token that pins a profile owns only what was scheduled as it (`wroteAs`).
+ * A profile owns only what was scheduled as it; its principal, as no profile, owns all of them (`wroteAs`).
  */
-export const createdBy = (schedule: Schedule, identity: { principal: Pick<Granted, 'id' | 'access' | 'pinned'>; actor: { id: string } }) =>
+export const createdBy = (schedule: Schedule, identity: { principal: Pick<Granted, 'id' | 'access'>; actor: { id: string } }) =>
   wroteAs(identity, { principal: schedule.as.principal.id, actor: schedule.as.actor.id }) &&
   identity.principal.access.can('post', schedule.channel) &&
   (schedule.blind || identity.principal.access.readable(schedule.channel))
@@ -165,8 +171,8 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
     next: schedule.next === null ? null : new Date(schedule.next).toISOString(),
     last: schedule.last === null ? null : ref(schedule.last),
     state: schedule.canceled ? 'canceled' : schedule.next === null ? 'done' : 'pending',
-    canceled: schedule.canceled,
-    by: schedule.as.author,
+    canceled: schedule.canceled && { ...schedule.canceled, by: authorView(schedule.canceled.by) },
+    by: authorView(schedule.as.author),
     author: { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(via ? { via } : {}) },
     createdAt: schedule.createdAt,
   }
@@ -414,13 +420,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       if (every !== null && every > MAX_AHEAD_MS) throw badRequest('`every` is at most a year')
       const first = body.at !== undefined ? Date.parse(body.at) : now + duration(body.in ?? body.every!)
       if (first < now - 60_000) throw badRequest('`at` is in the past')
-      const asked = body.until !== undefined ? Date.parse(body.until) : body.for !== undefined ? first + duration(body.for) : null
-      // One made with a board token stops when the token does, so it ends by the token's expiry,
-      // and its `until` says so.
-      const expires = identity.principal.token !== undefined ? (identity.principal.expiresAt?.getTime() ?? null) : null
-      if (expires !== null && first > expires)
-        throw badRequest(`this token expires ${new Date(expires).toISOString()}, before the schedule's first send: schedule it with a credential that lasts`, 'token_expires_first')
-      const until = expires !== null && (asked === null || asked > expires) ? expires : asked
+      const until = body.until !== undefined ? Date.parse(body.until) : body.for !== undefined ? first + duration(body.for) : null
       if (until !== null && until < first) throw badRequest('the schedule stops before its first send')
       if (first > now + MAX_AHEAD_MS || (until !== null && until > now + MAX_AHEAD_MS))
         throw badRequest('a schedule reaches at most a year out: its first send and its stop')

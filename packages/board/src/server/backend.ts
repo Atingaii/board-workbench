@@ -1,3 +1,4 @@
+import type { SandboxInput, SandboxReach } from './sandbox.ts'
 import type { Protocol } from '../api/protocol.ts'
 import type { MessageView, SourceJoin, SourceRead } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
@@ -5,7 +6,7 @@ import type { ExternalEvent } from '../contract/external.ts'
 import type { Actor } from '../contract/folds.ts'
 import type { Author } from '../contract/schemas.ts'
 import type { Access } from './access.ts'
-import type { Granted, Known, Pinned, StoredGrant } from './auth.ts'
+import type { Granted, Known, StoredGrant } from './auth.ts'
 import type { Board } from './board.ts'
 import type { Decided } from './policy.ts'
 import type { WatcherContext } from './watcher.ts'
@@ -36,7 +37,7 @@ export type SelfCaller = {
   /**
    * What `as(profile)` asked for, its avatar included, or null for yourself. Absent on the
    * handle itself, whose caller is whoever the environment picks: a backend elsewhere sends
-   * the profile `BOARD_AS` or the agent it runs in names.
+   * the profile `BOARD_PROFILE` names.
    */
   profile?: ProfileOption
   origin: WriteOrigin
@@ -146,27 +147,12 @@ export type BoardBinding = {
   url(): string | null
 }
 
-/** A token a backend issued, as board() checks a request that carries it. */
-export type StoredToken = {
-  id: string
-  name: string
-  /** Who minted it, as a schedule keeps its creator: what it may do is worked out again on every request, narrowed by its scope. */
-  minter: Known
-  pinned: Pinned
-  expiresAt: Date
-}
-
 /**
- * What a backend that keeps the board keeps of who it trusts: its grants, and the tokens it
- * issued. board() reads them on the requests they decide, as they are then, so a revoke takes
- * effect on the next request.
+ * What a backend that keeps the board keeps of who it trusts: its grants. board() reads them on
+ * the requests they decide, as they are then, so a revoke takes effect on the next request.
  */
 export type Trust = {
   grants(): Promise<readonly StoredGrant[]>
-  /** The token whose secret hashes to `hash`, while it and every token it was minted with are live: null otherwise. */
-  token(hash: string): Promise<StoredToken | null>
-  /** Whether token `id` and every token it was minted with are live: a schedule made with one stops when it doesn't. */
-  live(id: string): Promise<boolean>
 }
 
 /**
@@ -179,7 +165,7 @@ export interface Backend extends ProtocolMethods {
   readonly routes: readonly BackendRoute[]
   /**
    * Whether the board lives here. One that keeps it (`local()`) serves requests: its people, the
-   * board's own deployments, and whoever its grants and tokens let in. One that uses another board
+   * board's own deployments, and whoever its grants let in. One that uses another board
    * answers no requests: on Vercel's, only wake-ups and webhooks, and at `BOARD_URL`, nothing.
    */
   readonly keeps: boolean
@@ -195,8 +181,14 @@ export interface Backend extends ProtocolMethods {
    * pulls its inbox, starts threads, and delivers only through the keys it holds. Every key, when left out.
    */
   syncedHere?(key: string): Promise<boolean>
-  /** Its grants and tokens, for a backend that keeps them (`local()`): board() checks requests against them. */
+  /** Its grants, for a backend that keeps them (`local()`): board() checks requests against them. */
   readonly trust?: Trust
+  /**
+   * How a sandbox reaches the board this backend uses, for `sandboxPolicy()`: its URL, and the
+   * headers every request of the sandbox's carries. One that keeps the board leaves it out: the
+   * board's own URL says, and board() adds its deployment's credential.
+   */
+  sandbox?(input: SandboxInput): Promise<SandboxReach>
   /**
    * board() calls it once, when it's created, before any request: what background work needs
    * from the board (its subscriptions, its sync, its policy, a handle through it). It does no I/O.

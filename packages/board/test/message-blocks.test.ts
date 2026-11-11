@@ -173,7 +173,7 @@ describe('blocks in messages', () => {
 
   it('answers a caller who may not post there as it would for any text, whatever its blocks say', async () => {
     const { board, julian } = await setUp()
-    const reader = caller(board.fetch, (await julian('POST', '/tokens', { name: 'reader', can: { deploys: ['read'] } })).body.secret)
+    const reader = caller(board.fetch, await personToken(), { 'x-board-can': 'deploys=read' })
     const { message } = (await julian('POST', '/messages', { channel: 'deploys', text: 'a thread' })).body
     const bad = block('sandbox@1', { id: 'sbx-9', action: 'boot' })
     const plain = [
@@ -191,7 +191,7 @@ describe('blocks in messages', () => {
     expect(plain.map((answer) => answer.status)).toEqual([403, 403, 403, 403])
     expect(withBlock.map((answer) => [answer.status, answer.body.error.code])).toEqual(plain.map((answer) => [answer.status, answer.body.error.code]))
     // Where it may post, its block is checked.
-    const poster = caller(board.fetch, (await julian('POST', '/tokens', { name: 'poster', can: { deploys: ['post'] } })).body.secret)
+    const poster = caller(board.fetch, await personToken(), { 'x-board-can': 'deploys=post' })
     expect((await poster('POST', '/messages', { channel: 'deploys', text: bad })).status).toBe(400)
   })
 

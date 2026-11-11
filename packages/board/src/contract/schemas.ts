@@ -89,8 +89,10 @@ export const Author = z.object({
   actor: ActorId,
   principal: z.string().min(1),
   profile: z.string().nullable(),
-  session: z.string().nullable(),
 })
+
+/** Who wrote something, as views show it: a log from before sessions were gone keeps one on each, which no view shows. */
+export const authorView = ({ actor, principal, profile }: Author): Author => ({ actor, principal, profile })
 
 /** 128 random bits, base64url: an attachment is named by an ID nobody can guess. */
 /** 128 random bits, base64url, as a board on this machine makes them; or `att_` and a UUID, as Vercel's board does. */

@@ -53,10 +53,10 @@ describe('names every object has', () => {
   })
 
   it('fold from a log that already holds them, and the board keeps answering', async () => {
-    const store = olderStore({ eyes: 'constructor', rocket: '__proto__', status: 'constructor', 'ada-old': '__proto__' })
+    const store = olderStore({ eyes: 'constructor', rocket: '__proto__', status: 'constructor', u_ada: '__proto__' })
     const board = testBoard({ store })
     const julian = caller(board.fetch, await personToken('u_julian'))
-    const ada = caller(board.fetch, await personToken('u_ada'), { 'x-board-handle': 'ada-old' })
+    const ada = caller(board.fetch, await personToken('u_ada'), {})
     const id = (await julian('POST', '/messages', { channel: 'dev', text: 'root' })).body.message.id
     for (const emoji of ['eyes', 'rocket']) expect((await julian('POST', `/messages/${id}/reactions`, { emoji })).status).toBe(200)
     expect((await ada('POST', `/messages/${id}/reactions`, { emoji: 'eyes' })).status).toBe(200)
@@ -91,15 +91,16 @@ describe('names every object has', () => {
 
   it('are handles like any other, and never actors by themselves', async () => {
     const { fetch } = testBoard()
-    const julian = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
+    const julian = caller(fetch, await personToken('u_julian'), {})
     expect((await julian('POST', '/messages', { channel: 'dev', text: 'thanks @constructor' })).status).toBe(201)
     for (const actor of ['constructor', 'toString', '__proto__'])
       expect((await julian('POST', '/messages', { channel: 'dev', text: `cc @[${actor}]` })).status).toBe(201)
 
-    const ada = caller(fetch, await personToken('u_ada'), { 'x-board-handle': 'constructor' })
-    expect((await ada('POST', '/messages', { channel: 'dev', text: 'hi' })).status).toBe(201)
+    // A Vercel login's handle is its user ID, which may be one of them.
+    const named = caller(fetch, await personToken('constructor'), {})
+    expect((await named('POST', '/messages', { channel: 'dev', text: 'hi' })).status).toBe(201)
     const texts = async (query: string) => (await julian('GET', `/messages?${query}`)).body.messages.map((message: { text: string }) => message.text)
-    expect(await texts('mentions=vercel:user:u_ada')).toEqual(['thanks @constructor', 'cc @[constructor]'])
+    expect(await texts('mentions=vercel:user:constructor')).toEqual(['thanks @constructor', 'cc @[constructor]'])
     expect(await texts('mentions=__proto__')).toEqual(['cc @[__proto__]'])
     expect(await texts('by=constructor')).toEqual(['hi'])
   })

@@ -64,12 +64,8 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   the deployment's OIDC token and writes as its project,
   `vercel:project:prj_x:production`. Elsewhere it sends `VERCEL_TOKEN`, or
   your Vercel CLI login, and writes as you. `fetch` sends other credentials.
-- **A board token reaches its own board, by its ID.** `BOARD_TOKEN` goes to
-  Vercel's API as it is, and acts as whoever minted it. Name its board in
-  `BOARD_URL`, `--url`, or `vercel({ board })`: finding one by name, or the
-  team's default, answers 403 `board_token_scope`.
 - **Only a deployment's own credentials register watchers.** Anyone else's
-  (yours, an app's, any board token) answer 403 `watchers_need_project`, and
+  (yours, an app's) answer 403 `watchers_need_project`, and
   a board run with them runs its config's watchers in this process: see
   [How it runs](./06-watchers.md#how-it-runs).
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
@@ -78,7 +74,7 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out
-the actor from its claims (the profile it writes as, its session, its scope),
+the actor from its claims (the profile it writes as, its scope),
 and works out what it may do (see [Access](./09-access.md)). Nothing runs for
 a request before that.
 
@@ -248,8 +244,8 @@ do. The team is `VERCEL_ORG_ID`, the deployment's, or the nearest
 `.vercel/project.json`'s, unless `team` says another (`acme`). The
 credentials are `VERCEL_TOKEN`, the deployment's OIDC token, then your
 `vercel login`, or what `fetch` sends: a deployment writes as its project, and
-you as yourself. Its profile is `BOARD_AS`, or the coding agent it runs in,
-with that agent's session; `team.as(null)` acts as yourself.
+you as yourself. Its profile is the one `BOARD_PROFILE` names, or none;
+`team.as(null)` acts as yourself.
 
 With `BOARD_URL` set, it's the board at that URL instead, whatever the name:
 a board `vb serve` runs, say:
@@ -314,8 +310,8 @@ What a backend has:
 | --- | --- |
 | `discovery`, `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `@vercel/board` says what each takes and answers |
 | `routes` | Routes of its own beside the protocol: `{ method, path, handle(request, { caller, param }) }`. One at a protocol route's path takes its place. `board()` verifies nothing for them: `caller` is null for a request, or the handle's own when its call reaches one |
-| `keeps` | Whether the board lives here. `true` serves its callers: the board's people, its own deployments, and whoever grants and board tokens let in. `false` serves no requests: on Vercel's board, only wake-ups and webhooks, and at `BOARD_URL`, nothing |
-| `trust` | Its [grants](./09-access.md#grants) and [board tokens](./09-access.md#tokens), for a backend that keeps them: `grants()`, `token(hash)`, and `live(id)`. `board()` checks each request against them as they are then. Without it, they let no one in |
+| `keeps` | Whether the board lives here. `true` serves its callers: the board's people, its own deployments, and whoever grants let in. `false` serves no requests: on Vercel's board, only wake-ups and webhooks, and at `BOARD_URL`, nothing |
+| `trust` | Its [grants](./09-access.md#grants), for a backend that keeps them: `grants()`. `board()` checks each request against them as they are then. Without it, they let no one in |
 | `bind(binding)` | Called once, when `board()` is created, before any request. It does no I/O. `binding.name` and `binding.team` are `board({ name, team })`'s, or null |
 
 - **A caller is one `board()` verified, or its own code.** `{ identity, origin }`
@@ -401,13 +397,12 @@ write.
   (its project, and the issuers its grants name), which `oidcTokens()` reads.
 - **A host's own returns the principal:** `id` in the board's scheme
   (`vercel:user:<id>`, `vercel:project:<id>:<env>`, …), `kind`, `handle`, and
-  optionally `expiresAt`. Its handle stands: the one the CLI sends doesn't
-  replace it, so a verifier that wants it returns `request.claims.handle`
-  itself. The name, profile, and `x-board-can` the caller sends still apply
-  on top of it. The board takes the handle as checked: a person posts to Slack
-  under it as a plain sender ([who posts under a name](../02-sync/03-slack.md#messages-post-under-their-authors-name)),
-  so a verifier that echoes the caller's handle lets them pick the name they
-  post under.
+  optionally `expiresAt`. Its handle is who the caller is to people, their
+  handle and their name: nothing the caller sends replaces it, and one that
+  knows only an ID gives the ID. The profile and `x-board-can` the caller
+  sends still apply on top of it. The board takes the handle as checked: a
+  person posts to Slack under it as a plain sender
+  ([who posts under a name](../02-sync/03-slack.md#messages-post-under-their-authors-name)).
 - **`kind: 'person'` is a person on the team:** it gets what grants give
   people, as the board's own people do (g1 gives everything), and a channel
   closed to `everyone` keeps it out unless a grant names it. So your verifier

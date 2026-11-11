@@ -23,7 +23,7 @@ const serve: Command = {
   spec: {
     name: 'serve',
     description:
-      "run a board on this machine (127.0.0.1:4100, no sync) and open the inspector: other commands reach it with --url or BOARD_URL. Its log lives in .board/, and you're local:user:<your OS user> (or --handle)",
+      "run a board on this machine (127.0.0.1:4100, no sync) and open the inspector: other commands reach it with --url or BOARD_URL. Its log lives in .board/, and you're local:user:<your OS user>",
     arguments: [],
     options: [option('port', 'the port to listen on (default: 4100)'), option('dir'), option('no-inspect'), option('no-open')],
     examples: [{ name: 'run a board here, and open it', value: 'serve' }],
@@ -32,12 +32,10 @@ const serve: Command = {
     if (args.length > 0) throw usage('serve takes no arguments: pass its port with --port, and its directory with --dir.')
     const port = portFlag()
     const root = projectDir()
-    const { localHandle, serveLocal } = await import('./serve.ts')
-    const handle = flags.handle ?? process.env.BOARD_HANDLE
+    const { serveLocal } = await import('./serve.ts')
     const local = await serveLocal({
       dir: flags.dir ?? join(root, '.board'),
       ...(port !== undefined ? { port } : {}),
-      ...(handle ? { handle: localHandle(handle) } : {}),
     })
     let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
     try {
@@ -46,7 +44,7 @@ const serve: Command = {
       out(`reach it with --url ${local.url}, or BOARD_URL=${local.url}`)
       if (!flags['no-inspect']) {
         // With this board's token, whatever BOARD_TOKEN says.
-        const { board } = connection(local.url, { token: local.token, handle: local.handle })
+        const { board } = connection(local.url, { token: local.token })
         inspector = await startInspector({ client: board.as(null) })
         out(`inspector at ${inspector.url}`)
         if (!flags['no-open']) openBrowser(inspector.url)

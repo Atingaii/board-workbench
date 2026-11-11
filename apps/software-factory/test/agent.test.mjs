@@ -50,18 +50,16 @@ test("eveName: each thread's Eve has a name of its own", () => {
   assert.ok(eveName("99999999").length <= 32);
 });
 
-test("byEve: the thread's own Eve, by its name or the old `pi`, and no other thread's", () => {
-  const session = "thread-1956";
+test("byEve: the thread's own Eve, by its name, and no other thread's, nor the old `pi` every thread's Pi was", () => {
   const principal = "vercel:project:prj_factory:production";
-  assert.ok(byEve("1956", { principal, profile: eveName("1956"), session }));
-  assert.ok(byEve("1956", { principal, profile: "pi", session }));
-  assert.ok(!byEve("1956", { principal, profile: eveName("1957"), session }));
-  assert.ok(!byEve("1956", { principal, profile: eveName("1956"), session: "thread-1957" }));
-  assert.ok(!byEve("1956", { principal, profile: null, session: null }));
+  assert.ok(byEve("1956", { principal, profile: eveName("1956") }));
+  assert.ok(!byEve("1956", { principal, profile: eveName("1957") }));
+  assert.ok(!byEve("1956", { principal, profile: "pi" }));
+  assert.ok(!byEve("1956", { principal, profile: null }));
 });
 
-test("byEve: only the factory's production deployment, since anyone who can write sends a profile and session", () => {
-  const pi = { profile: eveName("1956"), session: "thread-1956" };
+test("byEve: only the factory's production deployment, since anyone who can write sends a profile", () => {
+  const pi = { profile: eveName("1956") };
   for (const principal of [
     "vercel:user:abc123",
     "vercel:project:prj_factory:preview",

@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type ThreadSummaryView, type TokenView } from '../api/routes.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
@@ -18,6 +18,7 @@ import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
 import { waitUntil } from './wait-until.ts'
+import { withoutToken, type SandboxInput, type SandboxReach, type SandboxRoute } from './sandbox.ts'
 
 // The `/v1/messageboard` API's shapes, as this backend reads them. `@api/messageboard-types` is
 // private to Vercel's monorepo, so these are written out: conformance catches drift.
@@ -36,7 +37,6 @@ type ApiActor = {
   id: string
   principal: ApiPrincipal
   profile?: { name: string; avatar?: string; platform?: { key: string; platform?: string; userId: string } }
-  session?: string
 }
 type ApiChannel = { id: string; name: string }
 /** A schema version in the team's registry: a built-in's `createdAt` is 0, and it has no `createdBy`. */
@@ -205,17 +205,64 @@ export type VercelEnvironment = {
   fetch(): typeof fetch
   /** The team, when the environment says which. */
   team(): Promise<string | null>
-  /** The profile the environment picks (`BOARD_AS`, or the coding agent it runs in), and that agent's session. */
-  profile(): { profile: ProfileOption; session: string | null }
-  /** Whether its fetch sends a board token you set (`BOARD_TOKEN`), whoever made it. */
-  boardToken(): boolean
+  /** The profile the environment names: `BOARD_PROFILE`, with `BOARD_AVATAR`. */
+  profile(): ProfileOption
+  /** What a sandbox's requests to Vercel's API carry from this deployment: `token`, or its own OIDC token. */
+  sandbox(url: string, token: string | undefined): Promise<Record<string, string>>
 }
 
 /** Who a request to the API is from, beside its credentials: a label it shows, never who it is. */
-type Who = { profile: { name: string; avatar?: string } | null; session: string | null }
+type Who = { profile: { name: string; avatar?: string } | null }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
-const SESSION = /^[A-Za-z0-9_.:-]{1,128}$/
+
+/**
+ * What `vb` on this board calls in Vercel's API for what a sandboxed agent does, by method and path
+ * under `/boards/<id>`: reading, posting and replying, editing and deleting its own, reacting and
+ * labeling, files, schedules, and finding a platform link's message. A sandbox's policy hands it these
+ * and nothing else under the board: not the board itself (`PATCH`, `DELETE`), its members, its
+ * grants, watchers, or sync's records, nor a route the API adds later.
+ */
+const SANDBOX_ROUTES: readonly SandboxRoute[] = [
+  { method: 'GET', path: '' },
+  { method: 'GET', path: '/me' },
+  { method: 'GET', path: '/channels' },
+  { method: 'POST', path: '/channels' },
+  { method: 'GET', path: '/actors' },
+  { method: 'GET', path: '/messages' },
+  { method: 'GET', path: '/messages/:id' },
+  { method: 'GET', path: '/messages/:id/synced' },
+  { method: 'GET', path: '/changes' },
+  { method: 'GET', path: '/threads' },
+  { method: 'POST', path: '/threads' },
+  { method: 'GET', path: '/threads/:thread/messages' },
+  { method: 'POST', path: '/threads/:thread/messages' },
+  { method: 'PATCH', path: '/threads/:thread/messages/:n' },
+  { method: 'POST', path: '/threads/:thread/messages/:n/delete' },
+  { method: 'GET', path: '/threads/:thread/messages/:n/reactions' },
+  { method: 'POST', path: '/threads/:thread/messages/:n/reactions' },
+  { method: 'POST', path: '/threads/:thread/messages/:n/labels' },
+  { method: 'GET', path: '/posts/:id' },
+  { method: 'POST', path: '/attachments' },
+  { method: 'GET', path: '/attachments/:id' },
+  { method: 'POST', path: '/attachments/:id/complete' },
+  { method: 'GET', path: '/schedules' },
+  { method: 'POST', path: '/schedules' },
+  { method: 'POST', path: '/schedules/:id/cancel' },
+  { method: 'GET', path: '/sync/linked' },
+]
+
+/**
+ * Who a request to Vercel's API writes as, as the API reads it today: the profile's name alone in
+ * `x-board-profile`, and its avatar in `x-board-avatar`, which board's protocol refuses for the
+ * avatar parameter of `x-board-profile` (`formatProfileHeader`). Every request and sandbox policy
+ * for the API gets its profile from here, so this is the one place that changes once the API reads
+ * the profile header as the protocol has it.
+ */
+export function apiProfileHeaders(profile: { name: string; avatar?: string | undefined } | null): Record<string, string> {
+  if (!profile) return {}
+  return { 'x-board-profile': profile.name, ...(profile.avatar?.startsWith('https://') ? { 'x-board-avatar': profile.avatar } : {}) }
+}
 const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
 /** Whether `value` is a message ID Vercel's API hands out (`msg_<thread>_<n>`): the CLI takes one as a message, even where a channel has its name. */
@@ -342,8 +389,6 @@ const iso = (ms: number) => new Date(ms).toISOString()
 
 /** A grant as the API answers it, its `at` in milliseconds, as the protocol has it: an ISO string. */
 const grantFrom = (grant: GrantView): GrantView => ({ ...grant, at: expiryOf(grant.at) })
-/** A token as the API answers it, its times in milliseconds, as the protocol has them. */
-const tokenFrom = (token: TokenView): TokenView => ({ ...token, at: expiryOf(token.at) ?? token.at, expiresAt: expiryOf(token.expiresAt) ?? token.expiresAt })
 /** A schema the API keeps, as the protocol shows it. */
 const schemaFrom = (schema: ApiSchema): SchemaView => ({
   id: schema.id,
@@ -469,11 +514,10 @@ const authorOf = (actor: ApiActor): Author => ({
   actor: actor.id,
   principal: principalId(actor.principal),
   profile: actor.profile?.name ?? null,
-  session: actor.session ?? null,
 })
 
 /** Who cancels a schedule when no one did: the API, once its creator can no longer post it, as a local board's scheduler. */
-const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null }
+const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule', profile: null }
 
 /**
  * An actor where the API doesn't name them: its handle is its profile, or a short form of its
@@ -551,10 +595,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (typeof value === 'string') url.searchParams.set(name, value)
       else for (const one of value) url.searchParams.append(name, one)
     }
-    const headers: Record<string, string> = { 'content-type': 'application/json' }
-    if (who.profile) headers['x-board-profile'] = who.profile.name
-    if (who.profile?.avatar?.startsWith('https://')) headers['x-board-avatar'] = who.profile.avatar
-    if (who.session && SESSION.test(who.session)) headers['x-board-session'] = who.session
+    const headers: Record<string, string> = { 'content-type': 'application/json', ...apiProfileHeaders(who.profile) }
     // A 429 did nothing. A 503 may have: only a request the API can tell it has seen goes again.
     const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'
     for (let attempt = 0; ; attempt++) {
@@ -583,9 +624,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         continue
       }
       const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
-      // A board token reaches its own board by ID, and none of the team's routes: finding a board by its name or as the team's is one.
-      if (error?.code === 'board_token_scope')
-        throw new HttpError(403, 'board_token_scope', 'a board token reaches only its own board, by its ID.', { hint: 'Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).', origin: 'handle' })
       throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
     }
   }
@@ -938,7 +976,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       id: await actorOf(who),
       principal: actor.principal,
       ...(who.profile ? { profile: who.profile } : {}),
-      ...(who.session ? { session: who.session } : {}),
     }
     // Its own files, as far as it can still look them up: the post landed, so one it can't is left out rather than failing it.
     const attachments = (
@@ -1157,7 +1194,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** The actor `who` writes as: the credentials' principal, and its profile, as the API names it. */
   const actorOf = async (who: Who) => `${principalId((await self(who)).actor.principal)}${who.profile ? `+${who.profile.name.toLowerCase()}` : ''}`
 
-  /** Who a caller acts as there: its profile and session, beside this deployment's credentials. */
+  /** Who a caller acts as there: its profile, beside this deployment's credentials. */
   function whoOf(caller: Caller): Who {
     if ('identity' in caller) throw servesNone()
     const named = (profile: ProfileOption): Who['profile'] => {
@@ -1168,11 +1205,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     if (caller.origin.via?.kind === 'client') {
       const asked = 'profile' in caller ? caller.profile : (caller.self ?? undefined)
-      const found = environment?.profile() ?? { profile: null, session: null }
-      if (asked === undefined) return { profile: named(found.profile), session: found.session }
-      return { profile: named(asked), session: asked === null ? null : found.session }
+      return { profile: named(asked === undefined ? (environment?.profile() ?? null) : asked) }
     }
-    return { profile: named(caller.self ?? 'client'), session: null }
+    return { profile: named(caller.self ?? 'client') }
   }
 
   /** A post's client ID, as the API takes one: its own when it fits, a hash of it when it doesn't. */
@@ -1554,13 +1589,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const whereOf = (found: ApiRegistration) => (found.path ? { url: null, path: found.path, ...(found.branch ? { branch: found.branch } : {}) } : { url: null })
 
   /**
-   * Vercel's API takes watchers only from a deployment's own credentials: never a person's, an app's,
-   * or a board token's, whoever made it. Anyone else's registration, pull, or ack is its 403
-   * `watchers_need_project`.
+   * Vercel's API takes watchers only from a deployment's own credentials: never a person's or an
+   * app's. Anyone else's registration, pull, or ack is its 403 `watchers_need_project`.
    */
   const notADeployment = () =>
     new HttpError(403, 'watchers_need_project', "Vercel's API takes watchers only from a deployment's own credentials.", {
-      hint: "Register them from the project's deployment, with no board token. Watchers in board()'s config run in this process instead.",
+      hint: "Register them from the project's deployment. Watchers in board()'s config run in this process instead.",
       origin: 'handle',
     })
   const needsProject = (error: unknown) => (error instanceof HttpError && error.code === 'watchers_need_project' ? notADeployment() : error)
@@ -1706,7 +1740,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** This deployment's own: what its config's watchers run as. */
-  const deployment: Who = { profile: null, session: null }
+  const deployment: Who = { profile: null }
   /** This board's config's watchers, which run here when the API wakes it. */
   let tails: Record<string, WatcherSpec> = {}
 
@@ -1720,16 +1754,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const runner = registrant({
     remote: "Vercel's API",
     registry: {
-      register: (where) =>
-        registerAs(deployment, where, tails, bound().sync, true, holding).catch((error: unknown) => {
-          // These aren't a deployment's own credentials after all (a board token in a fetch): they run here from now on.
-          if (error instanceof HttpError && error.code === 'watchers_need_project') {
-            refused = true
-            runner.close()
-            runHere()
-          }
-          throw error
-        }),
+      register: (where) => registerAs(deployment, where, tails, bound().sync, true, holding),
       matches: ({ signal, ...query }) => pullAs(deployment, query, signal, tails),
       ack: (id, body) => ackAs(deployment, id, body),
     },
@@ -1746,19 +1771,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   })
 
   let deployed: Promise<boolean> | null = null
-  /** Whether Vercel's API refused to register this board's watchers: its credentials aren't a deployment's own. */
-  let refused = false
-  /**
-   * Whether this board's own credentials are a deployment's own: a project's, and no board token. A
-   * board token you set says so; one in a `fetch` passed in says so when the API refuses it.
-   */
-  const isDeployment = async () => {
-    if (refused || (!options.fetch && environment?.boardToken())) return false
-    return (deployed ??= self(deployment).then((found) => found.actor.principal.type === 'project')).catch((error: unknown) => {
+  /** Whether this board's own credentials are a deployment's own: a project's. */
+  const isDeployment = () =>
+    (deployed ??= self(deployment).then((found) => found.actor.principal.type === 'project')).catch((error: unknown) => {
       deployed = null
       throw error
     })
-  }
 
   let here: ReturnType<typeof tailWatchers> | null = null
   let deployedElse = false
@@ -1768,7 +1786,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // A deployment's function doesn't outlive its request, so a tail there would stop with it.
     if (deployedOnVercel()) {
       deployedElse = true
-      console.error("[board] watchers on a deployment need its own OIDC token: with a board token or another Vercel token, none run here")
+      console.error("[board] watchers on a deployment need its own OIDC token: with another Vercel token, none run here")
       return
     }
     const { sync, run } = bound()
@@ -1784,7 +1802,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     here = tailWatchers({
       watchers,
       events: (query, signal) => eventsAs(deployment, query, signal),
-      actorOf: (id) => actorOf({ profile: { name: id }, session: null }),
+      actorOf: (id) => actorOf({ profile: { name: id } }),
       run,
     })
     here.start()
@@ -1875,16 +1893,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
     throw error
   }
-  /** A mint Vercel's API won't make: only a deployment mints board tokens there, and a board token mints from itself. */
-  const mintRefused = (error: unknown): never => {
-    if (error instanceof HttpError && error.code === 'unsupported_principal')
-      throw new HttpError(403, 'unsupported_principal', "Vercel's board mints board tokens only for a deployment.", {
-        hint: "Mint it from a deployment, with its OIDC token, or from a board token.",
-        origin: 'handle',
-      })
-    throw error
-  }
-
   const unsupported = Object.fromEntries(
     METHODS.map((method) => [
       method,
@@ -1897,7 +1905,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const methods: ProtocolMethods = {
     ...unsupported,
     async discovery() {
-      const who = { profile: null, session: null }
+      const who = { profile: null }
       const team = await teamId()
       // A board named by its ID is read, so `whoami` names only one there is and you can reach.
       if (options.board) await api(who, 'GET', await onBoard(who))
@@ -1941,7 +1949,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         avatar: shown.avatar,
         profile: found.actor.profile?.name ?? null,
         ...via,
-        session: found.actor.session ?? null,
         expiresAt: expiryOf(found.expiresAt),
         can: canOf(found.can),
       }
@@ -2202,7 +2209,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
       return { ok: true }
     },
-    // Grants and tokens are the API's, in the protocol's shapes: what it doesn't keep yet, it answers.
+    // Grants are the API's, in the protocol's shapes: what it doesn't keep yet, it answers.
     async grants(caller, _input, signal) {
       const who = whoOf(caller)
       const { grants } = await api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
@@ -2229,20 +2236,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async revokeGrant(caller, { id }, signal) {
       const who = whoOf(caller)
       return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
-    },
-    async tokens(caller, _input, signal) {
-      const who = whoOf(caller)
-      const tokens = await all<TokenView>(who, await onBoard(who, '/tokens'), 'tokens', {}, signal)
-      return { tokens: tokens.map(tokenFrom) }
-    },
-    async createToken(caller, input, signal) {
-      const who = whoOf(caller)
-      const created = await api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(mintRefused)
-      return { ...created, token: tokenFrom(created.token) }
-    },
-    async revokeToken(caller, { id }, signal) {
-      const who = whoOf(caller)
-      return api<Protocol['revokeToken']['output']>(who, 'POST', await onBoard(who, `/tokens/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
     },
     // Schemas are the team's in the API: every board on it shares one registry.
     async schemas(caller, _input, signal) {
@@ -2529,6 +2522,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     routes,
     // The board is Vercel's: a board here answers only wake-ups and webhooks.
     keeps: false,
+    /**
+     * A sandbox's way to this board in Vercel's API: its routes, by its ID and team, and `/me`, which a
+     * handle on it asks, held to `can` by `x-board-can` as a board of its own would be. The API reads the
+     * profile as `apiProfileHeaders` sends it.
+     */
+    async sandbox({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
+      // The API reads the avatar from its own header, which a sandbox could send when the policy sets none.
+      if (profile.avatar !== undefined && !profile.avatar.startsWith('https://'))
+        throw new HttpError(400, 'invalid_profile', `${profile.avatar} isn't an avatar Vercel's API takes: one is an https URL.`, { origin: 'handle' })
+      const who = { profile: null }
+      const team = await teamId()
+      const id = team?.startsWith('team_') ? team : (await self(who)).teamId
+      const url = `${origin}/v1/messageboard${await onBoard(who)}?teamId=${encodeURIComponent(id)}`
+      const credential = environment ? await environment.sandbox(url, token) : token === undefined ? withoutToken(url) : { authorization: `Bearer ${token}` }
+      return { url, headers: { ...credential, ...apiProfileHeaders(profile), 'x-board-can': can }, routes: SANDBOX_ROUTES, reads: ['/v1/messageboard/me'] }
+    },
     // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
     sendsSchedulesHere: false,
     // One deployment of a project holds each of its sync keys, as Vercel's API says when it registers.

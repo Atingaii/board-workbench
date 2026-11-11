@@ -30,8 +30,6 @@ import type {
   GrantView,
   UpdateGrantInput,
   Explanation,
-  TokenInput,
-  TokenView,
   SchemaInput,
   SchemaView,
   ThreadsPage,
@@ -45,6 +43,7 @@ import { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, typeOf } from '../contra
 import type { Attachment } from '../contract/schemas.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { parseSse } from './sse.ts'
+import { formatProfileHeader } from '../contract/profile-header.ts'
 
 /**
  * Where an error came from: `handle`, raised by the handle on this machine (no Vercel login,
@@ -93,12 +92,6 @@ export type ClientOptions = {
   /** An OIDC token whose audience is the board's URL, or a function returning one. Without one, `fetch` brings the credentials. */
   token?: Resolvable<string>
   profile?: Resolvable<ProfileOption>
-  /** Runtime session, recorded on writes and used to scope read cursors. */
-  session?: Resolvable<string | null>
-  /** A person's handle; the board falls back to one derived from their user ID. */
-  handle?: Resolvable<string | null>
-  /** Your display name and avatar, shown when you write as yourself (not as a profile). */
-  person?: Resolvable<{ name?: string | null; avatar?: string | null } | null>
   /** Extra headers on every request. */
   headers?: Resolvable<Record<string, string>>
   fetch?: typeof fetch
@@ -263,20 +256,7 @@ export function createBoardClient(options: ClientOptions) {
     if (!auth) return out
     if (options.token !== undefined) out.authorization = `Bearer ${await resolve(options.token)}`
     const profile = as !== undefined ? as : options.profile === undefined ? null : await resolve(options.profile)
-    if (profile !== null) {
-      const { name, avatar } = typeof profile === 'string' ? { name: profile, avatar: undefined } : profile
-      out['x-board-profile'] = name
-      if (avatar) out['x-board-avatar'] = avatar
-    } else {
-      const person = options.person === undefined ? null : await resolve(options.person)
-      if (person?.name) out['x-board-name'] = encodeURIComponent(person.name)
-      if (person?.avatar) out['x-board-avatar'] = person.avatar
-    }
-    // A profile chosen per request isn't this process's runtime session.
-    const session = as !== undefined ? null : options.session === undefined ? null : await resolve(options.session)
-    if (session) out['x-board-session'] = session
-    const handle = options.handle === undefined ? null : await resolve(options.handle)
-    if (handle) out['x-board-handle'] = handle
+    if (profile !== null) out['x-board-profile'] = formatProfileHeader(typeof profile === 'string' ? { name: profile } : profile)
     return out
   }
 
@@ -477,16 +457,6 @@ export function createBoardClient(options: ClientOptions) {
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
     revokeGrant: (id: string) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: {} }),
-    /**
-     * A token that acts as you, narrowed to `can`, writing as `profile` and `session` when they're
-     * given: for a widget, a sandbox, a script. `secret` shows only here. It lives 30 days, or
-     * `expires`, at most 90.
-     */
-    createToken: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input.can === undefined ? input : { ...input, can: wireCan(input.can) } }),
-    /** Your live tokens, or everyone's with manage in every channel. Never their secrets. */
-    tokens: async () => (await call<{ tokens: TokenView[] }>('GET', '/tokens')).tokens,
-    /** It and every token minted with it stop. `revoked` is false when it was already revoked. */
-    revokeToken: (id: string) => call<{ revoked: boolean }>('POST', `/tokens/${path(id)}/revoke`, { body: {} }),
     /** Every schema: the built-ins, then the board's own, by name and version. */
     schemas: async () => (await call<{ schemas: SchemaView[] }>('GET', '/schemas')).schemas,
     /** One schema version, by its ID: `sandbox@1`. */
