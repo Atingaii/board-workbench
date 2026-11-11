@@ -20,6 +20,7 @@ import {
   TaskState,
 } from '../contract/schemas.ts'
 import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
+import { SCHEMA_DESCRIPTION_MAX, SCHEMA_NAME, SCHEMA_VERSION_MAX } from '../contract/data-schemas.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message, Task } from '../contract/folds.ts'
@@ -361,6 +362,18 @@ export const TokenBody = z.object({
   expires: Duration.optional(),
 })
 
+/**
+ * A schema version to register, for good: `name` and `version` are its ID (`sandbox@1`), and
+ * `schema` is a JSON Schema for an object, in structural keywords only, which the board checks.
+ * Strict, so a board that doesn't know a field refuses it: what it kept could never be changed.
+ */
+export const SchemaBody = z.strictObject({
+  name: z.string().regex(SCHEMA_NAME, 'a schema name is up to 80 lowercase letters, numbers, and ._-, starting with a letter'),
+  version: z.number().int().min(1).max(SCHEMA_VERSION_MAX),
+  description: z.string().min(1).max(SCHEMA_DESCRIPTION_MAX).refine(storable, 'a description has a NUL character or a lone surrogate').optional(),
+  schema: z.record(z.string(), z.unknown()),
+})
+
 export const SyncBody = z.object({ target: z.string().min(3).max(300) })
 export const InboxQuery = z.object({
   channel: z.string().optional(),
@@ -641,6 +654,8 @@ export type GrantInput = { principals: readonly PrincipalInput[]; can: GrantCan 
 export type UpdateGrantInput = { add?: readonly PrincipalInput[]; remove?: readonly PrincipalInput[]; can?: GrantCan }
 /** What `token` takes: `can` as `access` writes it, with `'none'` for a pattern it may do nothing in. */
 export type TokenInput = Omit<z.input<typeof TokenBody>, 'can'> & { can?: AccessCan | GrantCan }
+/** What `createSchema` takes: a version's name, its number, and its JSON Schema. */
+export type SchemaInput = z.input<typeof SchemaBody>
 export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
 
 /** A scheduled message. It posts as `by`, its creator; each message it posts carries `schedule: { id, n }`. */
@@ -730,6 +745,22 @@ export type TokenView = {
   parent: string | null
 }
 
+/** A schema version, as the board keeps it: it never changes. */
+export type SchemaView = {
+  /** `name@version`: what names it everywhere. */
+  id: string
+  name: string
+  version: number
+  description: string | null
+  /** The JSON Schema its data matches. */
+  schema: Record<string, unknown>
+  /** One every board has: no one registers a version under its name. */
+  builtIn: boolean
+  /** The actor that registered it, and when: null for a built-in. */
+  by: string | null
+  at: string | null
+}
+
 /**
  * A task, on its root: its state (the root's `board.task` label too), whose it is, what it waits
  * for, and who holds it until when. A claim's token shows nowhere but in the answer that made it.
@@ -754,7 +785,7 @@ export type TaskClaim = { epoch: number; token: string; until: string }
  */
 export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via' | 'platform'> & { verified?: true }
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
-export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'task' | 'version' | 'revision'> & {
+export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'task' | 'version' | 'revision' | 'platformText'> & {
   id: string
   /** The thread's root, or null for a root. */
   re: string | null
@@ -773,6 +804,20 @@ export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'sch
   /** Set on a root that's a task. */
   task?: TaskView
   author: ActorView | null
+  /**
+   * The data its text carries, in order: each fence that names a schema (```json#sandbox@1), which
+   * the board checked against that schema when the message was written. A message a sync brought
+   * in has none, whatever its text says: a platform's text is never checked.
+   */
+  blocks: BlockView[]
+}
+
+/** A block: the schema it names, and its data, a JSON object that matches it. */
+export type BlockView = {
+  /** The schema's name and version: `sandbox`, 1. */
+  schema: string
+  version: number
+  data: Record<string, unknown>
 }
 
 /** A link in a message: a board message it names is a ref. */
@@ -1058,6 +1103,12 @@ export const routes = {
   tokens: { method: 'GET', path: '/tokens' },
   createToken: { method: 'POST', path: '/tokens', body: TokenBody },
   revokeToken: { method: 'POST', path: '/tokens/:id/revoke' },
+  /** Every schema: the built-ins, then the board's own. Anyone the board lets in reads them. */
+  schemas: { method: 'GET', path: '/schemas' },
+  /** One schema version, by `name@version`. */
+  schema: { method: 'GET', path: '/schemas/:id' },
+  /** Registers a version, which never changes after: needs manage at `*`. The same definition again is a no-op. */
+  createSchema: { method: 'POST', path: '/schemas', body: SchemaBody },
   /** The caller's own post with the client ID it gave: what `POST /messages` answered, for telling a retry before posting. */
   posted: { method: 'GET', path: '/posts/:id' },
   /** Raw platform events in a sync key's inbox, newest first: the caller's own, and the board's with `sync` everywhere. */

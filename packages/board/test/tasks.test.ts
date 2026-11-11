@@ -7,6 +7,7 @@ import type { BoardEventView, MessageView } from '../src/api/routes.ts'
 import type { Can } from '../src/access/index.ts'
 import type { Middleware, Watcher } from '../src/server/index.ts'
 import type { BoardEvent } from '../src/contract/events.ts'
+import { block } from '../src/contract/blocks.ts'
 import { foldMessages, type MessagesState } from '../src/contract/folds.ts'
 import { memory } from '../src/store/memory.ts'
 import { http } from '../src/backend-http/index.ts'
@@ -103,6 +104,17 @@ describe('a task', () => {
     expect((await bo('GET', '/messages?channel=work&label=board.task=ready')).body.messages.map((m: MessageView) => m.id)).toContain(root.id)
     expect((await bo('GET', '/threads?label=board.task=ready&label=step=fix')).body.threads.map((t: { message: MessageView }) => t.message.id)).toEqual([root.id])
     expect((await bo('GET', '/messages?label=board.task=claimed')).body.messages).toEqual([])
+  })
+
+  it("has its root's blocks checked as a post's are, and carries them", async () => {
+    const { ada } = setup()
+    const sha = 'a'.repeat(40)
+    // A block that doesn't fit its schema is the post's to refuse: no thread is started, and no task.
+    const wrong = await ada('POST', '/tasks', { channel: 'work', text: `revert this\n\n${block('git-commit@1', { sha })}` })
+    expect(code(wrong)).toEqual([400, 'invalid_block'])
+    expect((await ada('GET', '/tasks?channel=work')).body.tasks).toEqual([])
+    const made = await task(ada, `revert this\n\n${block('git-commit@1', { sha, title: 'ship the index' })}`)
+    expect(made).toMatchObject({ task: { state: 'ready' }, blocks: [{ schema: 'git-commit', version: 1, data: { sha, title: 'ship the index' } }] })
   })
 
   it('can be a thread that was there: whoever makes it one owns it, and it stays as it was written', async () => {

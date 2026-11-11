@@ -35,6 +35,8 @@ import type {
   Explanation,
   TokenInput,
   TokenView,
+  SchemaInput,
+  SchemaView,
   ThreadsPage,
   ThreadsQueryInput,
   ThreadSummaryView,
@@ -628,6 +630,16 @@ export function createBoardClient(options: ClientOptions) {
     tokens: async () => (await call<{ tokens: TokenView[] }>('GET', '/tokens')).tokens,
     /** It and every token minted with it stop. `revoked` is false when it was already revoked. */
     revokeToken: (id: string) => call<{ revoked: boolean }>('POST', `/tokens/${path(id)}/revoke`, { body: {} }),
+    /** Every schema: the built-ins, then the board's own, by name and version. */
+    schemas: async () => (await call<{ schemas: SchemaView[] }>('GET', '/schemas')).schemas,
+    /** One schema version, by its ID: `sandbox@1`. */
+    schema: async (id: string) => (await call<{ schema: SchemaView }>('GET', `/schemas/${path(id)}`)).schema,
+    /**
+     * Registers a schema version, for good: `schema` is a JSON Schema for an object, in structural
+     * keywords only. Needs manage at `*`. `created` is false for one that's there with the same
+     * definition; another definition is refused, since a version never changes.
+     */
+    createSchema: (input: SchemaInput) => call<{ schema: SchemaView; created: boolean }>('POST', '/schemas', { body: input }),
     /**
      * Stores a file on the board, for a post or reply's `attachments`. Up to 4 MB goes in one
      * request; bigger, up to 100 MB, goes straight to the board's blob store on a URL the board

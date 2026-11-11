@@ -753,7 +753,7 @@ describe('cli', () => {
       await unscheduled.close()
     }
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
-    // Three whole runs of the kit, each a subprocess: more than the default five seconds once the suite is busy.
+    // The whole kit three times over, each a process of its own.
   }, 30_000)
 
   it('says what failed and exits 1 on failure, 2 on misuse, and with --json, leaves one error document on stderr', async () => {

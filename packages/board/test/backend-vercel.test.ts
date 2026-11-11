@@ -124,6 +124,12 @@ describe('vercel()', () => {
       'grants: lets a project on another team in, in its environments': 'skipped',
       'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'skipped',
       "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'skipped',
+      'schemas: lists the built-in schemas first, and reads a schema by its ID': 'passed',
+      'schemas: registers a schema version once: the same definition again changes nothing, and another is refused': 'passed',
+      "schemas: refuses a built-in's name, and a definition it couldn't check a value against": 'passed',
+      'schemas: carries a block in a message, checked against the schema its fence names': 'passed',
+      // Vercel's API doesn't read x-board-can yet, so a narrowed caller registers one.
+      'schemas: refuses a caller narrowed with x-board-can a schema, and lets it read them': 'failed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'skipped',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'skipped',

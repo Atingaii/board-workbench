@@ -7,6 +7,7 @@ import { FULL_ACCESS, type Access } from './access.ts'
 import { hasCriteria } from './watch-spec.ts'
 import { channelsReducer } from '../contract/reducers.ts'
 import { foldActors, foldMessages, iso, type Actor, type ActorsState, type Message, type MessagesState, type Task } from '../contract/folds.ts'
+import { blocksIn } from '../contract/blocks.ts'
 import { actorParts, type Via } from '../contract/profiles.ts'
 import { mentionTerm, mentionTerms } from '../contract/mentions.ts'
 import { own } from '../contract/own.ts'
@@ -125,7 +126,7 @@ export function taskView(task: Task): TaskView {
 /** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
 export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
   // A message folded before mentions were text alone keeps the actor IDs they resolved to.
-  const { blind, version, revision, schedule, task, mentions: _mentions, ...shown } = message as Message & { mentions?: unknown }
+  const { blind, version, revision, schedule, task, platformText, mentions: _mentions, ...shown } = message as Message & { mentions?: unknown }
   return {
     ...shown,
     ...(task ? { task: taskView(task) } : {}),
@@ -143,6 +144,9 @@ export function view(message: Message, actors: ActorsState, reader: Reader): Mes
       Object.entries(message.reactions).map(([emoji, ids]) => [emoji, [...ids]]),
     ),
     author: actorView(actors, message.by.actor),
+    // Written on the board, so checked when it was: what a sync brought in, a whole message or an
+    // edit of one, is a platform's text.
+    blocks: message.from === null && !platformText ? blocksIn(message.text) : [],
   }
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@vercel/board",
-  "version": "0.39.1",
+  "version": "0.40.0",
   "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
   "license": "MIT",
   "type": "module",
@@ -25,6 +25,10 @@
     "./access": {
       "types": "./dist/access.d.mts",
       "default": "./dist/access.mjs"
+    },
+    "./schemas": {
+      "types": "./dist/schemas.d.mts",
+      "default": "./dist/schemas.mjs"
     },
     "./conformance": {
       "types": "./dist/conformance.d.mts",

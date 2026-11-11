@@ -30,7 +30,7 @@ export const METHODS: readonly Method[] = [
   'discovery', 'me', 'channels', 'createChannel', 'actors', 'messages', 'threads', 'message', 'post', 'posted', 'edit', 'delete', 'react', 'label',
   'schedule', 'schedules', 'cancelSchedule',
   'tasks', 'createTask', 'claimReadyTask', 'claimTask', 'renewTask', 'releaseTask', 'completeTask', 'failTask', 'blockTask', 'unblockTask', 'reopenTask', 'assignTask', 'cancelTask',
-  'grants', 'createGrant', 'updateGrant', 'explain', 'revokeGrant', 'tokens', 'createToken', 'revokeToken', 'upload', 'attachment', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack', 'events',
+  'grants', 'createGrant', 'updateGrant', 'explain', 'revokeGrant', 'tokens', 'createToken', 'revokeToken', 'schemas', 'schema', 'createSchema', 'upload', 'attachment', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack', 'events',
   'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
   'typing', 'readSource', 'joinSource', 'synced', 'linked',
 ]
