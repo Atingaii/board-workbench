@@ -1136,7 +1136,11 @@ through the sync that speaks for them, under the key it imported them through.
     where nothing names its project, its ID (`prj_support`,
     `prj_support@preview`). A principal a local board stored before, as a
     schedule's creator or a token's minter, keeps the handle it had
-    (`support@preview`), and still shows through `support`.
+    (`support@preview`), and still shows through `support`. A schedule made
+    before keeps the actor its creator's client named (`x-board-handle`,
+    `x-board-name`, a person's avatar); it sends as what verified that creator
+    instead, and an actor that shows as anything but what its principal names
+    is never `verified`, so it never posts to Slack under that name.
   - An Actions principal's handle is `owner/repo`.
   - A GitHub user's handle is their login. A Slack user's handle is their Slack
     display name. That's the board's own sync's users; a platform user a sync

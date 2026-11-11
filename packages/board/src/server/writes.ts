@@ -9,7 +9,7 @@ import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import { platformProfile } from '../contract/profiles.ts'
 import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
-import { actorSeen } from './actors.ts'
+import { actorSeen, ownedActor } from './actors.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { syncTarget, type SyncTarget } from './targets.ts'
 import type { BoardSession } from './a2.ts'
@@ -53,13 +53,16 @@ function seenFor(identity: Identity, actors: ActorsState) {
 
 /**
  * Whether the board checked who a write is by, as it shows them: a principal a credential named (an
- * OIDC token it trusts, a board token, or a host's verifier; never the board's own code). Its handle
- * and name are always that credential's word, and an agent shows that principal after `via`, its
- * profile name the principal's to choose. An import says for itself.
+ * OIDC token it trusts, a board token, or a host's verifier; never the board's own code), shown as
+ * that principal names it: its handle and name, and for an agent, that principal after `via`, its
+ * profile name the principal's to choose. A stored actor that shows otherwise (a schedule's, from
+ * before handles were checked) isn't. An import says for itself.
  */
-function verifiedAs({ principal, actor }: Identity): boolean {
+function verifiedAs({ principal, author, actor }: Identity): boolean {
   if (principal.kind === 'external') return actor.verified === true
-  return !principal.id.startsWith('board:')
+  if (principal.id.startsWith('board:')) return false
+  const named = ownedActor(principal, author, actor)
+  return named.handle === actor.handle && named.name === actor.name && named.avatar === actor.avatar && named.via?.name === actor.via?.name && named.via?.environment === actor.via?.environment
 }
 
 /**

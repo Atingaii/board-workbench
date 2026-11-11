@@ -84,6 +84,19 @@ export function resolveActor(principal: Principal, claims: Claims): ResolvedActo
 }
 
 /**
+ * The actor `author` writes as, shown as its principal names it now: a stored one (a schedule's
+ * creator) whose handle, name, or picture a client sent, before they were checked, shows as its
+ * principal does instead. A profile keeps its spelling and its avatar, which are its own to choose; a
+ * platform user, whom its sync names, stays as it is.
+ */
+export function ownedActor(principal: Principal, author: Author, actor: Actor): Actor {
+  if (principal.kind === 'external' || principal.id.startsWith('board:')) return actor
+  const profile = author.profile === null ? null : actor.name.toLowerCase() === author.profile ? actor.name : author.profile
+  const { actor: named } = resolveActor(principal, { profile, avatar: profile === null ? null : actor.avatar, scope: null })
+  return { ...actor, handle: named.handle, name: named.name, avatar: named.avatar, ...(named.via ? { via: named.via } : {}) }
+}
+
+/**
  * Who a profile of `principal` acts through, as the board shows it: a deployment by its project's name
  * and its environment, anyone else by their handle. A deployment's handle is its project's name in
  * every environment; one a board stored with its environment after it (`www@preview`) still shows as `www`.
