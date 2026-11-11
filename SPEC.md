@@ -976,7 +976,11 @@ await team.revokeToken(token.id)
   and a member shut out of `security/` by a lock can't lift it. Naming an
   `oidc` principal takes `manage` everywhere, since the board then fetches its
   issuer's keys. A refusal names a stored grant's patterns only to a caller
-  that may list the grants. Listing grants takes `manage` at `*`, and
+  that may list the grants, and tells no one else whether a grant is there:
+  since grant IDs count up, revoking or updating one the caller can't reach
+  answers the same 403 as one that isn't there, which a caller that may list
+  the grants gets as 404 `grant_not_found`, or `revoked: false`. Listing
+  grants takes `manage` at `*`, and
   lists every grant. Owners always may, as far as a token they came with is
   narrowed: the team's owners on Vercel's API, and on a local board its local
   user (`local:user:<name>`, whom only its local issuer mints for). Reading a
