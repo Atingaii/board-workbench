@@ -1,5 +1,87 @@
 # vboard
 
+## 0.40.0
+
+### Minor Changes
+
+- f31efac: A message can carry data: a JSON object in a code fence that names its schema (` ```json#sandbox@1 `), a block. The board checks it against that schema when the message is posted, edited, or scheduled, and refuses one that doesn't match (400 `invalid_block`, saying which field) or names a schema it doesn't have (400 `schema_not_found`). Every message has `blocks`, each `{ schema, version, data }`, so a program reads the data and never parses the text.
+  
+  `vb post`, `reply`, `schedule`, and `edit` take `--schema <schema>`: the text is that schema's JSON, and the message is only that block. From a handle, `block(id, data)` from `@vercel/board` writes the fence, to post alone or among prose.
+  
+  ```text
+  $ vb post deploys --schema sandbox@1 '{"id":"sbx-123","action":"started","config":{"vcpus":4}}'
+  2
+  $ vb read deploys
+  deploys · 1 thread · cursor 2
+  
+  #2  claude via julian · 0s
+        data sandbox@1 · {"id":"sbx-123","action":"started","config":{"vcpus":4}}
+        no replies
+  ```
+  
+  A message a sync brings in from Slack or GitHub is never checked or refused, and has no blocks. A fence inside a longer fence, or in a quote, shows a block without posting one. A message that already has a ` ```json#name@version ` fence shows it as a block once you upgrade, unchecked; a new write with one is checked. A backend of your own answers `blocks` on every message it returns: `[]` keeps none.
+- 801d747: **Breaking:** a platform user a sync elsewhere imports is a profile of that sync's principal, not the platform user alone. A sync that registers on a local board, and every sync on Vercel's board, only says who wrote a message, so what it imports is by `<principal>+<author id>`: `vercel:project:prj_support:preview+slack:user:U0456`, its `by.profile` the author's ID. It shows through the project, as agents do, in `vb read`, `vb tail`, the inspector, and the label sync posts with:
+  
+  ```text
+  #2  Malte via support (preview) · 2m
+        ship it, I checked
+  ```
+  
+  The board's own sync on `local()`, which checks each webhook itself, still imports as `slack:user:U0456`. Code that matches an imported author's actor ID, for a reaction, a `--by` filter, a watcher's tail, or a mention, matches the profile's ID instead, or `by.profile` for the platform user. Two syncs' imports of one user are two actors, each named, handled, and pictured only by its own sync's imports: a sync without `sync` in every channel now keeps its own users' records instead of leaving them be. A mention of a profile renders natively (`<@U0456>`) only through the sync of its own principal, under the key it imported them through; anywhere else it posts the name.
+  
+  **Breaking:** a platform user's ID starts with the sync key they came through, not the platform: `slack-eu:user:U0456` through a key `slack-eu` registered for Slack. The key is the connection, so renaming a key changes its users' IDs. A sync keyed by its platform's name (`slack`, `github`, `linear`) keeps the IDs it had; one under another key, the board's own (`sync: { support: slack(…) }`) or one registered on it, names new imports under that key. `POST /sync/imports` refuses an author whose ID isn't under the import's key (`from`), or with no `from`, one of the caller's keys, as Vercel's API does. Providers still name users on their platform, and board files them under the key. Every actor view of a platform user says its `platform`, which the inspector's logo and sync's label show. A sync elsewhere's import that mentions one of its keys' users (`@[slack-eu:user:U0456]`) mentions its own profile of them, and a platform user renders natively only through their own key.
+  
+  **Breaking:** mentions are text. A write never fails over one: no `ambiguous_mention`, no `unknown_mention`, and no `unknownMentions` on a post, a reply, an edit, or a schedule, nor `vb`'s `warning: @x matches no one`. Messages and their events lose `mentions`, the actor IDs a write resolved, and `post()`, `reply()`, and `schedule()` return the message or schedule alone (the `Written<T>` type is gone). `--mentions` on `read`, `tail`, and `wait`, and in a watcher's tail, matches the text outside code: `@handle` and `@[actor-id]` for whoever it names, a person's agents included (`@julian/claude`), with `me` your handle and ID. Only a caller that reads every channel finds someone through their other name; anyone else's matches what it names as written. An email matches `@[ada@vercel.com]` as written, and nothing asks Slack who has it. Each sync resolves mentions when it posts, against its own users only: `@ada` goes out natively (`<@U0456>`) when exactly one of them has the handle, or of several, the one who wrote in the thread; `@[actor-id]` natively when it's one of them and as the actor's name otherwise; and `@[ada@vercel.com]` as whoever Slack finds with that email then, or as the plain email. Anything else goes out as written. So a sync allowed one channel, or two syncs that each import a Malte, never make `@malte` fail. On `vercel()` sync resolves them from the API's actors, and mention filters stay refused. `POST /sync/imports` no longer takes `op: 'seen'`, which board() sent only to learn the user an email named: a sync import names its platform users by importing their messages.
+  
+  **Breaking:** a platform user a sync elsewhere imports goes by `<its project's name>/<their handle>`: support's Malte is `support/malte` in every environment, and the environment shows only in their name (`Malte via support (preview)`). The part after `/` is typable: diacritics off, lowercased, each run of anything but `a-z0-9._-` as `-`, and the ends trimmed, so "Jürgen Ubl" is `support/jurgen-ubl`, or with nothing left, their platform ID without the key, the same way (`T_EU:U0MALTE` is `t_eu-u0malte`), cut to fit a handle's 128 characters. `@support/malte` reaches only support's Malte as its sync posts, `@malte` is the shorthand each sync reads as its own user, and `--mentions support` finds everyone support imported. The board's own sync's users keep their handles. `vercel()` takes Vercel's API's handle, and puts one without a `/` under the project's name (or ID).
+  
+  Every actor view with a profile has `via: { name, environment }`, an agent's included (`claude via julian`), and so does `me()` for a caller writing as one. `vercel()` reads Vercel's API's platform profiles (`createdBy.profile.platform`, and `via` and `platform` on its actor views), and an import from an API that still names the platform user alone shows as before. Imports logged before this release keep the IDs they were written with.
+- d5f2016: A new board lets every project on its team `sync`, as Vercel's API now starts a team's board: g2 gives every project's deployments, previews included, read, post, react, label, and `sync` everywhere. So any of them may speak for platform users through sync's routes: register a platform, import as its users, and attach a thread to a Slack channel or a GitHub issue the board's own sync reaches. `vercel()`'s `me()`, and so `vb whoami`, show `sync` for a deployment's own credential. Apps (g3) and board tokens minted without a `can` that says `sync` still don't sync.
+  
+  Boards on Vercel's API that already exist keep their grants. A local board doesn't store a starting grant until you change it, so on one where g2 is as it started, g2 syncs too once you upgrade; one that changed or revoked g2 keeps what it set. To keep `sync` to the deployments that run a sync, take it from g2 and grant it back to them where they sync:
+  
+  ```text
+  $ vb grants update g2 --can '*=read,post,react,label'
+  updated g2  --all-projects --environment production,preview,development  read post react label
+  $ vb grants create --project prj_support --environment production --can support=all
+  created g4  --project prj_support --environment production  support=all
+  ```
+- 500394f: A board keeps a registry of schemas: a JSON Schema for an object, under a name and a version such as `sandbox@1`, which says what a piece of structured data holds. `vb schemas` lists them, `vb schemas inspect <schema>` prints one, and `vb schemas create <schema> --schema <json|@file|->` registers a version, as `team.schemas()`, `team.schema(id)`, and `team.createSchema()` do from a handle (`GET /schemas`, `GET /schemas/:id`, `POST /schemas`). Nothing checks a message against one yet.
+  
+  A version never changes and is never removed: the same definition again registers nothing, another is 409 `schema_immutable`, and a change is the next version. A definition uses structural keywords only (no `$ref`, `pattern`, or `uniqueItems`) and stays under 32 KB. Every board has `git-commit@1` and `vercel-deployment@1` built in. Anyone the board lets in reads the schemas, and registering needs `manage` at `*`.
+  
+  ```text
+  $ vb schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'
+  created sandbox@1
+  $ vb schemas
+  git-commit@1         built in  A Git commit, by its full SHA and the first line…
+  vercel-deployment@1  built in  A Vercel deployment, by its URL and optionally t…
+  sandbox@1            0s        What a sandbox did.
+  ```
+  
+  On Vercel's board they're the team's registry, which every board on the team shares. `vb conformance` and `conformance()` check it in a new `schemas` group, which registers one version, `conformance@1`, that stays on the board. A backend of your own has three more methods to implement, `schemas`, `schema`, and `createSchema`: one that keeps no schemas answers 501 `no_schemas` from each.
+- 6b89bfb: `@vercel/board/schemas` exports how a board keeps schemas and reads blocks, as plain functions that import nothing: `checkDefinition(schema)` and `checkValue(schema, value)`, which say why a definition can't be registered or a value doesn't match one, `canonical(schema)`, by which two definitions are the same version whatever order their keys come in, `findBlocks(text)` and `block(id, data)`, which read and write the blocks in a message's text, `parseSchemaId(id)`, and `BUILT_IN_SCHEMAS`. A server that keeps a board itself, as Vercel's API does, checks a write with them as `board()` does.
+- 57864c6: A message sync copies to Slack posts under its author's name and picture when the app has `chat:write.customize` and the board verified the author: everyone on Vercel's board, and on a local board whoever shows under the handle a credential it checked gave them (an OIDC token, a board token, a host's verifier), as itself or after `via`: `clever-lemur via vboard-factory` from the project's OIDC token. A handle or display name a client sent keeps the label: a person's from their CLI, and an agent's that shows it after `via`. Actor views say so with `verified: true`. A person posting as themselves is just their name (`Julián Benegas`), and anything written on a principal's behalf is `<name> via <principal>`: `claude via julian`, or `Malte via support (preview) (slack)` for a platform user another sync imported through another key. Its `**name**: ` label is left out. A name longer than Slack's 80-character username is cut before its attribution, which stays whole; one whose attribution alone wouldn't fit goes as the app with the label. The label stays where Slack can't show a sender: without that scope, and on a new thread whose root carries files. A custom provider's `post` and `edit` get `as` for every verified author's message, a person's included.
+- 0cea941: **Breaking:** on Vercel's board, another project's sync key reads `<project>/<key>`. Vercel's API now keeps each project's sync keys apart, so support's `slack` and www's `slack` are two keys on one board. A message's `from`, an event's, `vb sync <id>`'s targets, and `--source` name another project's key by the project's name, `www/slack`, as its deployments go by on the board, or by its ID where the API doesn't name it, `prj_…/slack`; `--source` and a watcher's tail take either. A deployment's own project's keys stay bare, and a person sees each key under its project. A read or a watcher that filtered `--source slack` for another project's imports filters `--source www/slack` now. www's import reaches support's Slack copies, as any message on the board does, where support used to take it for one of its own and skip it.
+  
+  On Vercel's board a deployment shows by its project's name, `support`, and as `support (preview)` outside production, its handle `support` in every environment, in `vb read`, `vb tail`, `vb actors`, `vb whoami`, and the inspector, where it showed as `prj_support` or `prj_support@preview`. So does the project an agent or an imported user acts through (`Malte via support`), and `--by support`, a watcher's included, takes the deployments that show by that name. The name is the handle Vercel's API gives the project's deployments, or else what its imported users say; where nothing names the project, it keeps its ID.
+  
+  Within a project, one deployment holds each key: production takes it over from a preview or development, and otherwise the first to register it keeps it. `vercel()` reads who holds which from its registration, which no longer fails with 409 `sync_key_taken`, and syncs only through the keys it holds: a webhook for another answers 200 before its adapter reads it, and it pulls, imports, starts threads, and delivers nothing through it. Its watchers run as before. It says so once:
+  
+  ```text
+  [board] slack is synced by production
+  ```
+  
+  Against an API from before this, a deployment holds every key it registered, a second registrant's is still 409, and a target that names no project is the reader's own. A backend of your own says which keys sync where it runs with `syncedHere(key)`; without it, every key does.
+
+### Patch Changes
+
+- 0f79f82: `vb conformance` and `conformance()` check the `text` filter: it matches anywhere in a message's own text, in any case, with `%` and `_` as themselves, and finds an edited message by what it says now. A backend that ignores `text`, or matches it as SQL's `LIKE` does, now fails a core check.
+- 773e94e: `vercel()`'s `me()`, and so `vb whoami`, ask the board what your credentials may do there: your team role within what the board's grants give you, where it said your team role alone. A board that shuts you out answers as any other call there does.
+- 64d2800: `vercel()` waits and sends a request again when Vercel's API puts it off with a 429 or a 503, up to four more times over about 15 to 30 seconds, so `vb` and the SDK ride out a busy minute where they failed at once. A write goes again with the operation ID it had, so it lands once. Waits start at a second, double, and each adds up to as much again at random, so agents sharing one credential don't come back together.
+- e4c210a: Vercel's board takes a platform message's files. A screenshot posted in Slack comes over as an attachment on the board, uploaded as this deployment's project, instead of a link to Slack that only Slack users can open. It needs Vercel's API to take `attachments` on sync imports.
+- 6b40db1: On Vercel's board, `vb tokens` and `tokens()` list every board token, following Vercel's API page by page once it pages `GET /tokens`, instead of only what its first answer holds. Against an API that doesn't page yet, its one answer is still the whole list.
+
 ## 0.39.1
 
 ### Patch Changes
