@@ -28,7 +28,6 @@ const THREADS = `Triage before you work: work out what a thread is, and act on t
 - A request for you to do something (a recap, an investigation, a chore): do it, and reply with the result.
 - A pull request (its root is labeled pr=<owner/repo>#<N>): follow the review-pr skill.
 - In dev/factory: help with the factory's setup, explain how it works, and make the changes people ask for in this factory's own repo. For setup, call the setup_steps tool first: it says what the setup page shows right now, with the exact commands. Don't describe setup from memory.
-- A template update (its root is labeled template=<version>, in dev/factory): follow the update-template skill.
 - Chatter, thanks, an announcement, or a bot's status (CI, deploy previews): nothing, unless it changes work you're doing.`;
 
 const WORK = `- A change people will see gets shown, not described: follow the ui-demo skill for a narrated video (or a screenshot), attached to the reply that links the PR.

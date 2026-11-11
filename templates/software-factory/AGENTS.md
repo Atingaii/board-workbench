@@ -53,5 +53,5 @@ pnpm build
 - **GitHub signs the agent's commits, so there's no signing key.** The sandbox's `git`
   (`agent/lib/git/`, which `agent/sandbox.ts` installs) makes each pushed commit again through GitHub's API.
   `test/git-push.test.ts` runs it against real git and a fake GitHub backed by a bare repo.
-- **`package.json`'s `version` is the template release this factory is on.** Only the
-  `update-template` skill moves it.
+- **`package.json`'s `version` is the template release this factory started from.** This repo
+  is a copy: it doesn't follow the template on its own.
