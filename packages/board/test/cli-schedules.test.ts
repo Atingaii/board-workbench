@@ -1,3 +1,4 @@
+import { isScheduleId } from '../src/cli/main.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { serve } from './http.ts'
 import { personToken, testBoard } from './harness.ts'
@@ -35,6 +36,12 @@ describe('cli schedules', () => {
       for (const given of [id.slice(1), `s${id}`]) expect((await vb(['schedule', 'cancel', given], as)).stdout).toBe(`${id} is already canceled\n`)
       expect((await vb(['schedules', root], as)).stdout).toBe('no pending schedules\n')
       expect((await vb(['schedules', '--all'], as)).stdout).toMatch(/· done · 1 sent · by u_julian[\s\S]*· canceled · by u_julian/)
+      // Its own ID shows the one schedule, canceled as it is: how to see that a cancel went through.
+      expect(await vb(['schedules', id], as)).toMatchObject({ code: 0, stdout: expect.stringMatching(new RegExp(`^${id}  #${root} · every 30m[^\\n]* · canceled · by u_julian\\n`)) })
+      expect(await vb(['schedules', 's99999'], as)).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Couldn't find schedule s99999\.\n/) })
+      // Vercel's board names a schedule sch_…: that is one too, and no message's ID (a number, or msg_…) is.
+      expect(['s12', 'S12', 'sch_01HZX3'].every(isScheduleId)).toBe(true)
+      expect(['12', '#12', 'msg_ab12_3', 'schedules', 's', 'standup'].some(isScheduleId)).toBe(false)
 
       expect(await vb(['schedule', root, 'when?'], as)).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't schedule a message without a time: pass --in 1d, --at <time>, or --every 30m\.\n/) })
       expect((await vb(['schedule', root, 'x', '--at', 'soonish'], as)).code).toBe(2)

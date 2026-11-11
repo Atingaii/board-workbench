@@ -723,7 +723,8 @@ See [Reading](../01-board/05-reading.md).
 vb download <attachment> [path]
 ```
 
-Saves an attachment, by the ID `vb read` shows on a file line. It's saved under its
+Saves an attachment, by the ID `vb read <id>` shows at the end of its file
+line: a file's name isn't one, and is refused with that. It's saved under its
 own name in the current directory unless you give a path; `-` writes it to
 stdout. Prints the path.
 
@@ -734,7 +735,9 @@ vb schedules [id] [--by <handle>] [--channel <c>] [--all]
 ```
 
 Pending schedules, oldest first. With an `id` (any message in a thread), the
-schedules that reply in that thread. `--all` adds done and canceled ones.
+schedules that reply in that thread. With a schedule's own ID (`s12`), that
+schedule, whatever became of it: sent, canceled, or pending. `--all` adds done
+and canceled ones.
 
 ## Writing
 
