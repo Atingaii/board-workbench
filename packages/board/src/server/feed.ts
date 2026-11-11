@@ -153,6 +153,16 @@ export function whoIs(value: string, actors: ActorsState): { actors: Set<string>
   return { actors: ids, principals }
 }
 
+/**
+ * Who a `--by` value names. `me` is the caller's own actor and nobody else, as on Vercel's board:
+ * not a person's agents, which their handle covers. It needs no record of them, so it holds for
+ * someone who has yet to post. Anyone else is `whoIs`.
+ */
+function authorOf(value: string, context: { me: Me | null; actors: ActorsState }): { actors: Set<string>; principals: Set<string> } {
+  if (value === 'me' && context.me) return { actors: new Set([context.me.id]), principals: new Set() }
+  return whoIs(value, context.actors)
+}
+
 /** The caller, as `--mentions me` names them: their actor ID and handle. */
 export type Me = { id: string; handle: string }
 
@@ -208,7 +218,7 @@ export function compileFilter(
   const labels = filters.label ?? []
   const channel = filters.channel
   const subtree = channel?.endsWith('/') ? channel.slice(0, -1) : null
-  const by = filters.by === undefined ? null : whoIs(filters.by, context.actors)
+  const by = filters.by === undefined ? null : authorOf(filters.by, context)
   // A ref that names nothing on this board matches nothing, as in the tables.
   const re = filters.re === undefined ? undefined : (indexOf(filters.re) ?? -1)
   const mentions = filters.mentions === undefined ? null : mentionFilter(filters.mentions, context)
@@ -254,7 +264,7 @@ export function toMessageFilter(filters: ParsedFilters, context: { me: Me | null
   // A ref that names nothing on this board matches nothing.
   if (filters.re !== undefined) out.re = indexOf(filters.re) ?? -1
   if (filters.by !== undefined) {
-    const who = whoIs(filters.by, context.actors)
+    const who = authorOf(filters.by, context)
     out.by = { actors: [...who.actors], principals: [...who.principals] }
   }
   if (filters.mentions !== undefined) out.mentions = mentionFilter(filters.mentions, context)

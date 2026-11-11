@@ -567,7 +567,9 @@ function build(options: A2Options, binding: BoardBinding) {
         root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
       }
       const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, { principal, actor })
-      return { schedules: (await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
+      // `me` is the caller, as it is on Vercel's board.
+      const by = query.by === 'me' ? actor.id : query.by
+      return { schedules: (await schedules.list({ ...query, ...(by !== undefined ? { by } : {}), ...(root !== undefined ? { root } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
     },
     async cancelSchedule(caller, { id }) {
       const identity = await identityOf(caller)
