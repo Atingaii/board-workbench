@@ -93,12 +93,14 @@ describe('auth', () => {
     expect(events.map((event: { payload: { by: unknown } }) => event.payload.by)).toEqual([{ actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' }])
   })
 
-  it('refuses x-board-session, naming what replaces it', async () => {
+  it('ignores x-board-session, which released vb still sends inside a coding agent: it writes as its verified actor, and keeps none', async () => {
     const { fetch } = testBoard()
     const claude = caller(fetch, await personToken(), { 'x-board-profile': 'claude', 'x-board-session': 'claude-1' })
     const { status, body } = await claude('POST', '/messages', { channel: 'dev', text: 'hi' })
-    expect([status, body.error]).toEqual([400, { code: 'invalid_request', message: 'x-board-session is gone: who writes is the principal and its profile, so leave it out, or write as a profile with x-board-profile' }])
-    expect((await caller(fetch, await personToken())('GET', '/messages?channel=dev')).body.messages).toEqual([])
+    expect(status).toBe(201)
+    expect(body.message.by).toEqual({ actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude' })
+    expect((await claude('GET', '/me')).body).not.toHaveProperty('session')
+    expect(JSON.stringify((await claude('GET', '/events?channel=dev&after=0')).body)).not.toContain('claude-1')
   })
 
   it('reads a log an older board wrote events in that board no longer has: account links', async () => {
@@ -189,20 +191,23 @@ describe('auth', () => {
     expect((await canonical('GET', '/me')).body).toMatchObject({ profile: 'fixer', avatar: 'https://example.com/2.png' })
   })
 
-  it('refuses x-board-avatar, and a profile header that is not one, naming the form it takes', async () => {
+  it('ignores x-board-avatar, which released vb still sends for a person: an avatar comes only with a profile, in its header', async () => {
+    const { fetch } = testBoard()
+    const post = async (headers: Record<string, string>) => (await caller(fetch, await personToken(), headers)('POST', '/messages', { channel: 'dev', text: 'hi' })).body.message
+    expect((await post({ 'x-board-avatar': 'https://example.com/me.png' })).author).toMatchObject({ kind: 'person', handle: 'u_julian', avatar: null })
+    expect((await post({ 'x-board-profile': 'fixer', 'x-board-avatar': 'https://example.com/fixer.png' })).author).toMatchObject({ kind: 'agent', name: 'fixer', avatar: null })
+    expect((await post({ 'x-board-profile': 'fixer;avatar="https://example.com/2.png"', 'x-board-avatar': 'https://example.com/fixer.png' })).author).toMatchObject({ name: 'fixer', avatar: 'https://example.com/2.png' })
+  })
+
+  it('refuses a profile header that is not one, naming the form it takes', async () => {
     const { fetch } = testBoard()
     const as = async (headers: Record<string, string>) => {
       const { status, body } = await caller(fetch, await personToken(), headers)('POST', '/messages', { channel: 'dev', text: 'hi' })
       return [status, body.error?.code, body.error?.message]
     }
-    expect(await as({ 'x-board-profile': 'fixer', 'x-board-avatar': 'https://example.com/fixer.png' })).toEqual([
-      400,
-      'invalid_profile',
-      'x-board-avatar is the avatar parameter of x-board-profile now: send x-board-profile: <name>;avatar="<url>"',
-    ])
-    expect((await as({ 'x-board-avatar': 'https://example.com/me.png' })).slice(0, 2)).toEqual([400, 'invalid_profile'])
     for (const header of ['fixer;avatar=https://example.com/f.png', 'fixer ;avatar="https://example.com/f.png"', 'fixer;avatar="https://example.com/f.png', '1fixer', 'fixer, claude', 'fixer;x=', 'fixer;x=1"a;avatar="https://example.com/f.png"'])
       expect([header, ...(await as({ 'x-board-profile': header })).slice(0, 2)]).toEqual([header, 400, 'invalid_profile'])
+    expect((await as({ 'x-board-profile': 'fixer;avatar=https://example.com/f.png' }))[2]).toMatch(/^x-board-profile is a structured header, like fixer;avatar="https:\/\/example\.com\/fixer\.png": /)
     expect(await as({ 'x-board-profile': 'fixer;avatar="ftp://example.com/f.png"' })).toEqual([400, 'invalid_profile', 'avatars must be https URLs (http only on localhost)'])
     expect((await caller(fetch, await personToken())('GET', '/messages?channel=dev')).body.messages).toEqual([])
   })

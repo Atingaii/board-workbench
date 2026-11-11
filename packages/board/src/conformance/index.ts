@@ -106,13 +106,13 @@ const NO_HEADERS = "this run can't call the board with headers of its own"
 /** The avatar the checks of who writes give their profile. */
 const AVATAR = 'https://example.com/conformance.png'
 
-/** That a post by `poster` is refused with 400, as a header it sent is; one that lands is deleted. */
-async function refusedHeader(ctx: Context, poster: Board, header: string) {
-  const posting = poster.post(ctx.channel, { text: `conformance: with ${header}`, labels: ctx.labels, noSync: true }).then((message) => {
-    ctx.posted.push(message.id)
-    return message
+/** A post by `poster`, which sends `header`, read back as the run sees it: it lands, and is deleted when the run ends. */
+async function postedWith(ctx: Context, poster: Board, header: string) {
+  const posted = await poster.post(ctx.channel, { text: `conformance: with ${header}`, labels: ctx.labels, noSync: true }).catch((error: unknown) => {
+    throw new Mismatch(`a post with ${header}, which released clients still send: expected it to land, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
   })
-  await refused(posting, 400, `a post with ${header}`)
+  ctx.posted.push(posted.id)
+  return (await ctx.board.thread(posted.id)).message
 }
 
 /** That a view's `by` names who wrote it as the protocol has it: an actor, a principal, and a profile, and no session. */
@@ -740,18 +740,24 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
-    name: "refuses x-board-avatar, which x-board-profile's avatar parameter replaced",
+    name: "ignores x-board-avatar, which x-board-profile's avatar parameter replaced",
     run: async (ctx) => {
       if (!ctx.withHeaders) return NO_HEADERS
-      await refusedHeader(ctx, ctx.withHeaders({ 'x-board-profile': `conformance-${ctx.labels.conformance}`, 'x-board-avatar': AVATAR }), 'x-board-avatar')
+      // A profile of its own: the one the check before gave an avatar would show it still.
+      const name = `conformance-bare-${ctx.labels.conformance}`
+      const message = await postedWith(ctx, ctx.withHeaders({ 'x-board-profile': name, 'x-board-avatar': AVATAR }), 'x-board-avatar')
+      same(message.by.profile?.toLowerCase(), name, 'the profile its header names')
+      same(message.author?.avatar ?? null, null, "the avatar of a profile whose header names none, whatever x-board-avatar says")
     },
   },
   {
     group: 'core',
-    name: 'refuses x-board-session: who writes is the principal and its profile',
+    name: 'ignores x-board-session: who writes is the principal and its profile',
     run: async (ctx) => {
       if (!ctx.withHeaders) return NO_HEADERS
-      await refusedHeader(ctx, ctx.withHeaders({ 'x-board-session': `conformance-${ctx.labels.conformance}` }), 'x-board-session')
+      const message = await postedWith(ctx, ctx.withHeaders({ 'x-board-session': `conformance-${ctx.labels.conformance}` }), 'x-board-session')
+      same(message.by.actor, ctx.me.actor, 'who a post with x-board-session is by: this run, as itself')
+      noSession(message.by, 'a post with x-board-session')
     },
   },
   {

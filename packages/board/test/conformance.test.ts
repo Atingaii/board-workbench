@@ -65,8 +65,8 @@ const withHeaders =
 /** The checks of who writes that send headers of their own, which a run that can't send them skips. */
 const HEADERS = [
   'takes a profile and its avatar as one x-board-profile header, and shows both on what it writes',
-  "refuses x-board-avatar, which x-board-profile's avatar parameter replaced",
-  'refuses x-board-session: who writes is the principal and its profile',
+  "ignores x-board-avatar, which x-board-profile's avatar parameter replaced",
+  'ignores x-board-session: who writes is the principal and its profile',
 ]
 const NO_HEADERS = "this run can't call the board with headers of its own"
 
@@ -297,25 +297,27 @@ describe('the conformance kit', () => {
     expect((await preview('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', branch: 'jb/watchers', watch: {} }])
   })
 
-  it("fails a board that reads who writes as boards did before: a profile's name alone, x-board-avatar and x-board-session, and a session on each by", async () => {
+  it("fails a board that reads who writes as boards did before: a profile's name alone, an avatar from x-board-avatar, and a session on each by", async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const older: Fetch = async (request) => {
       const headers = new Headers(request.headers)
-      // The name alone, and the two headers it took beside it, which this board would refuse.
-      const profile = headers.get('x-board-profile')
-      if (profile) headers.set('x-board-profile', profile.split(';')[0]!.trim())
+      // The name alone, with the avatar x-board-avatar names, and the session it kept.
+      const name = headers.get('x-board-profile')?.split(';')[0]!.trim()
+      const avatar = headers.get('x-board-avatar')
+      if (name) headers.set('x-board-profile', avatar ? `${name};avatar="${avatar}"` : name)
       headers.delete('x-board-avatar')
+      const session = headers.get('x-board-session')
       headers.delete('x-board-session')
       const response = await board.fetch(new Request(request, { headers }))
       if (!response.headers.get('content-type')?.includes('application/json')) return response
-      return new Response((await response.text()).replaceAll('"profile":', '"session":null,"profile":'), { status: response.status, headers: response.headers })
+      return new Response((await response.text()).replaceAll('"profile":', `"session":${JSON.stringify(session)},"profile":`), { status: response.status, headers: response.headers })
     }
     const report = await conformance(await clientOf(older), { withHeaders: withHeaders(older) })
     expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.name, check.detail])).toEqual([
       [HEADERS[0], `the profile's avatar, from its header's parameter: expected "https://example.com/conformance.png", got null`],
-      [HEADERS[1], 'a post with x-board-avatar: expected 400, and it succeeded'],
-      [HEADERS[2], 'a post with x-board-session: expected 400, and it succeeded'],
-      ['shows no session on a message, its event, or you', expect.stringMatching(/^a message should carry no session, got \{.*"session":null/)],
+      [HEADERS[1], `the avatar of a profile whose header names none, whatever x-board-avatar says: expected null, got "https://example.com/conformance.png"`],
+      [HEADERS[2], expect.stringMatching(/^a post with x-board-session should carry no session, got \{.*"session":/)],
+      ['shows no session on a message, its event, or you', expect.stringMatching(/^a message should carry no session, got \{.*"session":/)],
     ])
     const { messages } = await board.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])

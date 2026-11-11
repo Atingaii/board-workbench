@@ -142,7 +142,7 @@ const samePrincipal = (a: Principal, b: Principal) => principalId(a) === princip
  * secret of a board token `minted`, which acts as whoever minted its line. Its profile is what
  * `x-board-profile` names, with `x-board-avatar` and `x-board-session` beside it, as Vercel's API reads
  * them today; `protocol` reads them as board's protocol has it: the profile and its avatar in one
- * structured `x-board-profile`, and the other two refused.
+ * structured `x-board-profile`, and the other two ignored.
  */
 function actorOf(request: Request, tokens: Record<string, string> = {}, minted: Minted | null = null, protocol = false, enforcesCan = false): Actor {
   const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
@@ -164,8 +164,9 @@ function actorOf(request: Request, tokens: Record<string, string> = {}, minted: 
     session: request.headers.get('x-board-session') ?? undefined,
   }
   if (protocol) {
-    if (avatar !== undefined) throw new Refused(400, 'invalid_profile', 'x-board-avatar is the avatar parameter of x-board-profile now.')
-    if (session !== undefined) throw new Refused(400, 'invalid_request', 'x-board-session is gone.')
+    // What released clients still send, read by nothing: an avatar comes with a profile's header, and no session is kept.
+    avatar = undefined
+    session = undefined
     const header = request.headers.get('x-board-profile')
     if (header !== null) {
       try {
@@ -1510,7 +1511,7 @@ export function fakeMessageboard(
     /**
      * Who writes is read as board's protocol has it, as Vercel's API will once it conforms: the profile and its avatar
      * in one structured `x-board-profile` (`fixer;avatar="https://…"`), and `x-board-avatar` and `x-board-session`
-     * refused with 400. Without it, as the API reads them today: the name alone in `x-board-profile`, the avatar in
+     * ignored, as released clients still send them. Without it, as the API reads them today: the name alone in `x-board-profile`, the avatar in
      * `x-board-avatar`, and a session it keeps on the actor.
      */
     protocolProfile?: boolean

@@ -23,15 +23,11 @@ export type ResolvedActor = {
  * credential is.
  */
 export function claimsOf(headers: Headers): Claims {
-  // The old header, refused rather than ignored, as x-board-scope is: a client that still sends it would lose its avatar unsaid.
-  if (headers.get('x-board-avatar') !== null)
-    throw badRequest('x-board-avatar is the avatar parameter of x-board-profile now: send x-board-profile: <name>;avatar="<url>"', 'invalid_profile')
   const { profile, avatar } = profileOf(headers.get('x-board-profile'))
-  // Sessions are gone: who writes is a principal and a profile. Refused, so a client that still sends one hears so.
-  if (headers.get('x-board-session') !== null)
-    throw badRequest('x-board-session is gone: who writes is the principal and its profile, so leave it out, or write as a profile with x-board-profile', 'invalid_request')
-  // A handle and a name come from what verified the caller: `x-board-handle` and `x-board-name`, which
-  // clients sent before, are read by nothing.
+  // What clients sent before, which released `vb` still does and which changes no one's identity, is read by
+  // nothing: a person's picture (`x-board-avatar`), whom an avatar comes to only through a profile's header
+  // now, a coding agent's session (`x-board-session`), which is never kept, and a handle and name
+  // (`x-board-handle`, `x-board-name`), which come from what verified the caller.
   // Set by a proxy that holds the credential (Pi's sandbox); it only narrows.
   // The old name, refused rather than ignored: ignoring it would give a proxy that still sends it the token's whole access.
   if (headers.get('x-board-scope') !== null) throw badRequest('x-board-scope is x-board-can now: send the same value as x-board-can', 'invalid_scope')

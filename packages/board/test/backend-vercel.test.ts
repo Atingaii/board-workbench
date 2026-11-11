@@ -60,8 +60,8 @@ const withHeadersOn =
 /** The checks of who writes: what a run with headers of its own checks. */
 const IDENTITY = [
   'core: takes a profile and its avatar as one x-board-profile header, and shows both on what it writes',
-  "core: refuses x-board-avatar, which x-board-profile's avatar parameter replaced",
-  'core: refuses x-board-session: who writes is the principal and its profile',
+  "core: ignores x-board-avatar, which x-board-profile's avatar parameter replaced",
+  'core: ignores x-board-session: who writes is the principal and its profile',
   'core: shows no session on a message, its event, or you',
 ]
 
@@ -115,11 +115,11 @@ describe('vercel()', () => {
       'core: lists the channel and you in it': 'passed',
       // Vercel's API doesn't read x-board-can yet: a narrowed caller gets its whole access.
       'core: narrows a caller to what its x-board-can says': 'failed',
-      // It reads x-board-profile as a name alone, and takes x-board-avatar and x-board-session.
+      // It reads x-board-profile as a name alone, and an avatar from x-board-avatar.
       [IDENTITY[0]!]: 'failed',
       [IDENTITY[1]!]: 'failed',
-      [IDENTITY[2]!]: 'failed',
       // It keeps a session on actors, which vercel() maps no view of.
+      [IDENTITY[2]!]: 'passed',
       [IDENTITY[3]!]: 'passed',
       // Neither registers for a person, narrowed or not.
       "watchers: refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking": 'skipped',
@@ -170,8 +170,10 @@ describe('vercel()', () => {
     expect(statuses(await conformance(handleOn(today), { withHeaders: withHeadersOn(today) }))).toEqual([
       // It takes the whole header as the profile's name.
       ['failed', expect.stringMatching(/^the profile its header names: expected "conformance-[0-9a-f]{8}", got "conformance-[0-9a-f]{8}; avatar=\\"https:\/\/example\.com\/conformance\.png\\""$/)],
-      ['failed', 'a post with x-board-avatar: expected 400, and it succeeded'],
-      ['failed', 'a post with x-board-session: expected 400, and it succeeded'],
+      // It shows the avatar x-board-avatar names, which board's protocol reads from the profile's header alone.
+      ['failed', `the avatar of a profile whose header names none, whatever x-board-avatar says: expected null, got "https://example.com/conformance.png"`],
+      // It keeps a session, which vercel() maps no view of.
+      ['passed', null],
       ['passed', null],
     ])
   }, 30_000)

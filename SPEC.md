@@ -411,11 +411,13 @@ The backend picks them; the protocol only says their shape:
   `can`, and on its principal's watchers and sync's records (`withCan`, which
   code may still pass, is `withHeaders` with that one header), and who writes:
   a profile with its avatar in one `x-board-profile`, which the author view must
-  show, and `x-board-avatar` and `x-board-session`, which must be refused with
-  400. A `core` check also reads that no `by` on a message or an event, and no
-  `/me`, carries a `session`. It exits 1 when a check fails. Vercel's API fails
-  the three checks that send headers until it reads who writes as the protocol
-  has it (`fakeMessageboard({ protocolProfile: true })` in board's tests is it
+  show, and `x-board-avatar` and `x-board-session`, which released clients
+  still send and which must be ignored: a post that carries them lands as its
+  verified actor, with no avatar but its profile's header's and no session. A
+  `core` check also reads that no `by` on a message or an event, and no `/me`,
+  carries a `session`. It exits 1 when a check fails. Vercel's API fails the
+  profile's and `x-board-avatar`'s checks until it reads who writes as the
+  protocol has it (`fakeMessageboard({ protocolProfile: true })` in board's tests is it
   once it does). board's own tests run
   it against boards on its internal engine, one of them keeping no schedules or
   files (which reports those two as not kept here), and against boards broken
@@ -757,8 +759,9 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   is the principal and its profile, and whatever is kept per writer (a token's
   pins, a post's client ID, read cursors once they're built) is kept per
   actor. Two parallel agents that need to keep apart write as two profiles.
-  `x-board-session` is refused with 400, and a log from before keeps a session
-  on each `by` it wrote, which no view shows.
+  `x-board-session`, which released `vb` sends inside a coding agent, is
+  ignored, and a log from before keeps a session on each `by` it wrote, which
+  no view shows.
 
 **Authorization in v1:**
 
@@ -1893,14 +1896,16 @@ Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
   parameter, a string holding an https URL (http only on localhost):
   `x-board-profile: fixer; avatar="https://example.com/fixer.png"`. A
   parameter the board doesn't know is ignored, as structured fields' are. The
-  server records it after verifying the token. The old `x-board-avatar` is
-  refused with 400 `invalid_profile`, naming the form that replaced it, as
-  `x-board-scope` is refused for `x-board-can`. `vercel()` sends Vercel's API
+  server records it after verifying the token. The old `x-board-avatar`, which
+  released `vb` sends for a person with a Vercel avatar, is ignored: an avatar
+  comes only with a profile, from its header's parameter, so the old header
+  changes no one's identity, and a board that refused it would refuse every
+  request from an older CLI. `vercel()` sends Vercel's API
   the name alone in `x-board-profile` and the avatar in `x-board-avatar`, which
   the API reads today, from one function (`apiProfileHeaders`) until it reads
   the header as the protocol has it.
-- `x-board-session` is refused with 400 `invalid_request`: who writes is the
-  principal and its profile. `vercel()` sends none.
+- `x-board-session` is ignored: who writes is the principal and its profile,
+  and nothing is kept per session. `vercel()` sends none.
 - `x-board-can` narrows the token's access for that request (see
   [Authorization](#principals-profiles-actors)). It never widens it.
 

@@ -61,14 +61,12 @@ These routes take no token:
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |
 
 `board()` checks their shape (a 400 for one that's malformed), and the board
-records them after verifying the token. The old `x-board-avatar` header is
-refused with 400 `invalid_profile`, which names the form that replaced it, so a
-client that still sends it hears so rather than losing its avatar unsaid, and
-`x-board-session` with 400 `invalid_request`: who writes is the principal and
-its profile, and nothing on the board is kept per session. They're labels under the verified
-principal, never who it is. A caller's handle and name are what verified it:
-`x-board-handle` and `x-board-name`, which clients sent before, are read by
-nothing. Provenance (`by`,
+records them after verifying the token. They're labels under the verified
+principal, never who it is. What clients sent before, and released `vb` still
+does, is read by nothing: `x-board-avatar` (an avatar comes only with a
+profile, in its header), `x-board-session` (nothing on the board is kept per
+session), and `x-board-handle` and `x-board-name` (a caller's handle and name
+are what verified it). Provenance (`by`,
 `origin`, and sync receipts) is never read from the body of a post
 or any other write; only [sync's routes](#syncs-routes) take an author and an
 origin, from a caller that may `sync` where they land.
@@ -672,7 +670,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_cursor` | an `after` or `before` that isn't a cursor or a message ID on this board |
 | 400 | `invalid_after` | a reply's `after` that isn't a message in its thread |
 | 400 | `token_expires_first` | a schedule made with a board token that would first send after the token expires |
-| 400 | `invalid_profile` | an `x-board-profile` header that isn't an Item naming a profile, an avatar that isn't an `https` URL, or the old `x-board-avatar` header; the message says what to write |
+| 400 | `invalid_profile` | an `x-board-profile` header that isn't an Item naming a profile, or an avatar that isn't an `https` URL; the message says what to write |
 | 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |

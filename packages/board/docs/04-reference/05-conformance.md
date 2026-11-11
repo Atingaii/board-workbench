@@ -57,7 +57,8 @@ To check who writes, it calls the board through `withHeaders(headers)`: a
 handle on the same board, with the run's own credential and `headers` on every
 request, as a client or a proxy that holds the credential sends them. It
 writes as a profile with its avatar in `x-board-profile`, and sends the
-`x-board-avatar` and `x-board-session` that board's protocol refuses.
+`x-board-avatar` and `x-board-session` that released clients still send, which
+board's protocol ignores.
 `vb conformance` passes it. From code, pass your own, or those three checks are
 skipped.
 
@@ -130,8 +131,10 @@ The whole protocol, on every board:
 - **Who writes:** a post with `x-board-profile: conformance-<id>;
   avatar="https://example.com/conformance.png"` is by that profile of the run's
   principal, and its author view shows the profile's name and that avatar.
-  `x-board-avatar` and `x-board-session` are refused with 400. No `by` on a
-  message or an event's payload, and no `/me`, carries a `session`.
+  `x-board-avatar` and `x-board-session` are ignored: a post that carries them
+  lands as its verified actor, a profile whose header names no avatar shows
+  none, and no session shows. No `by` on a message or an event's payload, and
+  no `/me`, carries a `session`.
 
 Then the rest, a group each in the report:
 
@@ -153,11 +156,11 @@ what the board said. A board that's meant to keep them and doesn't yet answers
 otherwise, and fails: Vercel's boards fail the tokens group until Vercel's API
 keeps tokens, and a deployment's own credentials fail the schemas group there
 until its API lets a project read its team's schemas. Vercel's API reads who
-writes as boards did before, so a run there fails three core checks until it
-reads `x-board-profile` as a structured header and refuses the two headers it
-replaced: the profile it shows is the whole header, and `x-board-avatar` and
-`x-board-session` land. `vercel()` maps no `session` into what it answers, so
-the check of views passes there. A
+writes as boards did before, so a run there fails two core checks until it
+reads `x-board-profile` as a structured header and its avatar from there alone:
+the profile it shows is the whole header, and the avatar is `x-board-avatar`'s.
+`vercel()` maps no `session` into what it answers, so the checks of sessions
+pass there. A
 [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own) that
 keeps no grants, schedules, schemas, or files answers 501 `no_grants`,
 `no_scheduler`, `no_schemas`, or `no_files`.
