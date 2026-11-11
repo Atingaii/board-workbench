@@ -377,7 +377,22 @@ function labelPairs(values: string[] | undefined, wrong = "Labels look like key=
  * A message's text: the argument, stdin for `-`, or the file `--text-file` names (`-` for stdin).
  * `optional` when the message can go without, as one with `--attach` files can.
  */
-async function text(value: string | undefined, { optional = false } = {}): Promise<string> {
+async function text(value: string | undefined, options: { optional?: boolean } = {}): Promise<string> {
+  const said = await given(value, options)
+  if (said.length > MESSAGE_TEXT_MAX) throw tooLong(flags['text-file'])
+  return said
+}
+
+/** Text over the limit, which an `--attach` file carries instead: whoever hits it is told so. */
+const tooLong = (file: string | undefined) =>
+  new Failed({
+    class: 'limit',
+    reason: 'payload_too_large',
+    message: `${file === undefined || file === '-' ? "Can't send the text." : `Can't use ${file} as the text.`} A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.`,
+    next: [{ instruction: 'Put the long part in a file and --attach it, with a short summary as the text' }],
+  })
+
+async function given(value: string | undefined, { optional = false } = {}): Promise<string> {
   const file = flags['text-file']
   if (file !== undefined) {
     if (value !== undefined) throw usage("Can't use --text-file with text: pass one or the other.")
@@ -385,7 +400,7 @@ async function text(value: string | undefined, { optional = false } = {}): Promi
     const data = await io.readFile(file).catch((error: unknown) => {
       // A file too big to attach is far too long for a message: say it of the text, not of --attach.
       if (!(error instanceof Failed) || error.failure.reason !== 'payload_too_large') throw error
-      throw new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't use ${file} as the text. A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.` })
+      throw tooLong(file)
     })
     if (!data) throw usage(`Can't read ${file}. There's no such file.`, { reason: 'file_not_found', next: [] })
     return new TextDecoder().decode(data).replace(/\n$/, '')
