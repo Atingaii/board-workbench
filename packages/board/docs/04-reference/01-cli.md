@@ -27,7 +27,7 @@ The CLI makes no HTTP calls of its own: every command goes through
 does. Help, usage, and errors use the name it's given. It has every command but
 [`inspect`](#inspect) and [`serve`](#serve), which run something on this
 machine, so an app that bundles it brings neither the inspector nor a local
-board. Either one, typed there, points to board's own CLI.
+board.
 
 ```ts
 import { createApp } from '@vercel/board/cli'

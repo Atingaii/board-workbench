@@ -76,20 +76,14 @@ describe('the embedded CLI', () => {
     vi.unstubAllEnvs()
   })
 
-  it("names the app that runs it in help, usage, and errors, and has neither inspect nor serve, which point to board's own CLI", async () => {
+  it('names the app that runs it in help, usage, and errors, and has neither inspect nor serve', async () => {
     const app = createApp({ appName: 'vercel board' })
     const help = await capture(() => app.run(['help']))
     expect(help.code).toBe(0)
     expect(help.stdout).toMatch(/^vercel board \d+\.\d+\.\d+\S*: a message board you mount in one route\n\nusage: vercel board <command> \[options\]\n/)
     expect(help.stdout).not.toMatch(/also installed as|^\s+(serve|inspect) /m)
-    // The same run, as typed, its help included, with the team the app took for itself (--scope) left to fill in.
-    vi.stubEnv('BOARD_URL', '')
-    const pointer = (command: string, line: string) => ({ code: 2, stdout: '', stderr: `error: vercel board has no ${command}: board's own CLI runs it.\n\n  Run board's own CLI:\n    ${line}\n` })
-    expect(await capture(() => app.run(['inspect', '--port', '0']))).toEqual(pointer('inspect', 'npx @vercel/board@latest inspect --port 0 --scope <TEAM>'))
-    // serve runs a board of its own, so it needs no team.
-    expect(await capture(() => app.run(['serve', '--help']))).toEqual(pointer('serve', 'npx @vercel/board@latest serve --help'))
-    // A URL names the board, and with it its team.
-    expect(await capture(() => app.run(['--url', 'https://board.example/api/board', 'inspect']))).toEqual(pointer('inspect', 'npx @vercel/board@latest --url https://board.example/api/board inspect'))
+    for (const command of ['inspect', 'serve'])
+      expect(await capture(() => app.run([command]))).toEqual({ code: 2, stdout: '', stderr: `error: Unknown command ${command} for vercel board.\n\n  See all commands:\n    vercel board --help\n` })
     const extra = await capture(() => app.run(['conformance', 'extra']))
     expect(extra).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
     expect(extra.stderr).toContain('    vercel board conformance --help\n')
