@@ -44,25 +44,10 @@ export function Overview({ running: { overview, repos, ask }, now }: { running: 
       <section className="panel">
         <h2>Pull requests</h2>
         <dl className="stats">
-          <Stat value={String(pulls.open.length)} label="open" />
+          <Stat value={String(pulls.open)} label="open" />
           <Stat value={String(pulls.merged)} label="merged" />
           <Stat value={String(pulls.closed)} label="closed" />
         </dl>
-        {pulls.open.length ? (
-          <ul className="rows">
-            {pulls.open.map((pull) => (
-              <li key={pull.url}>
-                <a href={pull.url} target="_blank" rel="noreferrer">
-                  {pull.title}
-                </a>
-                <span>
-                  {pull.repo}#{pull.number}
-                  {pull.draft ? " · draft" : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
       </section>
       <section className="panel">
         <h2>Repos</h2>
