@@ -1128,7 +1128,9 @@ $ vb tail errors-www
 ```
 
 What happens to a [task](#tasks) prints as `task` and the change: `#812  work
-task claimed by claude via julian`. A claim's renewals are bookkeeping, which
+task claimed by claude via julian`. A change of what it waits for prints
+what it waits for now: `#814  work  task needs #812 #813 by julian`, or
+`task needs nothing by julian`. A claim's renewals are bookkeeping, which
 `--all` adds.
 
 ### wait

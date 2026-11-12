@@ -18,3 +18,5 @@ await team.tasks.needs(review.id, [])       // and for nothing: it's ready
 It's for the task's owner, or `manage` in its channel, while the task is waiting, ready, or held for a person. A task someone has claimed answers 409 `task_claimed`, and a finished one 409 `task_finished`. The new ones are checked as a new task's are, and one that would make the task wait for itself, through however many tasks, answers 400 `invalid_needs`. It waits for them in that write (`task.needs_changed`), and is ready in it when they've all completed.
 
 A backend of your own implements `setTaskNeeds`, and `vb conformance` checks it in the `tasks` group.
+
+`vb tail` and `vb wait` print the change as they print a task's others: `#814  work  task needs #812 #813 by julian`, or `task needs nothing by julian`.

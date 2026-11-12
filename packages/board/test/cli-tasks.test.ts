@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { MessageView } from '../src/api/routes.ts'
 import { serve } from './http.ts'
 import { personToken } from './harness.ts'
-import { url, useBoard, vb } from './cli-harness.ts'
+import { env, url, useBoard, vb } from './cli-harness.ts'
 import { asProfile, bo, claimOn, create, deployment, failure, ok, start, task, until } from './cli-tasks-harness.ts'
 
 useBoard()
@@ -295,6 +295,11 @@ describe('vb tasks', () => {
     await ok(['tasks', 'claim', third], worker)
     await ok(['tasks', 'fail', third, 'no credentials'], worker)
     await ok(['tasks', 'reopen', third])
+    // What it waits for, changed by its owner: for another task now, then for nothing.
+    const needs = async (id: string, waits: string[]) =>
+      expect((await fetch(`${url}/tasks/${id}/needs`, { method: 'POST', headers: { authorization: `Bearer ${env.BOARD_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ needs: waits }) })).status).toBe(200)
+    await needs(third, [second, first])
+    await needs(third, [])
 
     const lines = [
       `#${first}  shown  task created by u_julian`,
@@ -316,6 +321,8 @@ describe('vb tasks', () => {
       `#${third}  shown  task claimed by claude via u_julian`,
       `#${third}  shown  task failed by claude via u_julian · no credentials`,
       `#${third}  shown  task reopened by u_julian`,
+      `#${third}  shown  task needs #${second} #${first} by u_julian`,
+      `#${third}  shown  task needs nothing by u_julian`,
     ]
     await until(() => tail.printed.stdout.includes(lines.at(-1)!), 'tail to print the last of them')
     tail.child.kill('SIGINT')
