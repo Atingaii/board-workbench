@@ -20,10 +20,10 @@ repo has a convention, follow it. The rest is for where it has none.
 preview deployment, and shows wherever the PR does.
 
 A name like that isn't yours alone: another thread may have asked for the same thing, and a push
-to its branch would land on its PR. Before you push, check the name is free
-(`git ls-remote --exit-code --heads origin factory/<name>` finds nothing, and so does
+to its branch would land on its PR. Before your first push of a new branch, check the name is
+free (`git ls-remote --exit-code --heads origin factory/<name>` finds nothing, and so does
 `gh pr list --repo <owner/repo> --head factory/<name> --state all`), and pick another when it
-isn't.
+isn't. Once the branch is yours, with your PR on it, keep pushing to it.
 
 ## Title
 
