@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { slackChannels } from "../app/api/board/[[...path]]/channels.ts";
 import { agentPrompt, markdown } from "../lib/markdown.ts";
 import { isDone, setup, type Deps, type Step, type Task } from "../lib/setup.ts";
 
@@ -263,8 +263,9 @@ test("Slack set up without its app in the channel says to invite it, and holds u
   assert.deepEqual(commands(steps.slack!), ["/invite @factory"]);
   // It says what the channel is for, in a line, and links to the line that names it, in this factory's own repo.
   assert.equal(todo(steps.slack!)[0]!.hint, "Where the factory updates itself.");
+  // The template puts the channel's name together from the project's: that entry is the line.
   const [href] = links(steps.slack!);
-  assert.ok(linked(href!).includes(JSON.stringify(Object.keys(slackChannels)[0])), "the link should open on the line that names the Slack channel");
+  assert.match(linked(href!), /^\s*\[slackChannel\("-rsi"\)\]: "dev\/factory",$/);
   assert.ok(requests.includes("https://slack.com/api/auth.test"));
   assert.deepEqual(Object.values(steps).filter((step) => !step.optional && !isDone(step)), []);
 });
@@ -280,12 +281,13 @@ const uninvited = (channels: Deps["channels"]) =>
   }).deps;
 
 test("the link to the Slack channel follows its line after someone edits channels.ts", async () => {
-  // A factory that added repos above the Slack channel, wrote it in single quotes, and names it in a comment first.
+  // A factory that added repos above its Slack channels, put another channel first, and wrote its own
+  // in single quotes under a comment that names it.
   const edited = CHANNELS.replace('  // "acme/web": "dev",', '  "acme/web": "dev",\n  "acme/api": "dev",\n  "acme/docs": "dev",').replace(
-    '  "#factory-rsi"',
-    "  // '#factory-rsi' is where the factory updates itself.\n  '#factory-rsi'",
+    '  [slackChannel("-rsi")]: "dev/factory",',
+    `  "#dev": "dev",\n  // '#factory-rsi' is where the factory updates itself.\n  '#factory-rsi': "dev/factory",`,
   );
-  assert.equal(edited.split("\n").length, CHANNELS.split("\n").length + 3);
+  assert.equal(edited.split("\n").length, CHANNELS.split("\n").length + 4);
   const [href] = links((await shown(uninvited(() => edited))).slack!);
   assert.match(linked(href!, edited), /^\s*'#factory-rsi': "dev\/factory"/);
   // And not on the line it had before the edit.
@@ -295,6 +297,36 @@ test("the link to the Slack channel follows its line after someone edits channel
 test("a channels.ts that can't be read, or doesn't name the channel on a line, is linked as a file", async () => {
   assert.deepEqual(links((await shown(uninvited(() => undefined))).slack!), [CHANNELS_URL]);
   assert.deepEqual(links((await shown(uninvited(() => "export const slackChannels = channelsFromEnv();\n"))).slack!), [CHANNELS_URL]);
+  // A map with no entry has no line of its own: not its comment, not its closing brace.
+  assert.deepEqual(links((await shown(uninvited(() => "export const slackChannels = {\n  // none yet\n};\n"))).slack!), [CHANNELS_URL]);
+});
+
+/** The board's config as a deployment with `env` loads it: its connectors, and the Slack channels it mirrors. */
+function configured(env: Record<string, string>): { connectors: Record<string, string>; slack: string[] } {
+  const script = `
+    const { connectors } = await import("./app/api/board/[[...path]]/factory.ts");
+    const { slackChannels } = await import("./app/api/board/[[...path]]/channels.ts");
+    console.log(JSON.stringify({ connectors, slack: Object.keys(slackChannels) }));`;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: new URL("..", import.meta.url), env: { PATH: process.env.PATH, NODE_ENV: "test", ...env }, encoding: "utf8" });
+  return JSON.parse(out.trim().split("\n").at(-1)!);
+}
+
+test("a factory's connectors and Slack channel are named for its Vercel project, so two on a team don't collide", () => {
+  assert.deepEqual(configured({ VERCEL_PROJECT_NAME: "acme-factory" }), {
+    connectors: { github: "github/acme-factory", slack: "slack/acme-factory" },
+    slack: ["#acme-factory-rsi"],
+  });
+  // A dev server has no VERCEL_PROJECT_NAME: its project is the one the token it pulled names.
+  assert.deepEqual(configured({ VERCEL_OIDC_TOKEN: jwt({ owner: "acme", project: "web-factory" }) }), {
+    connectors: { github: "github/web-factory", slack: "slack/web-factory" },
+    slack: ["#web-factory-rsi"],
+  });
+  // Vercel takes a dot in a project's name and 100 characters. Slack takes neither in a channel's: 80 at most.
+  assert.deepEqual(configured({ VERCEL_PROJECT_NAME: "acme.factory" }).slack, ["#acme-factory-rsi"]);
+  const [long] = configured({ VERCEL_PROJECT_NAME: "f".repeat(100) }).slack;
+  assert.equal(long, `#${"f".repeat(76)}-rsi`);
+  // Signed out, with nothing to name it for.
+  assert.deepEqual(configured({}), { connectors: { github: "github/factory", slack: "slack/factory" }, slack: ["#factory-rsi"] });
 });
 
 test("Slack's app in its channel, by name, is done", async () => {

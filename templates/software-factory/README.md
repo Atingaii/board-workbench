@@ -18,9 +18,14 @@ fixes and features, reviews every PR, and stays quiet when nothing's for it.
      so it exists), and AI Gateway (the agent's model).
    - **GitHub.** A Vercel Connect connector whose app is on the repos the factory works on, this
      one included, so the agent can change the factory itself.
-   - **Slack**, optionally. `#factory-rsi`, the channel where the factory updates itself: its own
-     pull requests land there, and it's where to talk about how it works.
+   - **Slack**, optionally. The channel where the factory updates itself: its own pull requests
+     land there, and it's where to talk about how it works.
    - **Try it.** Open an issue, or post on the board, and the agent replies.
+
+   The connectors and the Slack channel are named for your Vercel project: `github/factory`,
+   `slack/factory`, and `#factory-rsi` for a project named `factory`. A team's second factory gets
+   its own. Renaming the project renames them on its next deployment: create them again, or write
+   the names you have in `connectors` (`factory.ts`) and `slackChannels` (`channels.ts`).
 
    Or hand it to your agent: **Copy prompt** copies what to paste. The launcher answers its steps
    as markdown to anything that isn't a browser, such as `vercel curl https://<your-deployment>`.
@@ -36,7 +41,7 @@ Until the deployment turns strangers away, the launcher shows only how to protec
 ## What it does with what it hears
 
 - **This repo's own PRs and issues come into `dev/factory`,** where people talk with the agent
-  about the factory itself, and Slack's `#factory-rsi` mirrors it. Map each of your other repos
+  about the factory itself, and Slack's `#<project>-rsi` mirrors it. Map each of your other repos
   and Slack channels to a board channel in `app/api/board/[[...path]]/channels.ts`:
   `"acme/web": "dev"`.
 - **The agent hears every message in `dev` and the channels under it,** and decides what each

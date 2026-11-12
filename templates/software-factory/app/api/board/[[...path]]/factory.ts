@@ -2,6 +2,7 @@ import { board } from "@vercel/board";
 import { github, repos } from "@vercel/board/sync-github";
 import { channels, slack } from "@vercel/board/sync-slack";
 import { wakeAgent } from "../../../../agent/lib/wake.ts";
+import { projectName } from "../../../../lib/project.ts";
 import { repoChannels, slackChannels } from "./channels.ts";
 import { appLogin, withoutForksOrOwn } from "./github.ts";
 
@@ -11,8 +12,8 @@ import { appLogin, withoutForksOrOwn } from "./github.ts";
 /** Which repos and Slack channels come in, and where: channels.ts is the file to edit. */
 export { repoChannels, slackChannels };
 
-/** This factory's Vercel Connect connectors. */
-export const connectors = { github: "github/factory", slack: "slack/factory" };
+/** This factory's Vercel Connect connectors, named for its Vercel project: a team has one connector per name. */
+export const connectors = { github: `github/${projectName()}`, slack: `slack/${projectName()}` };
 
 /** Production is on the team's default board. Anything else, your dev server included, is on one of its own, so it never answers production's threads. */
 export const boardName = process.env.VERCEL_ENV === "production" ? null : "factory-dev";
