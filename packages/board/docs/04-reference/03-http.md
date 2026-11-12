@@ -118,6 +118,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator (as a profile, only what that profile scheduled), or `manage` in its channel. Answers `{ schedule, canceled }` |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, id?, needs?, for?, claim?, lease? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` roots one. Answers 201 `{ task, claim? }`, where `task` is its root. See [Tasks](#tasks) |
 | POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of 1 to 100 tasks, in one write. A task is `{ key?, text, labels?, noSync?, attachments?, needs?, for? }`. Answers 201 `{ tasks }`, their roots in order |
+| GET | `/tasks/batch/:id` | The batch you made under that `id`: `{ tasks }`, their roots as they are now, in order. 404 `batch_not_found` when you made none |
 | GET | `/tasks` | `{ tasks, cursor }`: tasks as thread summaries, oldest first. Query: `channel`, `state`, `label`, `by`, `owner`, `for`, `needs`, `after`, `limit` |
 | POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: claims the oldest ready task in a channel or subtree. Answers `{ task, claim }`, or `{ task: null }` |
 | POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
@@ -433,7 +434,9 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   are 400 `invalid_needs`. `id` names the request: the same `id` again, with
   the same channel and the same tasks (as many, in the same order, each with
   the same fields), answers the tasks the first request made, as they are
-  now, and makes none. Anything else under it is 409 `duplicate_id`. More
+  now, and makes none. Anything else under it is 409 `duplicate_id`. The
+  request is told as it was sent, before the
+  [middleware](../01-board/08-middleware.md), which a retry never reaches. More
   than 100 tasks, or more than a board holds in one write, is 400
   `batch_too_large`: send it in parts.
 - **A claim is a lease.** `lease` is seconds, 30 to 3600, and 900 when left
@@ -808,6 +811,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 404 | `not_found` | no such route, a request a board with no backend doesn't serve, or a webhook for a sync entry the board doesn't have |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `post_not_found` | no such thing, or one the caller can't read |
 | 404 | `not_a_task` | a task route for a thread that isn't a task |
+| 404 | `batch_not_found` | `GET /tasks/batch/:id` for an `id` the caller made no batch under |
 | 404 | `schema_not_found` | a schema version no one registered |
 | 404 | `thread_not_found` | `GET /sync/threads/:thread` for a thread that isn't there, or that the caller can't sync |
 | 404 | `no_registration`, `no_match`, `no_item` | pulling matches with no registration, or acking a match or inbox event that isn't waiting for the caller |

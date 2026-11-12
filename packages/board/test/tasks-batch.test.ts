@@ -188,6 +188,8 @@ describe('several tasks made at once', () => {
     expect(code(await batch(ada, [...plan, { text: 'and one more' }], { id: 'release-42' }))).toEqual([409, 'duplicate_id'])
     for (const [what, other] of Object.entries<Asked[]>({
       'another text': [{ key: 'fix', text: 'fix the import' }, plan[1]!],
+      'another key': [{ key: 'repair', text: 'fix the export' }, { text: 'review the fix', needs: [{ key: 'repair' }] }],
+      'one more key': [plan[0]!, { ...plan[1]!, key: 'review' }],
       'a need less': [plan[0]!, { text: 'review the fix' }],
       'a label': [plan[0]!, { ...plan[1]!, labels: { step: 'review' } }],
       'a file': [{ ...plan[0]!, attachments: [file.id] }, plan[1]!],
@@ -202,9 +204,6 @@ describe('several tasks made at once', () => {
     // A field left out is its empty value: the same request written out in full is the same batch.
     const full = [{ key: 'fix', text: 'fix the export', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'review the fix', needs: [{ key: 'fix' }], labels: {} }]
     expect((await batch(ada, full, { id: 'release-42' })).body.tasks.map((root: MessageView) => root.id)).toEqual(ids)
-    // A task's key is its name for the call alone: the board goes by what was made, so the same tasks under other keys are the same batch.
-    const renamed = [{ key: 'repair', text: 'fix the export' }, { text: 'review the fix', needs: [{ key: 'repair' }] }]
-    expect((await batch(ada, renamed, { id: 'release-42' })).body.tasks.map((root: MessageView) => root.id)).toEqual(ids)
     // What's happened to its tasks since is no part of what was asked: an edit, a label, what one waits for now.
     await ada('POST', `/messages/${ids[1]}/edit`, { text: 'review the fix, carefully' })
     await ada('POST', `/messages/${ids[1]}/labels`, { set: { step: 'review' } })
@@ -212,6 +211,7 @@ describe('several tasks made at once', () => {
     const after = await batch(ada, plan, { id: 'release-42' })
     expect([after.status, after.body.tasks.map((root: MessageView) => [root.id, root.text, root.task?.needs])]).toEqual([201, [[ids[0], 'fix the export', []], [ids[1], 'review the fix, carefully', []]]])
     expect(await listed(ada)).toHaveLength(4)
+    await ada('POST', `/tasks/${ids[1]}/needs`, { needs: [ids[0]] })
     // An id that is someone else's to write with is refused, as a post's is: the board's own, and another client's key.
     expect(code(await batch(ada, plan, { id: '0f8fad5b-d9cb-8469-a165-70867728950e' }))).toEqual([400, 'invalid_request'])
     expect(code(await batch(ada, plan, { id: 'key:vercel:user:u_bo:0123456789abcdef0123456789abcdef' }))).toEqual([400, 'invalid_request'])
@@ -222,6 +222,59 @@ describe('several tasks made at once', () => {
     await batch(ada, plan)
     await batch(ada, plan)
     expect(await listed(ada)).toHaveLength(9)
+    // The batch made under an id is its maker's to find again, as a post is by its own: its tasks as they are now.
+    const found = await ada('GET', '/tasks/batch/release-42')
+    expect([found.status, found.body.tasks.map((root: MessageView) => [root.id, root.task?.state])]).toEqual([200, [[ids[0], 'claimed'], [ids[1], 'waiting']]])
+    expect(code(await ada('GET', '/tasks/batch/release-41'))).toEqual([404, 'batch_not_found'])
+    expect(code(await bo('GET', '/tasks/batch/release-42'))).toEqual([404, 'batch_not_found'])
+    expect(code(await ada('GET', '/tasks/batch/release-42?request=another'))).toEqual([409, 'duplicate_id'])
+  })
+
+  it('answer a retry before the middleware sees it: each root is screened once, whatever it would make of the request now, and what was asked is told as it was given', async () => {
+    // A middleware that is never the same twice: it counts what it sees, and stamps each root with the count.
+    const saw: string[] = []
+    const stamp: Middleware = async ({ write, next }) => {
+      saw.push(write.text)
+      await next({ text: write.text.toUpperCase(), labels: { seen: String(saw.length) } })
+    }
+    const { board, ada } = await setup({ middleware: [stamp] })
+    const plan: Asked[] = [{ key: 'fix', text: 'fix the export' }, { text: 'review the fix', needs: [{ key: 'fix' }] }]
+    const first = await batch(ada, plan, { id: 'release-42' })
+    expect([first.status, first.body.tasks.map((root: MessageView) => [root.text, root.labels.seen])]).toEqual([201, [['FIX THE EXPORT', '1'], ['REVIEW THE FIX', '2']]])
+    // The same request again gets the tasks that landed, as they landed, and the middleware never hears of it.
+    const again = await batch(ada, plan, { id: 'release-42' })
+    expect([again.status, again.body.tasks.map((root: MessageView) => [root.id, root.text, root.labels.seen])]).toEqual([201, first.body.tasks.map((root: MessageView) => [root.id, root.text, root.labels.seen])])
+    expect(saw).toEqual(['fix the export', 'review the fix'])
+    expect(await listed(ada)).toHaveLength(2)
+    // Another request under the id is refused as it was given, before the middleware, though it would make the same of both.
+    expect(code(await batch(ada, [{ key: 'fix', text: 'FIX THE EXPORT' }, plan[1]!], { id: 'release-42' }))).toEqual([409, 'duplicate_id'])
+    expect(saw).toHaveLength(2)
+    // One it drops landed nothing, so the same request again is screened again: there was no write to count.
+    const picky: Middleware = async ({ write, next }) => void (saw.push(write.text), write.text.includes('password') ? undefined : await next())
+    const strict = await setup({ middleware: [picky] })
+    saw.length = 0
+    const secret: Asked[] = [{ text: 'rotate the key' }, { text: 'the password is hunter2' }]
+    expect(code(await batch(strict.ada, secret, { id: 'rotate-1' }))).toEqual([422, 'dropped'])
+    expect(code(await batch(strict.ada, secret, { id: 'rotate-1' }))).toEqual([422, 'dropped'])
+    expect(saw).toHaveLength(4)
+    expect(await listed(strict.ada)).toEqual([])
+    // A sender that can't read what it made gets its tasks back from a retry as the write answered them.
+    const loud: Middleware = async ({ write, next }) => void (saw.push(write.text), await next({ text: write.text.toUpperCase() }))
+    const shouting = await setup({ middleware: [loud] })
+    await shouting.board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { intake: ['post'] } })
+    const workflow = caller(shouting.board.fetch, await workflowToken())
+    saw.length = 0
+    const filed = await batch(workflow, [{ text: 'triage the outage' }], { channel: 'intake', id: 'outage-1' })
+    const refiled = await batch(workflow, [{ text: 'triage the outage' }], { channel: 'intake', id: 'outage-1' })
+    expect([filed.status, refiled.status, refiled.body.tasks]).toEqual([201, 201, filed.body.tasks])
+    expect(filed.body.tasks[0]).toMatchObject({ text: 'TRIAGE THE OUTAGE', task: { state: 'ready' } })
+    expect((await listed(shouting.ada, 'channel=intake&state=all')).map((root) => root.text)).toEqual(['TRIAGE THE OUTAGE'])
+    expect(saw).toEqual(['triage the outage'])
+    // The board's own handle is answered the same way: its batch's retry is no second write for the middleware.
+    saw.length = 0
+    const mine = await board.tasks.createMany('work', plan, { id: 'handle-1' })
+    expect((await board.tasks.createMany('work', plan, { id: 'handle-1' })).map((root) => root.id)).toEqual(mine.map((root) => root.id))
+    expect(saw).toEqual(['fix the export', 'review the fix'])
   })
 
   it('are 100 at most on any board: one more is batch_too_large, and makes none', async () => {

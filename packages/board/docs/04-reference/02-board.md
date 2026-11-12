@@ -457,16 +457,16 @@ const [fix, review, ship] = await team.tasks.createMany(
 - **`id` names the request.** The same `id` again, with the same channel and
   the same tasks, answers the tasks the first call made, as they are now, and
   makes none. The tasks are the same when there are as many, in the same
-  order, each with the same text, labels, `noSync`, files, needs, and `for`.
-  Anything else under that `id` is 409 `duplicate_id`. A board keeps an `id`
-  for good.
+  order, each with the same `key`, text, labels, `noSync`, files, needs, and
+  `for`, as you gave them. Anything else under that `id` is 409
+  `duplicate_id`. A board keeps an `id` for good.
 - **100 tasks at most.** More is 400 `batch_too_large`, and so is a batch
   with more than a board holds in one write. Nothing is made.
   [`local()`](../01-board/10-local.md) holds all 100, one append of at most
   301 events. Vercel's board holds fewer: see below.
 - **The middleware sees each task's root as a post,** one after the other,
-  before any is written: one it drops makes none. A retry goes through it
-  again.
+  before any is written: one it drops makes none. A retry of a batch that
+  landed never reaches it.
 
 ```ts
 import { board, createTasksInChunks, TasksInChunksError, type TaskInBatch } from '@vercel/board'
@@ -562,9 +562,10 @@ it gives:
   chain of 13 fits, or of 12 with an `id`, and 11 tasks with a label each
   either way. More is 400 `batch_too_large`, with nothing made, and its
   message says how many the batch counts for.
-- **A task's `key` is part of the request there.** The same `id` with the
-  same tasks under other keys is 409 `duplicate_id`. `local()` goes by what
-  was made, and answers the batch.
+- **A retried batch goes through the middleware again there.** The API has
+  no read of a batch by its `id`, and tells the same request by what it's
+  sent, after the middleware. One that isn't the same twice makes a retry
+  409 `duplicate_id`.
 - **A batch's request is 64 KB at most,** which long texts reach first: six
   tasks of 10,000 characters fit, and seven don't. That's `batch_too_large`
   too, with nothing made, so one code says "send less". `createTasksInChunks`

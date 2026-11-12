@@ -126,7 +126,8 @@ describe('createTasksInChunks', () => {
     expect(made.slice(1, 101).map((root) => root.id)).toEqual(created.slice(1, 101).map((root) => root!.id))
     expect(made.map((root) => root.task?.needs)).toEqual(made.map((_, n) => (n > 1 ? [made[n - 1]!.id] : n === 1 ? [] : [made[229]!.id])))
     expect(await all(team)).toHaveLength(230)
-    expect(sent.map((batch) => batch.tasks.length)).toEqual([100, 100, 30])
+    // The batch that landed was found again, not sent again: only the two that hadn't were.
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([100, 30])
     // And once more makes nothing: every batch is answered as it stands.
     expect((await createTasksInChunks(team, 'work', plan, { id: 'release-42' })).map((root) => root.id)).toEqual(made.map((root) => root.id))
     expect(await all(team)).toHaveLength(230)

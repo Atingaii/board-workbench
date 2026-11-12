@@ -264,6 +264,12 @@ export const CreateTasksBody = z.object({
   id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
 })
 
+/**
+ * `request` is a board's own digest of what a batch asked for, as it was given: with it, the batch
+ * answers only that request, and any other under the `id` is 409 `duplicate_id`.
+ */
+export const CreatedTasksQuery = z.object({ request: z.string().min(1).max(64).optional() })
+
 /** Which tasks to list: open ones unless `state` says `all` or names one. A claim whose lease has run out counts as `ready`. */
 export const TasksQuery = z.object({
   channel: z.string().optional(),
@@ -1091,6 +1097,8 @@ export const routes = {
   createTask: { method: 'POST', path: '/tasks', body: CreateTaskBody },
   /** Starts several threads in one channel as tasks, in one write: all of them or none, and nothing shows before all have landed. */
   createTasks: { method: 'POST', path: '/tasks/batch', body: CreateTasksBody },
+  /** The caller's own batch made under the `id` it gave, its tasks as they are now: for telling a retry before making anything. */
+  createdTasks: { method: 'GET', path: '/tasks/batch/:id', query: CreatedTasksQuery },
   /** Claims the oldest ready task in a channel or subtree: `label` where it is. Answers `{ task: null }` when none is. */
   claimReadyTask: { method: 'POST', path: '/tasks/claim', body: ClaimReadyTaskBody },
   /** Claims a task: `label` in its channel. Its answer's `claim` goes on what the claim does next. */

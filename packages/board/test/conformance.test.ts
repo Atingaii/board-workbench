@@ -543,7 +543,7 @@ describe('the conformance kit', () => {
     // checked where requests reach the board with no handle in front (test/tasks.test.ts).
   }, 60_000)
 
-  it("fails a board that gets a batch of tasks wrong: one that makes them in turn, one that keeps part of a batch it refuses, one that forgets a batch's id, one that knows it by its size alone, one that drops what its tasks wait for, and one that answers out of order", async () => {
+  it("fails a board that gets a batch of tasks wrong: one that makes them in turn, one that keeps part of a batch it refuses, one that forgets a batch's id, two that take an id for other tasks, one that drops what its tasks wait for, and one that answers out of order", async () => {
     const BATCH = 'makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once'
     const ATOMIC = 'makes none of a batch when one of its tasks can not be made, wherever it comes in it'
     const failed = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
@@ -594,10 +594,21 @@ describe('the conformance kit', () => {
       return forgetful.fetch(new Request(request, { body: JSON.stringify(body) }))
     }
     expect(failed(await conformance(await clientOf(noId)))).toEqual([[BATCH, expect.stringMatching(/^the tasks a retry with the same id answers: expected \[.+\], got \[.+\]$/)]])
-    // One that knows a batch by its id and its size alone: as many other tasks under the id get the first ones back.
+    // One that finds a batch by its id whatever is asked under it: other tasks under the id get the first ones back.
+    const careless = testBoard({ scheduler: fakeQueue().scheduler })
+    const byIdAlone: Fetch = async (request) => {
+      const url = new URL(request.url)
+      if (request.method !== 'GET' || !/\/tasks\/batch\/[^/]+$/.test(url.pathname)) return careless.fetch(request)
+      url.searchParams.delete('request')
+      return careless.fetch(new Request(url, request))
+    }
+    expect(failed(await conformance(await clientOf(byIdAlone)))).toEqual([[BATCH, 'another batch under the same id: expected 409 duplicate_id, and it succeeded']])
+    // And one that knows a batch by its id and its size: as many other tasks under the id get the first ones back.
     const counting = testBoard({ scheduler: fakeQueue().scheduler })
     const first = new Map<string, Sent>()
     const bySize: Fetch = async (request) => {
+      // It has no way to ask whether a batch landed: every batch is sent to be made.
+      if (request.method === 'GET' && /\/tasks\/batch\/[^/]+$/.test(new URL(request.url).pathname)) return Response.json({ error: { code: 'batch_not_found', message: 'no batch of yours has that id' } }, { status: 404 })
       if (!batching(request)) return counting.fetch(request)
       const body = (await request.json()) as Sent
       const before = body.id !== undefined ? first.get(body.id) : undefined

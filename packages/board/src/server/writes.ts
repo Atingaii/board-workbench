@@ -402,21 +402,22 @@ export type RootInput = { id: string; text: string; labels?: Labels | undefined;
 export type AlongEach = () => Promise<{ position: number; counts: readonly number[]; events: (roots: readonly { id: number; thread: string }[]) => Events[] }>
 
 /**
- * What a batch's root was asked to be a task with, for a retry to tell its own request by: the tasks
- * that were there it waits for, the batch's others by their place in it, and whom it's for.
+ * A batch made under an `id`, as its sender finds it again: the tasks' roots it landed with, as they
+ * are now, or why there are none for it. `made`: none landed. `yours`: someone else's did. `asked`:
+ * it landed for another request.
  */
-export type RootTask = { there: readonly number[]; inside: readonly number[]; for: string | null }
+export type LandedBatch = { tasks: MessageView[] } | { not: 'made' | 'yours' | 'asked' }
 
 /**
  * Several new threads in `channel`, in one append: each root with what `with` makes of it right
  * after it, in the order given, all of them or none. Answers the roots as the append left them.
- * With `again`, the roots are a caller's own to send again: ones the same request landed already
- * are answered as they are, and nothing is written. `again.past` is the ID one more root would
- * have had, and `again.tasks` what each was asked to be a task with.
+ * With `again`, the roots are a caller's own to send again: `again.landed` finds the ones the same
+ * request landed already, which are answered as they are with nothing written, and `again.asked`
+ * is the ID the event right after the first root carries, which says what was asked for.
  */
 export async function writeRoots(
   ctx: WriteContext,
-  input: { identity: Identity; proofs: PostProofs; channel: string; roots: readonly RootInput[]; with: AlongEach; again?: { past: string; tasks: readonly RootTask[] } | undefined },
+  input: { identity: Identity; proofs: PostProofs; channel: string; roots: readonly RootInput[]; with: AlongEach; again?: { asked: string; landed: () => Promise<LandedBatch> } | undefined },
 ): Promise<MessageView[]> {
   const { identity, channel, roots } = input
   const { access } = identity.principal
@@ -428,7 +429,9 @@ export async function writeRoots(
   const read: { landed: MessageView[] | null } = { landed: null }
   const rows = await appendFrom(ctx, async () => {
     // A batch that landed stands, each time it looks: a retry of it, or the same one sent at the same time, which landed first.
-    read.landed = input.again ? await landedRoots(ctx, identity, channel, roots, input.again) : null
+    const found = input.again ? await input.again.landed() : null
+    if (found && 'not' in found && found.not !== 'made') throw duplicateId()
+    read.landed = found && 'tasks' in found ? found.tasks : null
     if (read.landed) return { position: 0, events: [] }
     const { position, counts, events: more } = await input.with()
     // The batch lands right after the index it read at, so every root's ID is known before any is written.
@@ -439,6 +442,8 @@ export async function writeRoots(
       return here
     })
     const came = more(placed)
+    // The event right after the first root says what the batch was asked for, by its ID: an `id` again is this batch only for that.
+    if (input.again && came[0]?.[0]) came[0][0] = { ...came[0][0], id: input.again.asked } as Events[number]
     const events: Events = seen ? [seen] : []
     for (const [at, root] of roots.entries()) {
       if (came[at]!.length !== counts[at]) throw new Error(`a root's append carries the ${counts[at]} events it said, not ${came[at]!.length}`)
@@ -484,48 +489,25 @@ export async function writeRoots(
 }
 
 /**
- * The roots a batch landed with these IDs, as its sender gets them back: null when the first never
- * landed. Only the same request is a retry, and the log says what the first one asked for: as many
- * roots, in this channel, each as its own append made it, with the same text, labels, files, and
- * `noSync`, waiting for the same tasks, for the same actor. Anything else under those IDs is
- * another write's. What's happened to a root since (an edit, a claim) makes it no other request.
+ * The batch a caller made under an `id`, found by the IDs its events carry, as a post is by its
+ * own: `rootId` names each root's post in turn, and `asked`, when the caller says what it asks
+ * for, the event right after the first one. What's happened to its tasks since makes it no other
+ * batch, and neither does what the middleware made of it: `asked` is of the request as given.
  */
-async function landedRoots(ctx: WriteContext, identity: Identity, channel: string, roots: readonly RootInput[], asked: { past: string; tasks: readonly RootTask[] }): Promise<MessageView[] | null> {
-  if (!(await ctx.reads.byEventId(roots[0]!.id))) return null
-  if (await ctx.reads.byEventId(asked.past)) throw duplicateId()
-  const landed: Message[] = []
-  for (const root of roots) {
-    const found = await ctx.reads.byEventId(root.id)
-    if (!found || found.channel !== channel || found.re !== null) throw duplicateId()
-    landed.push(found)
+export async function landedBatch(ctx: WriteContext, identity: Identity, rootId: (at: number) => Promise<string>, asked: string | undefined): Promise<LandedBatch> {
+  const first = await ctx.reads.byEventId(await rootId(0))
+  if (!first) return { not: 'made' }
+  const tasks: MessageView[] = []
+  for (let at = 0, landed: Message | null = first; landed; landed = await ctx.reads.byEventId(await rootId(++at))) {
+    const mine = await landedFor(ctx, identity, landed)
+    if (!mine) return { not: 'yours' }
+    tasks.push(mine)
   }
-  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
-  const sorted = (labels: Labels | undefined) => Object.entries(labels ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))
-  const { access } = identity.principal
-  const shown: MessageView[] = []
-  for (const [at, root] of roots.entries()) {
-    // The root as its own append made it: its post, and what made it a task right after.
-    const events = (await ctx.session.history({ gte: landed[at]!.id, lte: landed[at]!.id + ALONG_MAX })) as BoardEvent[]
-    const posted = (events[0] as BoardEvent<'message.posted'>).payload
-    const created = events.slice(1, 1 + (posted.along ?? 0)).find((event): event is BoardEvent<'task.created'> => event.type === 'task.created')?.payload
-    const task = asked.tasks[at]!
-    const waits = [...task.there, ...task.inside.map((other) => landed[other]!.id)]
-    const files = (attachments: readonly Attachment[] | undefined) => (attachments ?? []).map((file) => file.id)
-    if (
-      !created ||
-      posted.text !== root.text ||
-      posted.noSync !== (root.noSync ?? false) ||
-      !same(sorted(posted.labels), sorted(root.labels)) ||
-      !same(files(posted.attachments), files(root.attachments)) ||
-      !same(created.needs, waits) ||
-      created.for !== task.for
-    )
-      throw duplicateId()
-    const mine = await landedFor(ctx, identity, landed[at]!)
-    if (!mine) throw duplicateId()
-    shown.push(shownTo(mine, access, root.text))
+  if (asked !== undefined) {
+    const [, made] = (await ctx.session.history({ gte: first.id, lte: first.id + 1 })) as BoardEvent[]
+    if (made?.id !== asked) return { not: 'asked' }
   }
-  return shown
+  return { tasks }
 }
 
 /**

@@ -31,7 +31,7 @@ import { compileWatcher, createWatchers, ID, registrantSession } from './watch.t
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
-import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, writeRoots, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
+import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, writeRoots, landedBatch, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
 import { SYNC_ACTOR, type WriteOrigin } from './origin.ts'
 import { derivedId, isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
@@ -352,6 +352,13 @@ function build(options: A2Options, binding: BoardBinding) {
     }
   }
 
+  /**
+   * The IDs the events of a batch made under `id` carry, as a post's carries its own: each root's post in turn, and the
+   * event after the first root, which says what the batch was asked for. A batch is found again by them alone.
+   */
+  const batchRoot = (id: string, at: number) => derivedId('board-batch', id, String(at))
+  const batchAsked = (id: string, request: string) => derivedId('board-batch-request', id, request)
+
   /** Files a write carries, as the board stored them: each one the caller may have, or 404 as if it didn't exist. */
   const attachmentsFor = (principal: Granted, ids: readonly string[] | undefined) =>
     Promise.all(
@@ -616,14 +623,24 @@ function build(options: A2Options, binding: BoardBinding) {
       ownId(caller, principal, body.id)
       const made = tasks.startingMany(identity, body.tasks)
       // A batch's `id` names its roots in order, so a retry finds the ones that landed. They're the board's own IDs, which no request posts with.
-      const rootId = (at: number) => (body.id !== undefined ? derivedId('board-batch', body.id, String(at)) : Promise.resolve(crypto.randomUUID()))
+      const rootId = (at: number) => (body.id !== undefined ? batchRoot(body.id, at) : Promise.resolve(crypto.randomUUID()))
       const roots = await Promise.all(
         body.tasks.map(async (task, at) => ({ id: await rootId(at), text: task.text, labels: task.labels, noSync: task.noSync, attachments: await attachmentsFor(principal, task.attachments) })),
       )
-      // The same `id` again is the same batch only for the same request, which the roots that landed say: as many, there,
-      // each with the same text, labels, and files, waiting for the same tasks, for the same actor.
-      const again = body.id !== undefined ? { past: await rootId(body.tasks.length), tasks: made.asked } : undefined
-      return { tasks: await writeRoots(writes, { identity, proofs, channel: body.channel, roots, with: made.along, again }) }
+      // The same `id` again is the same batch only for the same request, as board() gave it: the event after the first
+      // root keeps that, in its ID. board() answers a retry before it gets here; two first calls at once meet in the write.
+      const { id } = body
+      const asked = id !== undefined ? await batchAsked(id, body.request ?? '') : undefined
+      const again = id !== undefined && asked !== undefined ? { asked, landed: () => landedBatch(writes, identity, (at) => batchRoot(id, at), asked) } : undefined
+      return { tasks: await writeRoots(writes, { identity, proofs, channel: body.channel, roots, with: made, again }) }
+    },
+    async createdTasks(caller, { id, request }) {
+      const identity = await identityOf(caller)
+      const found = await landedBatch(writes, identity, (at) => batchRoot(id, at), request !== undefined ? await batchAsked(id, request) : undefined)
+      if ('tasks' in found) return found
+      // Someone else's batch is none of the caller's, as a post is. Its own, made for another request, is another write's.
+      if (found.not === 'asked') throw duplicateId()
+      throw notFound(`no batch of yours has id ${id}`, 'batch_not_found')
     },
     claimReadyTask: async (caller, body, signal) => tasks.claimReady(await identityOf(caller), body, signal),
     claimTask: async (caller, { id, lease }) => tasks.claim(await identityOf(caller), messageAt(id), lease),

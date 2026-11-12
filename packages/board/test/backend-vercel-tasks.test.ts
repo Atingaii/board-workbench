@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { board } from '../src/server/index.ts'
+import { board, type Middleware } from '../src/server/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
 import type { Caller } from '../src/server/backend.ts'
@@ -365,6 +365,28 @@ describe("vercel()'s tasks", () => {
     expect(await julian.tasks.createMany('plans', chain(13))).toHaveLength(13)
   })
 
+  it("screens a retried batch again, where the API has no read of a batch by its key: the API tells the repeat by what the middleware made of it", async () => {
+    const api = fakeMessageboard()
+    const saw: string[] = []
+    const how = { stamps: false }
+    const screen: Middleware = async ({ write, next }) => {
+      saw.push(write.text)
+      await next(how.stamps ? { labels: { seen: String(saw.length) } } : { text: write.text.replace('ASAP', 'soon') })
+    }
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'user:u_jb'), files: api.files }), middleware: [screen] })
+    const plan = [{ key: 'fix', text: 'fix the export ASAP' }, { text: 'review the fix', needs: [{ key: 'fix' }] }]
+    const first = await team.tasks.createMany('work', plan, { id: 'release-42' })
+    expect(first.map((root) => root.text)).toEqual(['fix the export soon', 'review the fix'])
+    // A middleware that makes the same of the same request: the retry goes through it once more, and gets its tasks.
+    expect((await team.tasks.createMany('work', plan, { id: 'release-42' })).map((root) => root.id)).toEqual(first.map((root) => root.id))
+    expect(saw).toEqual(['fix the export ASAP', 'review the fix', 'fix the export ASAP', 'review the fix'])
+    // One that isn't the same twice sends the API another request under the key, which it refuses. A local board
+    // answers both before the middleware: on Vercel's it takes a read the API doesn't have.
+    how.stamps = true
+    await expect(team.tasks.createMany('work', plan, { id: 'release-42' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    expect((await team.tasks.list({ state: 'all' })).tasks).toHaveLength(2)
+  })
+
   it("refuses a write whose operation ID names no recent time, on every route that takes one, unless a receipt answers it: what the fake reads as the API does", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const api = fakeMessageboard()
@@ -551,6 +573,14 @@ describe("vercel()'s tasks", () => {
     expect(await ask({ ...keyed, tasks: [{ key: 'a', text: 'a', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'b', needs: [{ key: 'a' }] }] })).toEqual([200, null])
     expect((await julian.tasks.list({ channel: 'keyed', state: 'all' })).tasks).toHaveLength(2)
     expect(await ask({ ...keyed, tasks: [{ key: 'a', text: 'a' }, { text: 'b' }] })).toEqual([409, 'idempotency_key_reused'])
+    // The key is part of what an operation ID stands for: the operation again with another key, or with none, is another body.
+    const operationId = operationAt()
+    const once = { operationId, channel: 'keyed', tasks: plain(1) }
+    expect(await ask({ ...once, idempotencyKey: 'first' })).toEqual([200, null])
+    expect(await ask({ ...once, idempotencyKey: 'first' })).toEqual([200, null])
+    expect(await ask({ ...once, idempotencyKey: 'second' })).toEqual([409, 'operation_conflict'])
+    expect(await ask(once)).toEqual([409, 'operation_conflict'])
+    expect((await julian.tasks.list({ channel: 'keyed', state: 'all' })).tasks).toHaveLength(3)
     // A file is looked at last, once the channel a batch names is made, as for one task: a batch refused for one leaves the channel, and no task.
     expect(await ask({ channel: 'filed', tasks: [{ text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([404, 'attachment_not_found'])
     expect((await julian.channels()).map((channel) => channel.path)).toContain('filed')

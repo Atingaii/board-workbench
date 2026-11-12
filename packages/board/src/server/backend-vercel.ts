@@ -2808,6 +2808,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         ),
       }
     },
+    async createdTasks(caller, { id }) {
+      await tasksAs(caller)
+      // Vercel's API has no read of a batch by its caller's key: only the write itself answers a repeat. So board() asks
+      // it to make the batch, and its key says whether it has: a retry goes through the middleware once more on the way.
+      throw notFound(`no batch of yours has id ${id}`, 'batch_not_found')
+    },
     async claimTask(caller, { id, lease }, signal) {
       const who = await tasksAs(caller)
       const token = newClaimToken()

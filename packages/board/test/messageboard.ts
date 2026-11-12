@@ -639,7 +639,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   /** The feed shards a channel has: a batch's threads take a head on each they land on, eight at most. */
   const FEED_SHARDS = 8
   /** What each batch's operation answered, by its caller, with the body it was sent with. */
-  const batches = new Map<string, { sent: string; channelId: string; tasks: ReturnType<typeof taskOf>[] }>()
+  const batches = new Map<string, { sent: string; key: string | null; channelId: string; tasks: ReturnType<typeof taskOf>[] }>()
   /** The batch each caller's own key made, by its caller's principal, kept for good: a digest of the request, and the threads it made. */
   const keyed = new Map<string, { digest: string; channelId: string; threads: string[] }>()
   /**
@@ -1173,16 +1173,18 @@ function fakeBoard(shared: Shared, boardId: string) {
       // What the request asks for, whichever attempt sends it: its body but the operation ID.
       const { operationId: _attempt, ...asked } = body
       const sent = JSON.stringify(asked)
-      // Without a key of the caller's own, the operation again answers the tasks as the first call answered them, and
-      // another body under it is refused. A request with a key is answered by its key.
-      const first = body.idempotencyKey === undefined ? batches.get(key) : undefined
-      if (first && first.sent !== sent) throw new Refused(409, 'operation_conflict', 'That operation made other tasks.')
+      // The operation again answers the tasks as the first call answered them, and another body under it is refused: the
+      // caller's key is part of what an operation stands for, so another key, or none where it had one, is another body.
+      // The same key under it is answered by the key.
+      const first = batches.get(key)
+      const named = typeof body.idempotencyKey === 'string' ? body.idempotencyKey : null
+      if (first && (first.key !== named || (named === null && first.sent !== sent))) throw new Refused(409, 'operation_conflict', 'That operation made other tasks.')
       // To a caller that can't read the channel, only the call that made them answers them whole.
-      if (first) return { tasks: mayRead(actor, first.channelId) ? first.tasks : first.tasks.map(({ id }) => ({ id })) }
+      if (first && named === null) return { tasks: mayRead(actor, first.channelId) ? first.tasks : first.tasks.map(({ id }) => ({ id })) }
       const batch = makeBatch(actor, body)
       // The key again, with the same request: the tasks it made, as they are now, and their IDs alone to a caller that can't read them.
       if ('repeat' in batch) return { tasks: batch.repeat.threads.map((id) => (mayRead(actor, batch.repeat.channelId) ? taskOf(threadAt(id)) : { id })) }
-      const answered = { sent, channelId: batch.made[0]!.channelId, tasks: batch.made.map(taskOf) }
+      const answered = { sent, key: named, channelId: batch.made[0]!.channelId, tasks: batch.made.map(taskOf) }
       batches.set(key, answered)
       shared.receipt(actor, body.operationId)
       return { tasks: answered.tasks }

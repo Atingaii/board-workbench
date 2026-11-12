@@ -9,6 +9,7 @@ import {
   CompleteTaskBody,
   CreateTaskBody,
   CreateTasksBody,
+  CreatedTasksQuery,
   FailTaskBody,
   ReleaseTaskBody,
   RenewTaskBody,
@@ -57,7 +58,7 @@ import { checkValue } from '../contract/data-values.ts'
 import type { SyncEvent } from '../sync/engine.ts'
 import { SYNC, type Caller, type InboxDelivery, type ProtocolMethods, type SelfCaller, type VerifiedCaller } from './backend.ts'
 import type { Board, BoardContext } from './board.ts'
-import { derivedId } from '../client/ids.ts'
+import { derivedId, sha256 } from '../client/ids.ts'
 import { claimsOf, KNOWN_AGENTS, viaOf } from './actors.ts'
 import { importedHandle, userIdOf } from '../contract/profiles.ts'
 import type { CallerRequest } from './auth.ts'
@@ -156,6 +157,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return TasksQuery.parse(queryObject(url))
     case 'createTask':
       return CreateTaskBody.parse(await body())
+    case 'createdTasks':
+      return { id, ...CreatedTasksQuery.parse(queryObject(url)) }
     case 'createTasks': {
       const sent = await body()
       // More tasks than a batch makes is said as that, which its sender splits on, not as a body of the wrong shape.
@@ -500,10 +503,20 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   }
 
   /**
+   * A digest of what a batch asks for, as it was given: its channel and its tasks, as many, in the
+   * same order, each with the same key, text, labels, `noSync`, files, needs, and assignee. A field
+   * left out is its empty value. A batch made under an `id` is that `id`'s only for the same one.
+   */
+  async function batchRequest(body: Pick<Protocol['createTasks']['input'], 'channel' | 'tasks'>): Promise<string> {
+    const tasks = body.tasks.map((task) => [task.key ?? null, task.text, Object.entries(task.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)), task.noSync ?? false, task.attachments ?? [], task.needs ?? [], task.for ?? null])
+    return (await sha256(JSON.stringify([body.channel, tasks]))).slice(0, 32)
+  }
+
+  /**
    * A batch's roots through the middleware, each as the post it is, in order, then `send` with what
    * it passed on: every one before any is written, so a root it drops makes none of them. A batch
-   * that wouldn't land goes as it came, for the backend to say why. A retry goes through again: the
-   * backend answers what landed, whatever the middleware made of it this time.
+   * that wouldn't land goes as it came, for the backend to say why. One that landed already never
+   * gets here: its retry is answered before.
    */
   async function screenTasks<T>(
     caller: Caller,
@@ -827,11 +840,22 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       case 'createTasks': {
         const body = input as Protocol['createTasks']['input']
         for (const task of body.tasks) ownLabels(task.labels)
+        // A batch under an `id` that landed stands: the same request again gets its tasks, whatever the middleware would
+        // make of it now, and another request under the `id` is refused. Neither is screened: each write is, once.
+        const request = body.id !== undefined ? await batchRequest(body) : undefined
+        if (body.id !== undefined) {
+          try {
+            return await backend.createdTasks(caller, { id: body.id, request }, signal)
+          } catch (error) {
+            if (!(error instanceof HttpError && error.status === 404 && error.code === 'batch_not_found')) throw error
+          }
+        }
         // Each task's root is a post: its blocks are checked and the middleware sees it, as any post's.
         for (const task of body.tasks) await checkWrite(caller, task.text, { channel: body.channel }, signal)
         return screenTasks(caller, body, signal, async (tasks) => {
           for (const [at, task] of tasks.entries()) if (task.text !== body.tasks[at]!.text) await checkBlocks(task.text)
-          return backend.createTasks(caller, { ...body, tasks }, signal)
+          // What it asked for is what it was given, which the backend keeps with the batch: never a body's own word for it.
+          return backend.createTasks(caller, { ...body, tasks, request }, signal)
         })
       }
       case 'edit': {
