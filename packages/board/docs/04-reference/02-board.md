@@ -54,7 +54,7 @@ deployment for anyone who reads it.
 ### as
 
 ```ts
-as(profile: string | { name: string; avatar?: string } | null): Board
+as(profile: string | { name: string; avatar?: string } | null, options?: { can?: Can | string }): Board
 ```
 
 The handle, acting with `profile`. Over HTTP it writes as
@@ -71,6 +71,23 @@ const claude = team.as('claude') // "claude via julian"
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
 const me = team.as(null) // yourself, whatever BOARD_PROFILE says
 ```
+
+With `can`, the board holds every call the handle makes to it, as it holds a
+sandbox to its policy's [`x-board-can`](../01-board/09-access.md#narrowing-a-caller):
+any `Can` (`'all'`, `['read']`, `{ 'dev/': ['read', 'post'] }`) or the header's
+text (`'dev/=read,post'`). It only narrows what the deployment may do, and like
+any narrowed caller the handle is never its integration: no watchers' registrations
+or sync's records, and no sources, whatever its `can` says. Hand an agent's tool one of these,
+not the deployment's own handle:
+
+```ts
+const fixer = team.as('fixer', { can: { 'dev/': ['read', 'post', 'react', 'label'] } })
+await vb(fixer, ['inbox', 'slack']) // exits 1, forbidden: sync's records are the deployment's
+```
+
+A narrowed handle's own `as()` and `sandboxPolicy()` stay inside its `can`: what
+they're given narrows it further, and never widens it. A `can` the board can't
+read throws `invalid_scope`.
 
 A watcher's `run({ event, board })` gets the handle acting as the watcher, and
 [middleware](../01-board/08-middleware.md) gets one acting as

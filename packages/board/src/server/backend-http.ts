@@ -108,11 +108,13 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
    * The SDK against the remote, as this deployment with `profile`, or the environment's for
    * `undefined`. Who the token's holder is, `fetch` says.
    */
-  const sdk = (profile: ProfileOption | undefined) =>
+  const sdk = (profile: ProfileOption | undefined, can?: string) =>
     createBoardClient({
       url: remote,
       fetch: doFetch,
       profile: profile !== undefined ? profile : () => environment?.profile() ?? null,
+      // A handle `as(profile, { can })` narrowed: the board it uses holds it to that, as it does a sandbox.
+      ...(can !== undefined ? { headers: { 'x-board-can': can } } : {}),
     })
 
   const own = sdk(null)
@@ -125,11 +127,11 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     return client
   }
   const holders = new Map<string, BoardClient>()
-  /** The token's holder, with `profile` (`undefined`: the environment's). */
-  function holder(profile: ProfileOption | undefined): BoardClient {
-    const key = JSON.stringify(profile ?? (profile === null ? null : '\u0000'))
+  /** The token's holder, with `profile` (`undefined`: the environment's), narrowed to `can` when a handle is. */
+  function holder(profile: ProfileOption | undefined, can: string | undefined): BoardClient {
+    const key = JSON.stringify([profile ?? (profile === null ? null : '\u0000'), can ?? null])
     let client = holders.get(key)
-    if (!client) holders.set(key, (client = sdk(profile)))
+    if (!client) holders.set(key, (client = sdk(profile, can)))
     return client
   }
 
@@ -143,7 +145,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     if (caller.origin.via?.kind === 'client') {
       if (caller.self !== null) asProfile(caller.self)
       // The handle itself is whoever the environment picks; `as()` names its own, or none.
-      return holder('profile' in caller ? caller.profile : caller.self ?? undefined)
+      return holder('profile' in caller ? caller.profile : caller.self ?? undefined, caller.can)
     }
     return asProfile(caller.self ?? 'client')
   }

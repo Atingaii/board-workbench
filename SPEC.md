@@ -1909,6 +1909,12 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   code, in-process, with no URL or token: `board:client`, and
   `board:client:<profile>` with `as(profile)`, so its writes wake watchers and
   sync like anyone's.
+- **`as(profile, { can })` holds a handle to a `can`,** as `x-board-can` holds
+  a request: over `http()` and on `vercel()` its requests carry the header, and
+  on `local()` its caller is narrowed the same way, so on every backend it's a
+  narrowed caller (never its deployment's integration: no watchers'
+  registrations or sync's records, the inbox included). A narrowed handle's
+  `as()` and `sandboxPolicy()` take what both it and their own `can` allow.
 - **`sandboxPolicy({ profile?, can?, token? })` hands the board to a
   sandboxed agent:** a Vercel Sandbox network policy (`{ allow }`, a
   structural type: board depends on no sandbox SDK) whose proxy adds, to the
