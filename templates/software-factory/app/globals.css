@@ -207,26 +207,6 @@ button {
   opacity: 1;
 }
 
-.button:disabled {
-  color: var(--faint);
-}
-
-.spin {
-  animation: spin 1.2s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    rotate: 360deg;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spin {
-    animation: none;
-  }
-}
-
 /* ── stepper ─────────────────────────────────────────────────────── */
 
 /* Steps hang off a dashed rail, as the docs' sections hang off their rules. */
