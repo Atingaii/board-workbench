@@ -405,6 +405,7 @@ export function formatEvent(event: BoardEventView): string {
       return `#${message.id}  ${where}  ✗ didn't reach ${event.payload.target}: ${event.payload.error}`
     case 'task.created':
     case 'task.assigned':
+    case 'task.needs_changed':
     case 'task.ready':
     case 'task.claimed':
     case 'task.renewed':
@@ -431,6 +432,9 @@ function taskEvent(event: Extract<BoardEventView, { type: `task.${string}` }>): 
       return `created${by}${more(event.payload.needs.length ? `needs ${event.payload.needs.map((id) => `#${id}`).join(' ')}` : null, event.payload.for !== null ? `for ${profileOf(event.payload.for)}` : null)}`
     case 'task.assigned':
       return event.payload.for !== null ? `assigned to ${profileOf(event.payload.for)}${by}` : `unassigned${by}`
+    case 'task.needs_changed':
+      // What it waits for now, in place of what it waited for.
+      return `needs ${event.payload.needs.length ? event.payload.needs.map((id) => `#${id}`).join(' ') : 'nothing'}${by}`
     case 'task.ready':
       return 'ready'
     case 'task.expired':

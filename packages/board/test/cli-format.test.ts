@@ -130,6 +130,9 @@ describe('tasks', () => {
     // No one ends a lease: the board does, when its time is up.
     expect(formatEvent(event('task.expired', { message: '812', epoch: 1 }))).toBe('#812  work  task lease ran out')
     expect(formatEvent(event('task.renewed', { message: '812', epoch: 1, until: at(900_000) }, actor))).toBe('#812  work  task renewed by claude via julian')
+    // What a task waits for, changed: the ones it waits for now, or that it waits for nothing.
+    expect(formatEvent(event('task.needs_changed', { id: '812', needs: ['810', '811'] }, actor))).toBe('#812  work  task needs #810 #811 by claude via julian')
+    expect(formatEvent(event('task.needs_changed', { id: '812', needs: [] }, actor))).toBe('#812  work  task needs nothing by claude via julian')
   })
 })
 
