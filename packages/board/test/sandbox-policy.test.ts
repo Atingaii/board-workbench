@@ -215,6 +215,8 @@ describe("sandboxPolicy() on Vercel's board", () => {
     await agent.tasks.block(review.id, 'not yet')
     await agent.tasks.unblock(review.id)
     await agent.tasks.assign(review.id, fixer)
+    await agent.tasks.needs(review.id, [])
+    await agent.tasks.needs(review.id, [fix.id])
     await (await agent.tasks.claim(review.id, { lease: 60 })).fail('later')
     await agent.tasks.reopen(review.id)
     const note = await agent.post('work', 'a thread to make a task')
@@ -228,6 +230,7 @@ describe("sandboxPolicy() on Vercel's board", () => {
     // Its deployment's own aren't: the call is the sandbox's to make, and the API refuses it, so it gives itself none.
     const { task: theirs } = await pong.tasks.create('work', { text: "the deployment's own" })
     await expect(agent.tasks.assign(theirs.id, fixer)).rejects.toMatchObject({ status: 403, code: 'task_not_owned' })
+    await expect(agent.tasks.needs(theirs.id, [fix.id])).rejects.toMatchObject({ status: 403, code: 'task_not_owned' })
     await expect(agent.tasks.cancel(theirs.id, 'mine now')).rejects.toMatchObject({ status: 403, code: 'task_not_owned' })
     expect((await pong.thread(theirs.id)).message.task).toMatchObject({ state: 'ready', for: null })
     // Nothing else is the sandbox's at that version: a read of one task, which vb never asks for, another change or method, another board or team.

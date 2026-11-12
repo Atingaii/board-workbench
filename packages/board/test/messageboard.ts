@@ -598,6 +598,8 @@ function fakeBoard(shared: Shared, boardId: string) {
   const MARKED_SEEN = 3
   /** What a list or a claim-next repairs, a request at most: lapsed claims it writes as expired, and waiting tasks a list finds ready. */
   const REPAIRS = 10
+  /** How many tasks a change of what a task needs walks, behind the new ones, to see that none waits for it. */
+  const NEEDS_WALKED = 500
   /** The lapsed claims a claim-next finds: the longest-lapsed in each channel it names, and in all. */
   const LAPSED_EACH = 25
   const LAPSED_IN_ALL = 50
@@ -730,17 +732,41 @@ function fakeBoard(shared: Shared, boardId: string) {
   }
 
   /** What makes a thread a task, checked before anything is written: `self` is the thread, when it's there already. */
-  function checkedTask(actor: Actor, channel: string, spec: Record<string, any>, self: string | null) {
-    const owner = principalId(actor.principal)
-    const needs: unknown = spec.needs ?? []
+  /** The tasks a task waits for, checked before anything is written: tasks the caller reads, none canceled, and not `self`, the task itself. */
+  function checkedNeeds(actor: Actor, needs: unknown, self: string | null): string[] {
     if (!Array.isArray(needs) || needs.length > 20 || needs.some((id) => typeof id !== 'string' || !THREAD_ID.test(id)) || new Set(needs).size !== needs.length) throw bad('needs is at most 20 thread IDs, with no repeats.')
     for (const id of needs as string[]) {
       const wanted = threads.get(id)
       if (id === self || !wanted?.task || wanted.task.state === 'canceled' || !may(actor, 'read', wanted.channelId)) throw new Refused(400, 'invalid_needs', `${id} is not a task you can wait for.`)
     }
+    return needs as string[]
+  }
+  /**
+   * Refuses prerequisites that would make task `self` wait for itself: one that waits for it already, through however
+   * many tasks. It walks what the new ones need, and what those need, and gives up past `NEEDS_WALKED` tasks.
+   */
+  function acyclic(self: string, needs: readonly string[]) {
+    const from = new Map(needs.map((id) => [id, id]))
+    for (let level = [...needs]; level.length > 0; ) {
+      const next: string[] = []
+      for (const at of level)
+        for (const need of threads.get(at)?.task?.needs ?? []) {
+          if (need === self) throw new Refused(400, 'invalid_needs', `${from.get(at)} waits for this task already: they would wait for each other.`)
+          if (from.has(need)) continue
+          from.set(need, from.get(at)!)
+          next.push(need)
+        }
+      if (from.size > NEEDS_WALKED) throw new Refused(400, 'invalid_needs', `More than ${NEEDS_WALKED} tasks are behind those: too many to check that none waits for this task.`)
+      level = next
+    }
+  }
+
+  function checkedTask(actor: Actor, channel: string, spec: Record<string, any>, self: string | null) {
+    const owner = principalId(actor.principal)
+    const needs = checkedNeeds(actor, spec.needs ?? [], self)
     const assigned: unknown = spec.for ?? null
     if (assigned !== null && !profileOf(owner, assigned)) throw new Refused(400, 'invalid_for', "A task is assigned to one of its owner's profiles.")
-    const waits = (needs as string[]).some((id) => threads.get(id)!.task!.state !== 'completed')
+    const waits = needs.some((id) => threads.get(id)!.task!.state !== 'completed')
     let claim: { hash: string; lease: number } | null = null
     if (spec.claim !== undefined) {
       if (typeof spec.claim !== 'object' || spec.claim === null) throw bad('claim is { claimToken, leaseSeconds? }.')
@@ -750,7 +776,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (waits) throw new Refused(409, 'task_waiting', 'The task would wait for others.')
       if (assigned !== null && assigned !== actor.id) throw new Refused(409, 'task_assigned', 'The task would be assigned to another actor.')
     }
-    return { owner, needs: needs as string[], for: assigned as string | null, waits, claim }
+    return { owner, needs, for: assigned as string | null, waits, claim }
   }
   function hold(thread: Thread, actor: Actor, claim: { hash: string; lease: number }, operationId: unknown) {
     const task = thread.task!
@@ -960,7 +986,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (!made && !mayRead(actor, first.task.channelId)) return { task: { id: first.task.id } }
       return told(first)
     }
-    const worked = /^\/tasks\/([^/]+)\/(claim|renew|release|complete|fail|block|unblock|reopen|assign|cancel)$/.exec(rest)
+    const worked = /^\/tasks\/([^/]+)\/(claim|renew|release|complete|fail|block|unblock|reopen|assign|needs|cancel)$/.exec(rest)
     if (method !== 'POST' || !worked) return undefined
     const verb = worked[2]!
     let wrote = false
@@ -1057,6 +1083,22 @@ function fakeBoard(shared: Shared, boardId: string) {
         if (task.for !== to) {
           task.for = to
           taskEvent(thread, 'task.assigned', actor, from, op)
+        }
+      } else if (verb === 'needs') {
+        ownerOrManage(actor, thread)
+        if (finishedFor(task) || task.state === 'failed') throw new Refused(409, 'task_finished', `The task is ${task.state}.`)
+        if (task.state === 'claimed' && task.claim!.until > now()) throw new Refused(409, 'task_claimed', 'Someone holds the task: what it needs changes once no one does.', undefined, task.claim!.until)
+        const needs = checkedNeeds(actor, body.needs, thread.id)
+        // The same set changes nothing: not even a lapsed claim's expiry is written for it.
+        if (needs.length !== task.needs.length || needs.some((id) => !task.needs.includes(id))) {
+          acyclic(thread.id, needs)
+          lapse()
+          // It waits for them from this write, and its `task.ready` follows in it when they have all completed: with
+          // none it's ready, and one held for a person stays held.
+          task.needs = needs
+          if (task.state !== 'blocked') task.state = needs.length > 0 ? 'waiting' : 'ready'
+          taskEvent(thread, 'task.needs_changed', actor, from, op)
+          ready(thread, actor, op)
         }
       } else {
         const reason = note(body.reason, 'reason', true)

@@ -297,7 +297,7 @@ const SANDBOX_TASK_ROUTES: readonly SandboxRoute[] = [
   { method: 'GET', path: '/tasks' },
   { method: 'POST', path: '/tasks' },
   { method: 'POST', path: '/tasks/claim' },
-  ...['claim', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'cancel'].map((change) => ({ method: 'POST', path: `/tasks/:task/${change}` })),
+  ...['claim', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'needs', 'cancel'].map((change) => ({ method: 'POST', path: `/tasks/:task/${change}` })),
 ]
 
 /**
@@ -454,6 +454,7 @@ const noTasks = () => new HttpError(501, 'no_tasks', 'this board keeps no tasks'
 const TASK_EVENTS: Record<string, BoardEventView['type']> = {
   'task.made': 'task.created',
   'task.assigned': 'task.assigned',
+  'task.needs_changed': 'task.needs_changed',
   'task.ready': 'task.ready',
   'task.claimed': 'task.claimed',
   'task.renewed': 'task.renewed',
@@ -2184,6 +2185,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       case 'task.assigned':
         payload = { ...base, for: task.for, by }
         break
+      case 'task.needs_changed':
+        payload = { ...base, needs: message.task!.needs, by }
+        break
       case 'task.claimed':
       case 'task.renewed':
         payload = { ...base, ...claimed, by }
@@ -2834,6 +2838,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async assignTask(caller, { id, for: actor }, signal) {
       const who = await tasksAs(caller)
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/assign`, { for: actor }, { id, signal })) }
+    },
+    async setTaskNeeds(caller, { id, needs }, signal) {
+      const who = await tasksAs(caller)
+      // What it waits for now, by their threads: the API checks each, and that none waits for this one.
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/needs`, { needs: needsOf(needs) }, { id, signal })) }
     },
     async cancelTask(caller, { id, reason }, signal) {
       const who = await tasksAs(caller)
