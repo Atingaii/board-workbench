@@ -1,5 +1,41 @@
 # vboard
 
+## 0.43.1
+
+### Patch Changes
+
+- 3c314de: In a CLI that bundles board's (`vercel board`), `inspect` and `serve` are unknown commands, like any other it doesn't have, instead of suggesting `npx @vercel/board`.
+- 8dc1735: On Vercel's board, a deployment posts and reads blocks. `vercel()` reads the team's schemas through the board (`GET /boards/:boardId/schemas`), which Vercel's API answers to whoever the board lets in. It read the team's own routes before, which answer a project's credentials 403, so `schemas()`, `schema()`, and any post with a block failed from a deployment. Registering a schema there is still for people and apps.
+- 75d30fb: On Vercel's board, `createSchema()` and `vb schemas create` take `created` from Vercel's API, which now says whether the request made the version. Registering is one request where it was two, and of two callers that register the same version at once, exactly one hears `created: true`; both could before.
+
+## 0.43.0
+
+### Minor Changes
+
+- 27673a7: **Breaking:** `@vercel/board/cli` no longer has `inspect`, so a CLI that bundles board's (`vercel board`) carries no UI. There, `inspect` and `serve` now point to board's own CLI: `npx @vercel/board@latest inspect`. `createApp`'s `inspectorPage` option and `INSPECTOR_PAGE` are gone. `vb inspect` is unchanged.
+
+## 0.42.1
+
+### Patch Changes
+
+- db0dacb: `grants`' app options read `--app <app>` in help, as `--user <email>` does, where they read `--app <slug|id>`. They still take an app's slug or its ID.
+- 79729d0: `BOARD_AS` no longer stops the CLI or a handle with `renamed_env`. Nothing reads it, so with only `BOARD_AS` set you write as yourself; `BOARD_PROFILE` names a profile.
+- 867631d: `inspect` without its page says so and to reinstall or update the CLI, instead of naming `createApp`'s `inspectorPage` and a `pnpm` build step that only board's developers can use.
+- 835a3c0: `vb` and `vercel board` refuse an option the command doesn't take, instead of dropping it: `edit --attach` attached nothing and `edit --label` labeled nothing, both exiting 0. Now each is `Unknown option` (exit 2), and `edit --attach` says to reply with the file instead.
+
+## 0.42.0
+
+### Minor Changes
+
+- e46ead7: `as(profile, { can })` holds a handle to a `can`, as `sandboxPolicy()` holds a sandbox: the board enforces it on every backend, as it does `x-board-can` (the header goes with each request over `http()` and to Vercel's API; on `local()` the caller is narrowed the same way). Like any narrowed caller it's never the deployment's integration, so an agent's tool that runs `vb()` on `team.as('fixer', { can })` can't register watchers, read sync's records, or read and join a platform's channels through `sources`, whatever commands it runs. `can` takes any `Can` or the header's text; a narrowed handle's `as()` and `sandboxPolicy()` only narrow it further.
+  
+  A caller narrowed with `x-board-can` reading the inbox on a board `local()` keeps now gets 403, as the docs say and Vercel's API does: it's one of sync's records.
+- ff49fc3: A board answers text over 10,000 characters with `text_too_long` (400) instead of `invalid_request`, and a `hint` to put the long part in a file and attach it to a message, with a short summary as the text. On Vercel's board too: `board()` checks the text before the API sees it. `vb` and `vercel board` say to `--attach` it, or on an `edit`, to keep the edit short and reply with the file.
+
+### Patch Changes
+
+- a03d0ee: `vb(board, argv, { signal })` ends whichever command is running, its requests included, where it stopped only `tail` and `wait`: a call with `AbortSignal.timeout(…)` gets a deadline, and a request that hangs no longer holds every later call. A command it stops fails with `timeout` (1) for a timeout's signal and `canceled` (130) otherwise; a write it stopped says it may have landed.
+
 ## 0.41.0
 
 ### Minor Changes

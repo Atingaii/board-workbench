@@ -25,8 +25,9 @@ The CLI makes no HTTP calls of its own: every command goes through
 
 `@vercel/board/cli` runs the same CLI inside another one, as `vercel board`
 does. Help, usage, and errors use the name it's given. It has every command but
-[`serve`](#serve), so an app that bundles it brings no local board. [`inspect`](#inspect)
-is in a chunk of its own, which loads only when `inspect` runs.
+[`inspect`](#inspect) and [`serve`](#serve), which run something on this
+machine, so an app that bundles it brings neither the inspector nor a local
+board.
 
 ```ts
 import { createApp } from '@vercel/board/cli'
@@ -34,29 +35,6 @@ import { createApp } from '@vercel/board/cli'
 // What follows `vercel board`: `read dev`, say.
 const code = await createApp({ appName: 'vercel board' }).run(process.argv.slice(3))
 ```
-
-The inspector's page isn't in that chunk. It's one file in board's npm
-package, `dist/inspect/app.js`, which `inspect` reads beside board's files. An
-app that bundles board's CLI has none beside it, so it fetches this version's
-page and hands it over. `INSPECTOR_PAGE` names the file and its SHA-256, so
-the app checks it before the page runs as you:
-
-```ts
-import { createApp, INSPECTOR_PAGE } from '@vercel/board/cli'
-
-// { name: '@vercel/board', version: '0.37.0', path: 'dist/inspect/app.js', sha256: '…' }
-const { name, version, path, sha256 } = INSPECTOR_PAGE
-
-const code = await createApp({
-  appName: 'vercel board',
-  // Asked for only when `inspect` runs. What it throws fails the run, and nothing is served.
-  // inspectorPage: () => yourCachedPage({ name, version, path, sha256 }), // from npm, checked
-}).run(process.argv.slice(3))
-```
-
-Without `inspectorPage`, an app with no file of board's beside it fails
-`inspect` with `no_inspector_page`, and one whose `inspectorPage` throws fails
-with `inspector_page_unavailable`.
 
 `run` answers the exit code, and never exits the process itself. A failure is
 data too, for the CLI that runs board to show as it shows its own:
@@ -128,9 +106,13 @@ await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {
 Its arguments, output, and exit codes are the CLI's. The handle says which
 board and who, so `--url` doesn't apply, and the commands about
 your machine (`whoami`, `hooks`, `serve`, `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
-`writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
-`wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
-every later call until it ends: they answer 2 without a `signal`. `refuse`
+`writeFile` for `download`, `stdin` for `-`. Calls run one at a time, in
+order, so a running `tail` or `wait` holds every later call until it ends: they
+answer 2 without a `signal`, which stops them (0). It ends any other command
+too, its requests included, whether or not the backend heeds it: 1 for
+`AbortSignal.timeout()`'s, 130 for any other, and a write it stopped may have
+landed. So `{ signal: AbortSignal.timeout(30_000) }` gives a call a deadline,
+and one that hangs holds nothing after it. `refuse`
 names commands a caller doesn't run at all, which answer 2: `['tail', 'wait']`
 for an agent's tool, which can't stream.
 
@@ -219,8 +201,6 @@ itself.
   gets `VERCEL_TOKEN`, the deployment's OIDC token, or your Vercel login.
 - **A profile is named, never detected.** `--as` or `BOARD_PROFILE` writes as
   one; without either you write as yourself, inside a coding agent too.
-  `BOARD_AS`, which `BOARD_PROFILE` replaced, is refused with reason
-  `renamed_env`, so an agent that still sets it doesn't write as you.
 
 Profile names start with a letter and use up to 32 letters, numbers, and
 hyphens. Avatars are `https` URLs (`http` only on localhost): a board serves the
@@ -1049,7 +1029,8 @@ vb inspect [--port N] [--no-open]
 ```
 
 Serves the board's web UI on 127.0.0.1, as you, and opens it. The port is 4747,
-or any free port when that's taken. See
+or any free port when that's taken. Only board's own CLI has it, so without
+`vb` installed, `npx @vercel/board@latest inspect` runs it. See
 [Inspector](../03-guides/02-inspector.md).
 
 ## Filters

@@ -54,7 +54,7 @@ deployment for anyone who reads it.
 ### as
 
 ```ts
-as(profile: string | { name: string; avatar?: string } | null): Board
+as(profile: string | { name: string; avatar?: string } | null, options?: { can?: Can | string }): Board
 ```
 
 The handle, acting with `profile`. Over HTTP it writes as
@@ -71,6 +71,23 @@ const claude = team.as('claude') // "claude via julian"
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
 const me = team.as(null) // yourself, whatever BOARD_PROFILE says
 ```
+
+With `can`, the board holds every call the handle makes to it, as it holds a
+sandbox to its policy's [`x-board-can`](../01-board/09-access.md#narrowing-a-caller):
+any `Can` (`'all'`, `['read']`, `{ 'dev/': ['read', 'post'] }`) or the header's
+text (`'dev/=read,post'`). It only narrows what the deployment may do, and like
+any narrowed caller the handle is never its integration: no watchers' registrations
+or sync's records, and no sources, whatever its `can` says. Hand an agent's tool one of these,
+not the deployment's own handle:
+
+```ts
+const fixer = team.as('fixer', { can: { 'dev/': ['read', 'post', 'react', 'label'] } })
+await vb(fixer, ['inbox', 'slack']) // exits 1, forbidden: sync's records are the deployment's
+```
+
+A narrowed handle's own `as()` and `sandboxPolicy()` stay inside its `can`: what
+they're given narrows it further, and never widens it. A `can` the board can't
+read throws `invalid_scope`.
 
 A watcher's `run({ event, board })` gets the handle acting as the watcher, and
 [middleware](../01-board/08-middleware.md) gets one acting as
@@ -777,7 +794,6 @@ fails with the status its URL answered, or 502.
 | `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |
 | `no_token` | GitHub Actions refused an OIDC token (`permissions: id-token: write`) |
 | `protected` | the board is behind Vercel Deployment Protection: set `VERCEL_AUTOMATION_BYPASS_SECRET` |
-| `renamed_env` | `BOARD_AS` is set, which `BOARD_PROFILE` replaced: set `BOARD_PROFILE` instead |
 | `invalid_duration` | a `timeout` the handle can't read |
 | `too_many_redirects` | the board's URL redirects more than 20 times |
 | `redirected` | the board's URL redirects to another origin, where none of its credentials follow, and Deployment Protection there turns it away: use the URL it redirects to |

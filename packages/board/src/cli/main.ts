@@ -161,8 +161,6 @@ export type CommandContext = {
   connection: typeof connection
   client: () => Board
   openBrowser: (url: string) => void
-  /** The app's copy of the inspector's page, when it hands one (`App`'s). */
-  inspectorPage?: () => Promise<string>
 }
 
 /**
@@ -193,11 +191,6 @@ export type App = {
    * its saved team), asked for only when a request needs it. Null is your login's default team.
    */
   team?: () => Promise<string | null>
-  /**
-   * The inspector's page, for an app that bundles board's CLI and so has no file of board's beside
-   * it: `INSPECTOR_PAGE`'s, as the app fetched and checked it. Asked for only when `inspect` runs.
-   */
-  inspectorPage?: () => Promise<string>
 }
 
 type Flags = ReturnType<typeof parseAll>['values']
@@ -247,6 +240,18 @@ function parse(argv: string[]) {
   } catch (error) {
     throw parseFailure(error as Error & { code?: string }, argv, word)
   }
+  // An option only another command takes would be dropped without a word (`edit --attach`): it's unknown here too.
+  const known = specOf(word) && new Set(optionsOf(word))
+  const foreign = known && ordered.find((option) => !known.has(option.name))
+  if (foreign) throw foreignOption(foreign.name, word!)
+}
+
+/** An option `word` doesn't take: what to do instead, where there's something better to say than that. */
+function foreignOption(name: string, word: string): Failed {
+  if (name === 'text' && TEXT.has(word)) return usage(`--text is a filter for read, tail, and wait. ${word} takes its text as an argument, in quotes.`)
+  if (name === 'sync' && word === 'schedule') return usage("Can't use --sync with schedule. A schedule posts where you point it.")
+  if (name === 'attach' && word === 'edit') return usage("edit can't attach files: reply with the file instead.", { reason: 'unknown_option', next: [{ instruction: 'Reply with it', argv: [...cli(), 'reply', '<ID>', '<TEXT>', '--attach', '<FILE>'] }] })
+  return usage(`Unknown option --${name} for ${named()} ${word}.`, { reason: 'unknown_option', next: [{ instruction: 'See all options', argv: [...cli(), word, '--help'] }] })
 }
 
 /** What the parser rejected, as misuse: an unknown option (with the likeliest one meant), or an option without its value. */
@@ -279,8 +284,12 @@ function parseFailure(error: Error & { code?: string }, argv: string[], word: st
 }
 
 /** The options `word`'s command takes, its subcommands' and the filters included, and the ones every command takes. */
+/** The command `word` names, board's or the app's, as help shows it. */
+const specOf = (word: string | undefined): CliCommand | undefined =>
+  word === undefined ? undefined : [...commands, ...Object.values(app.commands).map((own) => own.spec)].find((known) => known.name === word)
+
 function optionsOf(word: string | undefined): string[] {
-  const command = [...commands, ...Object.values(app.commands).map((own) => own.spec)].find((known) => known.name === word)
+  const command = specOf(word)
   const own = command ? [command, ...(command.subcommands ?? [])].flatMap((c) => [...c.options, ...(c.filters ? filterOptions : [])]) : []
   return [...own, ...globalOptions].map((option) => option.name)
 }
@@ -304,7 +313,7 @@ export type Io = {
   writeFile(path: string, data: Uint8Array): Promise<void>
   /** What `-` reads. */
   stdin(): Promise<string>
-  /** Stops `tail` and `wait`; without one, Ctrl-C does. */
+  /** Stops `tail` and `wait`, and fails any other command its requests haven't finished, as `board`'s handle ends them; without one, Ctrl-C stops `tail` and `wait`. */
   signal?: AbortSignal
   /** The handle to run on, in place of the one the environment and `--url` find. */
   board?: Board
@@ -385,8 +394,6 @@ function labelPairs(
  * and would be dropped without a word: say so, and how each is written.
  */
 function oneText(command: string, target: string, extra: string[]) {
-  if (flags.text !== undefined)
-    throw usage(`--text is a filter for read, tail, and wait. ${command} takes its text as an argument, in quotes.`)
   const [first] = extra
   if (first === undefined) return
   if (/^[\w.-]+=/.test(first))
@@ -706,8 +713,6 @@ function failureOf(error: unknown): Failure {
       case 'wrong_audience':
       case 'redirected':
         return own('usage', 'wrong_url')
-      case 'renamed_env':
-        return own('usage', 'renamed_env')
       case 'too_large':
         return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
       case 'no_team':
@@ -1191,7 +1196,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const [target, body] = args
       if (!target) throw usage('Missing the channel or message to schedule a message in.', { reason: 'missing_arguments' })
       if (!flags.in && !flags.at && !flags.every) throw usage("Can't schedule a message without a time: pass --in 1d, --at <time>, or --every 30m.", { reason: 'missing_arguments' })
-      if (flags.sync?.length) throw usage("Can't use --sync with schedule. A schedule posts where you point it.")
       const times = flags.times === undefined ? undefined : Number(flags.times)
       if (times !== undefined && !(Number.isInteger(times) && times > 0)) throw usage(`--times takes a count, and ${flags.times} isn't one.`)
       const board = client()
@@ -1549,10 +1553,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'inspect':
-      // Loaded only now: the page comes with it, and it's most of what the CLI ships.
-      return (await import('./inspect.ts')).inspect(context())
-
     default: {
       const own = app.commands[command]
       if (own) return own.run(args, context())
@@ -1637,7 +1637,6 @@ const context = (): CommandContext => ({
   connection,
   client,
   openBrowser,
-  ...(app.inspectorPage ? { inspectorPage: app.inspectorPage } : {}),
 })
 
 /**
@@ -1691,10 +1690,32 @@ async function runOnce(argv: string[], options: App): Promise<number> {
     }
     return await run(command, args)
   } catch (error) {
+    // Its caller's signal ended its requests: `tail` and `wait` end as they do when it stops them, the rest say so.
+    if (io.signal?.aborted) {
+      if (current.command === 'tail' || current.command === 'wait') return 0
+      error = stopped(io.signal.reason)
+    }
     // Before the parser says, `--json` is whether it was typed before any `--`.
     const json = flags.json ?? argv.slice(0, argv.includes('--') ? argv.indexOf('--') : undefined).includes('--json')
     return report(failureOf(error), json)
   }
+}
+
+/** The commands that change the board, whatever their arguments. */
+const WRITES = new Set(['post', 'reply', 'edit', 'delete', 'label', 'react', 'schedule', 'sync'])
+
+/** What a run its caller's signal stopped says: a write it was making may have landed. */
+function stopped(reason: unknown): Failed {
+  const timedOut = reason instanceof Error && reason.name === 'TimeoutError'
+  // A subcommand that writes is `channels create`'s first word, `sources <key> join`'s second.
+  const sub = current.command === 'sources' ? current.args[1] : current.args[0]
+  const writes = WRITES.has(current.command ?? '') || ['create', 'update', 'revoke', 'cancel', 'join'].includes(sub ?? '')
+  return new Failed({
+    class: timedOut ? 'timeout' : 'canceled',
+    reason: timedOut ? 'timeout' : 'canceled',
+    message: `${timedOut ? 'Timed out' : 'Stopped'} before it could ${doing()}.`,
+    ...(writes ? { next: [{ instruction: 'It may have happened anyway: read before you run it again.' }] } : {}),
+  })
 }
 
 /** The commands about the machine the CLI runs on, not the board: none of them run in-process. */
