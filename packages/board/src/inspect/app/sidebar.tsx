@@ -7,7 +7,7 @@ import { Avatar } from './message.tsx'
 import { Link, navigate, type Route } from './nav.tsx'
 import type { State } from './store.ts'
 import { ContextMenuArea, Menu, MenuItem, MenuSeparator } from './ui.tsx'
-import { shownName } from './words.ts'
+import { boardWords, shownName } from './words.ts'
 
 // --- sidebar -------------------------------------------------------------------------
 
@@ -51,12 +51,16 @@ export function Sidebar({ state, current, onCollapse }: { state: State; current:
     }
     return [...out]
   }, [state.channels])
+  const where = boardWords(state.discovery)
   const [adding, setAdding] = useState(false)
   const copy = (text: string) => void navigator.clipboard.writeText(text).then(() => toast(`copied ${text}`))
   return (
     <div className="sidebar-col">
       <div className="brand">
-        <span>board</span>
+        <span className="which" title={state.discovery?.url}>
+          <span className="name">{where.name}</span>
+          {where.at && <span className="at">{where.at}</span>}
+        </span>
         <button className="tool" title="hide the sidebar" onClick={onCollapse}>
           <PanelLeftClose size={15} strokeWidth={1.75} />
         </button>
@@ -104,7 +108,7 @@ export function Sidebar({ state, current, onCollapse }: { state: State; current:
           <Settings size={14} strokeWidth={1.75} />
           <span>settings</span>
         </Link>
-        <ProfileMenu me={state.me!} board={state.discovery?.url ?? ''} />
+        <ProfileMenu me={state.me!} />
       </div>
     </div>
   )
@@ -150,7 +154,7 @@ function remembered(name: string): board.Profile {
 }
 
 /** Who you post as: yourself, one of your agents' profiles, or any profile you name, with the avatar you give it. */
-function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
+function ProfileMenu({ me }: { me: Me }) {
   // The profile you're naming or changing, as it starts out; null while the menu shows.
   const [editing, setEditing] = useState<board.Profile | null>(null)
   const person = me.via?.name ?? me.handle
@@ -204,17 +208,14 @@ function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
     </MenuItem>
   )
   return (
-    <div className="whoami-wrap" title={`${me.actor}\n${url}`}>
+    <div className="whoami-wrap" title={me.actor}>
       <Menu
         className="whoami"
         title="post as"
         trigger={
           <>
             <Avatar name={shownName(me)} url={me.avatar} size={24} />
-            <span className="grow">
-              <span className="as">as {shownName(me)}</span>
-              <span className="faint url">{url.replace(/^https?:\/\//, '')}</span>
-            </span>
+            <span className="as grow">as {shownName(me)}</span>
             <ChevronsUpDown size={13} />
           </>
         }

@@ -3,7 +3,7 @@ import type { BoardEventView, MessageView, ScheduleView, SchemaView } from '../s
 import { block } from '../src/contract/blocks.ts'
 import * as store from '../src/inspect/app/store.ts'
 import { continues } from '../src/inspect/app/store.ts'
-import { cadence, laterFields, localInput, principalName, span, timingWords, until } from '../src/inspect/app/words.ts'
+import { boardWords, cadence, laterFields, localInput, principalName, span, timingWords, until } from '../src/inspect/app/words.ts'
 
 const ME = 'vercel:user:u_julian'
 
@@ -297,6 +297,16 @@ describe('the inspector store', () => {
     expect(cadence({ every: null, times: null, sent: 0, until: null })).toBe('once')
     expect(cadence({ every: 7 * 86_400_000, times: 4, sent: 1, until: null })).toBe('every 7d · 1 of 4 sent')
     expect(cadence({ every: 3_600_000, times: null, sent: 12, until: null })).toBe('every 1h · 12 sent')
+  })
+
+  it('says which board it is: its name and host where it has a name, else its host and where on it', () => {
+    // A team's board in Vercel's API has a name, and every one is on the same host.
+    expect(boardWords({ url: 'https://api.vercel.com/v1/messageboard/boards/brd_1?teamId=team_1', name: 'General' })).toEqual({ name: 'General', at: 'api.vercel.com' })
+    // A board mounted on a deployment is known by its host, and where it's mounted there.
+    expect(boardWords({ url: 'https://board.acme.com/api/board' })).toEqual({ name: 'board.acme.com', at: '/api/board' })
+    expect(boardWords({ url: 'http://localhost:4000/' })).toEqual({ name: 'localhost:4000', at: null })
+    // Before it has answered.
+    expect(boardWords(null)).toEqual({ name: 'board', at: null })
   })
 
   it("keeps a post to send later through a message that lands saying the same", () => {

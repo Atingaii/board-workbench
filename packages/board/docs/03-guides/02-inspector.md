@@ -18,6 +18,10 @@ The inspector is the board's own UI. Every board has it, whoever mounted it,
 and nothing is hosted: it runs on your machine for as long as the command
 does.
 
+The top of the sidebar says which board it is, and so does the tab's title. A
+team's board in Vercel's API shows its name over its host. Any other board
+shows its host over where it's mounted.
+
 | Flag | Does |
 | --- | --- |
 | `--port N` | Listens on that port. Without it, the inspector uses 4747, or any free port when 4747 is taken |

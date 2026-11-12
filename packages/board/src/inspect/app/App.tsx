@@ -12,7 +12,7 @@ import { Sidebar } from './sidebar.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
 import { byWritten, channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
 import { Header, nativeMenu, ResizeHandle, type KnownLabels } from './ui.tsx'
-import { cadence, firstLine, until } from './words.ts'
+import { boardWords, cadence, firstLine, until } from './words.ts'
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
 
@@ -139,9 +139,11 @@ export function App() {
   }, [where])
 
   const current = route(where.path)
+  // The tab says which board too, so two inspectors side by side tell apart.
+  const named = boardWords(state.discovery).name
   useEffect(() => {
-    document.title = `${current.view === 'channel' ? `#${current.channel}` : current.view === 'settings' ? `${current.section} · settings` : current.view === 'missing' ? 'nothing here' : current.view} · board`
-  }, [where.path])
+    document.title = `${current.view === 'channel' ? `#${current.channel}` : current.view === 'settings' ? `${current.section} · settings` : current.view === 'missing' ? 'nothing here' : current.view} · ${named}`
+  }, [where.path, named])
 
   const known = useMemo(() => knownLabels(state), [state.messages])
   const viewer = useMemo(() => (state.me ? board.viewerOf(state.me) : null), [state.me])
