@@ -579,7 +579,7 @@ test("once it runs, the markdown opens with what the factory has been doing, and
     overview: {
       week: { threads: 6, messages: 22, answered: 5, firstReplyMs: 14_000, more: false },
       lastReplyAt: "2026-11-12T11:56:00.000Z",
-      pulls: { open: [{ repo: "acme/web", number: 12, title: "Fix the build", url: "https://github.com/acme/web/pull/12", draft: true }], merged: 3, closed: 1 },
+      pulls: { open: 1, merged: 3, closed: 1 },
     },
     repos: [{ repo: "acme/factory", channel: "project-factory/rsi" }],
     ask: { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 3 },
@@ -600,7 +600,6 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
 ## Pull requests
 
 - 1 open, 3 merged, 1 closed
-- [acme/web#12 Fix the build](https://github.com/acme/web/pull/12) (draft)
 
 ## Repos
 

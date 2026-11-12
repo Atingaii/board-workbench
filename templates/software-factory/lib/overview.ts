@@ -3,9 +3,10 @@ import { byAgent } from "../agent/lib/identity.ts";
 
 // What the page shows once the factory runs: the week in its channels and its pull requests, worked
 // out from what the board already has. Nothing here is kept: every load reads again.
-
-/** A pull request the board has a thread for, still open. */
-export type Pull = { repo: string; number: number; title: string; url: string; draft: boolean };
+//
+// Numbers only. The page reads the board as the deployment, and whoever can open the deployment sees
+// it, whatever they may read on the board themselves: so it counts, and never shows what a message
+// or a pull request says. The board shows that, to each person as themselves.
 
 export type Overview = {
   /**
@@ -16,7 +17,7 @@ export type Overview = {
   week: { threads: number; messages: number; answered: number; firstReplyMs: number | null; more: boolean };
   /** When the agent last wrote, in what was read. */
   lastReplyAt: string | null;
-  pulls: { open: Pull[]; merged: number; closed: number };
+  pulls: { open: number; merged: number; closed: number };
 };
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -63,13 +64,7 @@ export function overview(recent: MessageView[], pulls: MessageView[], principal:
     },
     lastReplyAt: replies.length ? new Date(Math.max(...replies)).toISOString() : null,
     pulls: {
-      open: roots.filter((message) => state(message) === "open" || state(message) === "draft").flatMap((message) => {
-        // The label is `owner/repo#12`, and the root's first line names it: `PR #12: its title`.
-        const [, repo, number] = /^(.+)#(\d+)$/.exec(message.labels.pr ?? "") ?? [];
-        if (!repo || !number) return [];
-        const title = (message.text.split("\n")[0] ?? "").replace(/^PR #\d+: /, "");
-        return [{ repo, number: Number(number), title, url: `https://github.com/${repo}/pull/${number}`, draft: state(message) === "draft" }];
-      }),
+      open: roots.filter((message) => state(message) === "open" || state(message) === "draft").length,
       merged: roots.filter((message) => state(message) === "merged").length,
       closed: roots.filter((message) => state(message) === "closed").length,
     },
