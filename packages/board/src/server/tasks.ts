@@ -488,12 +488,12 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     /**
      * What makes several new threads tasks, to append with their roots, all in one write: for each,
      * `task.created`, and `task.ready` when it waits only for tasks that were there and have all
-     * completed. A task waits for the batch's others by their `ref`, wherever they come in it, and
+     * completed. A task waits for the batch's others by their `key`, wherever they come in it, and
      * those are new, so it waits. Refused before anything is read: an assignee that isn't its
-     * owner's, a `ref` two tasks go by or none has, and tasks that wait for each other. `asked` is
+     * owner's, a `key` two tasks go by or none has, and tasks that wait for each other. `asked` is
      * what each is to be a task with, as its `task.created` will say it.
      */
-    startingMany(identity: Identity, tasks: readonly { ref?: string | undefined; needs?: readonly BatchNeed[] | undefined; for?: string | null | undefined }[]): { along: AlongEach; asked: RootTask[] } {
+    startingMany(identity: Identity, tasks: readonly { key?: string | undefined; needs?: readonly BatchNeed[] | undefined; for?: string | null | undefined }[]): { along: AlongEach; asked: RootTask[] } {
       const { principal, author } = identity
       const assigned = tasks.map((task) => ownActor(principal.id, task.for))
       const plan = batchPlan(tasks)

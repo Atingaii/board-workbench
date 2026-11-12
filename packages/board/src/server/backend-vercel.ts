@@ -2762,16 +2762,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async createTasks(caller, input, signal) {
       const who = await tasksAs(caller)
-      // A task waits for one that's there by its thread, and for another of the batch by its ref, which the API resolves:
+      // A task waits for one that's there by its thread, and for another of the batch by its key, which the API resolves:
       // each named once, the ones that were there first, as a board keeps them. The API tells a repeat by their order too.
       const waits = input.tasks.map((task) => {
-        const refs = [...new Set((task.needs ?? []).flatMap((need) => (typeof need === 'string' ? [] : [need.ref])))]
-        return { threads: needsOf((task.needs ?? []).filter((need) => typeof need === 'string')), refs }
+        const keys = [...new Set((task.needs ?? []).flatMap((need) => (typeof need === 'string' ? [] : [need.key])))]
+        return { threads: needsOf((task.needs ?? []).filter((need) => typeof need === 'string')), keys }
       })
       const tasks = input.tasks.map((task, at) => {
-        const needs = [...waits[at]!.threads, ...waits[at]!.refs.map((ref) => ({ ref }))]
+        const needs = [...waits[at]!.threads, ...waits[at]!.keys.map((key) => ({ key }))]
         return {
-          ...(task.ref !== undefined ? { ref: task.ref } : {}),
+          ...(task.key !== undefined ? { key: task.key } : {}),
           text: task.text,
           ...(task.labels && Object.keys(task.labels).length ? { labels: task.labels } : {}),
           ...(task.noSync ? { noSync: true } : {}),
@@ -2792,14 +2792,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         throw taskRefusal(error)
       })
       const threads = made.tasks.map((task) => task.id)
-      const places = new Map(input.tasks.flatMap((task, at) => (task.ref !== undefined ? [[task.ref, at] as const] : [])))
+      const places = new Map(input.tasks.flatMap((task, at) => (task.key !== undefined ? [[task.key, at] as const] : [])))
       return {
         tasks: await Promise.all(
           made.tasks.map(async (task, at) => {
             if ('message' in task) return view(who, firstOf(task), await landedIn(who, task.channelId, input.channel, undefined))
             // To a caller that may post but not read, a retry answers each task's ID alone: the task is what it asked for, as far as it can say.
             const asked = input.tasks[at]!
-            const needs = [...waits[at]!.threads, ...waits[at]!.refs.map((ref) => threads[places.get(ref)!]!)]
+            const needs = [...waits[at]!.threads, ...waits[at]!.keys.map((key) => threads[places.get(key)!]!)]
             const { actor } = await self(who)
             const stood: ApiTask = { state: needs.length ? 'waiting' : 'ready', owner: principalId(actor.principal), by: await actorOf(who), for: asked.for ?? null, needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
             const first = { id: idAt(task.id, 1), threadId: task.id, sequence: 1 }

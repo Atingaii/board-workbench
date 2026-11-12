@@ -387,7 +387,7 @@ if (claim) {
   or none, and none shows before all have landed. It answers their roots in
   the order given. A `TaskInBatch` is `text`, `labels`, `noSync`, and
   `attachments` as `post` takes them, `for`, and `needs`: a task's ID, or
-  `{ ref }` for a task of the same call, which names itself with `ref`. See
+  `{ key }` for a task of the same call, which names itself with `key`. See
   [Several tasks at once](#several-tasks-at-once).
 - **`claim`** by ID throws a 409 when the task can't be claimed:
   `task_claimed`, `task_waiting`, `task_blocked`, `task_finished`, or
@@ -431,9 +431,9 @@ const team = board()
 const [fix, review, ship] = await team.tasks.createMany(
   'work',
   [
-    { ref: 'fix', text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } },
-    { ref: 'review', text: 'review the fix', labels: { step: 'review' }, needs: [{ ref: 'fix' }] },
-    { text: 'ship it', needs: [{ ref: 'review' }, { ref: 'fix' }] },
+    { key: 'fix', text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } },
+    { key: 'review', text: 'review the fix', labels: { step: 'review' }, needs: [{ key: 'fix' }] },
+    { text: 'ship it', needs: [{ key: 'review' }, { key: 'fix' }] },
   ],
   { id: 'cve-123' },
 )
@@ -443,10 +443,11 @@ const [fix, review, ship] = await team.tasks.createMany(
 - **One write.** Every task is made or none is, and the feed has no event of
   any before all have landed: each task's `message.posted`, then its
   `task.created`, in the order given.
-- **`ref` names a task for the others of the call.** A task waits for one
-  before it or after it. A `ref` two tasks have, one no task has, and tasks
-  that wait for each other are 400 `invalid_needs`. A `ref` is 1 to 64
-  characters, and means nothing once the call returns: use the IDs it answers.
+- **A task's `key` names it for the others of the call.** A task waits for
+  one before it or after it. A `key` two tasks have, one no task has, and
+  tasks that wait for each other are 400 `invalid_needs`. A `key` is 1 to 64
+  characters, and means nothing once the call returns: use the IDs it
+  answers. It's no part of what makes a repeat safe: that's the call's `id`.
 - **A task that waits for one of the call waits.** One that waits only for
   tasks that were there and have all completed is ready in the same write.
 - **Each task is checked as `create` checks one:** its text and blocks, its
@@ -474,9 +475,9 @@ const team = board()
 
 // 400 steps, each waiting for the one before it.
 const plan: TaskInBatch[] = Array.from({ length: 400 }, (_, n) => ({
-  ref: `shard-${n}`,
+  key: `shard-${n}`,
   text: `migrate shard ${n}`,
-  ...(n > 0 ? { needs: [{ ref: `shard-${n - 1}` }] } : {}),
+  ...(n > 0 ? { needs: [{ key: `shard-${n - 1}` }] } : {}),
 }))
 
 try {
@@ -561,9 +562,9 @@ it gives:
   chain of 13 fits, or of 12 with an `id`, and 11 tasks with a label each
   either way. More is 400 `batch_too_large`, with nothing made, and its
   message says how many the batch counts for.
-- **A `ref` is part of the request there.** The same `id` with the same tasks
-  under other refs is 409 `duplicate_id`. `local()` goes by what was made,
-  and answers the batch.
+- **A task's `key` is part of the request there.** The same `id` with the
+  same tasks under other keys is 409 `duplicate_id`. `local()` goes by what
+  was made, and answers the batch.
 - **A batch's request is 64 KB at most,** which long texts reach first: six
   tasks of 10,000 characters fit, and seven don't. That's `batch_too_large`
   too, with nothing made, so one code says "send less". `createTasksInChunks`

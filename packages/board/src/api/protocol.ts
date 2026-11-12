@@ -109,7 +109,7 @@ export type Protocol = {
   /** `task` is the task's root. `claim` comes with a task made with `claim`; a retry of one that landed gets the task without it. */
   createTask: { input: Input<typeof CreateTaskBody>; output: { task: MessageView; claim?: TaskClaim } }
   /**
-   * `tasks` are the tasks' roots, in the body's order. 400 `invalid_needs` for a `ref` two tasks go by, one no task has,
+   * `tasks` are the tasks' roots, in the body's order. 400 `invalid_needs` for a `key` two tasks go by, one no task has,
    * or tasks that wait for each other; 400 `batch_too_large` for more than a board holds in one write. Nothing is made
    * then, and a retry with the same `id` answers the tasks the first made.
    */

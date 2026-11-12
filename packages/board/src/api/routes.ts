@@ -15,7 +15,7 @@ import {
   storable,
   TASK_BATCH_MAX,
   TASK_NEEDS_MAX,
-  TASK_REF_MAX,
+  TASK_KEY_MAX,
   EDITED_HOLD,
   TaskHoldKind,
   TaskNote,
@@ -230,13 +230,13 @@ export const CreateTaskBody = z
   })
   .refine((body) => body.lease === undefined || body.claim === true, { message: '`lease` goes with `claim`', path: ['lease'] })
 
-/** A task another task of the same batch waits for, by the `ref` it goes by there. */
-const TaskRef = z.string().min(1).max(TASK_REF_MAX).refine(storable, 'ref has a NUL character or a lone surrogate')
+/** A task another task of the same batch waits for, by the `key` it goes by there. */
+const TaskKey = z.string().min(1).max(TASK_KEY_MAX).refine(storable, 'key has a NUL character or a lone surrogate')
 
 /**
  * Several new threads in one channel, each a task, made in one write: all of them or none. A task is
- * what `POST /tasks` starts a thread with, less `claim`. `ref` names it for the batch's others, and
- * `needs` takes a task's ID, or `{ ref }` for one of the batch, before or after it. `id` names the
+ * what `POST /tasks` starts a thread with, less `claim`. `key` names it for the batch's others, and
+ * `needs` takes a task's ID, or `{ key }` for one of the batch, before or after it. `id` names the
  * batch: a retry with it answers the same tasks. At most `TASK_BATCH_MAX` tasks, 400
  * `batch_too_large` past that, which a board that holds fewer in one write answers too.
  */
@@ -246,14 +246,14 @@ export const CreateTasksBody = z.object({
     .array(
       z
         .object({
-          ref: TaskRef.optional(),
+          key: TaskKey.optional(),
           /** May be empty when the task's root has attachments. */
           text: z.string().max(MESSAGE_TEXT_MAX),
           labels: Labels.optional(),
           noSync: z.boolean().optional(),
           /** IDs from `POST /attachments`, as a post takes them. */
           attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
-          needs: z.array(z.union([Ref, z.object({ ref: TaskRef }).strict()])).max(TASK_NEEDS_MAX).optional(),
+          needs: z.array(z.union([Ref, z.object({ key: TaskKey }).strict()])).max(TASK_NEEDS_MAX).optional(),
           for: ActorId.nullable().optional(),
         })
         .refine((task) => task.text.trim().length > 0 || (task.attachments?.length ?? 0) > 0, { message: 'message text is empty', path: ['text'] })

@@ -251,11 +251,11 @@ describe("vercel()'s tasks", () => {
     julian.sent.length = 0
     const { cursor } = await julian.poll({ channel: 'work', wait: 0 })
     const made = await julian.tasks.createMany('work', [
-      { ref: 'review', text: 'review the fix', needs: [{ ref: 'fix' }] },
-      { ref: 'fix', text: 'fix the export', labels: { step: 'fix' }, noSync: true },
+      { key: 'review', text: 'review the fix', needs: [{ key: 'fix' }] },
+      { key: 'fix', text: 'fix the export', labels: { step: 'fix' }, noSync: true },
       { text: 'announce the release', needs: [done.task.id] },
       // A need named twice is one need, as on any board.
-      { text: 'ship it', needs: [done.task.id, { ref: 'review' }, { ref: 'fix' }, { ref: 'review' }, done.task.id], for: `${JULIAN}+shipper` },
+      { text: 'ship it', needs: [done.task.id, { key: 'review' }, { key: 'fix' }, { key: 'review' }, done.task.id], for: `${JULIAN}+shipper` },
       { text: 'migrate the data', needs: [done.task.id, frozen.id] },
     ])
     const [review, fix, announce, ship, migrate] = made
@@ -275,10 +275,10 @@ describe("vercel()'s tasks", () => {
       operationId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
       channel: 'work',
       tasks: [
-        { ref: 'review', text: 'review the fix', needs: [{ ref: 'fix' }] },
-        { ref: 'fix', text: 'fix the export', labels: { step: 'fix' }, noSync: true },
+        { key: 'review', text: 'review the fix', needs: [{ key: 'fix' }] },
+        { key: 'fix', text: 'fix the export', labels: { step: 'fix' }, noSync: true },
         { text: 'announce the release', needs: [threadOf(done.task.id)] },
-        { text: 'ship it', needs: [threadOf(done.task.id), { ref: 'review' }, { ref: 'fix' }], for: `${JULIAN}+shipper` },
+        { text: 'ship it', needs: [threadOf(done.task.id), { key: 'review' }, { key: 'fix' }], for: `${JULIAN}+shipper` },
         { text: 'migrate the data', needs: [threadOf(done.task.id), threadOf(frozen.id)] },
       ],
     })
@@ -306,7 +306,7 @@ describe("vercel()'s tasks", () => {
   it("sends a batch's id as the API's idempotency key, beside an operation ID that is each attempt's own and a time the API reads: a retry gets the tasks as they are now", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
-    const plan = [{ ref: 'fix', text: 'fix the export' }, { text: 'review the fix', needs: [{ ref: 'fix' }] }]
+    const plan = [{ key: 'fix', text: 'fix the export' }, { text: 'review the fix', needs: [{ key: 'fix' }] }]
     const first = await julian.tasks.createMany('work', plan, { id: 'release-42' })
     // Someone claims one of them: the same id again answers the tasks as they are now, and makes none.
     await julian.tasks.claim(first[0]!.id, { lease: 60 })
@@ -325,7 +325,7 @@ describe("vercel()'s tasks", () => {
     }
     // The request goes the same each time, which is what the API tells a repeat by: the channel by its name, and each task's fields as given.
     expect(batches()[1]).toEqual({ ...batches()[0], operationId: batches()[1]!.operationId })
-    expect(batches()[0]).toMatchObject({ channel: 'work', tasks: [{ ref: 'fix', text: 'fix the export' }, { text: 'review the fix', needs: [{ ref: 'fix' }] }] })
+    expect(batches()[0]).toMatchObject({ channel: 'work', tasks: [{ key: 'fix', text: 'fix the export' }, { text: 'review the fix', needs: [{ key: 'fix' }] }] })
     // Another id is another key, and a batch without one has none: the same plan again is new tasks.
     await julian.tasks.createMany('work', plan, { id: 'release-43' })
     await julian.tasks.createMany('work', plan)
@@ -336,7 +336,7 @@ describe("vercel()'s tasks", () => {
     // The API's word for a key sent again with another request is a board's for an id used twice: other tasks, as many
     // or not, the same ones in another order, and another channel.
     const other: Parameters<typeof julian.tasks.createMany>[1][] = [
-      [{ ref: 'fix', text: 'fix the import' }, plan[1]!],
+      [{ key: 'fix', text: 'fix the import' }, plan[1]!],
       [plan[0]!, { ...plan[1]!, labels: { step: 'review' } }],
       [plan[0]!, { text: 'review the fix' }],
       [{ ...plan[0]!, noSync: true }, plan[1]!],
@@ -348,7 +348,7 @@ describe("vercel()'s tasks", () => {
     for (const tasks of other) await expect(julian.tasks.createMany('work', tasks, { id: 'release-42' }), JSON.stringify(tasks)).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
     await expect(julian.tasks.createMany('elsewhere', plan, { id: 'release-42' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
     // A field left out is its empty value: the same request, written out in full.
-    const full = [{ ref: 'fix', text: 'fix the export', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'review the fix', needs: [{ ref: 'fix' }], labels: {} }]
+    const full = [{ key: 'fix', text: 'fix the export', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'review the fix', needs: [{ key: 'fix' }], labels: {} }]
     expect((await julian.tasks.createMany('work', full, { id: 'release-42' })).map((root) => root.id)).toEqual(first.map((root) => root.id))
     expect((await julian.tasks.list({ state: 'all' })).tasks).toHaveLength(8)
     // A key is its caller's: someone else's batch under the same id is their own.
@@ -356,7 +356,7 @@ describe("vercel()'s tasks", () => {
     expect((await ada.tasks.createMany('work', plan, { id: 'release-42' })).map((root) => root.id)).not.toEqual(first.map((root) => root.id))
     // A key takes one of the items a write holds: 14 plain tasks fit with one and 15 without, and a chain of 12 and of 13.
     const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
-    const chain = (count: number) => Array.from({ length: count }, (_, n) => ({ ref: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ ref: `step-${n - 1}` }] } : {}) }))
+    const chain = (count: number) => Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))
     await expect(julian.tasks.createMany('plans', plain(15), { id: 'fifteen' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
     await expect(julian.tasks.createMany('plans', chain(13), { id: 'thirteen' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
     expect(await julian.tasks.createMany('plans', plain(14), { id: 'fourteen' })).toHaveLength(14)
@@ -433,13 +433,13 @@ describe("vercel()'s tasks", () => {
     await julian.tasks.cancel(canceled.id, 'dropped')
     const note = await julian.post('work', 'just a note')
     const reply = await julian.reply(note.id, 'a reply')
-    const fine = [{ ref: 'a', text: 'first, and fine' }, { text: 'second, and fine', needs: [{ ref: 'a' }] }]
+    const fine = [{ key: 'a', text: 'first, and fine' }, { text: 'second, and fine', needs: [{ key: 'a' }] }]
     const refused = (last: Parameters<typeof julian.tasks.createMany>[1], status: number, code: string) =>
       expect(julian.tasks.createMany('plans', [...fine, ...last]), JSON.stringify(last)).rejects.toMatchObject({ status, code })
-    await refused([{ text: 'waits for no one here', needs: [{ ref: 'nobody' }] }], 400, 'invalid_needs')
-    await refused([{ ref: 'a', text: 'a second a' }], 400, 'invalid_needs')
-    await refused([{ ref: 'self', text: 'waits for itself', needs: [{ ref: 'self' }] }], 400, 'invalid_needs')
-    await refused([{ ref: 'x', text: 'x', needs: [{ ref: 'y' }] }, { ref: 'y', text: 'y', needs: [{ ref: 'x' }] }], 400, 'invalid_needs')
+    await refused([{ text: 'waits for no one here', needs: [{ key: 'nobody' }] }], 400, 'invalid_needs')
+    await refused([{ key: 'a', text: 'a second a' }], 400, 'invalid_needs')
+    await refused([{ key: 'self', text: 'waits for itself', needs: [{ key: 'self' }] }], 400, 'invalid_needs')
+    await refused([{ key: 'x', text: 'x', needs: [{ key: 'y' }] }, { key: 'y', text: 'y', needs: [{ key: 'x' }] }], 400, 'invalid_needs')
     await refused([{ text: 'waits for a canceled one', needs: [canceled.id] }], 400, 'invalid_needs')
     await refused([{ text: 'waits for a note', needs: [note.id] }], 400, 'invalid_needs')
     await refused([{ text: 'for someone else', for: `${ADA}+fixer` }], 400, 'invalid_request')
@@ -450,7 +450,7 @@ describe("vercel()'s tasks", () => {
     // What one of the API's writes holds, counted from the batch alone: 15 plain tasks, and fewer with labels, files, or needs.
     const { task: there } = await julian.tasks.create('work', { text: 'a task that was there' })
     const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
-    const chain = (count: number) => Array.from({ length: count }, (_, n) => ({ ref: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ ref: `step-${n - 1}` }] } : {}) }))
+    const chain = (count: number) => Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))
     const labeled = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}`, labels: { step: 'fix' } }))
     const waiting = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}`, needs: [there.id] }))
     const file = await julian.upload({ data: new TextEncoder().encode('the plan'), name: 'plan.txt', type: 'text/plain' })
@@ -472,7 +472,7 @@ describe("vercel()'s tasks", () => {
       '11 with a label each': labeled(11),
       '11 that wait for one that was there': waiting(11),
       // A task that waits for one of the batch too takes nothing for being readied with it.
-      '10 that wait for it and for one of the batch': [{ ref: 'a', text: 'a' }, ...Array.from({ length: 10 }, (_, n) => ({ text: `step ${n}`, needs: [there.id, { ref: 'a' }] }))],
+      '10 that wait for it and for one of the batch': [{ key: 'a', text: 'a' }, ...Array.from({ length: 10 }, (_, n) => ({ text: `step ${n}`, needs: [there.id, { key: 'a' }] }))],
     }
     for (const [what, tasks] of Object.entries(fits)) expect(await julian.tasks.createMany('plans', tasks), what).toHaveLength(tasks.length)
     // A task's file rides on its root, as a post's does.
@@ -515,25 +515,25 @@ describe("vercel()'s tasks", () => {
     for (const tasks of [
       [],
       plain(101),
-      [{ text: 'x', ref: '' }],
-      [{ text: 'x', ref: 'r'.repeat(65) }],
+      [{ text: 'x', key: '' }],
+      [{ text: 'x', key: 'r'.repeat(65) }],
       [{ text: 'x', clientId: 'c1' }],
       [{ text: 'x', claim: { claimToken: 'a'.repeat(43) } }],
       [{ text: 'x', needs: [thread, thread] }],
-      [{ ref: 'a', text: 'a' }, { text: 'x', needs: [{ ref: 'a' }, { ref: 'a' }] }],
+      [{ key: 'a', text: 'a' }, { text: 'x', needs: [{ key: 'a' }, { key: 'a' }] }],
       [{ text: 'x', needs: Array.from({ length: 21 }, () => `thr_${crypto.randomUUID()}`) }],
     ])
       expect(await ask({ tasks }), JSON.stringify(tasks).slice(0, 80)).toEqual([400, 'bad_request'])
     expect(await ask({ channelId: 'general', tasks: plain(1) })).toEqual([400, 'bad_request'])
     // Then what the caller may, each task's own fields, how they wait for each other, the count, and only then what takes a read.
-    expect(await ask({ tasks: [{ text: 'x', needs: [{ ref: 'nobody' }] }] }, 'plans=read')).toEqual([403, 'forbidden'])
+    expect(await ask({ tasks: [{ text: 'x', needs: [{ key: 'nobody' }] }] }, 'plans=read')).toEqual([403, 'forbidden'])
     expect(await ask({ tasks: [{ text: 'labeled', labels: { step: 'fix' } }] }, 'plans=read,post')).toEqual([403, 'forbidden'])
-    expect(await ask({ tasks: [{ text: '   ' }, { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_message'])
+    expect(await ask({ tasks: [{ text: '   ' }, { text: 'x', needs: [{ key: 'nobody' }] }] })).toEqual([400, 'invalid_message'])
     expect(await ask({ tasks: [{ text: 'x', labels: { 'board.task': 'ready' } }] })).toEqual([400, 'reserved_label'])
     expect(await ask({ tasks: [{ text: 'x', labels: Object.fromEntries(Array.from({ length: 17 }, (_, n) => [`k${n}`, 'v'])) }] })).toEqual([400, 'too_many_labels'])
     expect(await ask({ tasks: [{ text: 'x', for: `${ADA}+fixer` }] })).toEqual([400, 'invalid_for'])
-    expect(await ask({ tasks: [{ text: 'one', attachments: [file.id] }, { text: 'two', attachments: [file.id] }, { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_attachments'])
-    expect(await ask({ tasks: [...plain(16), { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_needs'])
+    expect(await ask({ tasks: [{ text: 'one', attachments: [file.id] }, { text: 'two', attachments: [file.id] }, { text: 'x', needs: [{ key: 'nobody' }] }] })).toEqual([400, 'invalid_attachments'])
+    expect(await ask({ tasks: [...plain(16), { text: 'x', needs: [{ key: 'nobody' }] }] })).toEqual([400, 'invalid_needs'])
     const wrong = `revert this\n\n${block('git-commit@1', { sha: 'a'.repeat(40) })}`
     expect(await ask({ tasks: [...plain(15), { text: wrong }] })).toEqual([400, 'batch_too_large', 106, 100])
     expect(await ask({ tasks: [{ text: wrong }, { text: 'x', needs: [`thr_${crypto.randomUUID()}`] }] })).toEqual([400, 'invalid_block'])
@@ -547,10 +547,10 @@ describe("vercel()'s tasks", () => {
     expect(await ask({ idempotencyKey: '', tasks: plain(1) })).toEqual([400, 'bad_request'])
     expect(await ask({ idempotencyKey: 'k'.repeat(513), tasks: plain(1) })).toEqual([400, 'bad_request'])
     const keyed = { channel: 'keyed', idempotencyKey: `release 42 / the plan ${'é'.repeat(480)}` }
-    expect(await ask({ ...keyed, tasks: [{ ref: 'a', text: 'a' }, { text: 'b', needs: [{ ref: 'a' }] }] })).toEqual([200, null])
-    expect(await ask({ ...keyed, tasks: [{ ref: 'a', text: 'a', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'b', needs: [{ ref: 'a' }] }] })).toEqual([200, null])
+    expect(await ask({ ...keyed, tasks: [{ key: 'a', text: 'a' }, { text: 'b', needs: [{ key: 'a' }] }] })).toEqual([200, null])
+    expect(await ask({ ...keyed, tasks: [{ key: 'a', text: 'a', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'b', needs: [{ key: 'a' }] }] })).toEqual([200, null])
     expect((await julian.tasks.list({ channel: 'keyed', state: 'all' })).tasks).toHaveLength(2)
-    expect(await ask({ ...keyed, tasks: [{ ref: 'a', text: 'a' }, { text: 'b' }] })).toEqual([409, 'idempotency_key_reused'])
+    expect(await ask({ ...keyed, tasks: [{ key: 'a', text: 'a' }, { text: 'b' }] })).toEqual([409, 'idempotency_key_reused'])
     // A file is looked at last, once the channel a batch names is made, as for one task: a batch refused for one leaves the channel, and no task.
     expect(await ask({ channel: 'filed', tasks: [{ text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([404, 'attachment_not_found'])
     expect((await julian.channels()).map((channel) => channel.path)).toContain('filed')
@@ -572,8 +572,8 @@ describe("vercel()'s tasks", () => {
       },
     })
     const plan = [
-      { text: 'write it up', needs: [{ ref: 'triage' }, there.id], noSync: true },
-      { ref: 'triage', text: 'triage the outage', for: 'vercel:project:prj_pong:production+triager' },
+      { text: 'write it up', needs: [{ key: 'triage' }, there.id], noSync: true },
+      { key: 'triage', text: 'triage the outage', for: 'vercel:project:prj_pong:production+triager' },
     ]
     const first = await blind.tasks.createMany('intake', plan, { id: 'outage-1' })
     const [writeUp, triage] = first
@@ -1463,7 +1463,7 @@ describe("vercel()'s tasks", () => {
       ['create', () => julian.tasks.create('dev', 'a task')],
       ['create and claim', () => julian.tasks.create('dev', { text: 'a task', claim: true, id: 'once' })],
       ['create from a thread', () => julian.tasks.create({ re: root.id })],
-      ['create several', () => julian.tasks.createMany('dev', [{ ref: 'a', text: 'a task' }, { text: 'another', needs: [{ ref: 'a' }] }], { id: 'once' })],
+      ['create several', () => julian.tasks.createMany('dev', [{ key: 'a', text: 'a task' }, { text: 'another', needs: [{ key: 'a' }] }], { id: 'once' })],
       ['claim', () => julian.tasks.claim(root.id)],
       ['claim the next', () => julian.tasks.claim({ channel: 'dev', wait: 30 })],
       ['renew', () => julian.tasks.held(root.id, proof).renew()],

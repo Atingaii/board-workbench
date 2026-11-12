@@ -211,7 +211,7 @@ describe('a board on http()', () => {
   it('makes several tasks on the board it uses in one write, once for its id, as its deployment', async () => {
     const { remote, project } = await team()
     const deploys = project.as('deploys')
-    const plan = [{ ref: 'build', text: 'build a1b2c3' }, { text: 'roll out a1b2c3', needs: [{ ref: 'build' }], labels: { step: 'deploy' } }]
+    const plan = [{ key: 'build', text: 'build a1b2c3' }, { text: 'roll out a1b2c3', needs: [{ key: 'build' }], labels: { step: 'deploy' } }]
     const first = await deploys.tasks.createMany('work', plan, { id: 'rollout-1' })
     const again = await project.as('deploys').tasks.createMany('work', plan, { id: 'rollout-1' })
     expect(again.map((root) => root.id)).toEqual(first.map((root) => root.id))

@@ -13,7 +13,7 @@ const ADA = 'vercel:user:u_ada'
 const CI = 'github:repo:123456'
 
 type Call = ReturnType<typeof caller>
-type Asked = { ref?: string; text: string; labels?: Record<string, string>; noSync?: boolean; attachments?: string[]; needs?: (string | { ref: string })[]; for?: string | null }
+type Asked = { key?: string; text: string; labels?: Record<string, string>; noSync?: boolean; attachments?: string[]; needs?: (string | { key: string })[]; for?: string | null }
 
 async function setup(options: Parameters<typeof testBoard>[0] = {}) {
   const board = testBoard({ scheduler: fakeQueue().scheduler, ...options })
@@ -43,16 +43,16 @@ async function completed(call: Call, text: string): Promise<MessageView> {
 }
 
 describe('several tasks made at once', () => {
-  it('land in one write, in the order given: each waits for the ones it names by ref, wherever they come, and is ready at once only when all it needs was there and has completed', async () => {
+  it('land in one write, in the order given: each waits for the ones it names by key, wherever they come, and is ready at once only when all it needs was there and has completed', async () => {
     const { ada } = await setup()
     const cut = await completed(ada, 'cut the release branch')
     const frozen: MessageView = (await ada('POST', '/tasks', { channel: 'work', text: 'freeze the schema' })).body.task
     const before = await cursorOf(ada)
     const made = await batch(ada, [
-      { ref: 'review', text: 'review the fix', needs: [{ ref: 'fix' }] },
-      { ref: 'fix', text: 'fix the export', labels: { step: 'fix' }, noSync: true },
+      { key: 'review', text: 'review the fix', needs: [{ key: 'fix' }] },
+      { key: 'fix', text: 'fix the export', labels: { step: 'fix' }, noSync: true },
       { text: 'announce the release', needs: [cut.id] },
-      { text: 'ship it', needs: [cut.id, { ref: 'review' }, { ref: 'fix' }], for: `${ADA}+shipper` },
+      { text: 'ship it', needs: [cut.id, { key: 'review' }, { key: 'fix' }], for: `${ADA}+shipper` },
       { text: 'migrate the data', needs: [cut.id, frozen.id] },
     ])
     expect(made.status, JSON.stringify(made.body)).toBe(201)
@@ -103,8 +103,8 @@ describe('several tasks made at once', () => {
     // The first write by someone new carries who they are, ahead of the batch's own events.
     const { bo } = await setup()
     const made = await batch(bo, [
-      { text: 'draft the plan', needs: [{ ref: 'scope' }] },
-      { ref: 'scope', text: 'scope the work' },
+      { text: 'draft the plan', needs: [{ key: 'scope' }] },
+      { key: 'scope', text: 'scope the work' },
     ])
     expect(made.status).toBe(201)
     const [draft, scope] = made.body.tasks as MessageView[]
@@ -123,20 +123,20 @@ describe('several tasks made at once', () => {
     const note: MessageView = (await ada('POST', '/messages', { channel: 'work', text: 'just a note' })).body.message
     const hidden: MessageView = (await ada('POST', '/tasks', { channel: 'elsewhere', text: 'out of sight' })).body.task
     const before = await cursorOf(ada)
-    const fine: Asked[] = [{ ref: 'a', text: 'first, and fine' }, { text: 'second, and fine', needs: [{ ref: 'a' }] }]
+    const fine: Asked[] = [{ key: 'a', text: 'first, and fine' }, { text: 'second, and fine', needs: [{ key: 'a' }] }]
     const refused = async (last: Asked[], why: RegExp, as: Call = ada, where = 'plans') => {
       const answer = await batch(as, [...fine, ...last], { channel: where })
       expect([code(answer), answer.body.error.message], JSON.stringify(last)).toEqual([[400, 'invalid_needs'], expect.stringMatching(why)])
     }
     // How its tasks wait for each other, checked from the batch alone.
-    await refused([{ text: 'waits for no one here', needs: [{ ref: 'nobody' }] }], /no task of the batch goes by the ref "nobody"/)
-    await refused([{ ref: 'a', text: 'a second a' }], /two tasks of the batch go by the ref "a"/)
-    await refused([{ ref: 'self', text: 'waits for itself', needs: [{ ref: 'self' }] }], /waits for itself/)
+    await refused([{ text: 'waits for no one here', needs: [{ key: 'nobody' }] }], /no task of the batch has the key "nobody"/)
+    await refused([{ key: 'a', text: 'a second a' }], /two tasks of the batch have the key "a"/)
+    await refused([{ key: 'self', text: 'waits for itself', needs: [{ key: 'self' }] }], /waits for itself/)
     await refused(
       [
-        { ref: 'x', text: 'x waits for z', needs: [{ ref: 'z' }] },
-        { ref: 'y', text: 'y waits for x', needs: [{ ref: 'x' }] },
-        { ref: 'z', text: 'z waits for y', needs: [{ ref: 'y' }] },
+        { key: 'x', text: 'x waits for z', needs: [{ key: 'z' }] },
+        { key: 'y', text: 'y waits for x', needs: [{ key: 'x' }] },
+        { key: 'z', text: 'z waits for y', needs: [{ key: 'y' }] },
       ],
       /"x", "z", "y" wait for each other/,
     )
@@ -166,8 +166,8 @@ describe('several tasks made at once', () => {
     const { board, ada, bo } = await setup()
     const file = await handleAs(board, 'u_ada').upload({ data: new TextEncoder().encode('the plan'), name: 'plan.txt', type: 'text/plain' })
     const plan: Asked[] = [
-      { ref: 'fix', text: 'fix the export' },
-      { text: 'review the fix', needs: [{ ref: 'fix' }] },
+      { key: 'fix', text: 'fix the export' },
+      { text: 'review the fix', needs: [{ key: 'fix' }] },
     ]
     const first = await batch(ada, plan, { id: 'release-42' })
     expect(first.status).toBe(201)
@@ -187,23 +187,23 @@ describe('several tasks made at once', () => {
     expect(code(await batch(ada, plan.slice(0, 1), { id: 'release-42' }))).toEqual([409, 'duplicate_id'])
     expect(code(await batch(ada, [...plan, { text: 'and one more' }], { id: 'release-42' }))).toEqual([409, 'duplicate_id'])
     for (const [what, other] of Object.entries<Asked[]>({
-      'another text': [{ ref: 'fix', text: 'fix the import' }, plan[1]!],
+      'another text': [{ key: 'fix', text: 'fix the import' }, plan[1]!],
       'a need less': [plan[0]!, { text: 'review the fix' }],
       'a label': [plan[0]!, { ...plan[1]!, labels: { step: 'review' } }],
       'a file': [{ ...plan[0]!, attachments: [file.id] }, plan[1]!],
       'kept off platforms': [{ ...plan[0]!, noSync: true }, plan[1]!],
       'an assignee': [{ ...plan[0]!, for: `${ADA}+fixer` }, plan[1]!],
-      'one more need': [plan[0]!, { ...plan[1]!, needs: [{ ref: 'fix' }, ids[0]!] }],
+      'one more need': [plan[0]!, { ...plan[1]!, needs: [{ key: 'fix' }, ids[0]!] }],
       'the other order': [plan[1]!, plan[0]!],
     }))
       expect(code(await batch(ada, other, { id: 'release-42' })), what).toEqual([409, 'duplicate_id'])
     expect(code(await batch(bo, plan, { id: 'release-42' }))).toEqual([409, 'duplicate_id'])
     expect(code(await batch(ada, plan, { id: 'release-42', channel: 'elsewhere' }))).toEqual([409, 'duplicate_id'])
     // A field left out is its empty value: the same request written out in full is the same batch.
-    const full = [{ ref: 'fix', text: 'fix the export', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'review the fix', needs: [{ ref: 'fix' }], labels: {} }]
+    const full = [{ key: 'fix', text: 'fix the export', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'review the fix', needs: [{ key: 'fix' }], labels: {} }]
     expect((await batch(ada, full, { id: 'release-42' })).body.tasks.map((root: MessageView) => root.id)).toEqual(ids)
-    // A ref is a name for the call alone: the board goes by what was made, so the same tasks under other refs are the same batch.
-    const renamed = [{ ref: 'repair', text: 'fix the export' }, { text: 'review the fix', needs: [{ ref: 'repair' }] }]
+    // A task's key is its name for the call alone: the board goes by what was made, so the same tasks under other keys are the same batch.
+    const renamed = [{ key: 'repair', text: 'fix the export' }, { text: 'review the fix', needs: [{ key: 'repair' }] }]
     expect((await batch(ada, renamed, { id: 'release-42' })).body.tasks.map((root: MessageView) => root.id)).toEqual(ids)
     // What's happened to its tasks since is no part of what was asked: an edit, a label, what one waits for now.
     await ada('POST', `/messages/${ids[1]}/edit`, { text: 'review the fix, carefully' })
@@ -226,7 +226,7 @@ describe('several tasks made at once', () => {
 
   it('are 100 at most on any board: one more is batch_too_large, and makes none', async () => {
     const { ada } = await setup()
-    const many = (count: number): Asked[] => Array.from({ length: count }, (_, n) => ({ ref: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ ref: `step-${n - 1}` }] } : {}) }))
+    const many = (count: number): Asked[] => Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))
     const over = await batch(ada, many(101))
     expect(over).toEqual({ status: 400, body: { error: { code: 'batch_too_large', message: 'a batch makes 100 tasks at most, and this one has 101: send it in parts' } } })
     expect(await listed(ada)).toEqual([])
@@ -251,13 +251,13 @@ describe('several tasks made at once', () => {
     expect((await listed(ada)).length).toBe(0)
     expect((await batch(workflow, [{ text: 'plain' }, { text: 'and plain' }])).status).toBe(201)
     // Where it posts without reading, it gets its tasks back as it made them, on the write and on a retry.
-    const filed = await batch(workflow, [{ ref: 'triage', text: 'triage the outage' }, { text: 'write it up', needs: [{ ref: 'triage' }] }], { channel: 'intake', id: 'outage-1' })
+    const filed = await batch(workflow, [{ key: 'triage', text: 'triage the outage' }, { text: 'write it up', needs: [{ key: 'triage' }] }], { channel: 'intake', id: 'outage-1' })
     expect(filed.status).toBe(201)
     const [triage, writeUp] = filed.body.tasks as MessageView[]
     expect([triage!.text, triage!.task?.state, writeUp!.text, writeUp!.task]).toEqual(['triage the outage', 'ready', 'write it up', expect.objectContaining({ state: 'waiting', needs: [triage!.id], owner: CI })])
     expect(code(await workflow('GET', `/messages/${triage!.id}`))).toEqual([404, 'message_not_found'])
     await ada('POST', `/tasks/${triage!.id}/claim`, {})
-    const refiled = await batch(workflow, [{ ref: 'triage', text: 'triage the outage' }, { text: 'write it up', needs: [{ ref: 'triage' }] }], { channel: 'intake', id: 'outage-1' })
+    const refiled = await batch(workflow, [{ key: 'triage', text: 'triage the outage' }, { text: 'write it up', needs: [{ key: 'triage' }] }], { channel: 'intake', id: 'outage-1' })
     expect((refiled.body.tasks as MessageView[]).map((root) => [root.id, root.text, root.task?.state, root.task?.claim])).toEqual([
       [triage!.id, 'triage the outage', 'ready', null],
       [writeUp!.id, 'write it up', 'waiting', null],
@@ -307,7 +307,7 @@ describe('several tasks made at once', () => {
       ['work', null, 'the password is hunter2', {}],
     ])
     expect(await listed(ada)).toEqual([])
-    const made = await batch(ada, [{ ref: 'rotate', text: 'rotate the key ASAP' }, { text: 'urgent: page the owner', labels: { step: 'page' }, needs: [{ ref: 'rotate' }] }])
+    const made = await batch(ada, [{ key: 'rotate', text: 'rotate the key ASAP' }, { text: 'urgent: page the owner', labels: { step: 'page' }, needs: [{ key: 'rotate' }] }])
     expect(made.status).toBe(201)
     expect((made.body.tasks as MessageView[]).map((root) => [root.text, root.labels, root.task?.needs])).toEqual([
       ['rotate the key soon', { 'board.task': 'ready' }, []],
@@ -324,7 +324,7 @@ describe('several tasks made at once', () => {
 
   it("are a handle's own by their id, which no request takes first, and are made once for a watcher that is run again", async () => {
     const { board, ada } = await setup()
-    const plan = [{ ref: 'build', text: 'build a1b2c3' }, { text: 'deploy a1b2c3', needs: [{ ref: 'build' }] }]
+    const plan = [{ key: 'build', text: 'build a1b2c3' }, { text: 'deploy a1b2c3', needs: [{ key: 'build' }] }]
     const hook = board.as('v0-hook')
     const first = await hook.tasks.createMany('work', plan, { id: 'delivery-1' })
     expect(first.map((root) => [root.text, root.task?.state, root.task?.owner])).toEqual([
@@ -345,7 +345,7 @@ describe('several tasks made at once', () => {
       tail: 'intake',
       run: async ({ event, board: own }) => {
         if (event.type !== 'message.posted' || event.message?.re !== null) return
-        await own.tasks.createMany('triage', [{ ref: 'look', text: `look into: ${event.message.text}` }, { text: 'write it up', needs: [{ ref: 'look' }] }])
+        await own.tasks.createMany('triage', [{ key: 'look', text: `look into: ${event.message.text}` }, { text: 'write it up', needs: [{ key: 'look' }] }])
         // Killed after its write, as a function that timed out is: the board runs it again.
         if (++runs === 1) throw new Error('timed out after it wrote')
       },

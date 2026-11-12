@@ -9,7 +9,7 @@ import { fakeQueue } from './queue.ts'
 
 // createTasksInChunks: a plan longer than one batch holds, made with a handle's own tasks.createMany.
 
-type Batch = { id?: string; tasks: { ref?: string; text: string; needs?: (string | { ref: string })[] }[] }
+type Batch = { id?: string; tasks: { key?: string; text: string; needs?: (string | { key: string })[] }[] }
 
 /**
  * A person's handle on a local board, every batch it sent, and `fail`: what a test sets to answer
@@ -38,7 +38,7 @@ function localTeam() {
 
 /** A plan of `count` steps, each waiting for the one before it, and the first for the last of all: no order as given makes it. */
 const steps = (count: number): TaskInBatch[] =>
-  Array.from({ length: count }, (_, n) => ({ ref: `step-${n}`, text: `step ${n}`, ...(n > 1 ? { needs: [{ ref: `step-${n - 1}` }] } : n === 1 ? {} : { needs: [{ ref: `step-${count - 1}` }] }) }))
+  Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 1 ? { needs: [{ key: `step-${n - 1}` }] } : n === 1 ? {} : { needs: [{ key: `step-${count - 1}` }] }) }))
 
 const all = async (team: ReturnType<typeof board>, channel = 'work'): Promise<MessageView[]> => {
   const found: MessageView[] = []
@@ -55,7 +55,7 @@ describe('createTasksInChunks', () => {
     const { team, sent } = localTeam()
     const plan = steps(230)
     const made = await createTasksInChunks(team, 'work', plan)
-    // The tasks, in the order given, each waiting for the task its ref named, whichever batch made that one.
+    // The tasks, in the order given, each waiting for the task its key named, whichever batch made that one.
     expect(made.map((root) => root.text)).toEqual(plan.map((task) => task.text))
     expect(made.map((root) => root.task?.needs)).toEqual(made.map((_, n) => (n > 1 ? [made[n - 1]!.id] : n === 1 ? [] : [made[229]!.id])))
     expect(made.map((root) => root.task?.state)).toEqual(made.map((_, n) => (n === 1 ? 'ready' : 'waiting')))
@@ -63,10 +63,10 @@ describe('createTasksInChunks', () => {
     // Three batches, none over what one holds. The first step waits for the last, so it's made last, after it.
     expect(sent.map((batch) => batch.tasks.length)).toEqual([100, 100, 30])
     expect([sent[0]!.tasks[0]!.text, sent[2]!.tasks.at(-1)!.text]).toEqual(['step 1', 'step 0'])
-    // Within a batch a task names another by its ref; across batches, by the ID that one got.
-    expect(sent[0]!.tasks[1]).toEqual({ ref: 'step-2', text: 'step 2', needs: [{ ref: 'step-1' }] })
-    expect(sent[1]!.tasks[0]).toEqual({ ref: 'step-101', text: 'step 101', needs: [made[100]!.id] })
-    expect(sent[2]!.tasks.at(-1)).toEqual({ ref: 'step-0', text: 'step 0', needs: [{ ref: 'step-229' }] })
+    // Within a batch a task names another by its key; across batches, by the ID that one got.
+    expect(sent[0]!.tasks[1]).toEqual({ key: 'step-2', text: 'step 2', needs: [{ key: 'step-1' }] })
+    expect(sent[1]!.tasks[0]).toEqual({ key: 'step-101', text: 'step 101', needs: [made[100]!.id] })
+    expect(sent[2]!.tasks.at(-1)).toEqual({ key: 'step-0', text: 'step 0', needs: [{ key: 'step-229' }] })
     // A task waits for what was there by its ID, as it's given.
     const [after] = await createTasksInChunks(team, 'work', [{ text: 'after the plan', needs: [made[0]!.id] }])
     expect(after!.task).toMatchObject({ state: 'waiting', needs: [made[0]!.id] })
@@ -96,7 +96,7 @@ describe('createTasksInChunks', () => {
     expect((await team.tasks.list({ channel: 'plans', state: 'all', limit: 100 })).tasks).toHaveLength(40)
     // Long texts are more bytes than one of its requests holds before they're more than it counts: the same refusal, halved the same way.
     sent.length = 0
-    const long: TaskInBatch[] = Array.from({ length: 12 }, (_, n) => ({ ref: `long-${n}`, text: `${n} ${'x'.repeat(9990)}`, ...(n > 0 ? { needs: [{ ref: `long-${n - 1}` }] } : {}) }))
+    const long: TaskInBatch[] = Array.from({ length: 12 }, (_, n) => ({ key: `long-${n}`, text: `${n} ${'x'.repeat(9990)}`, ...(n > 0 ? { needs: [{ key: `long-${n - 1}` }] } : {}) }))
     const texts = await createTasksInChunks(team, 'long', long)
     expect(texts.map((root) => root.text.length)).toEqual(long.map((task) => task.text.length))
     expect(texts.map((root) => root.task?.needs)).toEqual(texts.map((_, n) => (n > 0 ? [texts[n - 1]!.id] : [])))
@@ -151,9 +151,9 @@ describe('createTasksInChunks', () => {
     // Tasks that can't be put in an order can't be made in parts: it says so itself, and sends nothing.
     sent.length = 0
     for (const [unordered, why] of [
-      [[{ text: 'waits for no one here', needs: [{ ref: 'nobody' }] }], /no task of the batch goes by the ref "nobody"/],
-      [[{ ref: 'a', text: 'one a' }, { ref: 'a', text: 'another a' }], /two tasks of the batch go by the ref "a"/],
-      [[{ ref: 'x', text: 'x', needs: [{ ref: 'y' }] }, { ref: 'y', text: 'y', needs: [{ ref: 'x' }] }], /"x", "y" wait for each other/],
+      [[{ text: 'waits for no one here', needs: [{ key: 'nobody' }] }], /no task of the batch has the key "nobody"/],
+      [[{ key: 'a', text: 'one a' }, { key: 'a', text: 'another a' }], /two tasks of the batch have the key "a"/],
+      [[{ key: 'x', text: 'x', needs: [{ key: 'y' }] }, { key: 'y', text: 'y', needs: [{ key: 'x' }] }], /"x", "y" wait for each other/],
     ] as const)
       await expect(createTasksInChunks(team, 'elsewhere', [...steps(150), ...unordered] as TaskInBatch[])).rejects.toMatchObject({ name: 'BoardError', code: 'invalid_needs', status: 400, origin: 'handle', message: expect.stringMatching(why) })
     expect(sent).toEqual([])

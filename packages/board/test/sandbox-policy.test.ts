@@ -223,7 +223,7 @@ describe("sandboxPolicy() on Vercel's board", () => {
     await agent.tasks.create({ re: note.id })
     await agent.tasks.cancel(note.id, 'not needed')
     // And several at once, which is one call.
-    const [build, deploy] = await agent.tasks.createMany('work', [{ ref: 'build', text: 'build the fix' }, { text: 'deploy it', needs: [{ ref: 'build' }] }])
+    const [build, deploy] = await agent.tasks.createMany('work', [{ key: 'build', text: 'build the fix' }, { text: 'deploy it', needs: [{ key: 'build' }] }])
     expect((await agent.tasks.list({ channel: 'work', state: 'all' })).tasks.map((task) => [task.message.id, task.message.task?.state, task.message.task?.for])).toEqual([
       [fix.id, 'completed', null],
       [review.id, 'ready', fixer],

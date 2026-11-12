@@ -1230,10 +1230,10 @@ const CHECKS: Check[] = [
       const { task: open } = await task(ctx, 'conformance: a prerequisite that has not')
       const id = `conformance-batch-${ctx.labels.conformance}`
       const plan: TaskInBatch[] = [
-        { ref: 'review', text: 'conformance: batched, waits for the one after it', needs: [{ ref: 'fix' }] },
-        { ref: 'fix', text: 'conformance: batched, waits for nothing' },
+        { key: 'review', text: 'conformance: batched, waits for the one after it', needs: [{ key: 'fix' }] },
+        { key: 'fix', text: 'conformance: batched, waits for nothing' },
         { text: 'conformance: batched, waits for one that has completed', needs: [done.id] },
-        { text: 'conformance: batched, waits for one that has not, and for one of the batch', needs: [open.id, { ref: 'fix' }] },
+        { text: 'conformance: batched, waits for one that has not, and for one of the batch', needs: [open.id, { key: 'fix' }] },
       ]
       const made = await taskBatch(ctx, plan, { id })
       alike(made.map((root) => root.text), plan.map((one) => one.text), "a batch's tasks, in the order it gave them")
@@ -1274,17 +1274,17 @@ const CHECKS: Check[] = [
       const { task: gone } = await task(ctx, 'conformance: a prerequisite that was canceled')
       await ctx.board.tasks.cancel(gone.id, 'conformance: not wanted')
       const fine: TaskInBatch[] = [
-        { ref: 'a', text: 'conformance: never made, first of a refused batch' },
-        { text: 'conformance: never made, second of a refused batch', needs: [{ ref: 'a' }] },
+        { key: 'a', text: 'conformance: never made, first of a refused batch' },
+        { text: 'conformance: never made, second of a refused batch', needs: [{ key: 'a' }] },
       ]
       const refused = (last: TaskInBatch[], what: string) => rejects(taskBatch(ctx, [...fine, ...last]), 400, 'invalid_needs', what)
-      await refused([{ text: 'conformance: never made, waits for no one', needs: [{ ref: 'nobody' }] }], 'a batch with a task that needs a ref no task of it has')
-      await refused([{ ref: 'a', text: 'conformance: never made, a second a' }], 'a batch with a ref two of its tasks go by')
-      await refused([{ ref: 'itself', text: 'conformance: never made, waits for itself', needs: [{ ref: 'itself' }] }], 'a batch with a task that needs itself')
+      await refused([{ text: 'conformance: never made, waits for no one', needs: [{ key: 'nobody' }] }], 'a batch with a task that needs a key no task of it has')
+      await refused([{ key: 'a', text: 'conformance: never made, a second a' }], 'a batch with a key two of its tasks have')
+      await refused([{ key: 'itself', text: 'conformance: never made, waits for itself', needs: [{ key: 'itself' }] }], 'a batch with a task that needs itself')
       await refused(
         [
-          { ref: 'x', text: 'conformance: never made, waits for y', needs: [{ ref: 'y' }] },
-          { ref: 'y', text: 'conformance: never made, waits for x', needs: [{ ref: 'x' }] },
+          { key: 'x', text: 'conformance: never made, waits for y', needs: [{ key: 'y' }] },
+          { key: 'y', text: 'conformance: never made, waits for x', needs: [{ key: 'x' }] },
         ],
         'a batch with tasks that wait for each other',
       )

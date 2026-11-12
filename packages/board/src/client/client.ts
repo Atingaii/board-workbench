@@ -169,13 +169,13 @@ export type NewTaskOptions = TaskOptions & Pick<PostOptions, 'text' | 'labels' |
 
 /**
  * One task of several made together: its root's text, labels, `noSync`, and `attachments`, as a
- * post takes them. `ref` is a name for it among the others, and `needs` takes a task's ID, or
- * `{ ref }` for one made with it, before or after it. `for` is the one actor of yours that claims it.
+ * post takes them. `key` is a name for it among the others, and `needs` takes a task's ID, or
+ * `{ key }` for one made with it, before or after it. `for` is the one actor of yours that claims it.
  */
 export type TaskInBatch = Required<Pick<PostOptions, 'text'>> &
   Pick<PostOptions, 'labels' | 'noSync' | 'attachments'> & {
-    ref?: string
-    needs?: (string | { ref: string })[]
+    key?: string
+    needs?: (string | { key: string })[]
     for?: string | null
   }
 
@@ -391,7 +391,7 @@ export function createBoardClient(options: ClientOptions) {
   /**
    * Starts a thread in `channel` for each of `tasks`, as tasks, in one write: all of them or none,
    * and none shows before all have landed. It answers their roots in the order given. A task waits
-   * for the ones made with it by their `ref`. With `id`, a retry answers the tasks the first call
+   * for the ones made with it by their `key`. With `id`, a retry answers the tasks the first call
    * made. A board makes 100 at most, and throws a 400 `batch_too_large` for more, or for more than it
    * holds in one write: `createTasksInChunks` makes a longer plan, in several.
    */

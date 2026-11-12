@@ -649,7 +649,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   const batchDigest = (body: Record<string, any>) =>
     JSON.stringify([
       body.channelId !== undefined ? { id: body.channelId } : { name: body.channel },
-      (body.tasks as Record<string, any>[]).map((task) => [task.ref ?? null, task.text, Object.entries(task.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)), task.noSync ?? false, task.attachments ?? [], task.needs ?? [], task.for ?? null]),
+      (body.tasks as Record<string, any>[]).map((task) => [task.key ?? null, task.text, Object.entries(task.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)), task.noSync ?? false, task.attachments ?? [], task.needs ?? [], task.for ?? null]),
     ])
   /** A profile's name, as an actor ID ends with one. */
   const PROFILE_PART = /^[a-z0-9][a-z0-9-]{0,31}$/
@@ -860,7 +860,7 @@ function fakeBoard(shared: Shared, boardId: string) {
    * each label (and one more for a task with any), each attachment, each need, each different task that was there, and
    * each task whose needs are all such.
    */
-  function batchItems(tasks: { labels?: Record<string, string>; attachments?: string[]; needs?: (string | { ref: string })[] }[], keyed: boolean): number {
+  function batchItems(tasks: { labels?: Record<string, string>; attachments?: string[]; needs?: (string | { key: string })[] }[], keyed: boolean): number {
     const there = new Set(tasks.flatMap((task) => (task.needs ?? []).filter((need) => typeof need === 'string')))
     let items = 2 + (keyed ? 1 : 0) + Math.min(tasks.length, FEED_SHARDS) + there.size
     for (const task of tasks) {
@@ -877,19 +877,19 @@ function fakeBoard(shared: Shared, boardId: string) {
    * claimed in the body's order.
    */
   function makeBatch(actor: Actor, body: Record<string, any>): { made: Thread[] } | { repeat: { channelId: string; threads: string[] } } {
-    type Asked = { ref?: string; text: string; labels?: Record<string, string>; noSync?: boolean; attachments?: string[]; needs?: (string | { ref: string })[]; for?: string | null }
-    const ref = (value: unknown): value is string => typeof value === 'string' && value.length >= 1 && value.length <= 64
+    type Asked = { key?: string; text: string; labels?: Record<string, string>; noSync?: boolean; attachments?: string[]; needs?: (string | { key: string })[]; for?: string | null }
+    const aKey = (value: unknown): value is string => typeof value === 'string' && value.length >= 1 && value.length <= 64
     // The body's shape.
     if (!Array.isArray(body.tasks) || body.tasks.length < 1 || body.tasks.length > 100) throw bad('tasks is 1 to 100 tasks.')
     if ((body.channelId === undefined) === (body.channel === undefined)) throw bad('Name the channel by channelId or by channel.')
     if (body.idempotencyKey !== undefined && (typeof body.idempotencyKey !== 'string' || body.idempotencyKey.length < 1 || body.idempotencyKey.length > 512)) throw bad('idempotencyKey is 1 to 512 characters.')
     for (const task of body.tasks as Record<string, any>[]) {
       if (typeof task !== 'object' || task === null) throw bad('A task is an object.')
-      if (task.ref !== undefined && !ref(task.ref)) throw bad('ref is 1 to 64 characters.')
+      if (task.key !== undefined && !aKey(task.key)) throw bad('key is 1 to 64 characters.')
       if (task.claim !== undefined || task.clientId !== undefined) throw bad('A batch takes no claim and no clientId.')
       const needs: unknown[] = task.needs ?? []
-      const named = Array.isArray(needs) ? needs.map((need) => (typeof need === 'string' && THREAD_ID.test(need) ? `task ${need}` : typeof need === 'object' && need !== null && ref((need as { ref?: unknown }).ref) ? `ref ${(need as { ref: string }).ref}` : null)) : [null]
-      if (named.length > 20 || named.includes(null) || new Set(named).size !== named.length) throw bad('needs is at most 20 task IDs or refs, each named once.')
+      const named = Array.isArray(needs) ? needs.map((need) => (typeof need === 'string' && THREAD_ID.test(need) ? `task ${need}` : typeof need === 'object' && need !== null && aKey((need as { key?: unknown }).key) ? `key ${(need as { key: string }).key}` : null)) : [null]
+      if (named.length > 20 || named.includes(null) || new Set(named).size !== named.length) throw bad('needs is at most 20 task IDs or keys, each named once.')
     }
     const tasks = body.tasks as Asked[]
     // What the caller may: post there, and label when a task has labels.
@@ -912,16 +912,16 @@ function fakeBoard(shared: Shared, boardId: string) {
     // How the batch's tasks wait for each other.
     const places = new Map<string, number>()
     for (const [at, task] of tasks.entries()) {
-      if (task.ref === undefined) continue
-      if (places.has(task.ref)) throw new Refused(400, 'invalid_needs', `Two tasks have the ref ${task.ref}.`)
-      places.set(task.ref, at)
+      if (task.key === undefined) continue
+      if (places.has(task.key)) throw new Refused(400, 'invalid_needs', `Two tasks have the key ${task.key}.`)
+      places.set(task.key, at)
     }
     const inside = tasks.map((task, at) =>
       (task.needs ?? []).flatMap((need) => {
         if (typeof need === 'string') return []
-        const found = places.get(need.ref)
-        if (found === undefined) throw new Refused(400, 'invalid_needs', `No task has the ref ${need.ref}.`)
-        if (found === at) throw new Refused(400, 'invalid_needs', `The task with the ref ${need.ref} needs itself.`)
+        const found = places.get(need.key)
+        if (found === undefined) throw new Refused(400, 'invalid_needs', `No task has the key ${need.key}.`)
+        if (found === at) throw new Refused(400, 'invalid_needs', `The task with the key ${need.key} needs itself.`)
         return [found]
       }),
     )

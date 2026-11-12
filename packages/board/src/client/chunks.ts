@@ -29,7 +29,7 @@ export class TasksInChunksError extends BoardError {
 
 /**
  * Makes `tasks` in `channel` with as many `tasks.createMany` calls as it takes, and answers their
- * roots in the order given. It makes each task after the ones it waits for by `ref`, names a task
+ * roots in the order given. It makes each task after the ones it waits for by `key`, names a task
  * an earlier chunk made by the ID it got, and halves a chunk a board answers `batch_too_large`
  * for. With `id`, each chunk goes under an ID made from it and the chunk's place, so calling again
  * with the same `id` and tasks answers the chunks that landed and makes the rest.
@@ -45,7 +45,7 @@ export async function createTasksInChunks(board: TaskBatches, channel: string, t
   // Tasks that can't be put in an order can't be made in parts: nothing is sent.
   if ('problem' in plan) throw new BoardError('invalid_needs', `needs: ${plan.problem}`, 400)
   const { order } = plan
-  const places = new Map(tasks.flatMap((task, at) => (task.ref !== undefined ? [[task.ref, at] as const] : [])))
+  const places = new Map(tasks.flatMap((task, at) => (task.key !== undefined ? [[task.key, at] as const] : [])))
   const created: (MessageView | undefined)[] = tasks.map(() => undefined)
   let size = TASK_BATCH_MAX
   for (let from = 0; from < order.length; ) {
@@ -53,8 +53,8 @@ export async function createTasksInChunks(board: TaskBatches, channel: string, t
     const chunk = picked.map((at): TaskInBatch => {
       const task = tasks[at]!
       if (!task.needs) return task
-      // A task an earlier chunk made is there now, so it's named by its ID. One still to make is in this chunk, and keeps its ref.
-      return { ...task, needs: task.needs.map((need) => (typeof need === 'string' ? need : (created[places.get(need.ref)!]?.id ?? need))) }
+      // A task an earlier chunk made is there now, so it's named by its ID. One still to make is in this chunk, and is named by its key.
+      return { ...task, needs: task.needs.map((need) => (typeof need === 'string' ? need : (created[places.get(need.key)!]?.id ?? need))) }
     })
     try {
       const made = await board.tasks.createMany(channel, chunk, options.id !== undefined ? { id: `${options.id}/${from}+${picked.length}` } : {})

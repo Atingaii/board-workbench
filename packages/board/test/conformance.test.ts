@@ -548,7 +548,7 @@ describe('the conformance kit', () => {
     const ATOMIC = 'makes none of a batch when one of its tasks can not be made, wherever it comes in it'
     const failed = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
     const batching = (request: Request) => request.method === 'POST' && new URL(request.url).pathname.endsWith('/tasks/batch')
-    type Sent = { channel: string; id?: string; tasks: { ref?: string; text: string; needs?: (string | { ref: string })[] }[] }
+    type Sent = { channel: string; id?: string; tasks: { key?: string; text: string; needs?: (string | { key: string })[] }[] }
     // A board that makes a batch's tasks in turn, each with what makes one task: a task that needs a later one can't be
     // made, and it never looks at how the batch's tasks name each other.
     const turns = testBoard({ scheduler: fakeQueue().scheduler })
@@ -557,19 +557,19 @@ describe('the conformance kit', () => {
       const { channel, tasks } = (await request.json()) as Sent
       const made = new Map<string, string>()
       const roots: unknown[] = []
-      for (const { ref, needs, ...task } of tasks) {
-        const waits = (needs ?? []).map((need) => (typeof need === 'string' ? need : (made.get(need.ref) ?? '999999')))
+      for (const { key, needs, ...task } of tasks) {
+        const waits = (needs ?? []).map((need) => (typeof need === 'string' ? need : (made.get(need.key) ?? '999999')))
         const answer = await turns.fetch(new Request(`${BOARD_URL}/tasks`, { method: 'POST', headers: request.headers, body: JSON.stringify({ channel, ...task, ...(waits.length ? { needs: waits } : {}) }) }))
         if (!answer.ok) return answer
         const { task: root } = (await answer.json()) as { task: { id: string } }
-        if (ref !== undefined) made.set(ref, root.id)
+        if (key !== undefined) made.set(key, root.id)
         roots.push(root)
       }
       return Response.json({ tasks: roots }, { status: 201 })
     }
     expect(failed(await conformance(await clientOf(inTurn)))).toEqual([
       [BATCH, "needs: #999999 isn't a task"],
-      [ATOMIC, 'a batch with a ref two of its tasks go by: expected 400 invalid_needs, and it succeeded'],
+      [ATOMIC, 'a batch with a key two of its tasks have: expected 400 invalid_needs, and it succeeded'],
     ])
     // One that refuses what it should, with the batch's first task already written.
     const partly = testBoard({ scheduler: fakeQueue().scheduler })
@@ -578,7 +578,7 @@ describe('the conformance kit', () => {
       const sent = (await request.clone().json()) as Sent
       const response = await partly.fetch(request)
       if (response.status === 400) {
-        const { ref: _ref, needs: _needs, ...first } = sent.tasks[0]!
+        const { key: _key, needs: _needs, ...first } = sent.tasks[0]!
         await partly.fetch(new Request(`${BOARD_URL}/tasks`, { method: 'POST', headers: request.headers, body: JSON.stringify({ channel: sent.channel, ...first }) }))
       }
       return response
@@ -614,7 +614,7 @@ describe('the conformance kit', () => {
     }
     expect(failed(await conformance(await clientOf(noNeeds)))).toEqual([
       [BATCH, 'a batched task that needs a later one of the batch: expected "waiting", got "ready"'],
-      [ATOMIC, 'a batch with a task that needs a ref no task of it has: expected 400 invalid_needs, and it succeeded'],
+      [ATOMIC, 'a batch with a task that needs a key no task of it has: expected 400 invalid_needs, and it succeeded'],
     ])
     // One that answers them newest first.
     const backwards = testBoard({ scheduler: fakeQueue().scheduler })
