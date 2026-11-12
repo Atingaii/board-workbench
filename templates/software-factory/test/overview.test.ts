@@ -70,7 +70,7 @@ test("the last reply is the agent's latest message, whenever it was", () => {
   assert.equal(overview([message(null, "ada", HOUR)], [], DEPLOYMENT, NOW, 200).lastReplyAt, null);
 });
 
-test("pull requests are counted by the state their thread is labeled with, and the open ones are listed with where they are", () => {
+test("pull requests are counted by the state their thread is labeled with, a draft as open, and nothing of what they say is kept", () => {
   const pull = (repo: string, number: number, state: string, title = "a title") =>
     message(null, "sync", DAY, { id: `pr${number}`, text: `PR #${number}: ${title}\nhttps://github.com/${repo}/pull/${number}`, labels: { pr: `${repo}#${number}`, state } });
   const pulls = [
@@ -80,14 +80,11 @@ test("pull requests are counted by the state their thread is labeled with, and t
     pull("acme/web", 10, "merged"),
     pull("acme/web", 9, "closed"),
   ];
-  assert.deepEqual(overview([], pulls, DEPLOYMENT, NOW, 200).pulls, {
-    open: [
-      { repo: "acme/web", number: 12, title: "Fix the build", url: "https://github.com/acme/web/pull/12", draft: false },
-      { repo: "acme/factory", number: 3, title: "Remove the Deploy button", url: "https://github.com/acme/factory/pull/3", draft: true },
-    ],
-    merged: 2,
-    closed: 1,
-  });
+  const seen = overview([message(null, "ada", DAY, { text: "the launch date is the 3rd" })], pulls, DEPLOYMENT, NOW, 200);
+  assert.deepEqual(seen.pulls, { open: 2, merged: 2, closed: 1 });
+  // Whoever can open the deployment sees this, whatever they may read on the board: numbers and times only.
+  const shown = JSON.stringify(seen);
+  for (const said of ["Fix the build", "Remove the Deploy button", "acme/web", "launch date", "github.com"]) assert.ok(!shown.includes(said), said);
 });
 
 test("a length of time reads as people say it", () => {
