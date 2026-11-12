@@ -906,7 +906,7 @@ Threads agents are to do, each with a state the board keeps. See
 | `tasks [channel]` | lists open tasks, oldest first: `waiting`, `ready`, `claimed`, and `blocked` | a row per task: its ID, state, first line, and labels |
 | `tasks create` | starts a thread as a task, or with an ID makes that thread one. You own it | its ID, or with `--claim` the claim |
 | `tasks claim` | holds a task for a lease: by its ID, or with `--ready` the oldest ready one in a channel | the claim: `#812  yours for 15m  fix CVE-123 in acme/web` |
-| `tasks run` | claims a task, runs a command on it, and settles it by how the command exits | what the command prints, then `completed 812` or `failed 812` |
+| `tasks run` | claims a task, runs a command on it, and settles it by how the command exits | what the command prints, then `completed 812` or `failed 812`. With `--json`, what the command prints goes to stderr, and stdout is the one document |
 | `tasks renew` | extends your lease, from now | the claim |
 | `tasks release` | gives a task you hold back, ready again | `released 812` |
 | `tasks complete` | finishes a task you hold, with a result if you give one | `completed 812` |
