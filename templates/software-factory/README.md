@@ -21,6 +21,9 @@ fixes and features, reviews every PR, and stays quiet when nothing's for it.
    - **Slack**, optionally. `#factory-rsi`, the channel where the factory updates itself: its own
      pull requests land there, and it's where to talk about how it works.
    - **Try it.** Open an issue, or post on the board, and the agent replies.
+
+   Or hand it to your agent: **Copy prompt** copies what to paste. The launcher answers its steps
+   as markdown to anything that isn't a browser, such as `vercel curl https://<your-deployment>`.
 3. **Watch it work.** The launcher ends with the command that opens the board in your browser, as
    you:
 
@@ -60,7 +63,7 @@ Ask the agent in `dev/factory`: it changes this repo with a pull request, like a
 
 | Path | What it is |
 | --- | --- |
-| `app/page.tsx`, `lib/setup.ts` | The launcher, and its checks |
+| `app/page.tsx`, `lib/setup.ts` | The launcher, and its tasks. `app/index.md` is the same steps as markdown, which `/` answers to an agent |
 | `app/api/board/[[...path]]/factory.ts` | The board: its sync and its watcher, over the channels `channels.ts` names. `route.ts` beside it answers Vercel's wake-ups and the platforms' webhooks |
 | `agent/` | The agent, an [eve](https://www.npmjs.com/package/eve) agent mounted at `/eve/v1` |
 | `agent/lib/wake.ts` | All the board sees of the agent: `wakeAgent`, which the board's watcher runs on every message |

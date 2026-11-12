@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { slackChannels } from "../app/api/board/[[...path]]/channels.ts";
+import { agentPrompt, markdown } from "../lib/markdown.ts";
 import { isDone, setup, type Deps, type Step, type Task } from "../lib/setup.ts";
 
 // The launcher's steps, driven as the page drives them, against a fake network: what a person sees is
@@ -365,4 +366,108 @@ test("AI Gateway without credits says where to add them", async () => {
 test("a team billed for AI Gateway usage, with a negative balance, is ready", async () => {
   const { vercel } = await shown(fake({ deps: { credits: async () => -1194239.37 } }).deps);
   assert.equal(isDone(vercel!), true);
+});
+
+// The launcher for whatever doesn't ask for a page: the same steps, as markdown.
+
+const INSPECT = "npx @vercel/board inspect --scope acme";
+
+test("as markdown, the launcher is the page's steps as a checklist, each task with its help under it", async () => {
+  // Everything set up but Slack's app in its channel. The links name no line: channels.ts wasn't read.
+  const result = await setup(uninvited(() => undefined));
+  assert.equal(
+    markdown(result, INSPECT),
+    `# Your software factory is running
+
+Bring it issues, threads, and questions. 3 of 3 steps done, checked on this request.
+
+## 1. Vercel (done)
+
+- [x] Turn on Deployment Protection
+- [x] Open the team's board once
+- [x] Add AI Gateway credits
+
+## 2. GitHub (done)
+
+- [x] Create a GitHub connector
+- [x] Install its app on your repos
+  acme/web isn't on the board yet. [Add it](${CHANNELS_URL})
+- [x] Let the app write to acme/factory
+
+## 3. Slack (optional)
+
+- [x] Create a Slack connector
+- [ ] Invite the app to #factory-rsi
+  Where the factory updates itself. [Change the channel](${CHANNELS_URL})
+
+  \`\`\`
+  /invite @factory
+  \`\`\`
+
+## 4. Try it (done)
+
+- [x] Post on the board, or open an issue
+- [x] Get a reply from the agent
+
+## Watch the board
+
+\`\`\`
+${INSPECT}
+\`\`\`
+`,
+  );
+});
+
+test("as markdown, a factory that isn't set up says so first, and gives each command its own block", async () => {
+  const { deps } = fake({
+    env: { PORT: "3000" },
+    deps: {
+      oidc: async () => Promise.reject(new Error("no token")),
+      credits: async () => Promise.reject(new Error("no token")),
+      access: async () => Promise.reject(new Error("no team to find a board for")),
+      connect: async () => Promise.reject(new Error("The 'x-vercel-oidc-token' header is missing")),
+    },
+  });
+  const text = markdown(await setup(deps), INSPECT);
+  assert.ok(text.startsWith("# Set up your software factory\n\nAn agent that takes your team's issues to pull requests. 0 of 3 steps done, checked on this request.\n\n## 1. Vercel\n"));
+  assert.ok(
+    text.includes(`- [ ] Link this directory, then restart the dev server
+
+  \`\`\`
+  vercel link
+  \`\`\`
+
+  \`\`\`
+  vercel env pull
+  \`\`\`
+
+- [ ] Open the team's board once
+`),
+    text,
+  );
+  // Nothing to watch until it runs.
+  assert.ok(!text.includes(INSPECT));
+});
+
+test("as markdown, an open deployment says only how to protect it", async () => {
+  const { deps } = fake({ routes: { "https://factory.acme.dev/icon.svg": () => new Response("<svg/>", { status: 200 }) } });
+  assert.equal(
+    markdown(await setup(deps), INSPECT),
+    `# Protect this deployment first
+
+The setup shows once only your team can open this page.
+
+- [ ] Turn on Vercel Authentication for all deployments
+  [Open Deployment Protection](https://vercel.com/acme/factory/settings/deployment-protection)
+`,
+  );
+});
+
+test("the prompt for an agent names the deployment and the command that reads it: through protection on Vercel, plainly on a dev server", () => {
+  const deployed = agentPrompt("https://factory.acme.dev", false);
+  assert.ok(deployed.startsWith("Set up https://factory.acme.dev\n"));
+  assert.ok(deployed.endsWith("vercel curl https://factory.acme.dev"));
+  const local = agentPrompt("http://localhost:3000", true);
+  assert.ok(local.endsWith(": curl http://localhost:3000"));
+  assert.ok(!local.includes("vercel curl"));
 });

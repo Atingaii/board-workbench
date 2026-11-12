@@ -27,6 +27,21 @@ export const isDone = (step: Step) => step.tasks.every((task) => task.done);
 /** What the launcher shows: its steps, or while strangers can open this deployment, only how to protect it. */
 export type Setup = { open: false; steps: Step[] } | { open: true; task: Task };
 
+/** Where setup stands: how many of the steps that aren't optional are done, and whether that's all of them. */
+export function progress(steps: Step[]): { done: number; of: number; running: boolean } {
+  const required = steps.filter((step) => !step.optional);
+  const done = required.filter(isDone).length;
+  return { done, of: required.length, running: done === required.length };
+}
+
+/** What the launcher says first, as a page and as markdown. */
+export function headline(setup: Setup): { title: string; lede: string } {
+  if (setup.open) return { title: "Protect this deployment first", lede: "The setup shows once only your team can open this page." };
+  return progress(setup.steps).running
+    ? { title: "Your software factory is running", lede: "Bring it issues, threads, and questions." }
+    : { title: "Set up your software factory", lede: "An agent that takes your team's issues to pull requests." };
+}
+
 type Env = Record<string, string | undefined>;
 
 /** What the board syncs, as its route configures it: the checks look for these. */
