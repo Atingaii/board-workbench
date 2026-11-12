@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { BoardEventView, MessageView } from '../src/api/routes.ts'
+import type { BoardEventView, MessageView, ScheduleView, SchemaView } from '../src/api/routes.ts'
+import { block } from '../src/contract/blocks.ts'
 import * as store from '../src/inspect/app/store.ts'
 import { continues } from '../src/inspect/app/store.ts'
+import { cadence, principalName, span, until } from '../src/inspect/app/words.ts'
 
 const ME = 'vercel:user:u_julian'
 
@@ -159,14 +161,17 @@ describe('the inspector store', () => {
     expect(store.filtering({ label: [] })).toBe(false)
   })
 
-  it('groups messages by author, place, and time', () => {
+  it('groups a thread\'s replies by author and time, and gives every root its own header', () => {
     const at = (minutes: number) => new Date(Date.UTC(2026, 9, 1, 12, minutes)).toISOString()
-    const first = message(1, { createdAt: at(0) })
-    expect(continues(first, message(2, { createdAt: at(4) }))).toBe(true)
-    expect(continues(first, message(2, { createdAt: at(6) }))).toBe(false) // too late
-    expect(continues(first, message(2, { createdAt: at(1), channel: 'other' }))).toBe(false) // elsewhere
-    expect(continues(first, message(2, { createdAt: at(1), re: '9' }))).toBe(false) // another thread
-    expect(continues(first, message(2, { createdAt: at(1) }), true)).toBe(false) // the first has replies
+    const first = message(1, { createdAt: at(0), re: '9' })
+    expect(continues(first, message(2, { createdAt: at(4), re: '9' }))).toBe(true)
+    expect(continues(first, message(2, { createdAt: at(6), re: '9' }))).toBe(false) // too late
+    expect(continues(first, message(2, { createdAt: at(1), re: '9', channel: 'other' }))).toBe(false) // elsewhere
+    expect(continues(first, message(2, { createdAt: at(1), re: '8' }))).toBe(false) // another thread
+    expect(continues(first, message(2, { createdAt: at(1), re: '9' }), true)).toBe(false) // the first has replies
+    expect(continues(first, message(2, { createdAt: at(1), re: '9', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null } }))).toBe(false)
+    // A root starts a thread: two by one author, a minute apart, are two threads, each with who and when.
+    expect(continues(message(1, { createdAt: at(0) }), message(2, { createdAt: at(1) }))).toBe(false)
   })
 
   it('groups a channel into threads, with pending posts', () => {
@@ -179,5 +184,118 @@ describe('the inspector store', () => {
     ])
     expect(store.thread(state, '1')!.replies.map((r) => r.id)).toEqual(['2'])
     expect(store.recent(state, 2).map((m) => m.id)).toEqual(['3', '4'])
+  })
+
+  const NOW = Date.parse('2026-10-01T12:00:00.000Z')
+  const at = (minutes: number) => new Date(NOW + minutes * 60_000).toISOString()
+  const PRINCIPAL = 'vercel:user:u_julian'
+
+  // --- blocks and schemas ---
+
+  it("names an actor as the board last showed them, or by what their ID says", () => {
+    const state: store.State = { ...start, actors: { [`${PRINCIPAL}+claude`]: { kind: 'agent', handle: 'julian/claude', name: 'claude', avatar: null, via: { name: 'Julian', environment: null } } } }
+    expect(store.nameOf(state, `${PRINCIPAL}+claude`)).toBe('claude via Julian')
+    expect(store.nameOf(state, 'local:user:ada+fixer')).toBe('fixer via ada')
+    expect(store.nameOf(state, 'local:user:ada')).toBe('ada')
+  })
+
+  const schema = (name: string, version: number, overrides: Partial<SchemaView> = {}): SchemaView => ({
+    id: `${name}@${version}`,
+    name,
+    version,
+    description: null,
+    schema: { type: 'object', properties: {} },
+    builtIn: false,
+    by: ME,
+    at: '2026-10-01T00:00:00.000Z',
+    ...overrides,
+  })
+
+  it("splits a message into prose and the blocks the board lists, where their fences are", () => {
+    const run = { schema: 'test-run', version: 1, data: { suite: 'unit', passed: 3 } }
+    const commit = { schema: 'git-commit', version: 1, data: { sha: 'a1b2', title: 'fix' } }
+    const text = `Tests pass.\n\n${block('test-run@1', run.data)}\n\nBuilt from:\n${block('git-commit@1', commit.data)}`
+    expect(store.bodyParts(text, [run, commit])).toEqual([{ text: 'Tests pass.\n\n' }, { block: run }, { text: '\n\nBuilt from:\n' }, { block: commit }])
+    // Prose after the last block is kept.
+    expect(store.bodyParts(`${block('test-run@1', run.data)}\nDone.`, [run])).toEqual([{ block: run }, { text: '\nDone.' }])
+    // A message that is only its data has no prose around it.
+    expect(store.bodyParts(block('test-run@1', run.data), [run])).toEqual([{ block: run }])
+    // A fence the board lists no block for stays text: a platform's text is never checked.
+    expect(store.bodyParts(text, [])).toEqual([{ text }])
+    expect(store.bodyParts('plain', [])).toEqual([{ text: 'plain' }])
+    expect(store.bodyParts('', [])).toEqual([])
+    // Blocks the text can't place still show, after it.
+    expect(store.bodyParts('no fence here', [run])).toEqual([{ text: 'no fence here' }, { block: run }])
+  })
+
+  it("orders a block's fields as its schema lists them, with what it says of each", () => {
+    const run = { schema: 'test-run', version: 1, data: { extra: true, passed: 3, suite: 'unit' } }
+    const known = schema('test-run', 1, { schema: { type: 'object', properties: { suite: { type: 'string', description: 'The suite that ran' }, passed: { type: 'integer' }, failed: { type: 'integer' } } } })
+    expect(store.blockFields(run, known)).toEqual([
+      { name: 'suite', value: 'unit', description: 'The suite that ran' },
+      { name: 'passed', value: 3 },
+      { name: 'extra', value: true },
+    ])
+    // A schema the registry doesn't hold: the data as it is.
+    expect(store.blockFields(run, undefined).map((field) => field.name)).toEqual(['extra', 'passed', 'suite'])
+  })
+
+  it('reads the registry by name, and takes in a new version once', () => {
+    const registry = [schema('test-run', 2), schema('git-commit', 1, { builtIn: true }), schema('test-run', 1), schema('deploy', 1)]
+    expect(store.schemasByName(registry).map((group) => [group.name, group.builtIn, group.versions.map((v) => v.version)])).toEqual([
+      ['git-commit', true, [1]],
+      ['deploy', false, [1]],
+      ['test-run', false, [1, 2]],
+    ])
+    let state: store.State = { ...start, schemas: registry }
+    expect(store.schemaOf(state, 'test-run', 2)).toBe(registry[0])
+    expect(store.schemaOf(state, 'test-run', 3)).toBeUndefined()
+    expect(store.schemaOf(start, 'test-run', 1)).toBeUndefined() // not read yet
+    state = store.addSchema(state, schema('test-run', 3))
+    expect(store.schemaOf(state, 'test-run', 3)).toBeDefined()
+    expect(store.addSchema(state, schema('test-run', 3))).toBe(state)
+  })
+
+  // --- lists the board may not give, and access ---
+
+  it("reads a grant's lines as the CLI writes them, and leaves what they mean to the board", () => {
+    expect(store.canFromLines('work/=read,post\n secrets/ = none \n*=all')).toEqual({ can: { 'work/': ['read', 'post'], 'secrets/': 'none', '*': 'all' } })
+    expect(store.canFromLines('ops=read; dev=post')).toEqual({ can: { ops: ['read'], dev: ['post'] } })
+    // A permission it has never heard of goes as written: the board says whether there's one.
+    expect(store.canFromLines('ops=shout')).toEqual({ can: { ops: ['shout'] } })
+    expect(store.canFromLines('work/')).toHaveProperty('problem')
+    expect(store.canFromLines('=read')).toHaveProperty('problem')
+    expect(store.canFromLines('work/=')).toHaveProperty('problem')
+    expect(store.canFromLines('  \n')).toHaveProperty('problem')
+  })
+
+  it('names who a grant is for', () => {
+    expect(principalName({ kind: 'user', userId: 'u_1', email: 'ada@acme.com' })).toBe('ada@acme.com')
+    expect(principalName({ kind: 'user', userId: 'u_1', email: null })).toBe('u_1')
+    expect(principalName({ kind: 'project', projectId: 'prj_1', name: 'web', environments: ['production', 'preview'], teamId: null })).toBe('web (production, preview)')
+    expect(principalName({ kind: 'github', repositoryId: null, repository: 'acme/web', workflow: 'ci.yml', branch: 'main' })).toBe('acme/web · ci.yml · main')
+    expect(principalName({ kind: 'app', clientId: 'cl_1', name: null })).toBe('cl_1')
+    expect(principalName({ kind: 'everyone' })).toBe('everyone')
+  })
+
+  // --- schedules ---
+
+  it("finds a thread's pending scheduled replies, soonest first, and says when and how often each sends", () => {
+    const schedule = (id: string, overrides: Partial<ScheduleView>) => ({ id, re: '17', state: 'pending', next: at(60), every: null, times: null, sent: 0, until: null, ...overrides }) as ScheduleView
+    const listed = [schedule('s1', { next: at(120) }), schedule('s2', { next: at(5) }), schedule('s3', { re: '9' }), schedule('s4', { state: 'canceled', next: null }), schedule('s5', { re: null })]
+    const state: store.State = { ...start, schedules: { is: 'here', items: listed } }
+    expect(store.threadSchedules(state, '17').map((s) => s.id)).toEqual(['s2', 's1'])
+    expect(store.threadSchedules(start, '17')).toEqual([]) // not listed yet
+
+    expect(until(at(125), NOW)).toBe('in 2h')
+    expect(until(at(59), NOW)).toBe('in 59m')
+    expect(until(at(3 * 24 * 60), NOW)).toBe('in 3d')
+    expect(until(at(-1), NOW)).toBe('now')
+    expect(span(86_400_000)).toBe('1d')
+    expect(span(90 * 60_000)).toBe('90m')
+    expect(span(36 * 3_600_000)).toBe('36h')
+    expect(cadence({ every: null, times: null, sent: 0, until: null })).toBe('once')
+    expect(cadence({ every: 7 * 86_400_000, times: 4, sent: 1, until: null })).toBe('every 7d · 1 of 4 sent')
+    expect(cadence({ every: 3_600_000, times: null, sent: 12, until: null })).toBe('every 1h · 12 sent')
   })
 })

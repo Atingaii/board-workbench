@@ -1,9 +1,10 @@
-import { CloudOff, FileText, Paperclip, Tag, X } from 'lucide-react'
+import { Clock, CloudOff, FileText, Paperclip, Tag, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { fileSize } from '../../contract/files.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX } from '../../contract/schemas.ts'
-import * as board from './board.ts'
-import { LabelEditor, Panel, Suggest, type KnownLabels } from './ui.tsx'
+import type { ScheduleTiming } from '../../server/index.default.ts'
+import { toast } from './chrome.ts'
+import { fieldMenu, LabelEditor, Panel, Suggest, type KnownLabels } from './ui.tsx'
+import { fileSize } from './words.ts'
 
 // Just Chat's composer: one outlined box, the textarea, a quiet toolbar.
 // Enter sends, Shift+Enter breaks a line, ⌘B / ⌘I / ⌘E format, lists continue,
@@ -37,7 +38,15 @@ function insert(el: HTMLTextAreaElement, start: number, end: number, text: strin
 
 const LIST_ITEM = /^(\s*)([-*]|\d+\.)\s(.*)$/
 
-export type Send = { text: string; noSync: boolean; channel: string; labels: Record<string, string>; files: File[] }
+export type Send = {
+  text: string
+  noSync: boolean
+  channel: string
+  labels: Record<string, string>
+  files: File[]
+  /** Set to post it later: when, and how often. */
+  later?: ScheduleTiming
+}
 
 export function Composer(props: {
   scope: string
@@ -55,6 +64,8 @@ export function Composer(props: {
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [labelsOpen, setLabelsOpen] = useState(false)
   const [files, setFiles] = useState<File[]>([])
+  const [later, setLater] = useState<ScheduleTiming | null>(null)
+  const [laterOpen, setLaterOpen] = useState(false)
   const area = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
 
@@ -62,12 +73,12 @@ export function Composer(props: {
   const attach = (added: File[]) => {
     const fitting = added.filter((file) => {
       if (file.size <= ATTACHMENT_BYTES_MAX) return true
-      board.toast(`${file.name} is over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
+      toast(`${file.name} is over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
       return false
     })
     setFiles((current) => {
       const next = [...current, ...fitting]
-      if (next.length > ATTACHMENTS_PER_MESSAGE_MAX) board.toast(`a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX} files`)
+      if (next.length > ATTACHMENTS_PER_MESSAGE_MAX) toast(`a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX} files`)
       return next.slice(0, ATTACHMENTS_PER_MESSAGE_MAX)
     })
     area.current?.focus()
@@ -94,8 +105,9 @@ export function Composer(props: {
 
   const send = () => {
     if (!text.trim() && files.length === 0) return
-    if (props.channels && !target) return board.toast('pick a channel to post in')
-    props.onSend({ text: text.trim(), noSync, channel: target, labels, files })
+    if (props.channels && !target) return toast('pick a channel to post in')
+    props.onSend({ text: text.trim(), noSync, channel: target, labels, files, ...(later ? { later } : {}) })
+    setLater(null)
     change('')
     setLabels({})
     setFiles([])
@@ -244,6 +256,7 @@ export function Composer(props: {
               </>
             }
             triggerTitle="labels for this message"
+            align="start"
             open={labelsOpen}
             onOpenChange={setLabelsOpen}
           >
@@ -269,12 +282,90 @@ export function Composer(props: {
             <CloudOff size={14} />
             {noSync && <span className="tool-label">board only</span>}
           </button>
+          <Panel
+            title="send later"
+            trigger={
+              <>
+                <Clock size={14} />
+                {later && <span className="tool-label">{timing(later)}</span>}
+              </>
+            }
+            triggerClass={`tool${later ? ' on' : ''}`}
+            align="start"
+            open={laterOpen}
+            onOpenChange={setLaterOpen}
+          >
+            <Later
+              value={later}
+              onSet={(next) => {
+                setLater(next)
+                setLaterOpen(false)
+                area.current?.focus()
+              }}
+            />
+          </Panel>
           <span className="hint">enter to send · shift+enter for a new line</span>
           <button className="send" disabled={!canSend} onMouseDown={(event) => event.preventDefault()} onClick={send}>
-            send
+            {later ? 'schedule' : 'send'}
           </button>
         </div>
       </div>
     </div>
+  )
+}
+
+/** A timing in a few words: `in 2h`, `at 9:00, every 1d`. */
+const timing = (later: ScheduleTiming): string =>
+  [later.in ? `in ${later.in}` : later.at ? `at ${new Date(later.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '', later.every ? `every ${later.every}` : '']
+    .filter(Boolean)
+    .join(', ')
+
+/** When a message goes out: in a while or at a time, and again every so often. The board checks it. */
+function Later({ value, onSet }: { value: ScheduleTiming | null; onSet: (timing: ScheduleTiming | null) => void }) {
+  const [after, setAfter] = useState(value?.in ?? '')
+  const [at, setAt] = useState('')
+  const [every, setEvery] = useState(value?.every ?? '')
+  const [times, setTimes] = useState(value?.times ? String(value.times) : '')
+  const set = () =>
+    onSet({
+      ...(after.trim() ? { in: after.trim() } : at ? { at: new Date(at).toISOString() } : {}),
+      ...(every.trim() ? { every: every.trim() } : {}),
+      ...(every.trim() && Number(times) > 0 ? { times: Number(times) } : {}),
+    })
+  const ready = after.trim() !== '' || at !== '' || every.trim() !== ''
+  return (
+    <form
+      className="ask"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (ready) set()
+      }}
+      {...fieldMenu}
+    >
+      <div className="label-add">
+        <Suggest className="grow" prefix="in" value={after} onChange={setAfter} items={['10m', '1h', '3h', '1d']} placeholder="2h" autoFocus onEnter={() => ready && set()} />
+        <span className="faint">or at</span>
+        <label className="suggest grow">
+          <input type="datetime-local" value={at} disabled={after.trim() !== ''} onChange={(event) => setAt(event.target.value)} />
+        </label>
+      </div>
+      <div className="label-add">
+        <Suggest className="grow" prefix="every" value={every} onChange={setEvery} items={['1h', '1d', '7d']} placeholder="never" onEnter={() => ready && set()} />
+        <label className="suggest grow" title="stop after this many sends">
+          <span className="prefix">times</span>
+          <input value={times} disabled={!every.trim()} onChange={(event) => setTimes(event.target.value.replace(/\D/g, ''))} placeholder="no limit" inputMode="numeric" />
+        </label>
+      </div>
+      <div className="label-add end">
+        {value && (
+          <button type="button" className="clear" onClick={() => onSet(null)}>
+            send now instead
+          </button>
+        )}
+        <button type="submit" className="send small" disabled={!ready}>
+          set
+        </button>
+      </div>
+    </form>
   )
 }

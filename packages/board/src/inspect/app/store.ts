@@ -1,6 +1,8 @@
-import type { ActorView, BoardEventView, ChannelView, Discovery, Me, MessageView } from '../../api/routes.ts'
+import type { ActorView, BlockView, BoardEventView, ChannelView, Discovery, GrantView, Me, MessageView, RegistrationView, ScheduleView, SchemaView } from '../../api/routes.ts'
+// `@vercel/board/schemas`, in an app of yours.
+import { findBlocks } from '../../contract/blocks.ts'
 import { canonicalEmoji } from '../../contract/emoji.ts'
-import { actorKind } from '../../contract/schemas.ts'
+import { shownName } from './words.ts'
 
 // The board, as this page knows it. Pure functions over plain state: the page
 // loads snapshots, folds the live stream in, and overlays your own writes until
@@ -39,6 +41,17 @@ export type State = {
   /** The stream's position: the last event's cursor, to resume from. */
   cursor: string | null
   live: 'connecting' | 'live' | 'reconnecting'
+  /** The board's schema registry, once it's read: what a block's fields mean. */
+  schemas: SchemaView[] | null
+  /** What the board answered instead of its registry, when it refused. */
+  schemasRefused: string | null
+  /** The board's grants, as it answered when asked for them. */
+  grants: Listed<GrantView>
+  /** Scheduled messages: pending ones, or with `everySchedule` done and canceled ones too. Nothing in the feed says when one changes, so the page asks again. */
+  schedules: Listed<ScheduleView>
+  everySchedule: boolean
+  /** The watchers boards elsewhere registered here. */
+  watchers: Listed<RegistrationView>
 }
 
 export const initialState: State = {
@@ -51,6 +64,12 @@ export const initialState: State = {
   actors: {},
   cursor: null,
   live: 'connecting',
+  schemas: null,
+  schemasRefused: null,
+  grants: { is: 'unasked' },
+  schedules: { is: 'unasked' },
+  everySchedule: false,
+  watchers: { is: 'unasked' },
 }
 
 /** Whether a message as the board shows it already reflects a change you made. */
@@ -95,14 +114,31 @@ export function apply(message: MessageView, op: Op, me: string, now: string): Me
   }
 }
 
-/** Takes in message views, keeping whichever of each is newer: an older view never replaces a newer one. */
+// #region guide inspector/merge.ts
+/**
+ * Takes in views of messages, keeping the newer of each. A message's `version` grows with every
+ * change to it, so of two views the higher is newer, whatever order they arrive in: a snapshot
+ * that lands after the event that outdated it changes nothing.
+ */
+export function newest(known: Record<string, MessageView>, views: MessageView[]): Record<string, MessageView> {
+  let next = known
+  for (const view of views) {
+    if ((next[view.id]?.version ?? -1) > view.version) continue
+    if (next === known) next = { ...known }
+    next[view.id] = view
+  }
+  return next
+}
+// #endregion
+
+/** Takes in message views, the newer of each, with what a newer view settles: the changes of yours it confirms. */
 export function merge(state: State, views: MessageView[]): State {
-  let messages = state.messages
+  const messages = newest(state.messages, views)
+  if (messages === state.messages) return state
   let ops = state.ops
   for (const view of views) {
-    if ((messages[view.id]?.version ?? -1) > view.version) continue
-    if (messages === state.messages) messages = { ...messages }
-    messages[view.id] = view
+    // An older view changed nothing.
+    if (messages[view.id] !== view) continue
     const waiting = ops[view.id]
     if (waiting && state.me) {
       const left = waiting.filter(({ op }) => !confirms(view, op, state.me!.actor))
@@ -113,26 +149,26 @@ export function merge(state: State, views: MessageView[]): State {
       }
     }
   }
-  return messages === state.messages && ops === state.ops ? state : { ...state, messages, ops }
+  return { ...state, messages, ops }
 }
 
+// #region guide inspector/pending.ts
 /**
- * The post on its way that a message you wrote stands for. The stream can bring
- * the message before the board answers the post; whichever comes first replaces
- * it, so the two never show at once.
+ * The post on its way that a message stands for: yours, in the same place, saying the same. The
+ * feed can bring the message before the board answers the post, so whichever comes first replaces
+ * the pending one, and the two never show at once.
  */
-function landed(state: State, message: MessageView): Pending | undefined {
-  if (message.by.actor !== state.me?.actor) return undefined
-  return state.pending.find(
-    (post) => post.error === null && post.channel === message.channel && post.re === message.re && post.text === message.text,
-  )
+export function landed<Post extends { channel: string; re: string | null; text: string; error: string | null }>(pending: Post[], message: MessageView, me: string): Post | undefined {
+  if (message.by.actor !== me) return undefined
+  return pending.find((post) => post.error === null && post.channel === message.channel && post.re === message.re && post.text === message.text)
 }
+// #endregion
 
 /** Folds one live event in: the message it concerns, channel counts, and actor details. */
 export function applyEvent(state: State, event: BoardEventView): State {
   let next = event.message ? merge(state, [event.message]) : state
   if (event.type === 'message.posted' && event.message) {
-    const post = landed(next, event.message)
+    const post = landed(next.pending, event.message, next.me?.actor ?? '')
     if (post) next = { ...next, pending: next.pending.filter((p) => p !== post) }
     const { channel, re } = event.message
     const known = next.channels[channel]
@@ -164,7 +200,7 @@ export function applyEvent(state: State, event: BoardEventView): State {
   }
   if (event.type === 'actor.seen') {
     const { actor, kind, handle, name, avatar, via, platform } = event.payload
-    next = { ...next, actors: { ...next.actors, [actor]: { kind: actorKind(kind), handle, name, avatar, ...(via ? { via } : {}), ...(platform ? { platform } : {}) } } }
+    next = { ...next, actors: { ...next.actors, [actor]: { kind: kind === 'profile' ? 'agent' : kind, handle, name, avatar, ...(via ? { via } : {}), ...(platform ? { platform } : {}) } } }
   }
   // The stream comes in order, so the last event's cursor is where to resume.
   return { ...next, cursor: event.cursor }
@@ -289,10 +325,15 @@ export type Groupable = Pick<MessageView, 'by' | 'createdAt' | 'deleted' | 'chan
 export const sourcePlatform = (m: Pick<MessageView, 'from' | 'author'>, platforms: Record<string, string> = {}): string | null =>
   m.from === null ? null : (m.author?.platform ?? platforms[m.from] ?? m.from)
 
-/** Whether `m` continues `previous`: same author and place, same day, close in time, nothing in between. */
+/**
+ * Whether `m` continues `previous` under one header: a reply by the same author in the same thread,
+ * the same day and close in time, with nothing in between. A root never does: it starts a thread,
+ * so it shows who started it, and when.
+ */
 export function continues(previous: Groupable | undefined, m: Groupable, hasReplies = false): boolean {
   return (
     !!previous &&
+    m.re !== null &&
     !hasReplies &&
     !previous.deleted &&
     previous.by.actor === m.by.actor &&
@@ -303,3 +344,113 @@ export function continues(previous: Groupable | undefined, m: Groupable, hasRepl
   )
 }
 
+
+// --- who's who ---------------------------------------------------------------------------------
+
+/** Who's looking: what the board says of you (`team.me()`), and what you may do where. */
+export type Viewer = {
+  actor: string
+  principal: string
+  may(permission: 'post' | 'manage', channel: string): boolean
+  /** `manage` at `*`: what registering a schema and listing grants need. */
+  manages: boolean
+}
+
+/**
+ * An actor or a principal by name: as the board last said who they are, or else what their ID
+ * says, a profile and the last part of its principal's (`local:user:julian+codex` is `codex via julian`).
+ */
+export function nameOf(state: State, id: string): string {
+  const known = state.actors[id]
+  if (known) return shownName(known)
+  const plus = id.indexOf('+')
+  const principal = plus === -1 ? id : id.slice(0, plus)
+  const tail = state.actors[principal]?.name ?? principal.slice(principal.lastIndexOf(':') + 1)
+  return plus === -1 ? tail : `${id.slice(plus + 1)} via ${tail}`
+}
+
+// --- blocks and schemas -------------------------------------------------------------------
+
+/** A piece of a message's body: prose, or a block the board read out of it. */
+export type BodyPart = { text: string } | { block: BlockView }
+
+/**
+ * A message's text as prose and blocks, in order. A block is a fence in the text that names a
+ * schema; only the ones the board lists are blocks (it checked them), so a fence in a platform's
+ * text stays text. Blocks the text can't place come after it.
+ */
+export function bodyParts(text: string, blocks: BlockView[]): BodyPart[] {
+  if (blocks.length === 0) return text.trim() ? [{ text }] : []
+  const fences = findBlocks(text).filter((found) => found.data !== undefined && found.name !== undefined)
+  if (fences.length !== blocks.length) return [...(text.trim() ? [{ text }] : []), ...blocks.map((block) => ({ block }))]
+  const parts: BodyPart[] = []
+  let at = 0
+  fences.forEach((fence, i) => {
+    const before = text.slice(at, fence.start)
+    if (before.trim()) parts.push({ text: before })
+    parts.push({ block: blocks[i]! })
+    at = fence.end
+  })
+  if (text.slice(at).trim()) parts.push({ text: text.slice(at) })
+  return parts
+}
+
+/** A registered schema version, or undefined for one the registry doesn't hold (or hasn't been read). */
+export const schemaOf = (state: Pick<State, 'schemas'>, name: string, version: number): SchemaView | undefined =>
+  state.schemas?.find((schema) => schema.name === name && schema.version === version)
+
+/** A block's fields, in the order its schema lists them, then any it doesn't: each with what the schema says of it. */
+export function blockFields(block: BlockView, schema: SchemaView | undefined): { name: string; value: unknown; description?: string }[] {
+  const properties = (schema?.schema.properties ?? {}) as Record<string, { description?: unknown } | undefined>
+  const names = [...Object.keys(properties).filter((name) => name in block.data), ...Object.keys(block.data).filter((name) => !(name in properties))]
+  return names.map((name) => {
+    const description = properties[name]?.description
+    return { name, value: block.data[name], ...(typeof description === 'string' ? { description } : {}) }
+  })
+}
+
+/** The registry by name: each schema's versions, oldest first, built-ins before the board's own. */
+export function schemasByName(schemas: SchemaView[]): { name: string; builtIn: boolean; versions: SchemaView[] }[] {
+  const names = new Map<string, SchemaView[]>()
+  for (const schema of schemas) names.set(schema.name, [...(names.get(schema.name) ?? []), schema])
+  return [...names]
+    .map(([name, versions]) => ({ name, builtIn: versions.some((v) => v.builtIn), versions: versions.sort((a, b) => a.version - b.version) }))
+    .sort((a, b) => Number(b.builtIn) - Number(a.builtIn) || a.name.localeCompare(b.name))
+}
+
+/** Takes in a schema version the board registered, once. */
+export function addSchema(state: State, schema: SchemaView): State {
+  if (state.schemas?.some((known) => known.id === schema.id)) return state
+  return { ...state, schemas: [...(state.schemas ?? []), schema] }
+}
+
+// --- what a board answers when asked for a list ---------------------------------------------
+
+/** A list the page asked the board for: not asked yet, on its way, here, or what the board answered instead. */
+export type Listed<T> = { is: 'unasked' } | { is: 'loading' } | { is: 'here'; items: T[] } | { is: 'failed'; why: string }
+
+// --- access -----------------------------------------------------------------------------------
+
+/**
+ * What a grant gives, from lines as the CLI writes them: `work/=read,post`, `secrets/=none`,
+ * `*=all`. Which patterns and permissions exist is the board's to say; this only reads the shape.
+ */
+export function canFromLines(text: string): { can: Record<string, 'all' | 'none' | string[]> } | { problem: string } {
+  const can: Record<string, 'all' | 'none' | string[]> = {}
+  for (const line of text.split(/[\n;]/).map((line) => line.trim()).filter(Boolean)) {
+    const at = line.indexOf('=')
+    const pattern = at === -1 ? '' : line.slice(0, at).trim()
+    const gives = line.slice(at + 1).trim()
+    if (!pattern || !gives) return { problem: `${line} isn't pattern=permissions, like work/=read,post` }
+    can[pattern] = gives === 'all' || gives === 'none' ? gives : gives.split(',').map((permission) => permission.trim()).filter(Boolean)
+  }
+  return Object.keys(can).length > 0 ? { can } : { problem: 'say what it gives: a line like work/=read,post' }
+}
+
+// --- schedules ---------------------------------------------------------------------------------
+
+/** The pending schedules that reply in a thread, soonest first. */
+export function threadSchedules(state: State, root: string): ScheduleView[] {
+  if (state.schedules.is !== 'here') return []
+  return state.schedules.items.filter((schedule) => schedule.re === root && schedule.state === 'pending').sort((a, b) => (a.next ?? '').localeCompare(b.next ?? ''))
+}
