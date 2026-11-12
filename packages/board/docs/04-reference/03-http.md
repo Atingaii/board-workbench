@@ -464,9 +464,9 @@ const problem = found.problem ?? checkValue(definition, found.data)   // 'id mus
 
 Anyone the board lets in reads the schemas, whatever channels they read.
 Registering needs `manage` at `*`. On Vercel's board, schemas are the team's:
-every board on the team shares one registry, people and apps whose team role
-is owner, member, or developer register, and a deployment's own credentials
-reach none of it yet, reads included (403). It checks a
+every board on the team shares one registry, and people and apps whose team
+role is owner, member, or developer register. A deployment's own credentials
+read them and register none. It checks a
 definition more strictly: it also refuses a `required` name the schema's
 `properties` don't declare, and a keyword for one type, such as `minLength`,
 with no `type` that says it.

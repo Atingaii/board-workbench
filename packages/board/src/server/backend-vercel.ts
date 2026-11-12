@@ -2246,17 +2246,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
     },
-    // Schemas are the team's in the API: every board on it shares one registry.
+    // Schemas are the team's in the API: every board on it shares one registry. They're read through
+    // the board, which whoever it lets in may do, a deployment included; registering is the team's.
     async schemas(caller, _input, signal) {
       const who = whoOf(caller)
-      const schemas = (await all<ApiSchema>(who, '/schemas', 'schemas', {}, signal)).map(schemaFrom)
+      const schemas = (await all<ApiSchema>(who, await onBoard(who, '/schemas'), 'schemas', {}, signal)).map(schemaFrom)
       // The API lists a team's own by their IDs as text, so sandbox@10 before sandbox@2: by name, then version, as every board lists them.
       const order = (schema: SchemaView) => (schema.builtIn ? 0 : 1)
       return { schemas: schemas.sort((a, b) => order(a) - order(b) || (a.builtIn ? 0 : a.name < b.name ? -1 : a.name > b.name ? 1 : a.version - b.version)) }
     },
     async schema(caller, { id }, signal) {
       const who = whoOf(caller)
-      const { schema } = await api<{ schema: ApiSchema }>(who, 'GET', `/schemas/${encodeURIComponent(id)}`, signal ? { signal } : {})
+      const { schema } = await api<{ schema: ApiSchema }>(who, 'GET', await onBoard(who, `/schemas/${encodeURIComponent(id)}`), signal ? { signal } : {})
       return { schema: schemaFrom(schema) }
     },
     async createSchema(caller, input, signal) {
