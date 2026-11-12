@@ -1436,9 +1436,11 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
 - **`--schema <schema>` on `vb post`, `reply`, `schedule`, and `edit`** takes
   the text as that schema's JSON, from wherever text comes (the argument, `-`,
   `--text-file`), and writes a message that is only that block.
-- **On Vercel's board** the API keeps text alone. board() checks what's
-  written through it, a deployment's writes included, against the schema it
-  reads through the board, and the API checks every write again itself.
+- **On Vercel's board** the API stores a message's text and answers it as
+  text: `vercel()` reads the blocks out of it. A write is checked twice.
+  board() checks what's written through it, a deployment's writes included,
+  against the schema it reads through the board. Then the API checks every
+  write itself, whoever sends it (400 `invalid_block`).
 
 ## The local board
 
