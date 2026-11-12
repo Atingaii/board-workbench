@@ -7,10 +7,11 @@ export default defineTool({
     "The factory's setup, checked now: each step the setup page shows (Vercel, GitHub, Slack, Try it), whether it's done, what was found, and what to do, with the exact commands. Use it whenever someone asks about setting the factory up, and quote its commands as they are.",
   inputSchema: z.object({}),
   async execute() {
-    // This deployment's own setup page, which runs the checks.
-    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    // This deployment's own setup page, which runs the checks. Its OIDC token gets the call through
+    // Deployment Protection, which trusts a project's calls to its own environment.
+    const token = process.env.VERCEL_URL ? await (await import("@vercel/oidc")).getVercelOidcToken() : null;
     const response = await fetch(`${ORIGIN}/api/launcher/steps`, {
-      headers: bypass ? { "x-vercel-protection-bypass": bypass } : {},
+      headers: token ? { "x-vercel-trusted-oidc-idp-token": token } : {},
       signal: AbortSignal.timeout(30_000),
     });
     const body = await response.text();

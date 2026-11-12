@@ -17,11 +17,11 @@ export function SiteHeader(): ReactNode {
       </Link>
       <Link href="/" className="crumb">
         <span aria-hidden>/</span>
-        software factory
+        Software factory
       </Link>
       <nav className="site-nav" aria-label="Site">
-        <a href={DOCS}>docs</a>
-        {repo ? <a href={repo}>github</a> : null}
+        <a href={DOCS}>Docs</a>
+        {repo ? <a href={repo}>GitHub</a> : null}
       </nav>
     </header>
   );
