@@ -46,13 +46,18 @@ pnpm build
   writes, and the agent's check-ins must reach it. The agent's `setup_steps` tool asks the setup
   page's own `/api/launcher/steps`.
 - **The setup checks write nothing.** `lib/setup.ts` checks the deployment against what the board
-  syncs. A step is a list of checks, each there or not, with what to do about what isn't: there are
-  no other states. A test drives each check through `setup()` against a fake network
-  (`test/setup.test.ts`).
+  syncs. A step is a short list of tasks, each named for what to do, done or not, with what helps
+  do it (one line, a link, commands): there are no other states. A test drives each task through
+  `setup()` against a fake network (`test/setup.test.ts`).
+- **The launcher has three faces, one check** (`lib/launcher.ts`): the page (`app/page.tsx`), the
+  same steps as markdown (`app/index.md`), and `app/api/launcher/steps` for the agent's
+  `setup_steps` tool. `/` answers the markdown to whatever doesn't ask for a page (the rewrites in
+  `next.config.ts`), so someone can tell their agent "set up" and the deployment's URL. A link to
+  `channels.ts` opens on a line found in the file as deployed, never a remembered number.
 - **While strangers can open the deployment, the page and `app/api/launcher/` say only how to
   protect it,** and nothing about the factory.
 - **The deployment calls itself with its OIDC token, and no bypass secret.** The watcher reaches the
-  agent, and the agent's `setup_steps` tool the page's checks, through Deployment Protection's
+  agent, and the agent's `setup_steps` tool the page's steps, through Deployment Protection's
   Trusted Sources, which let a project call its own environment and no other.
 - **Real credentials never enter the sandbox.** `agent/lib/credentials.ts` puts them in its network
   policy, which swaps them in on the way out. Keep it that way.
