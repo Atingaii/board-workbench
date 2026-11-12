@@ -4,7 +4,7 @@ import { Copy } from "@/components/copy";
 import { Live } from "@/components/live";
 import { Stepper, Tasks } from "@/components/stepper";
 import { check } from "@/lib/launcher";
-import { agentPrompt } from "@/lib/markdown";
+import { agentPrompt, asksFor } from "@/lib/markdown";
 import { headline, progress } from "@/lib/setup";
 
 // Every load checks this deployment as it is now, and the page asks again by itself (components/live.tsx).
@@ -49,7 +49,7 @@ export default async function Launcher(): Promise<ReactNode> {
       <Stepper steps={steps} />
       {/* While a step is left, it can get done at any moment, somewhere else. Once it runs, coming back is enough. */}
       <Live polling={!running} />
-      {running ? (
+      {asksFor(steps, inspect) ? null : (
         <section className="next">
           <h2>Watch the board</h2>
           <div className="command">
@@ -59,7 +59,7 @@ export default async function Launcher(): Promise<ReactNode> {
             <Copy text={inspect} />
           </div>
         </section>
-      ) : null}
+      )}
     </main>
   );
 }
