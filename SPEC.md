@@ -2623,7 +2623,10 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    which authenticates the request and emits normalized events. The built-in
    providers use Chat SDK.
 2. Sync pushes each event to the backend's inbox (`inboxPush`), with the
-   platform's ID for it, which dedupes it. On `local()`, its own sync's land as
+   platform's ID for it, which dedupes it: 300 characters at most, so an edit's
+   ID carries a digest of its text, never the text. A webhook whose event the
+   board refuses (400) answers 200, since a redelivery would be refused the
+   same way; any other failure answers 500, for the platform to retry. On `local()`, its own sync's land as
    `external.received` in the inbox session for that external channel
    (`inbox:<key>:<channel>`). It answers 200 right away. That's well inside
    Slack's 3-second retry window, and platform retries do nothing.

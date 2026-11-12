@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { createHash } from 'node:crypto'
 import type { Adapter, Author as ChatAuthor, Chat, FileUpload, Message as ChatMessage, ReactionEvent, StateAdapter } from 'chat'
 import type { Actor } from '../contract/folds.ts'
 import { LINKS_PER_MESSAGE_MAX, type ExternalAuthor, type ExternalFile, type ExternalLink } from '../contract/external.ts'
@@ -142,7 +143,9 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     if (input.kind === 'deleted') return `deleted:${key}:${this.toNative(input.thread)}|${input.message}`
     const message = input.message
     const location = `${key}:${this.toNative(message.threadId)}|${message.id}`
-    return input.kind === 'message' ? `message:${location}` : `edited:${location}|${message.text}`
+    if (input.kind === 'message') return `message:${location}`
+    // A digest, not the text: an inbox event ID is short (300 characters on Vercel's API), and a message isn't.
+    return `edited:${location}|${createHash('sha256').update(message.text).digest('base64url')}`
   }
 
   protected author(author: ChatAuthor, raw: unknown) {

@@ -17,6 +17,7 @@ import { memory as boardMemory } from '../src/store/memory.ts'
 import type { MessageTables } from '../src/store/types.ts'
 import { VERCEL_BUILDING } from './vercel-fixtures.ts'
 import { fakeQueue } from './queue.ts'
+import { HttpError } from '../src/server/errors.ts'
 
 type SlackChannels = Record<string, SyncUnit<SlackEvent>>
 
@@ -980,6 +981,38 @@ describe('sync', () => {
     expect(posted).toContain('**▲ Vercel**\n- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building]')
     expect(posted).not.toContain('[vc]:')
     expect(posted).not.toContain('| Project |')
+  })
+
+  it("syncs an edit to a long comment, like Vercel's deployment comment going from Building to Ready", async () => {
+    const { board, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'vercel-labs/board' }
+    const pr = { number: 41, title: 'Deploy me', html_url: 'https://github.com/vercel-labs/board/pull/41' }
+    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'long-opened' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    const thread = 'github:vercel-labs/board:41'
+    await webhook('github', { type: 'message', threadId: thread, id: 'vc', text: VERCEL_BUILDING, user: '35613825', name: 'vercel[bot]' })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[1]?.text).toContain('[Building]'))
+    const ready = VERCEL_BUILDING.replaceAll('Building', 'Ready').replaceAll('building', 'ready')
+    const edited = await webhook('github', { type: 'edit', threadId: thread, id: 'vc', text: ready, user: '35613825' })
+    expect(edited.status).toBe(200)
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[1]?.text).toContain('[Ready]'))
+  })
+
+  it("answers a webhook whose event the board refuses with 200, since it'd refuse a redelivery too, and one it couldn't store with 500", async () => {
+    const { board, webhook } = setup()
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const push = vi.spyOn(board.backend, 'inboxPush')
+    const message = { type: 'message', threadId: 'slack:C1:500', id: '500', text: 'hello', user: 'U_ADA' }
+    push.mockRejectedValueOnce(new HttpError(400, 'bad_request', 'Invalid request: `events[0].id` should NOT be longer than 300 characters.'))
+    expect((await webhook('slack', message)).status).toBe(200)
+    push.mockRejectedValueOnce(new HttpError(503, 'unavailable', 'the API is down'))
+    expect((await webhook('slack', message)).status).toBe(500)
+    // Once the board takes it, the redelivery lands.
+    expect((await webhook('slack', message)).status).toBe(200)
+    const julian = caller(board.fetch, await personToken())
+    await vi.waitFor(async () => expect((await read(julian, 'firehose')).map((m) => m.text)).toEqual(['hello']))
+    logged.mockRestore()
   })
 
   it('keeps a reply imported with `noSync` on the board, and still delivers the rest of its thread', async () => {
