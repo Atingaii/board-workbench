@@ -1727,13 +1727,15 @@ const STANDALONE = new Set(['inspect', 'serve'])
 /**
  * A command only board's own CLI has, typed in an app that embeds board's: the same run there, as
  * typed. The app's team never reaches these arguments (`vercel board` takes `--scope` itself), so
- * it says where one goes, unless a URL names the board, and with it its team.
+ * `inspect`'s says where one goes, unless a URL names the board, and with it its team. `serve` runs
+ * a board of its own, and reads none.
  */
 function standalone(command: string | undefined): Failed | undefined {
   if (io.board || command === undefined || !STANDALONE.has(command) || Object.hasOwn(app.commands, command)) return undefined
   const at = typed.indexOf('--')
   const before = at === -1 ? typed : typed.slice(0, at)
-  const team = flags.url !== undefined || process.env.BOARD_URL?.trim() || (flags.scope ?? flags.team) !== undefined ? [] : ['--scope', '<TEAM>']
+  const given = flags.url !== undefined || Boolean(process.env.BOARD_URL?.trim()) || (flags.scope ?? flags.team) !== undefined
+  const team = command === 'inspect' && !given ? ['--scope', '<TEAM>'] : []
   return usage(`${named()} has no ${command}: board's own CLI runs it.`, {
     reason: 'unknown_command',
     next: [{ instruction: "Run board's own CLI", argv: ['npx', '@vercel/board@latest', ...before, ...team, ...(at === -1 ? [] : typed.slice(at))] }],

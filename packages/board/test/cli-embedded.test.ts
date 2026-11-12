@@ -86,7 +86,8 @@ describe('the embedded CLI', () => {
     vi.stubEnv('BOARD_URL', '')
     const pointer = (command: string, line: string) => ({ code: 2, stdout: '', stderr: `error: vercel board has no ${command}: board's own CLI runs it.\n\n  Run board's own CLI:\n    ${line}\n` })
     expect(await capture(() => app.run(['inspect', '--port', '0']))).toEqual(pointer('inspect', 'npx @vercel/board@latest inspect --port 0 --scope <TEAM>'))
-    expect(await capture(() => app.run(['serve', '--help']))).toEqual(pointer('serve', 'npx @vercel/board@latest serve --help --scope <TEAM>'))
+    // serve runs a board of its own, so it needs no team.
+    expect(await capture(() => app.run(['serve', '--help']))).toEqual(pointer('serve', 'npx @vercel/board@latest serve --help'))
     // A URL names the board, and with it its team.
     expect(await capture(() => app.run(['--url', 'https://board.example/api/board', 'inspect']))).toEqual(pointer('inspect', 'npx @vercel/board@latest --url https://board.example/api/board inspect'))
     const extra = await capture(() => app.run(['conformance', 'extra']))
