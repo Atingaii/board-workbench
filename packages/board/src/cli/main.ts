@@ -1891,6 +1891,8 @@ async function tasks(args: string[]): Promise<number> {
     const lease = seconds('lease')
     const ran = await runCommand(command, {
       env: { ...process.env, BOARD_TASK: id },
+      // With --json this run's stdout is one document: what the command prints goes to stderr.
+      ...(flags.json ? { stdout: 'stderr' as const } : {}),
       // A third of the lease the board gave, so two renewals can fail before it runs out.
       every: (Date.parse(claim.until) - Date.now()) / 3,
       async renew() {

@@ -180,6 +180,12 @@ describe('vb tasks run', () => {
     expect(await vb(['tasks', 'run', '--ready', 'runs', '--label', 'step=lint', ...node('')])).toEqual({ code: 0, stdout: `completed ${next}\n`, stderr: '' })
     expect((await task(next)).task).toMatchObject({ state: 'completed', result: null })
     expect(failure(await vb(['tasks', 'run', '--ready', 'runs', '--label', 'step=lint', '--json', ...node('')])).reason).toBe('nothing_ready')
+
+    // With --json, stdout is one document: what the command prints on its own stdout comes out on stderr.
+    const loud = await create('runs', 'build it')
+    const built = await vb(['tasks', 'run', loud, '--json', ...node('console.log("compiled 12 files"); console.error("1 warning")')])
+    expect(built).toMatchObject({ code: 0, stderr: 'compiled 12 files\n1 warning\n' })
+    expect(JSON.parse(built.stdout)).toMatchObject({ outcome: 'completed', task: { id: loud, task: { state: 'completed' } } })
   }, 60_000)
 
   it("fails the task with how the command ended, and exits with the command's code", async () => {

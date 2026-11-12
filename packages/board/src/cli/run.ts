@@ -18,13 +18,14 @@ export type Ran =
 
 /**
  * Runs `command` with this process's terminal, and calls `renew` every `every` milliseconds (at
- * least 10 seconds apart) while it runs. `renew` answers whether the claim still holds: once it
+ * least 10 seconds apart) while it runs. With `stdout: 'stderr'`, what the command prints on its
+ * stdout goes to this process's stderr, for a caller whose own stdout is one document. `renew` answers whether the claim still holds: once it
  * doesn't, the command is stopped. Ctrl-C stops it too. It answers once the command has ended and
  * no renewal is still on its way.
  */
-export function runCommand(command: readonly string[], options: { env: NodeJS.ProcessEnv; every: number; renew: () => Promise<boolean> }): Promise<Ran> {
+export function runCommand(command: readonly string[], options: { env: NodeJS.ProcessEnv; every: number; renew: () => Promise<boolean>; stdout?: 'inherit' | 'stderr' }): Promise<Ran> {
   return new Promise((resolve) => {
-    const child = spawn(command[0]!, command.slice(1), { stdio: 'inherit', env: options.env })
+    const child = spawn(command[0]!, command.slice(1), { stdio: ['inherit', options.stdout === 'stderr' ? 2 : 'inherit', 'inherit'], env: options.env })
     let interrupted: 'SIGINT' | 'SIGTERM' | null = null
     let lost = false
     let ended = false
