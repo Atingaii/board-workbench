@@ -4,7 +4,8 @@ import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
-import { BoardError, type ClaimedTask, type Filters, type ProfileOption } from '../client/client.ts'
+import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch } from '../client/client.ts'
+import { createTasksInChunks, TasksInChunksError } from '../client/chunks.ts'
 import { boardUrl, connect, environmentProfile, handFetch, handLogin, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { credentialed, credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
@@ -659,6 +660,7 @@ function doing(): string {
       const one = b === undefined ? 'a task' : `task ${ref(b)}`
       // `run` fails as its claim does, before its command starts, or as what it settles with after.
       if (a === 'claim' || a === 'run') return flags.ready ? `claim a task in ${b ?? 'a channel'}` : `claim ${one}`
+      if (a === 'create' && flags['tasks-file'] !== undefined) return `create tasks in ${b ?? 'a channel'}`
       if (a === 'create') return b !== undefined && isMessageRef(b) ? `make ${ref(b)} a task` : `create a task in ${b ?? 'a channel'}`
       if (a === 'renew') return `renew the claim on ${one}`
       return `${a} ${one}`
@@ -1643,6 +1645,69 @@ function seconds(flag: 'wait' | 'lease'): number | undefined {
   return total
 }
 
+/**
+ * `tasks create <channel> --tasks-file <path>`: the tasks a JSON file holds, as `tasks.createMany`
+ * takes them, made in as many writes as the board needs. It prints each as the list shows one.
+ * The whole plan goes under one key, `--idempotency-key`'s or this run's own, so one that stops
+ * midway says what was made and is finished by the same command.
+ */
+async function createPlan(target: string, text: string | undefined, path: string): Promise<number> {
+  if (isMessageRef(target)) throw usage(`--tasks-file starts threads in a channel, and ${ref(target)} is a thread.`)
+  const own = text !== undefined ? 'text' : (['text-file', 'label', 'needs', 'for', 'claim', 'lease', 'no-sync'] as const).find((name) => (flags as Record<string, unknown>)[name] !== undefined && (flags as Record<string, unknown>)[name] !== false)
+  if (own !== undefined) throw usage(`${own === 'text' ? 'Text' : `--${own}`} is one task's: with --tasks-file, each task in the file has its own.`)
+  const board = client()
+  const tasks = await planFrom(path, board)
+  const key = flags['idempotency-key'] ?? crypto.randomUUID()
+  let made: MessageView[]
+  try {
+    made = await createTasksInChunks(board, target, tasks, { id: key })
+  } catch (error) {
+    if (!(error instanceof TasksInChunksError)) throw error
+    const there = error.created.filter((task) => task !== undefined)
+    const failed = failureOf(error)
+    // Nothing made is the failure alone. Some made: which, and the command that makes the rest, under the same key.
+    if (there.length === 0) throw new Failed(failed)
+    throw new Failed({
+      ...failed,
+      details: [...(failed.details ?? []), `made ${there.length} of ${tasks.length}: ${ref(there[0]!.id)} to ${ref(there.at(-1)!.id)}`],
+      next: [{ instruction: 'Make the rest, under the same key: what was made stays as it is', argv: rerunWithout(['--idempotency-key'], '--idempotency-key', key) }],
+      data: { ...failed.data, created: there.map((task) => task.id), total: tasks.length },
+    })
+  }
+  if (flags.json) result({ tasks: made })
+  else out(formatTasks(made.map((message) => ({ message, replies: 0, last: null }))))
+  return 0
+}
+
+/** The tasks a `--tasks-file` holds: a JSON array, from the file or from stdin for `-`. An ID may be written `#812`, and `for` as a profile's name. */
+async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
+  const where = path === '-' ? 'stdin' : path
+  let source: string
+  if (path === '-') source = await io.stdin()
+  else {
+    const data = await io.readFile(path)
+    if (!data) throw usage(`Can't read ${path}. There's no such file.`, { reason: 'file_not_found', next: [] })
+    source = new TextDecoder().decode(data)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    throw usage(`${where} isn't JSON.`)
+  }
+  const shape = 'A plan is a JSON array of tasks: [{"key": "fix", "text": "…"}, {"text": "…", "needs": [{"key": "fix"}]}].'
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((task) => typeof task !== 'object' || task === null || Array.isArray(task))) throw usage(`${where} holds no tasks. ${shape}`)
+  const plan = parsed as (Record<string, unknown> & { needs?: unknown; for?: unknown })[]
+  // A profile's name is the caller's own profile, as --for takes one: an actor's ID goes as it is.
+  const named = plan.some((task) => typeof task.for === 'string' && !task.for.includes(':'))
+  const principal = named ? (await board.me()).principal : ''
+  return plan.map((task) => ({
+    ...task,
+    ...(Array.isArray(task.needs) ? { needs: task.needs.map((need) => (typeof need === 'string' ? need.replace(/^#/, '') : typeof need === 'number' ? String(need) : need)) } : {}),
+    ...(typeof task.for === 'string' && !task.for.includes(':') ? { for: profileActor(principal, task.for) } : {}),
+  })) as TaskInBatch[]
+}
+
 /** `--claim`, on `tasks create`: a flag there (`optionsFor`), where a grant's takes a value. */
 const claimFlag = () => (flags as { claim?: unknown }).claim === true
 
@@ -1828,6 +1893,7 @@ async function tasks(args: string[]): Promise<number> {
     const [target, body, extra] = rest
     if (!target) throw usage("Missing a channel to start a task in, or a thread's ID to make one of.", { reason: 'missing_arguments' })
     if (extra !== undefined) throw usage(`tasks create takes a channel and quoted text: ${extra} is one too many.`)
+    if (flags['tasks-file'] !== undefined) return createPlan(target, body, flags['tasks-file'])
     const lease = seconds('lease')
     if (lease !== undefined && !claimFlag()) throw usage('--lease is how long a claim holds the task: pass --claim too.')
     const { board, claims } = tasksOn()
@@ -2056,6 +2122,8 @@ function taskFailure(code: string, status: number): { class: Failure['class']; m
     case 'invalid_from':
       return { class: 'usage', message: `Can't ${doing()}. --from takes an owner's ID: several can share a handle.`, next: [{ instruction: "See everyone's IDs", argv: [...cli(), 'actors'] }] }
     case 'invalid_needs':
+      // A plan's tasks name each other by key too: what's wrong is in the board's words, under this.
+      if (flags['tasks-file'] !== undefined) return { class: 'usage', message: `Can't ${doing()}. A task's needs are tasks you can read, or keys of the plan's own.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
       return { class: 'usage', message: `Can't ${doing()}. --needs takes tasks you can read.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
     // A board's own bounds on how much one request looks through, as Vercel's has: less of the tree fits.
     case 'claim_too_wide':

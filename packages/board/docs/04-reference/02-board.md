@@ -506,10 +506,9 @@ tasks' roots in the order given.
   own `code`, `status`, and `message`, and `created`: the task made for each
   of `tasks`, at its place, or `undefined`.
 - **With `id`, call it again.** Each chunk goes under an ID made from `id` and
-  the chunk's place, so the same call again, with the same tasks, answers the
-  chunks that landed and makes the rest. That holds while the board holds as
-  much in one write as it did: a plan that splits another way is other
-  chunks.
+  where the chunk starts, so the same call again, with the same tasks, answers
+  the chunks that landed and makes the rest. Other tasks under that `id` are
+  409 `duplicate_id`: a plan that changed is never made beside the first one.
 
 A plan that must not start before all of it is there waits for a task of your
 own, in a channel no worker claims in. Nothing in `createTasksInChunks` does

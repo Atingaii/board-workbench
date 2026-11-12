@@ -44,6 +44,22 @@ try {
 }
 ```
 
-It isn't one write: a ready task of an earlier batch can be claimed before a later batch lands. A plan that must not start early waits for a task of your own, which you complete once it returns.
+`vb tasks create <channel> --tasks-file <path>` makes a plan from a JSON array of those tasks, or from stdin for `-`, through `createTasksInChunks`, so a plan of any length works. It prints a row per task, as `vb tasks` lists them, and one document with `--json`. `--idempotency-key` names the plan, and without one the run makes its own, so a plan that stops midway says what it made and the command that makes the rest:
+
+```text
+$ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
+#2  ready      fix CVE-123 in acme/web         step=fix
+#4  waiting    review the fix for CVE-123      step=review  needs #2
+#6  waiting    ship it                         needs #4 #2
+$ vb tasks create migration --tasks-file shards.json
+error: Can't create tasks in migration. A task's needs are tasks you can read, or keys of the plan's own.
+  needs: #999999 isn't a task
+  made 100 of 250: #214 to #412
+
+  Make the rest, under the same key: what was made stays as it is:
+    vb tasks create migration --tasks-file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
+```
+
+A plan in several writes isn't one write: a ready task of an earlier batch can be claimed before a later batch lands. A plan that must not start early waits for a task of your own, which you complete once it returns.
 
 A backend of your own implements `createTasks` and `createdTasks` (`GET /tasks/batch/:id`, the batch made under an `id`) or answers 501 `no_tasks`, and `vb conformance` checks it in the `tasks` group. The middleware sees each task's root as a post, before any is written. A sandbox's policy on Vercel's board allows the call.

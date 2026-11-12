@@ -3690,7 +3690,12 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   team, channel, tasks, { id? })`, a plain function on `tasks.createMany`,
   makes each task after the ones it waits for, names a task an earlier batch
   made by its ID, halves a batch a board answers `batch_too_large` for, and
-  sends each under an ID made from the caller's. It isn't one write: a ready
+  sends each under an ID made from the caller's and where the batch starts,
+  so other tasks under the caller's `id` are refused, never made beside the
+  first ones. `vb tasks create <channel> --tasks-file <path>` is that
+  function on a JSON array of tasks: it prints a row per task, and when a
+  plan stops midway, what it made and the command that makes the rest under
+  the same key, which is `--idempotency-key`'s or the run's own. It isn't one write: a ready
   task of an earlier batch can be claimed before a later one lands, and a
   batch that fails stops it with what the batches before it made. A plan
   that must not start early waits for a task of its maker's, in a channel no
@@ -3727,6 +3732,7 @@ synced, is where they already are.
 ```text
 vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
 vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--no-sync] [--idempotency-key <key>]
+vb tasks create <channel> --tasks-file <path> [--idempotency-key <key>]                                   a plan: a JSON array of tasks, - for stdin, in as many writes as it takes
 vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
 vb tasks renew <id> [--lease <duration>]

@@ -884,6 +884,7 @@ with `manage` in its channel, and prints
 vb tasks [channel] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
 vb tasks create (<channel> ["<text>" | --text-file <path>] | <id>) [--label k=v]... [--needs <id>]... [--for <profile>]
                 [--claim [--lease <duration>]] [--no-sync] [--idempotency-key <key>]
+vb tasks create <channel> --tasks-file <path> [--idempotency-key <key>]
 vb tasks claim (<id> | --ready <channel> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready <channel> [--label k=v]... [--from <id>]... [--wait <duration>])
              [--result "<text>"] [--lease <duration>] -- <cmd>...
@@ -905,6 +906,7 @@ Threads agents are to do, each with a state the board keeps. See
 | --- | --- | --- |
 | `tasks [channel]` | lists open tasks, oldest first: `waiting`, `ready`, `claimed`, and `blocked` | a row per task: its ID, state, first line, and labels |
 | `tasks create` | starts a thread as a task, or with an ID makes that thread one. You own it | its ID, or with `--claim` the claim |
+| `tasks create --tasks-file` | starts a thread for each task a JSON file holds, in as many writes as the board needs | a row per task, as the list shows it |
 | `tasks claim` | holds a task for a lease: by its ID, or with `--ready` the oldest ready one in a channel | the claim: `#812  yours for 15m  fix CVE-123 in acme/web` |
 | `tasks run` | claims a task, runs a command on it, and settles it by how the command exits | what the command prints, then `completed 812` or `failed 812`. With `--json`, what the command prints goes to stderr, and stdout is the one document |
 | `tasks renew` | extends your lease, from now | the claim |
@@ -946,6 +948,21 @@ $ vb tasks work/ --state all --limit 2
 - **`--ready`** takes a task assigned to you first, then the oldest unassigned
   one you own, or whose owner `--from <id>` names. `--wait` holds until one is
   ready.
+- **`--tasks-file <path>`** makes a plan: a JSON array of tasks, each `{ key?,
+  text, labels?, needs?, for?, noSync?, attachments? }`, from a file, or from
+  stdin for `-`. A task's `key` names it for the others of the file, and
+  `needs` takes `{ "key": "fix" }` for one of them or a task's ID for one
+  that's there. `for` takes a profile's name. Text, `--label`, `--needs`,
+  `--for`, `--claim`, and `--no-sync` are one task's, so they don't go with
+  it.
+- **A plan of any length works.** Up to 100 tasks go in one write, all or
+  none. A longer plan goes in several, each task after the ones it waits for,
+  so a ready task of an earlier write can be claimed before a later one lands.
+  See [Several tasks at once](./02-board.md#several-tasks-at-once).
+- **`--idempotency-key` names the plan.** The same key and file again make
+  nothing and print the tasks as they are now. Other tasks under the key are
+  `duplicate_id`. Without one the run makes its own, so a plan that stops
+  midway says what it made and the command that makes the rest.
 - **Durations** are a number and a unit: `30s`, `10m`, `1h`. `--lease` takes
   `30s` to `1h`, and the board gives 15 minutes when it's left out.
 - **`run`** gives the command the task's ID in `BOARD_TASK`, renews the claim
@@ -973,7 +990,8 @@ What can go wrong, by `reason`:
 | `task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished` | the task can't be claimed or changed as it is: someone holds it, it's for another profile, it waits for a task, it's held for a person, or it ended | 1 |
 | `task_not_owned` | the change is its owner's to make, or `manage`'s in its channel. A profile owns only the tasks it made | 1 |
 | `not_a_task`, `already_a_task` | the thread isn't a task, or `create <id>` named one that is | 1 |
-| `invalid_needs` | `--needs` named something that isn't a task you can read | 2 |
+| `invalid_needs` | `--needs` named something that isn't a task you can read. In a plan, a `key` two tasks have or none has, or tasks that wait for each other | 2 |
+| `duplicate_id` | `--idempotency-key` was used for another task, or with `--tasks-file`, for other tasks | 1 |
 | `invalid_from` | `--from` named an owner by handle: several can share one, so it takes IDs | 2 |
 | `command_not_found` | `run`'s command couldn't start. The task is released | 1 |
 | `claim_too_wide` | on Vercel's board, `--ready` with `--from` would look in more than 200 places, its channels times the owners it takes from: name fewer owners, or a smaller subtree | 1 |
@@ -987,6 +1005,28 @@ error: Can't claim task #832. Someone holds it.
 
   See who holds it, and until when:
     vb read 832
+```
+
+```json plan.json
+[
+  { "key": "fix", "text": "fix CVE-123 in acme/web", "labels": { "step": "fix" } },
+  { "key": "review", "text": "review the fix for CVE-123", "labels": { "step": "review" }, "needs": [{ "key": "fix" }] },
+  { "text": "ship it", "needs": [{ "key": "review" }, { "key": "fix" }], "for": "shipper" }
+]
+```
+
+```text
+$ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
+#2  ready      fix CVE-123 in acme/web         step=fix
+#4  waiting    review the fix for CVE-123      step=review  needs #2
+#6  waiting    ship it                         needs #4 #2
+$ vb tasks create migration --tasks-file shards.json
+error: Can't create tasks in migration. A task's needs are tasks you can read, or keys of the plan's own.
+  needs: #999999 isn't a task
+  made 100 of 250: #214 to #412
+
+  Make the rest, under the same key: what was made stays as it is:
+    vb tasks create migration --tasks-file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
 ```
 
 ### typing

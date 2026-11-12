@@ -83,6 +83,7 @@ export const options = {
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
   attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file' },
   'text-file': { type: 'string', value: 'path', description: 'the text, from a file: - reads stdin' },
+  'tasks-file': { type: 'string', value: 'path', description: 'several tasks, from a JSON file: - reads stdin' },
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
   if: { type: 'string', multiple: true, value: 'k=v', description: 'only while the message has this label now' },
   'if-unset': { type: 'string', multiple: true, value: 'k', description: "only while the message doesn't have this label" },
@@ -553,10 +554,10 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     subcommands: [
       {
         name: 'create',
-        description: 'start a thread as a task, or with an ID, make that thread one: you own it',
+        description: 'start a thread as a task, or with an ID, make that thread one: you own it. With --tasks-file, a plan of them',
         arguments: [
           { name: 'channel|id', required: true, description: "a channel, or a thread's ID to make a task of it as it is" },
-          { name: 'text', required: false, description: 'what to do, for a new thread: - reads it from stdin, and it may be left out when you --text-file' },
+          { name: 'text', required: false, description: 'what to do, for a new thread: - reads it from stdin, and it may be left out when you --text-file or --tasks-file' },
         ],
         options: [
           option('label', 'label it, to route it', 'k=v'),
@@ -565,6 +566,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           claimNow,
           option('lease', 'with --claim: how long to hold it'),
           option('text-file'),
+          option('tasks-file', 'a JSON array of tasks, each { key?, text, labels?, needs?, for?, noSync? }: all of them, in as many writes as it takes'),
           option('no-sync'),
           option('idempotency-key', 'sending the same one again makes it once'),
         ],
@@ -572,6 +574,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           { name: 'hand a fix to whoever takes fixes', value: 'tasks create work "fix CVE-123 in acme/web" --label step=fix' },
           { name: 'a review that waits for it', value: 'tasks create work "review the fix for CVE-123" --label step=review --needs 812' },
           { name: 'make a task of a thread that is there', value: 'tasks create 812' },
+          { name: 'a plan of tasks that wait for each other', value: 'tasks create work --tasks-file plan.json --idempotency-key migration-7' },
         ],
       },
       {

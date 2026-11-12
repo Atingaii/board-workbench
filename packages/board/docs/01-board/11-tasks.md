@@ -197,6 +197,42 @@ completed.
   <id>` retries a failed task in place, and its dependents keep waiting for
   it.
 
+## A plan of tasks
+
+```json plan.json
+[
+  { "key": "fix", "text": "fix CVE-123 in acme/web", "labels": { "step": "fix" } },
+  { "key": "review", "text": "review the fix for CVE-123", "labels": { "step": "review" }, "needs": [{ "key": "fix" }] },
+  { "text": "ship it", "needs": [{ "key": "review" }, { "key": "fix" }], "for": "shipper" }
+]
+```
+
+```bash
+vb tasks create work --tasks-file plan.json --idempotency-key cve-123
+```
+
+```text
+#2  ready      fix CVE-123 in acme/web         step=fix
+#4  waiting    review the fix for CVE-123      step=review  needs #2
+#6  waiting    ship it                         needs #4 #2
+```
+
+- **A plan is a JSON array of tasks,** from a file, or from stdin for `-`.
+  Each is `{ key?, text, labels?, needs?, for?, noSync?, attachments? }`.
+- **A task's `key` names it for the others of the plan.** `needs` takes
+  `{ "key": "fix" }` for a task of the plan, before it or after it, or an ID
+  for one that's there.
+- **Up to 100 tasks are one write:** all of them or none, and none shows
+  before all have landed. A longer plan goes in several writes, each task
+  after the ones it waits for, so it isn't one: a ready task of an earlier
+  write can be claimed before a later one lands.
+- **`--idempotency-key` names the plan.** The same key and file again make
+  nothing. A plan that stops midway says what it made, and the command that
+  makes the rest under the same key.
+- **In code** it's `team.tasks.createMany` for one write and
+  `createTasksInChunks` for a plan of any length. See
+  [Several tasks at once](../04-reference/02-board.md#several-tasks-at-once).
+
 ## Hold a task for a person
 
 ```text

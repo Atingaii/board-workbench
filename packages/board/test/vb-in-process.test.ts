@@ -199,6 +199,24 @@ describe('vb()', () => {
     expect(JSON.parse((await vb(team, ['read', written.stdout.trim(), '--json'])).stdout).message.text).toBe('from the sandbox')
   })
 
+  it('makes a plan of tasks from a file its readFile hands it, or from its stdin', async () => {
+    const team = await handle()
+    const plan = JSON.stringify([{ key: 'fix', text: 'fix the export', labels: { step: 'fix' } }, { text: 'review the fix', needs: [{ key: 'fix' }] }])
+    const files = { readFile: async (path: string) => (path === '/work/plan.json' ? new TextEncoder().encode(plan) : null) }
+    const made = await vb(team, ['tasks', 'create', 'work', '--tasks-file', '/work/plan.json', '--idempotency-key', 'plan-1'], files)
+    expect(made).toMatchObject({ code: 0, stderr: '' })
+    const [fix, review] = made.stdout.split('\n').filter(Boolean).map((row) => /^#(\S+)/.exec(row)![1]!)
+    expect(made.stdout.replace(/ +/g, ' ')).toBe(`#${fix} ready fix the export step=fix\n#${review} waiting review the fix needs #${fix}\n`)
+    // The same key again is the same tasks, and a file that isn't there is said as any is.
+    expect((await vb(team, ['tasks', 'create', 'work', '--tasks-file', '/work/plan.json', '--idempotency-key', 'plan-1'], files)).stdout).toBe(made.stdout)
+    expect(await vb(team, ['tasks', 'create', 'work', '--tasks-file', '/work/missing.json'], files)).toMatchObject({ code: 2, stderr: "error: Can't read /work/missing.json. There's no such file.\n" })
+    // From its stdin, as one document.
+    const piped = await vb(team, ['tasks', 'create', 'piped', '--tasks-file', '-', '--json'], { stdin: plan })
+    expect(piped).toMatchObject({ code: 0, stderr: '' })
+    expect(JSON.parse(piped.stdout).tasks.map((root: { text: string; channel: string; task: { state: string } }) => [root.text, root.channel, root.task.state])).toEqual([['fix the export', 'piped', 'ready'], ['review the fix', 'piped', 'waiting']])
+    expect(JSON.parse((await vb(team, ['tasks', '--state', 'all', '--json'])).stdout).tasks).toHaveLength(4)
+  })
+
   it('works a task over several calls on one handle, which keeps its claim, and runs no command', async () => {
     const served = testBoard()
     const stall: Stall = { on: false, seen: [] }
