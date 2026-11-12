@@ -13,7 +13,7 @@ import { type Actor, type ExternalCopy, type Message } from '../contract/folds.t
 import { importedHandle, shownName, userIdOf } from '../contract/profiles.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
-import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
+import { INBOX_EVENT_ID_MAX, type Discovery, type InboxEntry, type Me, type ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, parseCan, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
@@ -932,6 +932,8 @@ function build(options: A2Options, binding: BoardBinding) {
 
     async inboxPush(caller, { key, events }) {
       const { principal } = (await needSync(caller, 'push to an inbox', true))
+      for (const { id } of events)
+        if (id.length > INBOX_EVENT_ID_MAX) throw badRequest(`an inbox event ID is ${INBOX_EVENT_ID_MAX} characters at most, got ${id.length}`)
       for (const { event } of events)
         for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
           if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`an inbox's platform locations belong to its sync key: ${location} isn't ${key}'s`)

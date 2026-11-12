@@ -1,4 +1,4 @@
-import type { Explanation, GrantView, Me, MessageView, RegistrationView } from '../api/routes.ts'
+import { INBOX_EVENT_ID_MAX, type Explanation, type GrantView, type Me, type MessageView, type RegistrationView } from '../api/routes.ts'
 import { BoardError, type ExplainPrincipal } from '../client/client.ts'
 import { block } from '../contract/blocks.ts'
 import { canonical } from '../contract/data-schemas.ts'
@@ -1328,6 +1328,43 @@ const CHECKS: Check[] = [
           await ctx.board.inboxAck(SYNC_KEY, item.id, { lease: item.lease })
         }
         same((await lease()).length, 0, 'the events leased once both are acked')
+      } finally {
+        await ctx.board.register({ ...registered.where, watch: {} }).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'sync',
+    name: "takes an edit of a long message in its sync's inbox, under the longest event ID the protocol allows, and refuses a longer one",
+    run: async (ctx) => {
+      const registered = await registerSync(ctx)
+      if ('skip' in registered) return registered.skip
+      try {
+        const run = ctx.labels.conformance
+        const author = { id: `${SYNC_KEY}:user:${run}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
+        const thread = `${SYNC_KEY}:${run}:long`
+        const location = { channel: `${SYNC_KEY}:${run}`, thread, subthread: null, message: '1', author }
+        // A deployment comment, edited from Building to Ready: thousands of characters, as platforms send them.
+        const text = (status: string) => `conformance: ${status}\n${'| project | deployment | preview | updated |\n'.repeat(250)}`
+        const idOf = (kind: string) => `conformance-inbox-${run}-long-${kind}-`.padEnd(INBOX_EVENT_ID_MAX, 'x')
+        const pushed = [
+          { id: idOf('message'), event: { kind: 'message' as const, ...location, isRoot: true, text: text('Building'), context: null }, raw: null },
+          { id: idOf('edited'), event: { kind: 'edited' as const, ...location, text: text('Ready') }, raw: null },
+        ]
+        for (const event of pushed) await ctx.board.inboxPush(SYNC_KEY, [event])
+        await refused(
+          ctx.board.inboxPush(SYNC_KEY, [{ ...pushed[1]!, id: `${pushed[1]!.id}x` }]),
+          400,
+          `an inbox event ID over ${INBOX_EVENT_ID_MAX} characters`,
+        )
+        for (const { event } of pushed) {
+          const leased = (await ctx.board.inboxNext(SYNC_KEY, { limit: 50 })).filter((item) => item.thread === thread)
+          same(leased.length, 1, `the events leased from the platform thread, for its ${event.kind} event`)
+          const item = leased[0]!
+          same(item.event.kind, event.kind, 'the platform event leased next')
+          same('text' in item.event ? item.event.text : null, event.text, `the ${event.kind} event's text`)
+          await ctx.board.inboxAck(SYNC_KEY, item.id, { lease: item.lease })
+        }
       } finally {
         await ctx.board.register({ ...registered.where, watch: {} }).catch(() => {})
       }
