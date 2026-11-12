@@ -31,6 +31,7 @@ export {
   type UploadInput,
   type WaitOptions,
 } from '../client/client.ts'
+export { createTasksInChunks, TasksInChunksError, type TaskBatches } from '../client/chunks.ts'
 export type { Attachment } from '../contract/schemas.ts'
 export { block } from '../contract/blocks.ts'
 export type * from '../api/routes.ts'
