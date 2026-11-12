@@ -128,9 +128,13 @@ await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {
 Its arguments, output, and exit codes are the CLI's. The handle says which
 board and who, so `--url` doesn't apply, and the commands about
 your machine (`whoami`, `hooks`, `serve`, `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
-`writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
-`wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
-every later call until it ends: they answer 2 without a `signal`. `refuse`
+`writeFile` for `download`, `stdin` for `-`. Calls run one at a time, in
+order, so a running `tail` or `wait` holds every later call until it ends: they
+answer 2 without a `signal`, which stops them (0). It ends any other command
+too, its requests included, whether or not the backend heeds it: 1 for
+`AbortSignal.timeout()`'s, 130 for any other, and a write it stopped may have
+landed. So `{ signal: AbortSignal.timeout(30_000) }` gives a call a deadline,
+and one that hangs holds nothing after it. `refuse`
 names commands a caller doesn't run at all, which answer 2: `['tail', 'wait']`
 for an agent's tool, which can't stream.
 
@@ -722,7 +726,7 @@ See [Reading](../01-board/05-reading.md).
 ### download
 
 ```text
-vb download <attachment> [path]
+vb download <attachment-id> [path]
 ```
 
 Saves an attachment, by the ID `vb read <id>` shows at the end of its file

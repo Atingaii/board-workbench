@@ -304,7 +304,7 @@ export type Io = {
   writeFile(path: string, data: Uint8Array): Promise<void>
   /** What `-` reads. */
   stdin(): Promise<string>
-  /** Stops `tail` and `wait`; without one, Ctrl-C does. */
+  /** Stops `tail` and `wait`, and fails any other command its requests haven't finished, as `board`'s handle ends them; without one, Ctrl-C stops `tail` and `wait`. */
   signal?: AbortSignal
   /** The handle to run on, in place of the one the environment and `--url` find. */
   board?: Board
@@ -741,6 +741,14 @@ function failureOf(error: unknown): Failure {
     return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: `See what ${flags.schema} holds`, argv: [...cli(), 'schemas', 'inspect', flags.schema] }])
   if (status === 400 && code === 'schema_not_found' && current.command !== 'schemas')
     return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: 'See the schemas this board has', argv: [...cli(), 'schemas'] }])
+  // Too much text: what it can't hold goes in a file, on a message that can take one (an edit can't).
+  if (status === 400 && code === 'text_too_long')
+    return {
+      ...theirs('limit', 'payload_too_large', `Can't ${doing()}. A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.`, [
+        { instruction: current.command === 'edit' ? 'Keep the edit short, and reply with the long part in a file with --attach' : 'Put the long part in a file and --attach it, with a short summary as the text' },
+      ]),
+      details: [],
+    }
   // What the board said is what to fix.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
@@ -1683,10 +1691,32 @@ async function runOnce(argv: string[], options: App): Promise<number> {
     }
     return await run(command, args)
   } catch (error) {
+    // Its caller's signal ended its requests: `tail` and `wait` end as they do when it stops them, the rest say so.
+    if (io.signal?.aborted) {
+      if (current.command === 'tail' || current.command === 'wait') return 0
+      error = stopped(io.signal.reason)
+    }
     // Before the parser says, `--json` is whether it was typed before any `--`.
     const json = flags.json ?? argv.slice(0, argv.includes('--') ? argv.indexOf('--') : undefined).includes('--json')
     return report(failureOf(error), json)
   }
+}
+
+/** The commands that change the board, whatever their arguments. */
+const WRITES = new Set(['post', 'reply', 'edit', 'delete', 'label', 'react', 'schedule', 'sync'])
+
+/** What a run its caller's signal stopped says: a write it was making may have landed. */
+function stopped(reason: unknown): Failed {
+  const timedOut = reason instanceof Error && reason.name === 'TimeoutError'
+  // A subcommand that writes is `channels create`'s first word, `sources <key> join`'s second.
+  const sub = current.command === 'sources' ? current.args[1] : current.args[0]
+  const writes = WRITES.has(current.command ?? '') || ['create', 'update', 'revoke', 'cancel', 'join'].includes(sub ?? '')
+  return new Failed({
+    class: timedOut ? 'timeout' : 'canceled',
+    reason: timedOut ? 'timeout' : 'canceled',
+    message: `${timedOut ? 'Timed out' : 'Stopped'} before it could ${doing()}.`,
+    ...(writes ? { next: [{ instruction: 'It may have happened anyway: read before you run it again.' }] } : {}),
+  })
 }
 
 /** The commands about the machine the CLI runs on, not the board: none of them run in-process. */

@@ -41,6 +41,59 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('scheduled messages', () => {
+  it('wake the watcher that scheduled them, which none of its other writes do', async () => {
+    const queue = fakeQueue()
+    const ran: [type: string, text: string][] = []
+    /** How many of the watcher's runs have returned. */
+    let returned = 0
+    const board = testBoard({
+      scheduler: queue.scheduler,
+      watch: {
+        ci: {
+          tail: 'dev',
+          run: async ({ event, board: own }) => {
+            ran.push([event.type, event.message!.text])
+            try {
+              if (event.type !== 'message.posted') return
+              // For anything but its check-in, it asks to be woken later.
+              if (!event.message!.schedule) return void (await own.schedule({ re: event.message!.id }, { text: 'check on CI', in: '5m' }))
+              await own.react(event.message!.id, 'eyes')
+              await own.reply(event.message!.id, 'still red')
+            } finally {
+              returned += 1
+            }
+          },
+        },
+      },
+    })
+    const julian = fresh(board.fetch, 'u_julian', {})
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    const root = (await julian('POST', '/messages', { channel: 'dev', text: 'the build is red' })).body.message
+    // The clock moves past the check-in only once the watcher's first run has returned and the board
+    // has recorded it: under a run still in flight, a jump makes the board take it for dead and run it again.
+    while (returned < 1) await settle()
+    await settle()
+    expect(ran).toEqual([['message.posted', 'the build is red']])
+    vi.setSystemTime(Date.now() + 5 * MINUTE)
+    const replies = async () => (await julian('GET', `/messages/${root.id}`)).body.replies as { text: string; by: { actor: string } }[]
+    // The schedule shows before the queue holds its timer, so one fire could find nothing due: fire
+    // until the watcher has answered its check-in, or for 3 seconds, so a watcher that never runs fails below.
+    for (const giveUp = performance.now() + 3_000; (await replies()).length < 2 && performance.now() < giveUp; ) {
+      await queue.fire()
+      await settle()
+    }
+    await settle()
+    expect((await replies()).map((reply) => [reply.text, reply.by.actor])).toEqual([
+      ['check on CI', 'board:watch:ci'],
+      ['still red', 'board:watch:ci'],
+    ])
+    // It ran on its check-in, and on nothing it then wrote: not its reaction to the check-in, nor its reply.
+    expect(ran).toEqual([
+      ['message.posted', 'the build is red'],
+      ['message.posted', 'check on CI'],
+    ])
+  })
+
   it('reply once, later, as whoever scheduled them', async () => {
     const { julian, pi, root, replies, advance } = await setup()
     await pi('GET', '/me')

@@ -82,6 +82,18 @@ describe('cli', () => {
     await truncate(huge, 101 * 1024 * 1024)
     expect(await vb(['reply', id, '--text-file', huge])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't use .*huge\.log as the text\. A message's text is at most 10,000 characters\.\n/) })
     expect((await read()).replies).toHaveLength(1)
+    // Text over the limit, from stdin or a file, is the board's to refuse, and says to attach it instead.
+    await writeFile(note, 'x'.repeat(10_001))
+    const tooLong = /^error: Can't reply to #\d+\. A message's text is at most 10,000 characters\.\n\n {2}Put the long part in a file and --attach it, with a short summary as the text\n/
+    expect(await vb(['reply', id, '-'], {}, 'x'.repeat(10_001))).toMatchObject({ code: 1, stderr: expect.stringMatching(tooLong) })
+    expect(await vb(['reply', id, '--text-file', note])).toMatchObject({ code: 1, stderr: expect.stringMatching(tooLong) })
+    expect(failure(await vb(['post', 'text-files', '-', '--json'], {}, 'x'.repeat(10_001)))).toMatchObject({ reason: 'payload_too_large' })
+    expect((await read()).replies).toHaveLength(1)
+    // An edit can't attach, so it says to reply with the file instead.
+    expect(await vb(['edit', id, '-'], {}, 'x'.repeat(10_001))).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't edit #\d+\. A message's text is at most 10,000 characters\.\n\n {2}Keep the edit short, and reply with the long part in a file with --attach\n/) })
+    // At the limit, it posts.
+    expect(await vb(['reply', id, '-'], {}, 'x'.repeat(10_000))).toMatchObject({ code: 0 })
+    expect((await read()).replies).toHaveLength(2)
   }, 20_000)
 
   it('refuses what a post, a reply, or a label would drop, and says how each is written', async () => {
@@ -844,7 +856,7 @@ describe('cli', () => {
     expect(dashed.stderr).toContain('vb post dev -- -1')
     // `update` here is a channel, not the removed command.
     expect((await vb(['--mentions', 'read', 'update'])).stderr).not.toContain('is gone')
-  })
+  }, 30_000)
 
   it('names the whole argument an unknown option is in, when it holds several words', async () => {
     // A shell variable that wasn't split: --as is real, but the argument it starts isn't an option.

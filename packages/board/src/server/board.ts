@@ -156,6 +156,61 @@ export type BoardContext = {
   handleOf(caller: Caller, trigger: string | null): Board
 }
 
+/** A handle's own, with every request it makes ended by a signal: what `vb()` runs a command on. Global, so another copy of board finds it. */
+const STOPPED_BY = Symbol.for('@vercel/board/stopped-by')
+
+/**
+ * `board`, with each request it makes ended by `signal`: the backend's call gets it, and the request
+ * rejects with its reason when it fires, whether or not the backend heeds it. A request already
+ * sent may still have done what it asked. Null for a handle board() didn't make.
+ */
+export function stoppedBy(board: Board, signal: AbortSignal): Board | null {
+  const own = (board as { [STOPPED_BY]?: (signal: AbortSignal) => Board })[STOPPED_BY]
+  return typeof own === 'function' ? own(signal) : null
+}
+
+/** `response`, with a body that errors with `signal`'s reason once it fires: a download whose body stalls ends too. */
+function bounded(response: Response, signal: AbortSignal): Response {
+  // An error's body is read at once, and the response is how the client knows a handle's own errors.
+  if (!response.ok || !response.body) return response
+  const reader = response.body.getReader()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const stop = () => {
+        controller.error(signal.reason)
+        void reader.cancel(signal.reason).catch(() => {})
+      }
+      if (signal.aborted) stop()
+      else signal.addEventListener('abort', stop, { once: true })
+    },
+    async pull(controller) {
+      let read: ReadableStreamReadResult<Uint8Array>
+      try {
+        read = await reader.read()
+      } catch (error) {
+        // The signal's own error is out already; any other is the body's, and the caller gets it.
+        if (!signal.aborted) controller.error(error)
+        return
+      }
+      if (signal.aborted) return
+      if (read.done) controller.close()
+      else controller.enqueue(read.value)
+    },
+    cancel: (reason) => reader.cancel(reason),
+  })
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
+}
+
+/** `work`, or `signal`'s reason once it fires, whichever comes first. */
+function until<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(signal.reason)
+    signal.addEventListener('abort', stop, { once: true })
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop))
+  })
+}
+
 /** How long a handle's live events wait for the next, in seconds, before asking again. */
 const EVENTS_WAIT_S = 25
 
@@ -215,12 +270,21 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     return loading
   }
 
-  function clientAs(caller: Caller | PlatformCaller, trigger: string | null): BoardClient {
-    const writes = { made: 0 }
+  // `writes` counts a trigger's posts, which their IDs derive from: a handle `stoppedBy` makes counts on with the one it came from.
+  function clientAs(caller: Caller | PlatformCaller, trigger: string | null, stop?: AbortSignal, writes = { made: 0 }): BoardClient {
+    const inject = async (request: Request) => (await server()).inject(request, caller, trigger, writes)
     return createBoardClient({
       url: inProcess,
       token: 'in-process',
-      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => (await server()).inject(new Request(input, init), caller, trigger, writes)) as typeof fetch,
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (!stop) return inject(new Request(input, init))
+        // The backend gets the signal, and the caller its answer when it fires, whether or not the backend heeds it.
+        const signal = init?.signal ? AbortSignal.any([init.signal, stop]) : stop
+        // Stopped already, nothing starts: a write queued behind a hung call never lands after its caller heard it failed.
+        if (signal.aborted) throw signal.reason
+        return bounded(await until(signal, inject(new Request(input, { ...init, signal }))), signal)
+      }) as typeof fetch,
+      ...(stop ? { storeFetch: ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, stop]) : stop })) as typeof fetch } : {}),
     })
   }
 
@@ -272,9 +336,10 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   }
 
   /** A handle on `client`, which `as` gives other profiles of. */
-  function handle(client: BoardClient, url: (() => string) | null, caller: Caller): Board {
-    const made = { ...client, fetch: serve, as: asFrom(caller), sandboxPolicy: (options?: SandboxPolicyOptions) => sandboxPolicy(caller, options) } as Board
+  function handle(client: BoardClient, url: (() => string) | null, caller: Caller, trigger: string | null, stop: AbortSignal | undefined, writes: { made: number }): Board {
+    const made = { ...client, fetch: serve, as: asFrom(caller, stop), sandboxPolicy: (options?: SandboxPolicyOptions) => sandboxPolicy(caller, options) } as Board
     if (url) Object.defineProperty(made, 'url', { get: url, enumerable: true })
+    Object.defineProperty(made, STOPPED_BY, { value: (signal: AbortSignal) => handleOf(caller, trigger, signal, writes) })
     return made
   }
 
@@ -283,9 +348,9 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
    * so a retry posts once and no request can take it first. A verified caller's are a backend's,
    * derived already (a schedule's send's), so they go as they are.
    */
-  function handleOf(caller: Caller, trigger: string | null): Board {
-    const client = clientAs(caller, trigger)
-    if ('identity' in caller) return handle({ ...client, events: (query, opts) => events(client, query, opts) }, () => ownUrl() ?? inProcess, caller)
+  function handleOf(caller: Caller, trigger: string | null, stop?: AbortSignal, writes = { made: 0 }): Board {
+    const client = clientAs(caller, trigger, stop, writes)
+    if ('identity' in caller) return handle({ ...client, events: (query, opts) => events(client, query, opts) }, () => ownUrl() ?? inProcess, caller, trigger, stop, writes)
     const via = caller.origin.via?.kind ?? 'client'
     const id = (given: string) => derivedId(`board-${via === 'watcher' ? 'watch' : via}`, caller.self ?? '', given)
     const owned = async <T extends PostOptions | ReplyOptions>(input: string | T): Promise<string | T> =>
@@ -299,12 +364,15 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
         // In-process, a request is this caller's whatever its headers say: another profile is another handle's.
         request: (path, init = {}) => {
           const { as: profile, ...rest } = init
-          return profile !== undefined ? asFrom(caller)(profile).request(path, rest) : client.request(path, rest)
+          return profile !== undefined ? asFrom(caller, stop)(profile).request(path, rest) : client.request(path, rest)
         },
         events: (query, opts) => events(client, query, opts),
       },
       () => ownUrl() ?? inProcess,
       caller,
+      trigger,
+      stop,
+      writes,
     )
   }
 
@@ -313,13 +381,16 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     return { self: name, profile, ...(can !== undefined ? { can } : {}), origin: { via: { kind: 'client', name } } }
   }
 
-  /** `as()` on a handle as `caller`: another profile, held to what that handle holds, and to `can` when it's given. */
+  /**
+   * `as()` on a handle as `caller`: another profile, held to what that handle holds, and to `can`
+   * when it's given, and stopped by what stops that handle.
+   */
   const asFrom =
-    (caller: Caller) =>
+    (caller: Caller, stop?: AbortSignal) =>
     (profile: ProfileOption, options: AsOptions = {}): Board => {
       const held = heldBy(caller)
       const can = options.can === undefined ? held : within(held, canOf(options.can))
-      return handleOf(profileCaller(profile, can), null)
+      return handleOf(profileCaller(profile, can), null, stop)
     }
 
   const context: BoardContext = { options, backend, runtime, policy, state, ownUrl, clientAs, handleOf }

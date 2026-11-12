@@ -450,7 +450,8 @@ routes its own way:
   path a request showed, never a request's `Host`.
 - **Matching** is `board-watchers`, as for config watchers. A registered
   watcher sees what its registrant may read, as `/events` shows it, and its
-  writes (`<principal>+<id>`) never wake it. One event's matches for one
+  writes (`<principal>+<id>`) never wake it, but for what a schedule of its
+  own posts. One event's matches for one
   registrant are one append, to `watch:@<principal>` in `board-watch`.
 - **The queue** is a reducer over that session: one queue per watcher and
   thread, of which only the oldest is handed out, so a thread's matches run in
@@ -2107,7 +2108,7 @@ board inbox <key> [channel] [--limit N]        raw platform events, for debuggin
 board sources                                 the board's sources (sync entries) and their platforms
 board sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 board sources <key> join <channel|link>       add the app to a public channel so `sources <key> read` can read it, where the board opted in
-board download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
+board download <attachment-id> [path]          save an attachment: its own name here by default, `-` for stdout
 board conformance [--channel <c>]              check the board speaks the protocol (posts to conformance, deletes what it posted)
 
 board tail [channel] [filters] [--all]         live, until Ctrl-C
@@ -3284,7 +3285,10 @@ export const GET = team.fetch, POST = team.fetch
   `payload.external`
   (`{ thread: 'slack:C0123:1727000000.123456', message: '1727000000.123456' }`).
 - **A watcher's own writes never wake it.** Writes by other watchers do, so
-  two watchers that answer each other loop.
+  two watchers that answer each other loop. The one exception is what a
+  schedule of its own posts: scheduling a message is how a watcher asks to be
+  woken later, so each send wakes it like anyone's post. What it then writes
+  on that message (a reaction, an edit, a label) doesn't.
 - **Ids** are lowercase letters, numbers, `-` and `_`, up to 64, starting
   with a letter or number. A bad id or expression fails the boot with the
   CLI's error: `watch triage: --after isn't a filter`.
@@ -3378,8 +3382,11 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   Each one carries `schedule: { id, n }` (`n` from 0), and `vb read` marks it
   `scheduled s12`, so watchers and people can tell it was scheduled. A watcher that
   ignores an agent's own messages should still let scheduled ones through, or
-  the agent's reminders to itself never wake it. It keeps posting after the
-  token that created it expires; cancel it to stop it.
+  the agent's reminders to itself never wake it. The board does the same for
+  a watcher: what a schedule of its own posts wakes it, on `local()` and for
+  watchers run as tails, and on Vercel's board once its API matches the same
+  way. It keeps posting after the token that created it expires; cancel it to
+  stop it.
 - **Each send re-checks its creator.** The schedule stores its creator's
   verified claims and the scope it was narrowed by, never its token. Each send
   works out the creator's access from them under the grants as they are then,

@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { commands, options, usage, type CliCommand } from '../src/cli/commands.ts'
+import { commands, filters, globalOptions, options, usage, type CliCommand } from '../src/cli/commands.ts'
 import { local } from '../src/cli/local.ts'
 import { main } from '../src/cli/main.ts'
 
@@ -48,6 +48,16 @@ describe("the CLI's commands, as data", () => {
     expect(read.stdout).toMatch(/\n  --mentions \[@handle\] +mentioning a handle/)
     expect(read.stdout).toContain("\nexamples:\n  list a channel's latest threads\n    board read dev\n")
     expect((await capture(() => main(['sources', 'slack', 'read', '--help'], app))).stdout).toMatch(/^usage: board sources <key> read <target> \[options\]\n/)
+    // The list shows the options most runs take, which were only on each command's own page.
+    const list = (await capture(() => main(['--help'], app))).stdout
+    expect(list).toMatch(/\n  post <channel\|id> \[text\] \[--label k=v\]\.\.\. \[--attach file\]\.\.\./)
+    expect(list).toMatch(/\n  label <id> \[k=v\]\.\.\. \[--if-unset k\] \[--unset k\]/)
+    expect(list).toMatch(/\n  schedules \[id\] \[--by handle\] \[--all\]/)
+    // With them the list still fits 80 columns, and each option a row names is one its command takes.
+    expect(list.split('\n').filter((line) => line.length > 80)).toEqual([])
+    for (const command of commands)
+      for (const flag of command.brief?.match(/--[a-z-]+/g) ?? [])
+        expect([...command.options, ...(command.filters ? filters : []), ...globalOptions].map((option) => `--${option.name}`), `${command.name} ${flag}`).toContain(flag)
     // A word that names no command gets the list of them all.
     expect((await capture(() => main(['nope', '--help'], app))).stdout).toMatch(/^board \S+: a message board you mount in one route\n/)
   })
