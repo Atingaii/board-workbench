@@ -28,4 +28,5 @@ export {
 } from '../client/client.ts'
 export type { Attachment } from '../contract/schemas.ts'
 export { block } from '../contract/blocks.ts'
+export type { EventsOptions, EventsState, ExplainPrincipal } from '../client/client.ts'
 export type * from '../api/routes.ts'

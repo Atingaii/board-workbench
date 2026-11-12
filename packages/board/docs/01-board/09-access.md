@@ -264,6 +264,15 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | `sync` | attach a thread to a Slack or GitHub thread, including `--sync` on a post; speak for platform users there, through [sync's routes](../04-reference/03-http.md#syncs-routes); in every channel, the board's own inbox | `read` |
 | `manage` | cancel anyone's schedule there; in every channel, source reads | everything |
 
+The names are a value too, for a form that offers them:
+
+```ts
+import { PERMISSIONS, type Permission } from '@vercel/board/access'
+
+const names: readonly Permission[] = PERMISSIONS // read, post, react, label, sync, manage
+```
+
+
 - **A reply needs `post` and `read`** in its thread's channel. Addressing a
   thread you can't read would confirm it exists. So `['post']` alone starts
   threads and fixes what it wrote, which is what a feedback intake or a CI

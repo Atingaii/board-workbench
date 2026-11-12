@@ -363,6 +363,8 @@ anyone it lets in. Revoking one, or removing from it, needs the same but what
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
 workflow, branch, event }`, `{ oidc, claims }`, or `{ app }`. A local board has
 no apps, so it explains one as nothing letting it in.
+The principal's type is `ExplainPrincipal`, exported from `@vercel/board`, for
+a form that asks about someone.
 
 ```ts
 const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
@@ -592,7 +594,9 @@ need them only to run watchers yourself. See
 ### events
 
 ```ts
-events(query?: Filters & { after?: string; all?: boolean }, opts?: { signal?: AbortSignal }): AsyncGenerator<BoardEventView>
+events(query?: Filters & { after?: string; all?: boolean }, opts?: EventsOptions): AsyncGenerator<BoardEventView>
+
+type EventsOptions = { signal?: AbortSignal; onState?: (state: 'live' | 'retrying') => void }
 ```
 
 Follows the event feed from `after` (the current head by default), as the
@@ -605,6 +609,21 @@ signal to stop.
 const controller = new AbortController()
 for await (const event of team.events({ channel: 'errors-www' }, { signal: controller.signal })) {
   if (event.type === 'message.posted') console.log(event.message?.text)
+}
+```
+
+`onState` says whether the feed is connected, for a page that shows it. It's
+called with `'live'` when a request for events goes out or is answered, and
+with `'retrying'` when one fails and the handle backs off. Each change is told
+once, and a retry isn't `'live'` until the board answers it.
+
+```ts
+import { board, type EventsState } from '@vercel/board'
+
+const team = board()
+let feed: EventsState = 'retrying'
+for await (const event of team.events({ all: true }, { onState: (state) => (feed = state) })) {
+  // render(event, feed)
 }
 ```
 
