@@ -2180,18 +2180,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }))
     const task = change.task ?? found?.message.task
     if (!found || !task || found.message.sequence !== 1) return null
-    // The root's labels as the change left them, and as it found them: a deleted root wears none.
-    const now = labelsOf(found.message)
-    const wearing = (state: string | undefined) => {
-      const { [TASK_LABEL]: _state, ...rest } = now
-      return found.message.deletedAt !== undefined || state === undefined ? rest : { ...rest, [TASK_LABEL]: state }
+    // The root's labels with `board.task` as `state`: its own as the API keeps them, a deleted root's too.
+    const wearing = (own: Labels, state: string | undefined) => {
+      const { [TASK_LABEL]: _state, ...rest } = own
+      return state === undefined ? rest : { ...rest, [TASK_LABEL]: state }
     }
     const moved = change.labels?.[TASK_LABEL]
     // The change is about the root, whose labels its thread carries too.
     const as = (labels: Labels) => ({ message: { ...found.message, task, labels }, thread: { ...found.thread, labels } })
-    const after = as(wearing(task.state))
+    // What it's shown as: the root as it is, and a deleted root wears no labels.
+    const after = as(found.message.deletedAt !== undefined ? {} : wearing(labelsOf(found.message), task.state))
+    // What it's matched as: the root as the change left it, and as it found it. The cancel a root's
+    // delete brings found it wearing its labels and its state, as on a board that writes the cancel first.
+    const kept: Labels = { ...found.message.labels }
+    const then = [as(wearing(kept, task.state)), ...(moved ? [as(wearing(kept, moved.from))] : [])]
     let matched = false
-    for (const { message, thread } of moved ? [after, as(wearing(moved.from))] : [after]) matched ||= await matches(filters, message, thread, narrow)
+    for (const { message, thread } of then) matched ||= await matches(filters, message, thread, narrow)
     if (!matched) return null
     const message = await view(who, after.message, channel)
     const by = authorOf(change.actor)
