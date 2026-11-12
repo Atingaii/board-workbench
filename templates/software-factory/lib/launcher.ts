@@ -48,12 +48,9 @@ export async function check(host: string | null): Promise<Launcher> {
   const origin = `${local ? "http" : "https"}://${host ?? deps.env.VERCEL_PROJECT_PRODUCTION_URL ?? "localhost"}`;
   let running: Running | null = null;
   if (!result.open && result.found.me && progress(result.steps).running) {
-    // The threads the GitHub sync labels as pull requests, in this factory's channels: their roots, one
-    // per thread however many replies it has. One more read, only once it runs.
-    const pulls = await deps.threads({ channel: `${home}/`, label: ["pr"], limit: READ }).catch(() => []);
     const rsi = channel("rsi");
     running = {
-      overview: overview(result.found.recent, pulls, result.found.me.principal, new Date(), READ),
+      overview: overview(result.found.recent, result.found.pulls, result.found.me.principal, new Date(), READ),
       repos: reposOf({ repoChannels, slackChannels }),
       ask: { channel: rsi, slack: mirrorOf(slackChannels, rsi), waiting: result.found.waiting, suggest: result.found.unmapped, install: result.found.install },
       join: joinPrompt({ origin, team, board: boardName, home, repo: ownRepo(deps.env) }),

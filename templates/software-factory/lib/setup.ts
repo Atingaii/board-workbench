@@ -43,9 +43,14 @@ export type Me = { principal: string; can: Record<string, readonly string[]> };
  * deployment on its board (null when it can't use it), the latest messages in its channels, how
  * many repos its GitHub app is on that come into no channel (null when that couldn't be told) and
  * which, by name, for the page to suggest, where on GitHub that app is added to more repos (null
- * when its name couldn't be told), and where its first task stands (null when there's none to offer).
+ * when its name couldn't be told), the pull requests the factory itself opened in its repos, by
+ * where they stand (null when GitHub didn't say), and where its first task stands (null when
+ * there's none to offer).
  */
-export type Found = { me: Me | null; recent: MessageView[]; waiting: number | null; unmapped: string[]; install: string | null; first: FirstTask };
+export type Found = { me: Me | null; recent: MessageView[]; waiting: number | null; unmapped: string[]; install: string | null; pulls: Pulls | null; first: FirstTask };
+
+/** Pull requests, counted by where they stand: a draft is open, and closed means closed without merging. */
+export type Pulls = { open: number; merged: number; closed: number };
 
 /** How many messages one read of the factory's channels asks for. */
 export const READ = 200;
@@ -199,7 +204,7 @@ export async function setup(deps: Deps): Promise<Setup> {
     }
   }
   const vercel = await vercelStep(deps, local, project);
-  const found: Found = { me: vercel.me, recent: [], waiting: null, unmapped: [], install: null, first: null };
+  const found: Found = { me: vercel.me, recent: [], waiting: null, unmapped: [], install: null, pulls: null, first: null };
   const [connected, mirrored] = [githubStep(deps, project, found), slackStep(deps, project)];
   const [github, slack, tryIt] = await Promise.all([connected, mirrored, tryStep(deps, project, found, connected, mirrored)]);
   return { open: false, steps: [vercel.step, github, slack, tryIt], found };
@@ -249,6 +254,27 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
 }
 
 type Repo = { full_name: string };
+
+/**
+ * The pull requests an app opened in `repos`, counted by GitHub in one request. The factory's own
+ * never come into the board (it would review itself), so the board can't count them. Only in
+ * `repos`: a team may use the same app elsewhere.
+ */
+async function pullsBy(api: (path: string, init?: RequestInit) => Promise<Response>, app: string, repos: string[]): Promise<Pulls | null> {
+  if (!repos.length) return null;
+  const theirs = `is:pr author:app/${app} ${repos.map((repo) => `repo:${repo}`).join(" ")}`;
+  const response = await api("/graphql", {
+    method: "POST",
+    body: JSON.stringify({
+      query:
+        "query($open: String!, $merged: String!, $closed: String!) { open: search(query: $open, type: ISSUE) { issueCount } merged: search(query: $merged, type: ISSUE) { issueCount } closed: search(query: $closed, type: ISSUE) { issueCount } }",
+      variables: { open: `${theirs} is:open`, merged: `${theirs} is:merged`, closed: `${theirs} is:closed is:unmerged` },
+    }),
+  });
+  const data = ((await response.json()) as { data?: Partial<Record<keyof Pulls, { issueCount?: unknown } | null>> }).data;
+  const [open, merged, closed] = (["open", "merged", "closed"] as const).map((state) => data?.[state]?.issueCount);
+  return typeof open === "number" && typeof merged === "number" && typeof closed === "number" ? { open, merged, closed } : null;
+}
 
 /** What GitHub answers for the repos an app is on: how many in all, and one page of them. */
 type Installed = { total_count: number; repositories: Repo[] };
@@ -316,6 +342,8 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
   found.install = app ? `https://github.com/apps/${app}/installations/new` : null;
   const install = found.install ? { link: { href: found.install, label: "Configure the app" } } : {};
   if (total_count === 0) return step("github", [...tasks, todo(INSTALL, install)]);
+  // What the factory itself opened, in the repos the board brings in.
+  found.pulls = app ? await pullsBy(api, app, Object.keys(deps.synced.repoChannels)).catch(() => null) : null;
   // Installed but in no channel: the board drops their PRs and issues (matched as GitHub writes them).
   // The step says how many. Which ones is for the page to suggest when someone onboards one: it
   // shows them to whoever can open the deployment, and the checks get here only once that's the team.

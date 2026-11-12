@@ -260,6 +260,46 @@ test("the agent's tool reads the page's steps, and the factory's repos as the de
   assert.equal(capped.open ? undefined : stepsView(capped, deps.synced).repos.waitingComplete, false);
 });
 
+test("the checks count the pull requests the factory opened in its repos, as GitHub counts them, and say nothing when it doesn't", async () => {
+  // GitHub's GraphQL, faked: who the token is, and how many pull requests each search finds.
+  const searches: Record<string, string>[] = [];
+  const graphql = (counts: object | null) => (init?: RequestInit) => {
+    const { query, variables } = JSON.parse(String(init?.body)) as { query: string; variables?: Record<string, string> };
+    if (query.includes("viewer")) return json({ data: { viewer: { login: "acme-factory[bot]" } } });
+    searches.push(variables ?? {});
+    return json(counts ? { data: counts } : { errors: [{ message: "something went wrong" }] });
+  };
+  const base = fake().deps.synced;
+  const synced = { ...base, repoChannels: { ...base.repoChannels, "acme/web": "project-factory/web" } };
+  const counted = await setup(fake({ deps: { synced }, routes: { "https://api.github.com/graphql": graphql({ open: { issueCount: 2 }, merged: { issueCount: 1 }, closed: { issueCount: 0 } }) } }).deps);
+  assert.deepEqual(counted.open ? null : counted.found.pulls, { open: 2, merged: 1, closed: 0 });
+  // One request asked for all three, each for this app's pull requests in the factory's repos and no others: a team may use the app elsewhere.
+  assert.equal(searches.length, 1);
+  const repos = "is:pr author:app/acme-factory repo:acme/factory repo:acme/web";
+  assert.deepEqual(searches[0], { open: `${repos} is:open`, merged: `${repos} is:merged`, closed: `${repos} is:closed is:unmerged` });
+  // GitHub answered with an error: no count, and the step is as done as it was.
+  const failed = await setup(fake({ routes: { "https://api.github.com/graphql": graphql(null) } }).deps);
+  assert.equal(failed.open ? undefined : failed.found.pulls, null);
+  assert.equal(failed.open ? undefined : isDone(failed.steps[1]!), true);
+  // Half an answer is no count either.
+  const half = await setup(fake({ routes: { "https://api.github.com/graphql": graphql({ open: { issueCount: 2 }, merged: null }) } }).deps);
+  assert.equal(half.open ? undefined : half.found.pulls, null);
+  // And a search that never answers costs the count, not the step.
+  const answered = graphql(null);
+  const down = await setup(
+    fake({
+      routes: {
+        "https://api.github.com/graphql": (init) => {
+          if (String(init?.body).includes("viewer")) return answered(init);
+          throw new Error("socket hang up");
+        },
+      },
+    }).deps,
+  );
+  assert.equal(down.open ? undefined : down.found.pulls, null);
+  assert.equal(down.open ? undefined : isDone(down.steps[1]!), true);
+});
+
 test("the checks find where the GitHub app is added to more repos, by the app's own name, and nowhere when GitHub doesn't say it", async () => {
   const found = async (deps: Deps) => {
     const result = await setup(deps);
@@ -816,7 +856,7 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
 
 ## Pull requests
 
-- 1 open, 3 merged, 1 closed
+- 1 open, 3 merged, 1 closed, opened by the factory
 
 ## Repos
 
@@ -841,6 +881,9 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
   const started = markdown(await setup(fake().deps), INSPECT, { ...running, first: "started" });
   assert.ok(started.includes("## First task\n\n- The factory is making the README yours, in #factory-rsi.\n"), started);
   assert.ok(!markdown(await setup(fake().deps), INSPECT, running).includes("First task"));
+  // When GitHub didn't count the factory's pull requests, the week is followed by the repos.
+  const uncounted = markdown(await setup(fake().deps), INSPECT, { ...running, overview: { ...running.overview, pulls: null } }, new Date("2026-11-12T12:00:00.000Z"));
+  assert.ok(uncounted.includes("- Last reply 4m ago\n\n## Repos\n"), uncounted);
 });
 
 test("the prompt for an agent to join names the team's board, the factory's channels, and where its ways are written", () => {
