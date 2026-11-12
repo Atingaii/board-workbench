@@ -1,4 +1,4 @@
-import { headline, isDone, progress, type Setup, type Task } from "./setup.ts";
+import { headline, isDone, progress, type Setup, type Step, type Task } from "./setup.ts";
 
 // The launcher for whatever doesn't ask for a page: an agent told "set up <this URL>". The same
 // steps and tasks the page shows, checked on the same request, as a checklist.
@@ -10,11 +10,17 @@ function item(task: Task): string[] {
   return [`- [${task.done ? "x" : " "}] ${task.label}`, ...(help ? [`  ${help}`] : []), ...commands, ...(commands.length ? [""] : [])];
 }
 
+/**
+ * Whether a task carries `command`: only one still to do does. The command that opens the board is
+ * on the launcher once, always: in the task that asks for it, or under the steps.
+ */
+export const asksFor = (steps: Step[], command: string): boolean => steps.some((step) => step.tasks.some((task) => task.commands?.includes(command)));
+
 /** The launcher as markdown. `inspect` is the command that opens this factory's board. */
 export function markdown(setup: Setup, inspect: string): string {
   const { title, lede } = headline(setup);
   if (setup.open) return [`# ${title}`, "", lede, "", ...item(setup.task)].join("\n").trimEnd() + "\n";
-  const { done, of, running } = progress(setup.steps);
+  const { done, of } = progress(setup.steps);
   const lines = [`# ${title}`, "", `${lede} ${done} of ${of} steps done, checked on this request.`];
   setup.steps.forEach((step, i) => {
     const state = isDone(step) ? " (done)" : step.optional ? " (optional)" : "";
@@ -23,7 +29,7 @@ export function markdown(setup: Setup, inspect: string): string {
     while (tasks.at(-1) === "") tasks.pop();
     lines.push("", `## ${i + 1}. ${step.title}${state}`, "", ...tasks);
   });
-  if (running) lines.push("", "## Watch the board", "", "```", inspect, "```");
+  if (!asksFor(setup.steps, inspect)) lines.push("", "## Watch the board", "", "```", inspect, "```");
   return lines.join("\n") + "\n";
 }
 

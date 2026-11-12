@@ -1,6 +1,7 @@
 import type { Board, MessageView } from "@vercel/board";
-import { NAME } from "../agent/lib/identity.ts";
+import { byAgent } from "../agent/lib/identity.ts";
 import { githubScope, ownRepo } from "./github.ts";
+import { projectOf, type Project } from "./project.ts";
 
 // The launcher's steps: each is a short list of tasks, checked from this deployment as it is now.
 // Nothing here writes anything.
@@ -11,7 +12,10 @@ export type Link = { href: string; label: string };
 /** What helps do a task: one short line, a link that reads on after it, and the commands to run. */
 export type Help = { hint?: string; link?: Link; commands?: string[] };
 
-/** One task of a step, named for what to do ("Create a GitHub connector") whether it's done or not. */
+/**
+ * One task of a step, named for what to do ("Create a GitHub connector") whether it's done or not. A
+ * name in its label (a channel, a repo, a connector) goes in backticks, and stands out on the page.
+ */
 export type Task = { label: string; done: boolean } & Help;
 
 export type StepId = "vercel" | "github" | "slack" | "try";
@@ -51,7 +55,11 @@ export type Synced = {
   slackChannels: Record<string, string>;
   /** The board's name, or null for the team's default board. */
   board: string | null;
+  /** This factory's own channel on the board: it hears that one and the ones under it. */
+  home: string;
 };
+
+type Me = { principal: string; can: Record<string, readonly string[]> };
 
 /** What the checks reach: the environment, the network, and the board. Tests pass their own. */
 export type Deps = {
@@ -66,12 +74,12 @@ export type Deps = {
   connect(connector: string, scope?: Scope): Promise<string>;
   /** AI Gateway's balance, in dollars. */
   credits(): Promise<number>;
-  /** What this deployment may do on its board, by channel pattern. Rejects with the board's own error when it can't use it. */
-  access(): Promise<Record<string, readonly string[]>>;
+  /** Who this deployment is on its board, and what it may do there, by channel pattern. Rejects with the board's own error when it can't use it. */
+  me(): Promise<Me>;
   /** The board's latest messages in a channel, newest last. */
   messages(query: { channel: string; limit: number }): Promise<MessageView[]>;
-  /** channels.ts as it was deployed, to link to its lines. Nothing when it can't be read. */
-  channels(): string | undefined;
+  /** A file of this factory as it was deployed, by its path from the project's root, to link to its lines. Nothing when it can't be read. */
+  source(file: string): string | undefined;
 };
 
 const TITLES: Record<StepId, string> = { vercel: "Vercel", github: "GitHub", slack: "Slack", try: "Try it" };
@@ -81,23 +89,29 @@ const step = (id: StepId, tasks: Task[], optional = false): Step => ({ id, title
 const done = (label: string, help: Help = {}): Task => ({ label, done: true, ...help });
 const todo = (label: string, help: Help = {}): Task => ({ label, done: false, ...help });
 
+/** Names, as a label carries them. */
+const named = (...names: string[]) => names.map((name) => `\`${name}\``).join(", ");
+
 /** One command that creates a connector for this project and sends its webhooks to the board, from any directory. */
 const createConnector = (service: "github" | "slack", connector: string, project: Project) =>
   `vercel connect create ${service} --name ${connector.split("/")[1] ?? "factory"} --triggers --trigger-project ${project?.name ?? "<project>"} --trigger-path /api/board/webhooks/${service}${project ? ` --scope ${project.team}` : ""}`;
 
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
+/**
+ * A connector that's on this team for another project: Connect refuses this project its tokens, and
+ * refuses to create it again. So the task is to attach it, with this project as one of the places its
+ * webhooks go, or to give this factory's another name.
+ */
+const taken = (error: unknown) => (error as { code?: string } | null)?.code === "forbidden";
 
-type Project = { team: string; name: string } | null;
-
-/** The project a token names: its team's slug and its own name, or null when it doesn't read as one. */
-export function projectOf(jwt: string): Project {
-  try {
-    const { owner, project } = JSON.parse(Buffer.from(jwt.split(".")[1] ?? "", "base64url").toString());
-    return typeof owner === "string" && typeof project === "string" ? { team: owner, name: project } : null;
-  } catch {
-    return null;
-  }
+function attach(deps: Deps, service: "github" | "slack", connector: string, project: Project): Task {
+  return todo(`Attach ${named(connector)} to this project`, {
+    hint: "It's on this team for another project.",
+    ...sourceLink(deps, FACTORY_FILE, "Use another name", (lines) => lines.findIndex((line) => line.startsWith("export const connectors"))),
+    commands: [`vercel connect attach ${connector} --triggers --trigger-path /api/board/webhooks/${service}${project ? ` --project ${project.name} --scope ${project.team}` : ""}`],
+  });
 }
+
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
 
 /** Where the project's settings are, from its OIDC token's claims. */
 function dashboard(project: Project) {
@@ -126,19 +140,22 @@ const signIn = () => todo("Link this directory, then restart the dev server", { 
 /** Your machine: `vercel env pull` writes VERCEL_ENV=development, so that counts too. */
 export const isLocal = (env: Env) => !env.VERCEL_ENV || env.VERCEL_ENV === "development";
 
-/** The file that names the repos and Slack channels the board syncs, from the project's root. */
+/** The files a person edits, from the project's root: the repos and Slack channels the board syncs, and beside them its connectors. */
 export const CHANNELS_FILE = "app/api/board/[[...path]]/channels.ts";
+export const FACTORY_FILE = "app/api/board/[[...path]]/factory.ts";
 
 /**
- * That file in this factory's own repo on GitHub, on the branch it was deployed from, opened on the
- * first line `find` picks. People edit the file, so the line is looked up in what was deployed, never
- * remembered; when it isn't found, the link opens the file. Nothing off a deployment from Git.
+ * One of those files in this factory's own repo on GitHub, on the branch it was deployed from, opened
+ * on the line `find` picks (counted from 0, -1 for none). People edit them, so the line is looked up
+ * in what was deployed, never remembered; when it isn't found, the link opens the file. Nothing off a
+ * deployment from Git.
  */
-function channelsLink(deps: Deps, label: string, find: (line: string) => boolean): { link?: Link } {
+function sourceLink(deps: Deps, file: string, label: string, find: (lines: string[]) => number): { link?: Link } {
   const own = ownRepo(deps.env);
   if (!own) return {};
-  const line = (deps.channels()?.split("\n").findIndex(find) ?? -1) + 1;
-  const path = CHANNELS_FILE.split("/").map(encodeURIComponent).join("/");
+  const source = deps.source(file);
+  const line = (source === undefined ? -1 : find(source.split("\n"))) + 1;
+  const path = file.split("/").map(encodeURIComponent).join("/");
   return { link: { href: `https://github.com/${own}/blob/${deps.env.VERCEL_GIT_COMMIT_REF || "main"}/${path}${line ? `#L${line}` : ""}`, label } };
 }
 
@@ -160,12 +177,12 @@ export async function setup(deps: Deps): Promise<Setup> {
     }
   }
   const vercel = await vercelStep(deps, local, project);
-  const [github, slack, tryIt] = await Promise.all([githubStep(deps, project), slackStep(deps, project), tryStep(deps, project, vercel.board)]);
+  const [github, slack, tryIt] = await Promise.all([githubStep(deps, project), slackStep(deps, project), tryStep(deps, project, vercel.me)]);
   return { open: false, steps: [vercel.step, github, slack, tryIt] };
 }
 
-/** Protected, on the team's board, with AI Gateway. `board` says whether this project can use the board. */
-async function vercelStep(deps: Deps, local: boolean, project: Project): Promise<{ step: Step; board: boolean }> {
+/** Protected, on the team's board, with AI Gateway. `me` is this project on the board, or null when it can't use it. */
+async function vercelStep(deps: Deps, local: boolean, project: Project): Promise<{ step: Step; me: Me | null }> {
   const links = dashboard(project);
   const signedOut = local && !deps.env.VERCEL_OIDC_TOKEN;
   const tasks: Task[] = [];
@@ -173,7 +190,7 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
     tasks.push(done("Turn on Deployment Protection"));
     if (!project) {
       tasks.push(todo("Turn on OIDC Federation, then redeploy", { link: { href: links.settings("security"), label: "Open Security settings" } }));
-      return { step: step("vercel", tasks), board: false };
+      return { step: step("vercel", tasks), me: null };
     }
   }
 
@@ -183,8 +200,7 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
 
   // The board is the team's, in Vercel's API. A team has one once someone on it has opened it.
   const OPEN_BOARD = "Open the team's board once";
-  const access = await deps.access().catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
-  const board = !(access instanceof Error);
+  const access = await deps.me().catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
   if (access instanceof Error) {
     const refused = ["board_not_granted", "no_board"].includes((access as { code?: string }).code ?? "");
     if (signedOut) tasks.push(todo(OPEN_BOARD));
@@ -193,7 +209,7 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
   } else {
     tasks.push(done(OPEN_BOARD));
     // A board lets every project on its team sync unless someone narrowed its grants: then it's theirs to widen.
-    const syncs = Object.values(access).some((can) => can.includes("sync"));
+    const syncs = Object.values(access.can).some((can) => can.includes("sync"));
     if (!syncs) tasks.push(todo("Let this project sync on the board", { hint: "Its grants were narrowed. Whoever manages the board can widen them." }));
   }
 
@@ -205,7 +221,7 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
   else if (signedOut) tasks.push(todo(CREDITS));
   else tasks.push(todo("Couldn't reach AI Gateway", { hint: message(balance) }));
 
-  return { step: step("vercel", tasks), board };
+  return { step: step("vercel", tasks), me: access instanceof Error ? null : access };
 }
 
 type Repo = { full_name: string };
@@ -216,13 +232,14 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
   const own = ownRepo(deps.env);
   const CONNECT = "Create a GitHub connector";
   const INSTALL = "Install its app on your repos";
-  const write = (repo: string) => `Let the app write to ${repo}`;
+  const write = (repo: string) => `Let the app write to ${named(repo)}`;
   const token = await deps.connect(connector).catch((error: unknown) => error);
   if (typeof token !== "string") {
     // Signed out on your machine: the Vercel step says how to sign in.
     if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("github", [todo(CONNECT), todo(INSTALL)]);
     // The connector is there, and its app is on nothing yet.
     if (token instanceof Error && token.name === "ConnectorInstallationRequiredError") return step("github", [done(CONNECT), todo(INSTALL)]);
+    if (taken(token)) return step("github", [attach(deps, "github", connector, project), todo(INSTALL)]);
     return step("github", [todo(CONNECT, { commands: [createConnector("github", connector, project)] }), todo(INSTALL)]);
   }
   const tasks: Task[] = [done(CONNECT)];
@@ -255,15 +272,15 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
   const several = off.length > 1;
   const unmapped = `${off.slice(0, 2).join(", ")}${off.length > 2 ? `, +${off.length - 2}` : ""} ${several ? "aren't" : "isn't"} on the board yet.`;
   // The link opens where the map of repos starts.
-  const map = channelsLink(deps, several ? "Add them" : "Add it", (line) => line.startsWith("export const repoChannels"));
+  const map = sourceLink(deps, CHANNELS_FILE, several ? "Add them" : "Add it", (lines) => lines.findIndex((line) => line.startsWith("export const repoChannels")));
   tasks.push(done(INSTALL, off.length ? { hint: unmapped, ...map } : {}));
   if (!own) return step("github", tasks);
 
   const WHY = "So the agent can change its own code.";
   const repo = repositories.find((candidate) => candidate.full_name.toLowerCase() === own.toLowerCase());
   // GitHub listed a first page only, and this repo isn't on it.
-  if (!repo && total_count > repositories.length) return step("github", [...tasks, todo(`Check that the app is on ${own}`, { hint: WHY, ...install })]);
-  if (!repo) return step("github", [...tasks, todo(`Install the app on ${own}`, { hint: WHY, ...install })]);
+  if (!repo && total_count > repositories.length) return step("github", [...tasks, todo(`Check that the app is on ${named(own)}`, { hint: WHY, ...install })]);
+  if (!repo) return step("github", [...tasks, todo(`Install the app on ${named(own)}`, { hint: WHY, ...install })]);
   // GitHub lists an app's repos with every permission false, so ask for what the agent's turns ask
   // for (agent/lib/credentials.ts): a token for this repo alone, here one that can write to it, which
   // GitHub only issues when the app may.
@@ -275,17 +292,25 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
 async function slackStep(deps: Deps, project: Project): Promise<Step> {
   const connector = deps.synced.connectors.slack;
   const wanted = Object.keys(deps.synced.slackChannels);
-  const channel = wanted.join(", ");
   const CONNECT = "Create a Slack connector";
-  // What the channel is for, and the line that names it (a key of the map, in either quote), to name another.
-  const names = (line: string) => wanted.some((name) => [`"${name}"`, `'${name}'`].some((key) => line.trimStart().startsWith(key)));
-  const invite = (channels: string, command?: string): Task =>
-    todo(`Invite the app to ${channels}`, { hint: "Where the factory updates itself.", ...channelsLink(deps, "Change the channel", names), ...(command ? { commands: [command] } : {}) });
+  // What the channel is for, and the line that names it, to name another: the entry that starts with
+  // its name in quotes, or the map's first entry, whose name is put together from the project's.
+  const names = (lines: string[]) => {
+    const quoted = lines.findIndex((line) => wanted.some((name) => [`"${name}"`, `'${name}'`].some((key) => line.trimStart().startsWith(key))));
+    if (quoted !== -1) return quoted;
+    const map = lines.findIndex((line) => line.startsWith("export const slackChannels"));
+    const first = map === -1 ? -1 : lines.findIndex((line, i) => i > map && line.trim() !== "" && !line.trimStart().startsWith("//"));
+    return first !== -1 && !lines[first]!.startsWith("}") ? first : -1;
+  };
+  const INVITE = (channels: string[]) => `Invite the app to ${named(...channels)}`;
+  const invite = (channels: string[], command?: string): Task =>
+    todo(INVITE(channels), { hint: "Where the factory updates itself.", ...sourceLink(deps, CHANNELS_FILE, "Change the channel", names), ...(command ? { commands: [command] } : {}) });
   const token = await deps.connect(connector).catch((error: unknown) => error);
   if (typeof token !== "string") {
-    if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("slack", [todo(CONNECT), invite(channel)], true);
+    if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("slack", [todo(CONNECT), invite(wanted)], true);
     // The board already syncs through this connector, and picks it up within a minute of its attach: no redeploy.
-    return step("slack", [todo(CONNECT, { commands: [createConnector("slack", connector, project)] }), invite(channel)], true);
+    if (taken(token)) return step("slack", [attach(deps, "slack", connector, project), invite(wanted)], true);
+    return step("slack", [todo(CONNECT, { commands: [createConnector("slack", connector, project)] }), invite(wanted)], true);
   }
   const slack = async <T>(method: string, query = "") => {
     const response = await deps.fetch(`https://slack.com/api/${method}${query}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
@@ -302,34 +327,34 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   if (checked instanceof Error) return step("slack", [done(CONNECT), todo("Couldn't ask Slack which channels the app is in", { hint: message(checked) })], true);
   const [who, mine] = checked;
   const missing = wanted.filter((name) => !mine.channels.some((candidate) => candidate.id === name || candidate.name === name.replace(/^#/, "")));
-  if (missing.length) return step("slack", [done(CONNECT), invite(missing.join(", "), `/invite @${who.user}`)], true);
-  return step("slack", [done(CONNECT), done(`Invite the app to ${channel}`)], true);
+  if (missing.length) return step("slack", [done(CONNECT), invite(missing, `/invite @${who.user}`)], true);
+  return step("slack", [done(CONNECT), done(INVITE(wanted))], true);
 }
 
-async function tryStep(deps: Deps, project: Project, board: boolean): Promise<Step> {
+async function tryStep(deps: Deps, project: Project, me: Me | null): Promise<Step> {
   const POST = "Post on the board, or open an issue";
   const REPLY = "Get a reply from the agent";
   // The Vercel step says how to open the board: nothing to try until then.
-  if (!board) return step("try", [todo(POST), todo(REPLY)]);
-  const read: MessageView[][] | Error = await Promise.all([
-    deps.messages({ channel: "dev", limit: 200 }),
-    deps.messages({ channel: "dev/factory", limit: 200 }),
-  ]).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
-  if (read instanceof Error) return step("try", [todo("Couldn't read the board", { hint: message(read) }), todo(REPLY)]);
-  const recent = read.flat();
-  const heard = recent.some((m) => m.by.profile !== NAME);
-  const replied = recent.some((m) => m.by.profile === NAME);
+  if (!me) return step("try", [todo(POST), todo(REPLY)]);
+  // The factory's channels, in one read: its own and the ones under it.
+  const recent: MessageView[] | Error = await deps.messages({ channel: `${deps.synced.home}/`, limit: 200 }).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+  if (recent instanceof Error) return step("try", [todo("Couldn't read the board", { hint: message(recent) }), todo(REPLY)]);
+  const heard = recent.some((m) => !byAgent(m.by, me.principal));
+  const replied = recent.some((m) => byAgent(m.by, me.principal));
   return step("try", [heard ? done(POST) : todo(POST, { commands: [inspectCommand(project?.team, deps.synced.board)] }), replied ? done(REPLY) : todo(REPLY)]);
 }
 
 /** What the checks ask the board, as this deployment. */
-export const boardDeps = (board: Board): { access: Deps["access"]; messages: Deps["messages"] } => ({
-  access: async () => (await board.me()).can,
+export const boardDeps = (board: Board): { me: Deps["me"]; messages: Deps["messages"] } => ({
+  me: async () => {
+    const { principal, can } = await board.me();
+    return { principal, can };
+  },
   messages: async (query) => (await board.messages(query)).messages,
 });
 
 /** The checks' real dependencies, loaded only when the launcher runs. */
-export async function liveDeps(board: { access: Deps["access"]; messages: Deps["messages"] }, synced: Synced): Promise<Deps> {
+export async function liveDeps(board: { me: Deps["me"]; messages: Deps["messages"] }, synced: Synced): Promise<Deps> {
   const [{ getVercelOidcToken }, { getToken }, { gateway }, { readFileSync }, { join }] = await Promise.all([
     import("@vercel/oidc"),
     import("@vercel/connect"),
@@ -344,12 +369,12 @@ export async function liveDeps(board: { access: Deps["access"]; messages: Deps["
     oidc: () => getVercelOidcToken(),
     connect: (connector, scope) => getToken(connector, { subject: { type: "app" }, ...(scope ? { authorizationDetails: scope } : {}) }),
     credits: async () => Number((await gateway.getCredits()).balance),
-    access: board.access,
+    me: board.me,
     messages: board.messages,
-    // next.config.ts keeps the file in every route's function.
-    channels: () => {
+    // next.config.ts keeps the files the launcher links to in every route's function.
+    source: (file) => {
       try {
-        return readFileSync(join(process.cwd(), CHANNELS_FILE), "utf8");
+        return readFileSync(join(process.cwd(), file), "utf8");
       } catch {
         return undefined;
       }

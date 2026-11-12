@@ -1,5 +1,6 @@
-// The standalone `board` CLI's own command, which runs a board on this machine: `serve`, a `local()`
-// board. An app that embeds board's CLI leaves it out, so it never loads a local board.
+// The standalone `board` CLI's own commands, which run something on this machine: `inspect`, the
+// board in your browser, and `serve`, a `local()` board. An app that embeds board's CLI leaves them
+// out, so it never loads the inspector or a local board.
 import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { projectDir } from '../client/node.ts'
@@ -17,6 +18,21 @@ async function ignoreLog(root: string) {
   })
   if (!ignore.split(/\r?\n/).some((line) => /^\/?\.board\/?$/.test(line)))
     await appendFile(path, `${ignore && !ignore.endsWith('\n') ? '\n' : ''}.board/\n`)
+}
+
+const inspect: Command = {
+  spec: {
+    name: 'inspect',
+    description: 'the board in your browser, as you: read, post, react (local only)',
+    arguments: [],
+    options: [option('port', 'the port to listen on (default: a free one)'), option('no-open')],
+    examples: [{ name: 'open the board in your browser', value: 'inspect' }],
+  },
+  async run(args, context: CommandContext) {
+    if (args.length > 0) throw context.usage('inspect takes no arguments: pass its port with --port.')
+    // Loaded only now: the page comes with it.
+    return (await import('./inspect.ts')).inspect(context)
+  },
 }
 
 const serve: Command = {
@@ -59,4 +75,4 @@ const serve: Command = {
 }
 
 /** The commands only the standalone `board` has, in the order its help lists them. */
-export const local: Record<string, Command> = { serve }
+export const local: Record<string, Command> = { inspect, serve }

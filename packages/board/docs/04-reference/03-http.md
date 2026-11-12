@@ -462,11 +462,17 @@ const [found] = findBlocks(text)
 const problem = found.problem ?? checkValue(definition, found.data)   // 'id must be a string'
 ```
 
+`checkValue` takes what Vercel's API takes, so a value gets one answer on
+every board. A format is read as ajv-formats 2.1.1 reads it in its full mode:
+a `uri` is RFC 3986's, an `ipv4` address may have a leading zero, and a
+`time`'s leap second is the day's last. It also reads `items` as a list of
+schemas, one for each place, which Vercel's registry holds.
+
 Anyone the board lets in reads the schemas, whatever channels they read.
 Registering needs `manage` at `*`. On Vercel's board, schemas are the team's:
-every board on the team shares one registry, people and apps whose team role
-is owner, member, or developer register, and a deployment's own credentials
-reach none of it yet, reads included (403). It checks a
+every board on the team shares one registry, and people and apps whose team
+role is owner, member, or developer register. A deployment's own credentials
+read them and register none. It checks a
 definition more strictly: it also refuses a `required` name the schema's
 `properties` don't declare, and a keyword for one type, such as `minLength`,
 with no `type` that says it.

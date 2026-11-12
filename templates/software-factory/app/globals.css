@@ -112,19 +112,6 @@ button {
   text-decoration: underline;
 }
 
-.crumb {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  color: var(--faint);
-  font-weight: 400;
-  text-decoration: none;
-}
-
-.crumb:hover {
-  color: var(--bright);
-}
-
 .site-nav {
   display: flex;
   align-items: center;
@@ -205,26 +192,6 @@ button {
   background: var(--shade-hover);
   color: var(--bright);
   opacity: 1;
-}
-
-.button:disabled {
-  color: var(--faint);
-}
-
-.spin {
-  animation: spin 1.2s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    rotate: 360deg;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spin {
-    animation: none;
-  }
 }
 
 /* ── stepper ─────────────────────────────────────────────────────── */
@@ -317,6 +284,19 @@ button {
 .task[data-done] p,
 .task[data-done] > svg {
   color: var(--faint);
+}
+
+/* A name in a task (a channel, a repo, a connector) stands out from the words around it, until it's done. */
+.task p code {
+  padding: 0.1rem 0.35rem;
+  background: var(--shade);
+  color: var(--bright);
+}
+
+.task[data-done] p code {
+  padding: 0;
+  background: none;
+  color: inherit;
 }
 
 .task .hint {

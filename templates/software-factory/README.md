@@ -18,9 +18,14 @@ fixes and features, reviews every PR, and stays quiet when nothing's for it.
      so it exists), and AI Gateway (the agent's model).
    - **GitHub.** A Vercel Connect connector whose app is on the repos the factory works on, this
      one included, so the agent can change the factory itself.
-   - **Slack**, optionally. `#factory-rsi`, the channel where the factory updates itself: its own
-     pull requests land there, and it's where to talk about how it works.
+   - **Slack**, optionally. The channel where the factory updates itself: its own pull requests
+     land there, and it's where to talk about how it works.
    - **Try it.** Open an issue, or post on the board, and the agent replies.
+
+   The connectors and the Slack channel are named for your Vercel project: `github/factory`,
+   `slack/factory`, and `#factory-rsi` for a project named `factory`. A team's second factory gets
+   its own. Renaming the project renames them on its next deployment: create them again, or write
+   the names you have in `connectors` (`factory.ts`) and `slackChannels` (`channels.ts`).
 
    Or hand it to your agent: **Copy prompt** copies what to paste. The launcher answers its steps
    as markdown to anything that isn't a browser, such as `vercel curl https://<your-deployment>`.
@@ -35,12 +40,15 @@ Until the deployment turns strangers away, the launcher shows only how to protec
 
 ## What it does with what it hears
 
-- **This repo's own PRs and issues come into `dev/factory`,** where people talk with the agent
-  about the factory itself, and Slack's `#factory-rsi` mirrors it. Map each of your other repos
-  and Slack channels to a board channel in `app/api/board/[[...path]]/channels.ts`:
-  `"acme/web": "dev"`.
-- **The agent hears every message in `dev` and the channels under it,** and decides what each
-  needs: an answer, a reproduction, a PR, a review, or nothing.
+- **Its channels on your team's board are under one named for the project:** `project-factory` for
+  a project named `factory`, so a team's second factory never hears the first.
+- **This repo's own PRs and issues come into `project-<name>/rsi`,** where people talk with the
+  agent about the factory itself, and Slack's `#<project>-rsi` mirrors it.
+- **Each repo you onboard gets a channel of its own,** `project-<name>/<repo>`. Ask the agent,
+  "onboard acme/web", and it opens the pull request that adds the line to
+  `app/api/board/[[...path]]/channels.ts`. What's about no one repo goes in `project-<name>`.
+- **The agent hears every message in those channels,** and decides what each needs: an answer, a
+  reproduction, a PR, a review, or nothing.
 - **Each thread gets its own session and its own sandbox.** Its GitHub token covers only the
   thread's repo, and a fork's PRs stay off the board.
 - **A PR the agent opens is its own until it's merged or closed:** it schedules its own check-ins
@@ -55,9 +63,8 @@ Until the deployment turns strangers away, the launcher shows only how to protec
 | What it does sometimes: reviewing, reproducing a bug, seeing a PR through, demos | `agent/skills/` |
 | Which repos and Slack channels come into the board, and where | `app/api/board/[[...path]]/channels.ts` |
 | Its model, and its sandbox | `agent/agent.ts`, `agent/sandbox.ts` |
-| Its name on the board | `agent/lib/identity.ts` |
 
-Ask the agent in `dev/factory`: it changes this repo with a pull request, like any other.
+Ask the agent in `project-<name>/rsi`: it changes this repo with a pull request, like any other.
 
 ## How it's built
 
@@ -68,7 +75,7 @@ Ask the agent in `dev/factory`: it changes this repo with a pull request, like a
 | `agent/` | The agent, an [eve](https://www.npmjs.com/package/eve) agent mounted at `/eve/v1` |
 | `agent/lib/wake.ts` | All the board sees of the agent: `wakeAgent`, which the board's watcher runs on every message |
 | `agent/channels/eve.ts` | Where wake-ups reach the agent, from this deployment only: one eve session per board thread |
-| `agent/tools/vb.ts` | The agent's hands on the board: `vb`'s commands, as the profile `factory` |
+| `agent/tools/vb.ts` | The agent's hands on the board: `vb`'s commands, as the factory itself |
 | `agent/lib/credentials.ts` | A GitHub token per thread, in the sandbox's network policy and never in the sandbox |
 | `agent/lib/git/` | The sandbox's `git`: pushes go through GitHub's API, which signs the agent's commits |
 | `agent/extensions/browser.ts`, `agent/tools/narrate.ts` | A browser in the sandbox, and the voice for the narrated videos of the `ui-demo` skill |

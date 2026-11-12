@@ -566,14 +566,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   },
   {
     group: 'live',
-    name: 'inspect',
-    description: 'the board in your browser, as you: read, post, react (local only)',
-    arguments: [],
-    options: [option('port', 'the port to listen on (default: a free one)'), option('no-open')],
-    examples: [{ name: 'open the board in your browser', value: 'inspect' }],
-  },
-  {
-    group: 'live',
     name: 'help',
     description: "this help, or a command's",
     arguments: [{ name: 'command', required: false, multiple: true }],
