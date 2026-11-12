@@ -382,6 +382,23 @@ test("a factory's connectors, Slack channel and board channels are named for its
   assert.equal(channel("web", { VERCEL_PROJECT_NAME: "f".repeat(100) }), `project-${"f".repeat(40)}/web`);
 });
 
+test("a Slack channel that mirrors a repo's channel is said to be that, not the factory's own", async () => {
+  // As the agent leaves it after onboarding acme/web, before anyone invites the app to the new channel.
+  const base = fake().deps.synced;
+  const synced = { ...base, slackChannels: { ...base.slackChannels, "#factory-web": "project-factory/web" } };
+  const routes = (...channels: { id: string; name: string }[]) => ({
+    "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
+    "https://slack.com/api/users.conversations": conversations(...channels),
+  });
+  const web = await shown(fake({ deps: { connect: async () => "app-token", synced }, routes: routes({ id: "C2", name: "factory-rsi" }) }).deps);
+  assert.deepEqual(labels(todo(web.slack!)), ["Invite the app to `#factory-web`"]);
+  assert.equal(todo(web.slack!)[0]!.hint, "Where project-factory/web shows in Slack.");
+  // In neither: one task for both, and a line that's true of both.
+  const both = await shown(fake({ deps: { connect: async () => "app-token", synced }, routes: routes({ id: "C1", name: "general" }) }).deps);
+  assert.deepEqual(labels(todo(both.slack!)), ["Invite the app to `#factory-rsi`, `#factory-web`"]);
+  assert.equal(todo(both.slack!)[0]!.hint, "Where the factory's channels show in Slack.");
+});
+
 test("Slack's app in its channel, by name, is done", async () => {
   const { slack } = await shown(
     fake({
