@@ -1,56 +1,66 @@
 import type { ReactNode } from "react";
-import { Check as Tick, Circle } from "lucide-react";
-import { isDone, type Fix, type Step } from "@/lib/setup";
+import { Check, Circle } from "lucide-react";
+import { isDone, type Step, type Task } from "@/lib/setup";
 import { Copy } from "./copy";
 
-/** What to do about something: a line, then each command in its own box, or a link. */
-export function Todo({ fix }: { fix: Fix }): ReactNode {
+const icon = { size: 14, strokeWidth: 2.5, role: "img" } as const;
+
+/** One task: what to do, then what helps do it: a line with its link in it, and each command in its own box. */
+function TaskItem({ task }: { task: Task }): ReactNode {
   return (
-    <div className="todo">
-      <p>{fix.text}</p>
-      {fix.commands?.map((command) => (
-        <div key={command} className="command">
-          <pre>
-            <code>{command}</code>
-          </pre>
-          <Copy text={command} />
-        </div>
-      ))}
-      {fix.link ? (
-        <a className="button secondary" href={fix.link.href} target="_blank" rel="noreferrer">
-          {fix.link.label}
-        </a>
-      ) : null}
-    </div>
+    <li className="task" data-done={task.done ? "" : undefined}>
+      {task.done ? <Check {...icon} aria-label="Done" /> : <Circle {...icon} aria-label="To do" />}
+      <div>
+        <p>{task.label}</p>
+        {task.hint || task.link ? (
+          <p className="hint">
+            {task.hint}
+            {task.hint && task.link ? " " : null}
+            {task.link ? (
+              <a href={task.link.href} target="_blank" rel="noreferrer">
+                {task.link.label}
+              </a>
+            ) : null}
+          </p>
+        ) : null}
+        {task.commands?.map((command) => (
+          <div key={command} className="command">
+            <pre>
+              <code>{command}</code>
+            </pre>
+            <Copy text={command} />
+          </div>
+        ))}
+      </div>
+    </li>
   );
 }
 
-/** The steps, in order, each with its checks: what's there, and what to do about what isn't. */
+export function Tasks({ tasks }: { tasks: Task[] }): ReactNode {
+  return (
+    <ul className="tasks">
+      {tasks.map((task) => (
+        <TaskItem key={task.label} task={task} />
+      ))}
+    </ul>
+  );
+}
+
+/** The steps, in order, each with its tasks. */
 export function Stepper({ steps }: { steps: Step[] }): ReactNode {
-  const icon = { size: 14, strokeWidth: 2.5, "aria-hidden": true } as const;
   return (
     <ol className="stepper">
       {steps.map((step, i) => {
         const done = isDone(step);
         return (
           <li key={step.id} className="step" data-done={done ? "" : undefined}>
-            <span className="marker">{done ? <Tick {...icon} /> : <span>{i + 1}</span>}</span>
+            <span className="marker">{done ? <Check size={14} strokeWidth={2.5} aria-hidden /> : <span>{i + 1}</span>}</span>
             <div className="step-body">
               <div className="step-head">
                 <h2>{step.title}</h2>
-                <span className="status">{done ? "Done" : step.optional ? "Optional" : "To do"}</span>
+                {step.optional && !done ? <span className="optional">Optional</span> : null}
               </div>
-              <ul className="checks">
-                {step.checks.map((check) => (
-                  <li key={check.label} data-done={check.done ? "" : undefined}>
-                    {check.done ? <Tick {...icon} /> : <Circle {...icon} />}
-                    <div>
-                      <p>{check.label}</p>
-                      {check.fix ? <Todo fix={check.fix} /> : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              <Tasks tasks={step.tasks} />
             </div>
           </li>
         );

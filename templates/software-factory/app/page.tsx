@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { boardName, connectors, factory, repoChannels, slackChannels } from "@/app/api/board/[[...path]]/factory";
 import { Copy } from "@/components/copy";
 import { Refresh } from "@/components/refresh";
-import { Stepper, Todo } from "@/components/stepper";
+import { Stepper, Tasks } from "@/components/stepper";
 import { boardDeps, inspectCommand, isDone, liveDeps, projectOf, setup } from "@/lib/setup";
 
 // Every load checks this deployment as it is now.
@@ -21,13 +21,13 @@ export default async function Launcher(): Promise<ReactNode> {
       <main className="launcher">
         <section className="hero">
           <h1>Protect this deployment first</h1>
-          <p className="lede">The rest of the setup shows once only your team can open this page.</p>
+          <p className="lede">The setup shows once only your team can open this page.</p>
           <div className="hero-links">
             <Refresh waiting={false} />
           </div>
         </section>
         <section className="next">
-          <Todo fix={result.fix} />
+          <Tasks tasks={[result.task]} />
         </section>
       </main>
     );
