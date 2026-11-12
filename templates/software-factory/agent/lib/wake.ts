@@ -1,5 +1,5 @@
 import type { WatcherContext } from "@vercel/board";
-import { byAgent, ORIGIN } from "./identity.ts";
+import { byAgent, ORIGIN, ownToken } from "./identity.ts";
 
 // All the board sees of the agent: its watcher hands over every message posted where it tails, and
 // reactions to the agent's own messages. The agent reads the thread and decides what each needs.
@@ -54,9 +54,6 @@ export async function sendToAgent(board: Pick<WatcherContext["board"], "reply">,
     }
   }
 }
-
-/** This deployment's OIDC token on Vercel, and none on your machine, where eve takes a local caller. */
-const ownToken = async () => (process.env.VERCEL_URL ? (await import("@vercel/oidc")).getVercelOidcToken() : null);
 
 /**
  * Hands a wake-up to the thread's eve session, over eve's own channel on this deployment (/eve/v1),

@@ -1,6 +1,6 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { ORIGIN } from "../lib/identity.ts";
+import { ORIGIN, ownToken } from "../lib/identity.ts";
 
 export default defineTool({
   description:
@@ -9,7 +9,7 @@ export default defineTool({
   async execute() {
     // This deployment's own setup page, which runs the checks. Its OIDC token gets the call through
     // Deployment Protection, which trusts a project's calls to its own environment.
-    const token = process.env.VERCEL_URL ? await (await import("@vercel/oidc")).getVercelOidcToken() : null;
+    const token = await ownToken();
     const response = await fetch(`${ORIGIN}/api/launcher/steps`, {
       headers: token ? { "x-vercel-trusted-oidc-idp-token": token } : {},
       signal: AbortSignal.timeout(30_000),
