@@ -269,7 +269,7 @@ button {
 
 .step-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.75rem;
   min-height: var(--marker);
 }
@@ -281,56 +281,63 @@ button {
   font-weight: 600;
 }
 
-.step[data-done] .step-head h2 {
-  color: var(--ink);
-}
-
-.status {
+.optional {
   margin-left: auto;
   color: var(--faint);
   font-size: 0.85rem;
 }
 
-/* A step's checks: what's there, and under what isn't, what to do about it. */
-.checks {
-  margin: 0.6rem 0 0;
+/* A step's tasks. What's left to do reads first: done ones step back, and a hint sits under its task, smaller. */
+.tasks {
+  margin: 0.4rem 0 0;
   padding: 0;
   list-style: none;
 }
 
-.checks > li {
+.task {
   display: grid;
   grid-template-columns: 1rem minmax(0, 1fr);
   gap: 0.6rem;
 }
 
-.checks > li + li {
-  margin-top: 0.45rem;
+.task + .task {
+  margin-top: 0.4rem;
 }
 
-.checks > li > svg {
+.task > svg {
   margin-top: 0.3rem;
-  color: var(--faint);
-}
-
-.checks p {
-  margin: 0;
-  max-width: 44rem;
-  color: var(--bright);
-}
-
-.checks > li[data-done] p {
   color: var(--muted);
 }
 
-.todo {
-  margin: 0.35rem 0 0.6rem;
+.task p {
+  margin: 0;
+  color: var(--ink);
 }
 
-.todo p,
-.checks .todo p {
-  margin: 0 0 0.5rem;
-  color: var(--ink);
+.task[data-done] p,
+.task[data-done] > svg {
+  color: var(--faint);
+}
+
+.task .hint {
+  color: var(--faint);
+  font-size: 0.9rem;
+}
+
+.hint a {
+  color: var(--muted);
+}
+
+.hint a:hover {
+  color: var(--bright);
+}
+
+.task .command {
+  margin-top: 0.5rem;
+}
+
+.task:not(:last-child) .command:last-child {
+  margin-bottom: 0.75rem;
 }
 
 /* ── code ────────────────────────────────────────────────────────── */
@@ -361,9 +368,7 @@ pre {
   scrollbar-width: thin;
 }
 
-.command + .command,
-.command + .button,
-.todo p + .button {
+.command + .command {
   margin-top: 0.5rem;
 }
 
@@ -400,10 +405,6 @@ pre {
   font-weight: 600;
 }
 
-.next p {
-  margin: 0 0 0.75rem;
-}
-
 @media (max-width: 40rem) {
   .launcher {
     padding-top: 2.5rem;
@@ -413,7 +414,7 @@ pre {
     gap: 0.75rem;
   }
 
-  .status {
+  .optional {
     display: none;
   }
 }
