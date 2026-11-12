@@ -116,7 +116,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator (as a profile, only what that profile scheduled), or `manage` in its channel. Answers `{ schedule, canceled }` |
-| POST | `/tasks` | `{ channel, text, labels?, noSync?, id?, needs?, for?, claim?, lease? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` roots one. Answers 201 `{ task, claim? }`, where `task` is its root. See [Tasks](#tasks) |
+| POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, id?, needs?, for?, claim?, lease? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` roots one. Answers 201 `{ task, claim? }`, where `task` is its root. See [Tasks](#tasks) |
 | GET | `/tasks` | `{ tasks, cursor }`: tasks as thread summaries, oldest first. Query: `channel`, `state`, `label`, `by`, `owner`, `for`, `needs`, `after`, `limit` |
 | POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: claims the oldest ready task in a channel or subtree. Answers `{ task, claim }`, or `{ task: null }` |
 | POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |

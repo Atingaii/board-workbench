@@ -139,6 +139,45 @@ describe('a task', () => {
     expect(code(await ada('POST', '/tasks', { channel: 'work', re: issue.id, text: 'both' }))).toEqual([400, 'invalid_request'])
   })
 
+  it("takes files on its root as a post does, with no text when it has one, and keeps a thread's own when it's made one", async () => {
+    // The middleware sees a new task's root as it sees any post, its files among it.
+    const screened: string[][] = []
+    const files: Middleware = async ({ write, next }) => {
+      if (write.kind === 'post') screened.push(write.attachments.map((attached) => attached.name))
+      await next()
+    }
+    const { board, ada } = setup({ middleware: [files] })
+    // A handle as ada, to upload as the CLI and agents do.
+    const team = projectBoard({
+      backend: http(BOARD_URL, {
+        fetch: async (input, init) => {
+          const request = new Request(input, init)
+          request.headers.set('authorization', `Bearer ${await personToken('u_ada')}`)
+          return board.fetch(request)
+        },
+      }),
+    }).as(null)
+    const file = (name: string) => team.upload({ data: new TextEncoder().encode(name), name, type: 'text/plain' })
+    const shot = await file('failing.txt')
+    const { task } = await team.tasks.create('work', { text: 'fix the layout', attachments: [shot] })
+    expect(task).toMatchObject({ text: 'fix the layout', attachments: [{ id: shot.id, name: 'failing.txt' }], task: { state: 'ready' } })
+    expect((await team.thread(task.id)).message.attachments.map((attached) => attached.id)).toEqual([shot.id])
+    expect(await (await team.download(shot.id)).text()).toBe('failing.txt')
+    expect(screened).toEqual([['failing.txt']])
+    // Its text may be empty when it has a file, and not without one.
+    const log = await file('build.log')
+    expect((await team.tasks.create('work', { text: '', attachments: [log.id] })).task).toMatchObject({ text: '', attachments: [{ id: log.id }], task: { state: 'ready' } })
+    expect(code(await ada('POST', '/tasks', { channel: 'work', text: '' }))).toEqual([400, 'invalid_request'])
+    // A file that isn't the caller's to attach makes no task.
+    expect((await ada('POST', '/tasks', { channel: 'work', text: 'with a file that is not there', attachments: ['AAAAAAAAAAAAAAAAAAAAAA'] })).status).toBe(404)
+    expect((await team.tasks.list({ channel: 'work' })).tasks).toHaveLength(2)
+    // A thread made a task keeps the files it had, and takes none: they're a new thread's.
+    const trace = await file('trace.txt')
+    const posted = await team.post('work', { text: 'the worker crashes on start', attachments: [trace] })
+    expect(code(await ada('POST', '/tasks', { re: posted.id, attachments: [trace.id] }))).toEqual([400, 'invalid_request'])
+    expect((await team.tasks.create({ re: posted.id })).task).toMatchObject({ id: posted.id, attachments: [{ id: trace.id }], task: { state: 'ready' } })
+  })
+
   it('is made once for a client id, and a retry gets the task back without the claim it was made with', async () => {
     const { ada } = setup()
     const first = await ada('POST', '/tasks', { channel: 'work', text: 'deploy a1b2c3', id: 'deploy-a1b2c3', claim: true })

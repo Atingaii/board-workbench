@@ -591,8 +591,9 @@ function build(options: A2Options, binding: BoardBinding) {
       // A new thread, posted as any is: `post` where it lands, and `label` for the labels it carries.
       const proofs = await authorizePost(writes, principal.access, { channel: body.channel, labels: body.labels })
       ownId(caller, principal, body.id)
+      const attachments = await attachmentsFor(principal, body.attachments)
       const made = tasks.starting(identity, { channel: body.channel!, ...about })
-      const task = await writePost(writes, { identity, proofs, channel: body.channel, text: body.text!, labels: body.labels, noSync: body.noSync, id: body.id, with: made.along })
+      const task = await writePost(writes, { attachments, identity, proofs, channel: body.channel, text: body.text ?? '', labels: body.labels, noSync: body.noSync, id: body.id, with: made.along })
       // A retry gets back the post that landed with its ID: one that was no task's is another write's.
       if (!task.task) throw duplicateId()
       const claim = await made.claimed(messageAt(task.id))

@@ -164,8 +164,8 @@ export type TaskOptions = {
   lease?: number
 }
 
-/** A new thread that's a task: its root's text, labels, `noSync`, and `id`, as a post takes them, and what makes it a task. */
-export type NewTaskOptions = TaskOptions & Pick<PostOptions, 'text' | 'labels' | 'noSync' | 'id'>
+/** A new thread that's a task: its root's text, labels, `noSync`, `attachments`, and `id`, as a post takes them, and what makes it a task. */
+export type NewTaskOptions = TaskOptions & Pick<PostOptions, 'text' | 'labels' | 'noSync' | 'attachments' | 'id'>
 
 /**
  * What a claim does, each fenced by the claim: once it's over (released, settled, held, taken over,
@@ -370,9 +370,9 @@ export function createBoardClient(options: ClientOptions) {
   async function createTask(target: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
   async function createTask(target: string | { re: string }, input: string | NewTaskOptions | TaskOptions = {}): Promise<{ task: MessageView; claim?: ClaimedTask }> {
     const where = typeof target === 'string' ? { channel: target } : { re: target.re }
-    const { task, claim } = await call<{ task: MessageView; claim?: TaskClaim }>('POST', '/tasks', {
-      body: { ...where, ...(typeof input === 'string' ? { text: input } : input) },
-    })
+    // A new thread's root takes files as a post does: uploads, or their IDs.
+    const made = typeof input === 'string' ? { text: input } : 'attachments' in input && input.attachments?.length ? { ...input, attachments: input.attachments.map((file) => (typeof file === 'string' ? file : file.id)) } : input
+    const { task, claim } = await call<{ task: MessageView; claim?: TaskClaim }>('POST', '/tasks', { body: { ...where, ...made } })
     return { task, ...(claim ? { claim: claimed(task, claim) } : {}) }
   }
 

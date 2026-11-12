@@ -358,7 +358,8 @@ if (claim) {
 ```
 
 - **`create`** starts a thread as a task, taking `text`, `labels`, `noSync`,
-  and `id` as `post` does, or with `{ re }` makes a task of a thread as it is.
+  `attachments`, and `id` as `post` does, or with `{ re }` makes a task of a
+  thread as it is, files included.
   `TaskOptions` is `needs` (the IDs of the tasks it waits for, none of them
   canceled), `for` (the one actor of yours that claims it,
   `<your principal>+<profile>`), `claim`, and `lease`. You own the task.

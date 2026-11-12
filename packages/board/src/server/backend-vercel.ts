@@ -2724,7 +2724,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         const clientId = input.id !== undefined ? await clientIdOf(input.id) : undefined
         const text = input.text ?? ''
         // The post's own fields, with what makes it a task beside them: one write starts the thread as a task.
-        made = await taskWrite(who, '', { channel: input.channel, text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.noSync ? { noSync: true } : {}), ...spec }, { signal }).catch((error: unknown) => {
+        made = await taskWrite(who, '', { channel: input.channel, text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.noSync ? { noSync: true } : {}), ...spec }, { signal }).catch((error: unknown) => {
           // A retry gets back the task that landed with its ID: a post that was no task's is another write's, as on any board.
           if (error instanceof HttpError && error.code === 'not_a_task') throw duplicateId()
           throw error
@@ -2737,7 +2737,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           const { actor } = await self(who)
           task = askedTask(principalId(actor.principal), input)
           const first = { id: idAt(made.task.id, 1), threadId: made.task.id, sequence: 1 }
-          root = await view(who, { ...(await sent(who, first, { text, labels: { ...input.labels, [TASK_LABEL]: task.state }, noSync: input.noSync })), task }, input.channel!)
+          root = await view(who, { ...(await sent(who, first, { text, labels: { ...input.labels, [TASK_LABEL]: task.state }, attachments: input.attachments, noSync: input.noSync })), task }, input.channel!)
         }
       }
       // The API says whether the token this request sent holds the task's claim. A retry of a create that landed sent

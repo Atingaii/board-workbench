@@ -221,6 +221,25 @@ describe("vercel()'s tasks", () => {
     expect((await julian.messages({ channel: 'work', label: { 'board.task': 'waiting' } })).messages.map((message) => message.id)).toEqual([review.id])
   })
 
+  it("sends a new task's files with it, as a post's go, and shows them on its root", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const shot = await julian.upload({ data: new TextEncoder().encode('pixels'), name: 'failing.png', type: 'image/png' })
+    const { task } = await julian.tasks.create('work', { text: 'fix the layout', attachments: [shot] })
+    expect(julian.wrote()).toMatchObject({ version: 2, path: '/tasks', body: { channel: 'work', text: 'fix the layout', attachments: [shot.id] } })
+    expect(task).toMatchObject({ text: 'fix the layout', attachments: [{ id: shot.id, name: 'failing.png' }], task: { state: 'ready' } })
+    expect((await julian.thread(task.id)).message.attachments.map((attached) => attached.id)).toEqual([shot.id])
+    // Its text may be empty when it has one, and a task without files sends none.
+    const log = await julian.upload({ data: new TextEncoder().encode('log'), name: 'build.log', type: 'text/plain' })
+    expect((await julian.tasks.create('work', { text: '', attachments: [log.id] })).task).toMatchObject({ text: '', attachments: [{ id: log.id }] })
+    await julian.tasks.create('work', { text: 'no files' })
+    expect(julian.wrote().body).not.toHaveProperty('attachments')
+    // A thread made a task keeps what it had.
+    const trace = await julian.upload({ data: new TextEncoder().encode('trace'), name: 'trace.txt', type: 'text/plain' })
+    const posted = await julian.post('work', { text: 'the worker crashes on start', attachments: [trace] })
+    expect((await julian.tasks.create({ re: posted.id })).task.attachments.map((attached) => attached.id)).toEqual([trace.id])
+  })
+
   it("claims on the API's routes with a token it makes, which no view and no event ever shows", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)

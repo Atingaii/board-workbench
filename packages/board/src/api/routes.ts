@@ -198,9 +198,10 @@ const Lease = z.number().min(LEASE_MIN_S).max(LEASE_MAX_S)
 const Claimed = { epoch: z.number().int().positive(), token: z.string().min(1).max(128) }
 
 /**
- * A new thread that's a task (`channel` and `text`, with `labels`, `noSync`, and an `id` as a post
- * takes them), or the thread `re` roots made one. `needs` are the tasks it waits for, `for` the one
- * actor of its owner's that claims it, and `claim` claims it in the same write, for `lease` seconds.
+ * A new thread that's a task (`channel` and `text`, with `labels`, `noSync`, `attachments`, and an
+ * `id` as a post takes them), or the thread `re` roots made one. `needs` are the tasks it waits for,
+ * `for` the one actor of its owner's that claims it, and `claim` claims it in the same write, for
+ * `lease` seconds.
  */
 export const CreateTaskBody = z
   .object({
@@ -209,6 +210,8 @@ export const CreateTaskBody = z
     text: z.string().max(MESSAGE_TEXT_MAX).optional(),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
+    /** IDs from `POST /attachments`, as a post takes them. */
+    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
     needs: z.array(Ref).max(TASK_NEEDS_MAX).optional(),
     for: ActorId.nullable().optional(),
     claim: z.boolean().optional(),
@@ -218,10 +221,10 @@ export const CreateTaskBody = z
   .refine((body) => (body.channel === undefined) !== (body.re === undefined), {
     message: 'a task needs `channel` and `text` for a new thread, or `re` for a thread that\'s there',
   })
-  .refine((body) => body.channel === undefined || (body.text ?? '').trim().length > 0, { message: 'message text is empty', path: ['text'] })
+  .refine((body) => body.channel === undefined || (body.text ?? '').trim().length > 0 || (body.attachments?.length ?? 0) > 0, { message: 'message text is empty', path: ['text'] })
   .refine((body) => body.text === undefined || storable(body.text), { message: 'message text has a NUL character or a lone surrogate', path: ['text'] })
-  .refine((body) => body.re === undefined || (body.text === undefined && body.labels === undefined && body.noSync === undefined && body.id === undefined), {
-    message: '`text`, `labels`, `noSync`, and `id` are a new thread\'s: `re` makes a task of a thread as it is',
+  .refine((body) => body.re === undefined || (body.text === undefined && body.labels === undefined && body.noSync === undefined && body.attachments === undefined && body.id === undefined), {
+    message: '`text`, `labels`, `noSync`, `attachments`, and `id` are a new thread\'s: `re` makes a task of a thread as it is',
   })
   .refine((body) => body.lease === undefined || body.claim === true, { message: '`lease` goes with `claim`', path: ['lease'] })
 

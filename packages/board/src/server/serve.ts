@@ -767,10 +767,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         // A thread that's there becomes a task as it is: nothing is posted, so the middleware has nothing to see.
         if (body.channel === undefined) return backend.createTask(caller, body, signal)
         // A new one's root is a post: its blocks are checked and the middleware sees it, as any post's.
-        const { channel, labels, noSync, id } = body
-        const sent = body.text!
+        const { channel, labels, noSync, attachments, id } = body
+        // It may be empty when the root has files, as a post's may.
+        const sent = body.text ?? ''
         await checkWrite(caller, sent, { channel }, signal)
-        const root = { channel, text: sent, ...(labels ? { labels } : {}), ...(noSync !== undefined ? { noSync } : {}), ...(id !== undefined ? { id } : {}) } as Protocol['post']['input']
+        const root = { channel, text: sent, ...(labels ? { labels } : {}), ...(noSync !== undefined ? { noSync } : {}), ...(attachments ? { attachments } : {}), ...(id !== undefined ? { id } : {}) } as Protocol['post']['input']
         return screenPost(caller, root, signal, async (screened) => {
           if (screened.text !== sent) await checkBlocks(screened.text)
           return backend.createTask(caller, { ...body, text: screened.text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal)

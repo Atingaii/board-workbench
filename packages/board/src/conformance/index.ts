@@ -382,7 +382,7 @@ async function reply(ctx: Context, re: string, text: string, extra: { after?: st
 }
 
 /** A task of this run's, in a thread of its own that stays on the board: the run deletes its root at the end, which cancels it. */
-async function task(ctx: Context, text: string, options: TaskOptions & { labels?: Record<string, string> } = {}) {
+async function task(ctx: Context, text: string, options: TaskOptions & { labels?: Record<string, string>; attachments?: string[] } = {}) {
   const { labels, ...rest } = options
   const made = await ctx.board.tasks.create(ctx.channel, { text, labels: { ...ctx.labels, ...labels }, noSync: true, ...rest })
   ctx.posted.push(made.task.id)
@@ -1694,6 +1694,20 @@ const CHECKS: Check[] = [
       check(message.attachments.some((a) => a.id === attachment.id), 'the post should carry the file')
       const response = await ctx.board.download(attachment.id)
       same(new TextDecoder().decode(await response.arrayBuffer()), new TextDecoder().decode(bytes), "the file's bytes")
+    },
+  },
+  {
+    group: 'attachments',
+    name: 'starts a task with a file, which its root carries',
+    run: async (ctx) => {
+      // A board that keeps no tasks says so before anything is uploaded.
+      await ctx.board.tasks.list({ channel: ctx.channel, limit: 1 })
+      const bytes = new TextEncoder().encode(`conformance ${ctx.labels.conformance}: a task's file\n`)
+      const attachment = await ctx.board.upload({ data: bytes, name: 'conformance-task.txt', type: 'text/plain' })
+      const { task: root } = await task(ctx, 'conformance: a task with a file', { attachments: [attachment.id] })
+      check(root.attachments.some((a) => a.id === attachment.id), "the task's root should carry the file")
+      same(root.task?.state, 'ready', "the task's state")
+      check((await ctx.board.thread(root.id)).message.attachments.some((a) => a.id === attachment.id), 'the task, read as its thread, should carry the file')
     },
   },
   {
