@@ -1,12 +1,11 @@
 import { ownRepo } from "../../lib/github.ts";
+import { projectName } from "../../lib/project.ts";
 
-// Who the agent is on the board.
+// Who the agent is on the board: this deployment, writing as itself. It has no profile of its own,
+// so the board, and Slack, show it by its Vercel project's name and not as a name "via" that project.
 
-/** Its name on the board: the profile it posts under, and what people @mention. */
-export const NAME = "factory";
-
-/** A PNG: Slack won't use the board's SVG avatars as a message's icon. */
-export const AVATAR = `https://vercel.com/api/www/avatar?s=64&format=png&u=${NAME}`;
+/** Its name on the board, and what people @mention: the Vercel project's. */
+export const NAME = projectName();
 
 /** This factory's own repo, which it changes when it's asked to improve itself. */
 export const OWN_REPO = ownRepo();
@@ -24,8 +23,8 @@ export const ownToken = async (): Promise<string | null> => (process.env.VERCEL_
 type Author = { principal: string; profile: string | null };
 
 /**
- * Whether the agent wrote a message. Anyone who can write may name a profile, so it's the agent only
- * as a profile of `principal`: the one this deployment's own code writes as, which its watcher reads
- * from the board.
+ * Whether the agent wrote a message: this deployment (`principal`, which its watcher reads from the
+ * board), with no profile. What else the deployment writes has one: its watcher's own replies, named
+ * for the watcher, and what its sync brings in from GitHub and Slack, named for who wrote it there.
  */
-export const byAgent = (by: Author, principal: string): boolean => by.principal === principal && by.profile === NAME;
+export const byAgent = (by: Author, principal: string): boolean => by.principal === principal && by.profile === null;
