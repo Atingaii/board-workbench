@@ -395,9 +395,18 @@ it gives:
 - **Nothing times a lease.** A claim whose lease ran out is over at once, and
   still reads `claimed` until the next task write or list that sees it.
 - **A task's changes stay in the feed 30 days.** Its thread and its state stay.
-- **`claim({ channel: 'work/' })` looks at up to 50 channels** under a prefix,
-  and at the 200 oldest ready tasks across them, at most 100 from each. Past
-  50 channels, it fails with 400 `channel_tree_too_large`.
+- **`claim({ channel: 'work/' })` looks at up to 50 channels** you may claim
+  in under a prefix, and at the 200 oldest ready tasks across them, at most
+  100 from each. Past 50 such channels, it fails with 400
+  `channel_tree_too_large`.
+- **A list reads 50 channels at most for a caller that doesn't read the whole
+  board.** One held to a `can`, as a sandbox is, lists the board or a subtree
+  only where it reads 50 channels or fewer. Past that it fails with 400
+  `channel_tree_too_large`: name a channel, or a smaller subtree.
+- **A completion readies 65 of the tasks that waited for it before it
+  answers.** Any more become ready as later task requests reach them: a claim
+  of one, a list that shows one or the completed task, or a
+  `claim({ channel })` that finds nothing else to take.
 - **Lists and `claim({ channel })` can trail a write by a moment.** They find
   tasks through an index, so a task made or readied just now can be missing
   from the next list or look. A claim by ID never misses, and a claim that
