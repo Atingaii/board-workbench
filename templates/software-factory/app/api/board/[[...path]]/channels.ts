@@ -1,5 +1,5 @@
 import { ownRepo } from "../../../../lib/github.ts";
-import { projectName } from "../../../../lib/project.ts";
+import { slackChannel } from "../../../../lib/project.ts";
 
 // Which repos and Slack channels come into the board, and where. This is the file to edit.
 
@@ -16,6 +16,6 @@ export const repoChannels: Record<string, string> = {
 export const slackChannels: Record<string, string> = {
   // Where the factory updates itself: its own PRs and issues, and talk about how it works. Named
   // for this factory's Vercel project, #factory-rsi for one named factory.
-  [`#${projectName()}-rsi`]: "dev/factory",
+  [slackChannel("-rsi")]: "dev/factory",
   // "#dev": "dev",
 };

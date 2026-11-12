@@ -265,7 +265,7 @@ test("Slack set up without its app in the channel says to invite it, and holds u
   assert.equal(todo(steps.slack!)[0]!.hint, "Where the factory updates itself.");
   // The template puts the channel's name together from the project's: that entry is the line.
   const [href] = links(steps.slack!);
-  assert.match(linked(href!), /^\s*\[`#.*-rsi`\]: "dev\/factory",$/);
+  assert.match(linked(href!), /^\s*\[slackChannel\("-rsi"\)\]: "dev\/factory",$/);
   assert.ok(requests.includes("https://slack.com/api/auth.test"));
   assert.deepEqual(Object.values(steps).filter((step) => !step.optional && !isDone(step)), []);
 });
@@ -284,7 +284,7 @@ test("the link to the Slack channel follows its line after someone edits channel
   // A factory that added repos above its Slack channels, put another channel first, and wrote its own
   // in single quotes under a comment that names it.
   const edited = CHANNELS.replace('  // "acme/web": "dev",', '  "acme/web": "dev",\n  "acme/api": "dev",\n  "acme/docs": "dev",').replace(
-    '  [`#${projectName()}-rsi`]: "dev/factory",',
+    '  [slackChannel("-rsi")]: "dev/factory",',
     `  "#dev": "dev",\n  // '#factory-rsi' is where the factory updates itself.\n  '#factory-rsi': "dev/factory",`,
   );
   assert.equal(edited.split("\n").length, CHANNELS.split("\n").length + 4);
@@ -321,6 +321,10 @@ test("a factory's connectors and Slack channel are named for its Vercel project,
     connectors: { github: "github/web-factory", slack: "slack/web-factory" },
     slack: ["#web-factory-rsi"],
   });
+  // Vercel takes a dot in a project's name and 100 characters. Slack takes neither in a channel's: 80 at most.
+  assert.deepEqual(configured({ VERCEL_PROJECT_NAME: "acme.factory" }).slack, ["#acme-factory-rsi"]);
+  const [long] = configured({ VERCEL_PROJECT_NAME: "f".repeat(100) }).slack;
+  assert.equal(long, `#${"f".repeat(76)}-rsi`);
   // Signed out, with nothing to name it for.
   assert.deepEqual(configured({}), { connectors: { github: "github/factory", slack: "slack/factory" }, slack: ["#factory-rsi"] });
 });

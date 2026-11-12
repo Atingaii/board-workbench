@@ -20,3 +20,13 @@ export function projectOf(jwt: string): Project {
 export function projectName(env: Env = process.env): string {
   return env.VERCEL_PROJECT_NAME || projectOf(env.VERCEL_OIDC_TOKEN ?? "")?.name || "factory";
 }
+
+/**
+ * A Slack channel named for the project, with `suffix` after its name. Slack takes less than Vercel
+ * does: lowercase letters, digits, `-` and `_`, 80 characters at most. So a `.` becomes a `-`, and a
+ * long name is cut to fit.
+ */
+export function slackChannel(suffix: string, env: Env = process.env): string {
+  const name = projectName(env).toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  return `#${name.slice(0, 80 - suffix.length)}${suffix}`;
+}
