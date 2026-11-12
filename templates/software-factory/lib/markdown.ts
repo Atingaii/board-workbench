@@ -1,3 +1,5 @@
+import type { Running } from "./launcher.ts";
+import { duration } from "./overview.ts";
 import { headline, isDone, progress, type Setup, type Step, type Task } from "./setup.ts";
 
 // The launcher for whatever doesn't ask for a page: an agent told "set up <this URL>". The same
@@ -16,12 +18,46 @@ function item(task: Task): string[] {
  */
 export const asksFor = (steps: Step[], command: string): boolean => steps.some((step) => step.tasks.some((task) => task.commands?.includes(command)));
 
-/** The launcher as markdown. `inspect` is the command that opens this factory's board. */
-export function markdown(setup: Setup, inspect: string): string {
+/** How long ago `at` was, as people say it: `4m ago`. */
+export const ago = (at: string, now: Date): string => `${duration(now.getTime() - Date.parse(at))} ago`;
+
+/** How to onboard a repo, in a line: how many are waiting, and where to ask, in Slack when the factory's channel is mirrored there. */
+export function onboarding({ channel, slack, waiting }: Running["ask"]): string {
+  return `${waiting ? `${waiting} more ${waiting === 1 ? "has" : "have"} the GitHub app. ` : ""}To onboard one, ask in ${slack ?? channel}:`;
+}
+
+/** What the factory has been doing, once it runs: the week, its pull requests, its repos. */
+function activity({ overview: { week, lastReplyAt, pulls }, repos, ask }: Running, now: Date): string[] {
+  const plus = week.more ? "+" : "";
+  return [
+    "",
+    "## This week",
+    "",
+    `- ${week.threads}${plus} threads, ${week.messages}${plus} messages`,
+    `- ${week.answered} answered${week.firstReplyMs === null ? "" : `, the first reply after ${duration(week.firstReplyMs)} (median)`}`,
+    ...(lastReplyAt ? [`- Last reply ${ago(lastReplyAt, now)}`] : []),
+    "",
+    "## Pull requests",
+    "",
+    `- ${pulls.open.length} open, ${pulls.merged} merged, ${pulls.closed} closed`,
+    ...pulls.open.map((pull) => `- [${pull.repo}#${pull.number} ${pull.title}](${pull.url})${pull.draft ? " (draft)" : ""}`),
+    "",
+    "## Repos",
+    "",
+    ...repos.map(({ repo, channel }) => `- ${repo} in \`${channel}\``),
+    `- ${onboarding(ask)} onboard <owner>/<repo>`,
+  ];
+}
+
+/**
+ * The launcher as markdown. `inspect` is the command that opens this factory's board, and `running`
+ * what it's been doing, once it runs.
+ */
+export function markdown(setup: Setup, inspect: string, running: Running | null = null, now = new Date()): string {
   const { title, lede } = headline(setup);
   if (setup.open) return [`# ${title}`, "", lede, "", ...item(setup.task)].join("\n").trimEnd() + "\n";
   const { done, of } = progress(setup.steps);
-  const lines = [`# ${title}`, "", `${lede} ${done} of ${of} steps done, checked on this request.`];
+  const lines = [`# ${title}`, "", `${lede} ${done} of ${of} steps done, checked on this request.`, ...(running ? activity(running, now) : [])];
   setup.steps.forEach((step, i) => {
     const state = isDone(step) ? " (done)" : step.optional ? " (optional)" : "";
     const tasks = step.tasks.flatMap(item);
@@ -31,6 +67,24 @@ export function markdown(setup: Setup, inspect: string): string {
   });
   if (!asksFor(setup.steps, inspect)) lines.push("", "## Watch the board", "", "```", inspect, "```");
   return lines.join("\n") + "\n";
+}
+
+/**
+ * What to paste to a coding agent on your machine to have it join a factory that runs: its board
+ * is the team's, which the Vercel CLI reads and writes as whoever is signed in, and how it works is
+ * its own repo's skills and instructions.
+ */
+export function joinPrompt({ origin, team, board, home, repo }: { origin: string; team: string | undefined; board: string | null; home: string; repo: string | null }): string {
+  // Which board: the team's, and by its name when it isn't the team's default one, as a preview's or a dev server's isn't.
+  const scope = `${team ? ` --scope ${team}` : ""}${board ? ` --name ${board}` : ""}`;
+  return [
+    `Join the software factory at ${origin}, as another agent on its board.`,
+    "",
+    `- Its board is my Vercel team's. Read and write it with the Vercel CLI: vercel board whoami${scope}`,
+    `- Its channels are ${home} and the ones under it: vercel board read ${home}/${scope}`,
+    ...(repo ? [`- How it works is in its repo, https://github.com/${repo}: read agent/skills/ and agent/lib/instructions.ts, and work the same way, with "vercel board" where they say "vb".`] : []),
+    "- Post under your own name: --as <your name>",
+  ].join("\n");
 }
 
 /**
