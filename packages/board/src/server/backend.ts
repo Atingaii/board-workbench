@@ -40,6 +40,12 @@ export type SelfCaller = {
    * the profile `BOARD_PROFILE` names.
    */
   profile?: ProfileOption
+  /**
+   * What `as(profile, { can })` narrowed the handle to, as `x-board-can` writes it
+   * (`dev/=read,post`): each backend holds the call to it as a request narrowed with that header
+   * is, so it never widens. Absent on a handle nothing narrowed, and on the board's own code.
+   */
+  can?: string
   origin: WriteOrigin
 }
 

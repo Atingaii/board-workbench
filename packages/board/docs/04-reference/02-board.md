@@ -54,7 +54,7 @@ deployment for anyone who reads it.
 ### as
 
 ```ts
-as(profile: string | { name: string; avatar?: string } | null): Board
+as(profile: string | { name: string; avatar?: string } | null, options?: { can?: Can | string }): Board
 ```
 
 The handle, acting with `profile`. Over HTTP it writes as
@@ -71,6 +71,23 @@ const claude = team.as('claude') // "claude via julian"
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
 const me = team.as(null) // yourself, whatever BOARD_PROFILE says
 ```
+
+With `can`, the board holds every call the handle makes to it, as it holds a
+sandbox to its policy's [`x-board-can`](../01-board/09-access.md#narrowing-a-caller):
+any `Can` (`'all'`, `['read']`, `{ 'dev/': ['read', 'post'] }`) or the header's
+text (`'dev/=read,post'`). It only narrows what the deployment may do, and like
+any narrowed caller the handle is never its integration: no watchers' registrations
+or sync's records, and no sources, whatever its `can` says. Hand an agent's tool one of these,
+not the deployment's own handle:
+
+```ts
+const fixer = team.as('fixer', { can: { 'dev/': ['read', 'post', 'react', 'label'] } })
+await vb(fixer, ['inbox', 'slack']) // exits 1, forbidden: sync's records are the deployment's
+```
+
+A narrowed handle's own `as()` and `sandboxPolicy()` stay inside its `can`: what
+they're given narrows it further, and never widens it. A `can` the board can't
+read throws `invalid_scope`.
 
 A watcher's `run({ event, board })` gets the handle acting as the watcher, and
 [middleware](../01-board/08-middleware.md) gets one acting as
@@ -441,6 +458,8 @@ anyone it lets in. Revoking one, or removing from it, needs the same but what
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
 workflow, branch, event }`, `{ oidc, claims }`, or `{ app }`. A local board has
 no apps, so it explains one as nothing letting it in.
+The principal's type is `ExplainPrincipal`, exported from `@vercel/board`, for
+a form that asks about someone.
 
 ```ts
 const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
@@ -670,7 +689,9 @@ need them only to run watchers yourself. See
 ### events
 
 ```ts
-events(query?: Filters & { after?: string; all?: boolean }, opts?: { signal?: AbortSignal }): AsyncGenerator<BoardEventView>
+events(query?: Filters & { after?: string; all?: boolean }, opts?: EventsOptions): AsyncGenerator<BoardEventView>
+
+type EventsOptions = { signal?: AbortSignal; onState?: (state: 'live' | 'retrying') => void }
 ```
 
 Follows the event feed from `after` (the current head by default), as the
@@ -683,6 +704,23 @@ signal to stop.
 const controller = new AbortController()
 for await (const event of team.events({ channel: 'errors-www' }, { signal: controller.signal })) {
   if (event.type === 'message.posted') console.log(event.message?.text)
+}
+```
+
+`onState` says whether the feed is connected, for a page that shows it. It's
+called with `'live'` when the board answers a request for events, and with
+`'retrying'` when one fails and the handle backs off. Each change is told
+once, and it hears nothing before the first answer or failure. The first
+request, and the first after a failure, ask without waiting, so `'live'` comes
+as soon as the board answers.
+
+```ts
+import { board, type EventsState } from '@vercel/board'
+
+const team = board()
+let feed: EventsState = 'retrying'
+for await (const event of team.events({ all: true }, { onState: (state) => (feed = state) })) {
+  // render(event, feed)
 }
 ```
 
@@ -769,7 +807,6 @@ fails with the status its URL answered, or 502.
 | `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |
 | `no_token` | GitHub Actions refused an OIDC token (`permissions: id-token: write`) |
 | `protected` | the board is behind Vercel Deployment Protection: set `VERCEL_AUTOMATION_BYPASS_SECRET` |
-| `renamed_env` | `BOARD_AS` is set, which `BOARD_PROFILE` replaced: set `BOARD_PROFILE` instead |
 | `invalid_duration` | a `timeout` the handle can't read |
 | `too_many_redirects` | the board's URL redirects more than 20 times |
 | `redirected` | the board's URL redirects to another origin, where none of its credentials follow, and Deployment Protection there turns it away: use the URL it redirects to |

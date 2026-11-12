@@ -937,7 +937,7 @@ describe('the embedded CLI', () => {
       const without = await inspecting([join(dir, 'app.mjs')])
       expect(without.address).toBeNull()
       expect(await without.exited).toBe(1)
-      expect(without.stderr()).toMatch(/^error: The inspector's page isn't beside board's CLI\.\n[\s\S]*inspectorPage/)
+      expect(without.stderr()).toBe("error: The inspector's page isn't installed with this CLI.\n\n  Reinstall or update the CLI\n")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

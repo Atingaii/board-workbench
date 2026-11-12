@@ -1911,6 +1911,12 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   code, in-process, with no URL or token: `board:client`, and
   `board:client:<profile>` with `as(profile)`, so its writes wake watchers and
   sync like anyone's.
+- **`as(profile, { can })` holds a handle to a `can`,** as `x-board-can` holds
+  a request: over `http()` and on `vercel()` its requests carry the header, and
+  on `local()` its caller is narrowed the same way, so on every backend it's a
+  narrowed caller (never its deployment's integration: no watchers'
+  registrations or sync's records, the inbox included). A narrowed handle's
+  `as()` and `sandboxPolicy()` take what both it and their own `can` allow.
 - **`sandboxPolicy({ profile?, can?, token? })` hands the board to a
   sandboxed agent:** a Vercel Sandbox network policy (`{ allow }`, a
   structural type: board depends on no sandbox SDK) whose proxy adds, to the
@@ -2036,9 +2042,7 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 | Profile avatar | `--avatar <url>` | `BOARD_AVATAR` | none |
 | Output format | `--json` | none | human output |
 
-`--avatar` goes with `--as`, and `BOARD_AVATAR` with `BOARD_PROFILE`, which
-replaced `BOARD_AS`: a CLI or handle that finds `BOARD_AS` set refuses to run
-(`renamed_env`) rather than write as the person.
+`--avatar` goes with `--as`, and `BOARD_AVATAR` with `BOARD_PROFILE`.
 
 **Which board.** `--url`, then `--scope`'s or `--name`'s team board in Vercel's API, then
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in

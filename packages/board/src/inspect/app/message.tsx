@@ -1,17 +1,18 @@
-import { Ellipsis, FileText, MessageSquare, SmilePlus, Tag } from 'lucide-react'
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Clock, Ellipsis, FileText, MessageSquare, SmilePlus, Tag } from 'lucide-react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { LOGOS } from '../../contract/logos.ts'
-import type { MessageView } from '../../api/routes.ts'
-import { authorName, who } from '../../cli/format.ts'
+import type { MessageView, SchemaView } from '../../api/routes.ts'
 import { displayEmoji } from '../../contract/emoji.ts'
-import { fileSize } from '../../contract/files.ts'
-import type { Attachment } from '../../contract/schemas.ts'
+import type { Attachment } from '../../server/index.default.ts'
+import { BlockCard } from './blocks.tsx'
 import * as board from './board.ts'
+import { setEditing, toast, useEditing } from './chrome.ts'
 import { Ago } from './nav.tsx'
-import { continues, sourcePlatform, type Groupable, type Pending } from './store.ts'
+import { bodyParts, continues, schemaOf, sourcePlatform, type Groupable, type Pending } from './store.ts'
+import { authorName, fileSize, shownName, timingWords } from './words.ts'
 import { ContextMenuArea, EmojiPicker, fieldMenu, LabelEditor, Panel, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
 
 const MENU_EMOJI = ['thumbs_up', 'heart', 'laugh', 'party', 'eyes', 'check']
@@ -28,6 +29,8 @@ export type RowOptions = {
   replies?: (m: MessageView) => MessageView[]
   /** Sync key → platform, for each message's source mark. */
   platforms?: Record<string, string>
+  /** The board's schema registry, once read: what each block's fields mean. */
+  schemas?: SchemaView[] | null
 }
 
 const MENTIONS = /((?<![\w@])@[a-z0-9][\w./-]*)/gi
@@ -80,6 +83,30 @@ export const Text = memo(function Text({ text, edited = false }: { text: string;
     </div>
   )
 })
+
+/** A message's body: its prose as markdown, and each block it carries as a card, where its fence was. */
+function Body({ m, schemas }: { m: MessageView; schemas: SchemaView[] | null | undefined }) {
+  const parts = useMemo(() => bodyParts(m.text, m.blocks ?? []), [m.text, m.blocks])
+  const edited = m.editedAt !== null
+  const lastText = parts.findLastIndex((part) => 'text' in part)
+  return (
+    <>
+      {parts.map((part, i) =>
+        'text' in part ? (
+          <Text key={i} text={part.text} edited={edited && i === lastText} />
+        ) : (
+          <BlockCard
+            key={i}
+            block={part.block}
+            schema={schemaOf({ schemas: schemas ?? null }, part.block.schema, part.block.version)}
+            registry={schemas !== null && schemas !== undefined}
+          />
+        ),
+      )}
+      {edited && lastText === -1 && <span className="edited">(edited)</span>}
+    </>
+  )
+}
 
 /**
  * The platform messages a message links to (Slack permalinks), quoted under it:
@@ -239,7 +266,7 @@ function Editor({ m }: { m: MessageView }) {
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`
   }, [value])
   const save = () => {
-    board.setEditing(null)
+    setEditing(null)
     if (value.trim() && value.trim() !== m.text) void board.edit(m.id, value.trim())
   }
   return (
@@ -251,7 +278,7 @@ function Editor({ m }: { m: MessageView }) {
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation()
-            board.setEditing(null)
+            setEditing(null)
           }
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault()
@@ -266,8 +293,8 @@ function Editor({ m }: { m: MessageView }) {
 
 const copy = (text: string, what: string) =>
   navigator.clipboard.writeText(text).then(
-    () => board.toast(`copied ${what}`),
-    () => board.toast(`couldn't copy ${what}`),
+    () => toast(`copied ${what}`),
+    () => toast(`couldn't copy ${what}`),
   )
 
 export function MessageRow({ m, options, continued = false }: { m: MessageView; options: RowOptions; continued?: boolean }) {
@@ -275,13 +302,14 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
   const [hovered, setHovered] = useState(false)
   const [labelsOpen, setLabelsOpen] = useState(false)
   const row = useRef<HTMLDivElement>(null)
-  const editing = board.useEditing() === m.id
+  const editing = useEditing() === m.id
   const name = authorName(m)
   const mine = m.by.actor === options.me
   const reacted = (emoji: string) => (m.reactions[emoji] ?? []).includes(options.me)
   const toggle = (emoji: string) => void board.react(m.id, emoji, reacted(emoji))
   const replies = m.re === null ? (options.replies?.(m) ?? []) : []
   const thread = m.re ?? m.id
+  const labels = Object.entries(m.labels)
 
   const items = (
     <>
@@ -296,7 +324,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
       {mine && (
         <>
           <MenuSeparator />
-          <MenuItem onClick={() => board.setEditing(m.id)}>edit message</MenuItem>
+          <MenuItem onClick={() => setEditing(m.id)}>edit message</MenuItem>
           <MenuItem danger onClick={() => confirm(`Delete #${m.id}? It's removed on Slack and GitHub too.`) && void board.remove(m.id)}>
             delete message
           </MenuItem>
@@ -335,6 +363,11 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
               {options.context?.(m)}
               <Ago iso={m.createdAt} />
               {m.noSync && <span className="badge">board only</span>}
+              {m.schedule && (
+                <span className="badge" title={`sent by schedule ${m.schedule.id}: send ${m.schedule.n + 1}`}>
+                  <Clock size={10} /> scheduled
+                </span>
+              )}
             </div>
           )}
           {m.deleted ? (
@@ -345,14 +378,14 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
             <Editor m={m} />
           ) : (
             <>
-              {m.text && <Text text={m.text} edited={m.editedAt !== null} />}
+              <Body m={m} schemas={options.schemas} />
               <Attachments items={m.attachments ?? []} />
               <Links items={m.links} />
             </>
           )}
-          {(Object.keys(m.labels).length > 0 || Object.keys(m.reactions).length > 0) && (
+          {(labels.length > 0 || Object.keys(m.reactions).length > 0) && (
             <div className="chips">
-              {Object.entries(m.labels).map(([key, value]) => (
+              {labels.map(([key, value]) => (
                 <button key={key} className="label" title="edit labels" onClick={() => setLabelsOpen(true)}>
                   {key}={value}
                 </button>
@@ -430,7 +463,8 @@ export function Pendings(props: { posts: Pending[]; me: Me; after?: MessageView;
     <>
       {props.posts.map((post, i) => {
         const previous = i === 0 ? props.after : seen(props.posts[i - 1]!)
-        const continued = continues(previous, seen(post), i === 0 ? (props.afterHasReplies ?? false) : false)
+        // One to send later says when under its own header, so it never runs on from the row above.
+        const continued = post.later === undefined && continues(previous, seen(post), i === 0 ? (props.afterHasReplies ?? false) : false)
         return <PendingRow key={post.key} post={post} me={props.me} continued={continued} />
       })}
     </>
@@ -439,7 +473,7 @@ export function Pendings(props: { posts: Pending[]; me: Me; after?: MessageView;
 
 /** A post on its way, or one that didn't make it. */
 export function PendingRow({ post, me, continued = false }: { post: Pending; me: Me; continued?: boolean }) {
-  const status = post.error ? "didn't send" : 'sending…'
+  const status = post.later ? (post.error ? "didn't schedule" : 'scheduling…') : post.error ? "didn't send" : 'sending…'
   return (
     <div className={`message pending${continued ? ' continued' : ''}${post.error ? ' failed' : ''}`}>
       <div className="gutter">
@@ -448,14 +482,19 @@ export function PendingRow({ post, me, continued = false }: { post: Pending; me:
             …
           </span>
         ) : (
-          <Avatar name={who(me)} url={me.avatar} />
+          <Avatar name={shownName(me)} url={me.avatar} />
         )}
       </div>
       <div className="body">
         {!continued && (
           <div className="meta-line">
-            <span className="author">{who(me)}</span>
+            <span className="author">{shownName(me)}</span>
             <span className="time">{status}</span>
+            {post.later && (
+              <span className="badge">
+                <Clock size={10} /> {timingWords(post.later)}
+              </span>
+            )}
           </div>
         )}
         {post.text && <Text text={post.text} />}

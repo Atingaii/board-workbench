@@ -25,10 +25,11 @@ pnpm build
   messages, files, and schedules, and this deployment keeps nothing. It runs the board's sync and
   its watcher, woken through `app/api/board/[[...path]]/route.ts`. Production is on the team's
   default board; a dev server or a preview is on one named `factory-dev`.
-- **Each setting lives where it's used.** The board's sync is all in
-  `app/api/board/[[...path]]/factory.ts`: its connectors, which channel each repo's PRs and issues
-  come into (`repoChannels`; this repo's own go to `dev/factory`), and which Slack channels it
-  mirrors. The agent's model, instructions, sandbox, tools, and skills are in `agent/`.
+- **Each setting lives where it's used.** Which channel each repo's PRs and issues come into, and
+  which Slack channels mirror which board channels, are in `app/api/board/[[...path]]/channels.ts`
+  (this repo's own go to `dev/factory`, which Slack's `#factory-rsi` mirrors: where the factory
+  updates itself). The board's sync, its connectors, and its watcher are in `factory.ts` beside
+  it. The agent's model, instructions, sandbox, tools, and skills are in `agent/`.
 - **Instructions are for every turn, skills for some.** `agent/lib/instructions.ts` holds the
   judgment every turn needs, with a line pointing at each skill; a procedure the agent needs only
   sometimes (reviewing, reproducing a bug, seeing a PR through, demos) is a skill in `agent/skills/`.
@@ -45,10 +46,19 @@ pnpm build
   writes, and the agent's check-ins must reach it. The agent's `setup_steps` tool asks the setup
   page's own `/api/launcher/steps`.
 - **The setup checks write nothing.** `lib/setup.ts` checks the deployment against what the board
-  route syncs and says what to do. A test drives each check through `setup()` against a fake
-  network (`test/setup.test.ts`).
-- **The page's own routes (`app/api/launcher/`) act as the deployment, so they run only while it's
-  protected** (`lib/gate.ts`), and write nothing.
+  syncs. A step is a short list of tasks, each named for what to do, done or not, with what helps
+  do it (one line, a link, commands): there are no other states. A test drives each task through
+  `setup()` against a fake network (`test/setup.test.ts`).
+- **The launcher has three faces, one check** (`lib/launcher.ts`): the page (`app/page.tsx`), the
+  same steps as markdown (`app/index.md`), and `app/api/launcher/steps` for the agent's
+  `setup_steps` tool. `/` answers the markdown to whatever doesn't ask for a page (the rewrites in
+  `next.config.ts`), so someone can tell their agent "set up" and the deployment's URL. A link to
+  `channels.ts` opens on a line found in the file as deployed, never a remembered number.
+- **While strangers can open the deployment, the page and `app/api/launcher/` say only how to
+  protect it,** and nothing about the factory.
+- **The deployment calls itself with its OIDC token, and no bypass secret.** The watcher reaches the
+  agent, and the agent's `setup_steps` tool the page's steps, through Deployment Protection's
+  Trusted Sources, which let a project call its own environment and no other.
 - **Real credentials never enter the sandbox.** `agent/lib/credentials.ts` puts them in its network
   policy, which swaps them in on the way out. Keep it that way.
 - **GitHub signs the agent's commits, so there's no signing key.** The sandbox's `git`

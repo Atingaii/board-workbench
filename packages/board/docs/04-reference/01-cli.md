@@ -128,9 +128,13 @@ await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {
 Its arguments, output, and exit codes are the CLI's. The handle says which
 board and who, so `--url` doesn't apply, and the commands about
 your machine (`whoami`, `hooks`, `serve`, `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
-`writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
-`wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
-every later call until it ends: they answer 2 without a `signal`. `refuse`
+`writeFile` for `download`, `stdin` for `-`. Calls run one at a time, in
+order, so a running `tail` or `wait` holds every later call until it ends: they
+answer 2 without a `signal`, which stops them (0). It ends any other command
+too, its requests included, whether or not the backend heeds it: 1 for
+`AbortSignal.timeout()`'s, 130 for any other, and a write it stopped may have
+landed. So `{ signal: AbortSignal.timeout(30_000) }` gives a call a deadline,
+and one that hangs holds nothing after it. `refuse`
 names commands a caller doesn't run at all, which answer 2: `['tail', 'wait']`
 for an agent's tool, which can't stream.
 
@@ -219,8 +223,6 @@ itself.
   gets `VERCEL_TOKEN`, the deployment's OIDC token, or your Vercel login.
 - **A profile is named, never detected.** `--as` or `BOARD_PROFILE` writes as
   one; without either you write as yourself, inside a coding agent too.
-  `BOARD_AS`, which `BOARD_PROFILE` replaced, is refused with reason
-  `renamed_env`, so an agent that still sets it doesn't write as you.
 
 Profile names start with a letter and use up to 32 letters, numbers, and
 hyphens. Avatars are `https` URLs (`http` only on localhost): a board serves the

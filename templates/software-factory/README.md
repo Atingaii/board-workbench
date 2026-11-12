@@ -1,4 +1,4 @@
-# software factory
+# Software factory
 
 A board, an agent, and a sandbox that take your team's bugs, features, and questions to pull
 requests. Issues and PRs from your GitHub repos, and threads from a Slack channel, come into the
@@ -14,12 +14,16 @@ fixes and features, reviews every PR, and stays quiet when nothing's for it.
    files, and schedules.
 2. **Open the deployment.** Its page is the launcher. Each step checks the deployment as it is now
    and says what to do, with the command to run or the page to open:
-   - **Vercel.** Vercel Authentication and a Protection Bypass for Automation, the team's board
-     (this project let in, and allowed to sync), and AI Gateway (the agent's model).
+   - **Vercel.** Vercel Authentication, the team's board (which someone on the team opens once,
+     so it exists), and AI Gateway (the agent's model).
    - **GitHub.** A Vercel Connect connector whose app is on the repos the factory works on, this
      one included, so the agent can change the factory itself.
-   - **Slack**, optionally. A channel that mirrors the board.
+   - **Slack**, optionally. `#factory-rsi`, the channel where the factory updates itself: its own
+     pull requests land there, and it's where to talk about how it works.
    - **Try it.** Open an issue, or post on the board, and the agent replies.
+
+   Or hand it to your agent: **Copy prompt** copies what to paste. The launcher answers its steps
+   as markdown to anything that isn't a browser, such as `vercel curl https://<your-deployment>`.
 3. **Watch it work.** The launcher ends with the command that opens the board in your browser, as
    you:
 
@@ -32,8 +36,9 @@ Until the deployment turns strangers away, the launcher shows only how to protec
 ## What it does with what it hears
 
 - **This repo's own PRs and issues come into `dev/factory`,** where people talk with the agent
-  about the factory itself. Map each of your other repos to a channel in `repoChannels`
-  (`app/api/board/[[...path]]/factory.ts`): `"acme/web": "dev"`.
+  about the factory itself, and Slack's `#factory-rsi` mirrors it. Map each of your other repos
+  and Slack channels to a board channel in `app/api/board/[[...path]]/channels.ts`:
+  `"acme/web": "dev"`.
 - **The agent hears every message in `dev` and the channels under it,** and decides what each
   needs: an answer, a reproduction, a PR, a review, or nothing.
 - **Each thread gets its own session and its own sandbox.** Its GitHub token covers only the
@@ -48,7 +53,7 @@ Until the deployment turns strangers away, the launcher shows only how to protec
 | --- | --- |
 | How it works on every turn: what it answers, how it triages, how it writes | `agent/lib/instructions.ts` |
 | What it does sometimes: reviewing, reproducing a bug, seeing a PR through, demos | `agent/skills/` |
-| Which repos and Slack channels come into the board, and where | `app/api/board/[[...path]]/factory.ts` |
+| Which repos and Slack channels come into the board, and where | `app/api/board/[[...path]]/channels.ts` |
 | Its model, and its sandbox | `agent/agent.ts`, `agent/sandbox.ts` |
 | Its name on the board | `agent/lib/identity.ts` |
 
@@ -58,8 +63,8 @@ Ask the agent in `dev/factory`: it changes this repo with a pull request, like a
 
 | Path | What it is |
 | --- | --- |
-| `app/page.tsx`, `lib/setup.ts` | The launcher, and its checks |
-| `app/api/board/[[...path]]/factory.ts` | The board: its sync and its watcher. `route.ts` beside it answers Vercel's wake-ups and the platforms' webhooks |
+| `app/page.tsx`, `lib/setup.ts` | The launcher, and its tasks. `app/index.md` is the same steps as markdown, which `/` answers to an agent |
+| `app/api/board/[[...path]]/factory.ts` | The board: its sync and its watcher, over the channels `channels.ts` names. `route.ts` beside it answers Vercel's wake-ups and the platforms' webhooks |
 | `agent/` | The agent, an [eve](https://www.npmjs.com/package/eve) agent mounted at `/eve/v1` |
 | `agent/lib/wake.ts` | All the board sees of the agent: `wakeAgent`, which the board's watcher runs on every message |
 | `agent/channels/eve.ts` | Where wake-ups reach the agent, from this deployment only: one eve session per board thread |

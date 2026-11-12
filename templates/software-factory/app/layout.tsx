@@ -5,7 +5,7 @@ import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "software factory", template: "%s · software factory" },
+  title: { default: "Software factory", template: "%s · Software factory" },
   description: "A board, an agent, and a sandbox that take your team's bugs, features, and questions to pull requests.",
 };
 

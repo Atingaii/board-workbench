@@ -390,10 +390,13 @@ describe('who an import is by', () => {
     const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
     const web = caller(team.fetch, await deploymentToken('web', 'prj_web', 'production'))
     for (const as of [support, web]) expect((await as('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
-    const post = (as: typeof support, text: string) => as('POST', '/sync/imports', { op: 'post', author: malte, from: 'slack-eu', channel: 'firehose', text })
-    for (const [as, text] of [[support, 'one'], [support, 'two'], [web, 'three']] as const) expect((await post(as, text)).status).toBe(200)
+    const post = (as: typeof support, text: string, re?: string) =>
+      as('POST', '/sync/imports', { op: 'post', author: malte, from: 'slack-eu', ...(re === undefined ? { channel: 'firehose' } : { re }), text })
+    // The inspector groups a thread's replies, never its roots: so a thread, and three replies in it.
+    const root = (await post(support, 'zero')).body.message as string
+    for (const [as, text] of [[support, 'one'], [support, 'two'], [web, 'three']] as const) expect((await post(as, text, root)).status).toBe(200)
     const julian = await julianOn(team.fetch)
-    const [one, two, three] = (await julian('GET', '/messages?channel=firehose')).body.messages as MessageView[]
+    const [, one, two, three] = (await julian('GET', '/messages?channel=firehose')).body.messages as MessageView[]
     expect([one!.by.actor, three!.by.actor]).toEqual(['vercel:project:prj_support:preview+slack-eu:user:U_MALTE', 'vercel:project:prj_web:production+slack-eu:user:U_MALTE'])
     // One sync's Malte twice runs on as one; the other's Malte, right after, starts anew.
     expect([continues(one, two!), continues(two, three!)]).toEqual([true, false])

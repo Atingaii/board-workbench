@@ -287,6 +287,14 @@ through the binding's `handle(caller)`, so the middleware sees it.
   too: neither can say a message came from, or landed in, a platform thread or
   message another board thread or message has.
 
+The names are a value too, for a form that offers them:
+
+```ts
+import { PERMISSIONS, type Permission } from '@vercel/board/access'
+
+const names: readonly Permission[] = PERMISSIONS // read, post, react, label, sync, manage
+```
+
 ## Channels
 
 `can` takes `'all'`, a list, or a map from pattern to permissions:
@@ -380,7 +388,10 @@ A proxy that holds the credential sets `x-board-can`, and the board
 intersects it with what the credential's principal may do, so it only
 narrows. A sandbox's network policy, for example, adds the credential and the
 header on the way out, so the sandbox never sees either:
-[`sandboxPolicy()`](../03-guides/06-sandboxed-agents.md) makes one. A caller
+[`sandboxPolicy()`](../03-guides/06-sandboxed-agents.md) makes one. A handle
+in your own code takes the same limit with
+[`as(profile, { can })`](../04-reference/02-board.md#as), which the board holds
+it to on every backend. A caller
 holding its own credential gains nothing by sending one. Each entry is a
 pattern and its permissions, or `all`: `dev/=all;ci/=read`. A header the
 board can't read, or one longer than 4000 characters, is a 400 with

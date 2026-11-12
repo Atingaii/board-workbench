@@ -1,5 +1,5 @@
 import type { WatcherContext } from "@vercel/board";
-import { byAgent, ORIGIN } from "./identity.ts";
+import { byAgent, ORIGIN, ownToken } from "./identity.ts";
 
 // All the board sees of the agent: its watcher hands over every message posted where it tails, and
 // reactions to the agent's own messages. The agent reads the thread and decides what each needs.
@@ -57,21 +57,20 @@ export async function sendToAgent(board: Pick<WatcherContext["board"], "reply">,
 
 /**
  * Hands a wake-up to the thread's eve session, over eve's own channel on this deployment (/eve/v1),
- * as this deployment. eve keeps one session per `operationId`, so the thread's ID finds its session
+ * as this deployment: its OIDC token says who's calling, and gets the call through Deployment
+ * Protection, which trusts a project's calls to its own environment. eve keeps one session per `operationId`, so the thread's ID finds its session
  * or starts one, and it drops a delivery whose `idempotencyKey` it has seen, so a wake-up the board
  * delivers twice starts no second turn. Nothing here keeps a map of sessions. The board runs a
  * thread's events in order: two first wake-ups at the very same moment could each start a session.
  */
-export async function send({ thread, key, text }: AgentMessage, request: typeof fetch = fetch): Promise<void> {
-  const token = process.env.VERCEL_URL ? await (await import("@vercel/oidc")).getVercelOidcToken() : null;
-  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+export async function send({ thread, key, text }: AgentMessage, request: typeof fetch = fetch, oidc: () => Promise<string | null> = ownToken): Promise<void> {
+  const token = await oidc();
   const post = async (path: string, body: object) => {
     const response = await request(`${ORIGIN}${path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+        ...(token ? { authorization: `Bearer ${token}`, "x-vercel-trusted-oidc-idp-token": token } : {}),
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
