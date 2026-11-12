@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Hash } from "lucide-react";
+import { Mark } from "./mark";
 
 const DOCS = "https://www.vboard.dev";
 
@@ -12,7 +12,7 @@ export function SiteHeader(): ReactNode {
   return (
     <header className="site-header">
       <Link href="/" className="brand">
-        <Hash size={18} strokeWidth={2.5} aria-hidden />
+        <Mark />
         <span>factory</span>
       </Link>
       <nav className="site-nav" aria-label="Site">
