@@ -63,7 +63,7 @@ import { avatarSvg } from './avatars.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
 import { DroppedError, runMiddleware, type Write, type WriteSource } from './middleware.ts'
 import { createRouter, METHODS, openapi, queryObject, readCapped, readJson, type BoardRoute } from './routing.ts'
-import type { Access } from './access.ts'
+import { FULL_ACCESS, parseCan, type Access } from './access.ts'
 import { syncTarget, type SyncTarget } from './targets.ts'
 import { SYNC_ACTOR, type WriteOrigin } from './origin.ts'
 import type { WatcherContext } from './watcher.ts'
@@ -341,9 +341,13 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * What a verified caller may do, as board()'s `access` said when it verified them: board() checks
    * it before it does anything for them past calling the backend (a platform call, sync's own write,
    * reading an upload, the middleware), so a caller it won't let in starts none of it. Null for this
-   * deployment's own code, which may do everything.
+   * deployment's own code, which may do everything, unless `as(profile, { can })` narrowed its
+   * handle: then what that `can` leaves it, as a request narrowed with x-board-can is checked.
    */
-  const accessOf = (caller: Caller): Access | null => ('identity' in caller ? caller.identity.principal.access : null)
+  const accessOf = (caller: Caller): Access | null =>
+    'identity' in caller ? caller.identity.principal.access : caller.can !== undefined ? FULL_ACCESS.narrow(parseCan(caller.can)) : null
+  /** Whether `caller` is narrowed with a `can`: a request's x-board-can, or a handle's from `as()`. */
+  const narrowed = (caller: Caller) => ('identity' in caller ? caller.identity.principal.scope !== undefined : caller.can !== undefined)
 
   /**
    * Whether board() may work for a write of `caller`'s that lands in `channel`, or in the thread of
@@ -586,7 +590,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     if (middleware.length === 0 || caller.origin.via?.kind === 'middleware' || (body.op !== 'post' && body.op !== 'edit')) return send(body)
     const access = accessOf(caller)
     // One that can't import goes as it came, for the backend to say why: no sync, or narrowed with x-board-can.
-    if (access && (!access.anywhere('sync') || ('identity' in caller && caller.identity.principal.scope !== undefined))) return send(body)
+    if (access && (!access.anywhere('sync') || narrowed(caller))) return send(body)
     const dropped = async (commit: () => Promise<Protocol['syncImport']['output']>) => {
       try {
         return await commit()

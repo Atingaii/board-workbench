@@ -401,9 +401,6 @@ export function connect(
  * agent included: without it, you write as yourself.
  */
 export function environmentProfile(): ProfileOption {
-  // The old name, refused rather than ignored: an agent that still sets it would write as its person.
-  if (process.env.BOARD_AS)
-    throw new BoardError('renamed_env', 'BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS.', 0, { hint: 'Set BOARD_PROFILE to the same name, and unset BOARD_AS.' })
   const name = process.env.BOARD_PROFILE
   const avatar = process.env.BOARD_AVATAR
   return name ? (avatar ? { name, avatar } : name) : null

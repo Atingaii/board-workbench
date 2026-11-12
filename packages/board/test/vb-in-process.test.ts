@@ -1,17 +1,26 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { vb } from '../src/cli/embedded.ts'
-import { personToken, testBoard, BOARD_URL } from './harness.ts'
+import { caller, personToken, testBoard, BOARD_URL } from './harness.ts'
 
 // vb() on a handle over HTTP to an in-process board: the CLI's commands, output, and exit codes,
 // with files from its options. The CLI itself runs through the same code (cli*.test.ts).
-async function handle(served = testBoard()) {
+// With `stall.on`, its board never answers, whatever the request's signal says, and `stall.seen` keeps those requests.
+// With `stall.bodies`, a file's download answers, and its bytes never come; with `stall.breaks`, its connection drops after one byte.
+type Stall = { on: boolean; seen: Request[]; bodies?: boolean; breaks?: boolean }
+async function handle(stall: Stall = { on: false, seen: [] }, served = testBoard()) {
   const token = await personToken('u_ada', BOARD_URL)
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
     request.headers.set('authorization', `Bearer ${token}`)
-    return served.fetch(request)
+    if (stall.on) return stall.seen.push(request), new Promise<never>(() => {})
+    const response = await served.fetch(request)
+    const download = request.method === 'GET' && new URL(request.url).pathname.includes('/attachments/')
+    if (download && stall.bodies) return new Response(new ReadableStream({ start() {} }), { status: response.status, headers: response.headers })
+    if (download && stall.breaks)
+      return new Response(new ReadableStream({ start: (body) => (body.enqueue(new Uint8Array([1])), body.error(new Error('connection reset'))) }), { status: response.status, headers: response.headers })
+    return response
   }) as typeof globalThis.fetch
   return board({ backend: http(BOARD_URL, { fetch }) }).as(null)
 }
@@ -97,6 +106,76 @@ describe('vb()', () => {
       expect(await vb(team, [command])).toMatchObject({ code: 2, stderr: expect.stringMatching(new RegExp(`${command} isn't available in-process`)) })
   })
 
+  it("ends any command's requests with its signal, and runs the next call", async () => {
+    const stall: Stall = { on: false, seen: [] }
+    const team = await handle(stall)
+    const id = (await vb(team, ['post', 'dev', 'before the outage', '--no-sync'])).stdout.trim()
+    stall.on = true
+    // A deadline bounds a read the board never answers: 1, and the call after it runs.
+    const read = vb(team, ['read', id, '--json'], { signal: AbortSignal.timeout(50) })
+    const next = vb(team, ['read', id, '--json'])
+    const timedOut = await read
+    expect(timedOut).toMatchObject({ code: 1, stdout: '' })
+    expect(JSON.parse(timedOut.stderr)).toMatchObject({ reason: 'timeout' })
+    expect(stall.seen.length).toBeGreaterThan(0)
+    expect(stall.seen.every((request) => request.signal.aborted)).toBe(true)
+    stall.on = false
+    expect(JSON.parse((await next).stdout).message.text).toBe('before the outage')
+    // Stopped any other way, it's canceled (130), and a write says it may have landed.
+    stall.on = true
+    const controller = new AbortController()
+    const reply = vb(team, ['reply', id, 'on it', '--no-sync', '--json'], { signal: controller.signal })
+    setTimeout(() => controller.abort(), 20)
+    const stopped = await reply
+    expect(stopped.code).toBe(130)
+    expect(JSON.parse(stopped.stderr)).toMatchObject({ reason: 'canceled', hint: expect.stringMatching(/may have happened/) })
+    stall.on = false
+    // A download whose bytes stall ends too.
+    const files = { readFile: async () => new Uint8Array([1, 2, 3]), writeFile: async () => {} }
+    const shot = (await vb(team, ['post', 'dev', 'proof', '--attach', '/work/shot.png', '--no-sync'], files)).stdout.trim()
+    const attachment = JSON.parse((await vb(team, ['read', shot, '--json'])).stdout).message.attachments[0].id
+    stall.bodies = true
+    expect(await vb(team, ['download', attachment, '/work/copy.png'], { ...files, signal: AbortSignal.timeout(50) })).toMatchObject({ code: 1 })
+    stall.bodies = false
+    // One whose connection drops fails, as it does without a signal: never a short file that looks whole.
+    stall.breaks = true
+    expect((await vb(team, ['download', attachment, '/work/copy.png'], { ...files, signal: AbortSignal.timeout(5000) })).code).toBe(1)
+    stall.breaks = false
+    // A signal that never fires changes nothing.
+    expect(await vb(team, ['read', 'dev', '--text', 'outage'], { signal: new AbortController().signal })).toMatchObject({ code: 0, stdout: expect.stringMatching(/^dev · 1 thread/) })
+  })
+
+  it('sends nothing for a call whose signal fired while it waited its turn, on a backend that ignores signals', async () => {
+    const kept = testBoard()
+    const id = (await vb(kept, ['post', 'dev', 'the build is red', '--no-sync'])).stdout.trim()
+    const late = await vb(kept, ['reply', id, 'too late', '--no-sync'], { signal: AbortSignal.abort() })
+    expect(late.code).toBe(130)
+    expect(JSON.parse((await vb(kept, ['read', id, '--json'])).stdout).replies).toEqual([])
+    expect((await vb(kept, ['reply', id, 'on time', '--no-sync'])).code).toBe(0)
+    expect(JSON.parse((await vb(kept, ['read', id, '--json'])).stdout).replies).toMatchObject([{ text: 'on time' }])
+  })
+
+  it.each([false, true])("posts each of a watcher's writes through vb(), with a signal or without (%s)", async (withSignal) => {
+    const replies: string[][] = []
+    const served = testBoard({
+      watch: {
+        triage: {
+          tail: 'firehose',
+          run: async ({ event, board: own }) => {
+            if (event.type !== 'message.posted' || event.message!.re !== null) return
+            const opts = withSignal ? { signal: AbortSignal.timeout(5000) } : {}
+            await vb(own, ['reply', event.message!.id, 'first', '--no-sync'], opts)
+            await vb(own, ['reply', event.message!.id, 'second', '--no-sync'], opts)
+            replies.push((await own.thread(event.message!.id)).replies.map((reply) => reply.text))
+          },
+        },
+      },
+    })
+    const ada = caller(served.fetch, await personToken('u_ada', BOARD_URL), {})
+    await ada('POST', '/messages', { channel: 'firehose', text: 'export is broken' })
+    await vi.waitFor(() => expect(replies).toEqual([['first', 'second']]))
+  })
+
   it('attaches and downloads through its readFile and writeFile, and - reads its stdin', async () => {
     const team = await handle()
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
@@ -122,7 +201,7 @@ describe('vb()', () => {
 
   it('works a task over several calls on one handle, which keeps its claim, and runs no command', async () => {
     const served = testBoard()
-    const team = await handle(served)
+    const team = await handle(undefined, served)
     const id = (await vb(team, ['tasks', 'create', 'work', 'fix CVE-123 in acme/web', '--label', 'step=fix', '--no-sync'])).stdout.trim()
     expect(await vb(team, ['tasks', 'work'])).toEqual({ code: 0, stdout: `#${id}  ready      fix CVE-123 in acme/web         step=fix\n`, stderr: '' })
     const claimed = await vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=fix', '--json'])
@@ -132,7 +211,7 @@ describe('vb()', () => {
     expect(task.id).toBe(id)
     expect(Object.keys(claim).sort()).toEqual(['epoch', 'until'])
     // Another handle on the same board, the same person's even, holds none.
-    const other = await handle(served)
+    const other = await handle(undefined, served)
     expect(await vb(other, ['tasks', 'complete', id, 'not mine'])).toEqual({ code: 1, stdout: '', stderr: `error: You hold no claim on task #${id} as yourself.\n\n  Claim it:\n    vb tasks claim ${id}\n` })
     expect(await vb(team, ['tasks', 'renew', id, '--json'])).toMatchObject({ code: 0, stderr: '' })
     expect(await vb(team, ['tasks', 'complete', id, 'fixed in a1b2c3'])).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })

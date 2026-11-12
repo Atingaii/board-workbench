@@ -6,6 +6,8 @@ import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-gr
 import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
 import { parseProfileHeader } from '../src/contract/profile-header.ts'
 import { compileAccess, parseCan } from '../src/server/access.ts'
+import { findBlocks } from '../src/contract/blocks.ts'
+import { checkValue } from '../src/contract/data-values.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -267,6 +269,8 @@ type Shared = {
   projectIdHandles: boolean
   unscopedSync: boolean
   tasks: boolean
+  /** A schema the team has, by its ID: a built-in, or one it registered. */
+  schemaOf: (id: string) => Record<string, unknown> | undefined
 }
 
 const STORAGE = 'http://storage.test/'
@@ -551,6 +555,12 @@ function fakeBoard(shared: Shared, boardId: string) {
     const known = body.channel !== undefined ? channels.find((c) => c.name === body.channel) : channelAt(body.channelId)
     if (known) tokenMay(actor, 'post', known.id)
     if (Object.keys(body.labels ?? {}).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
+    // A first message whose embedded block doesn't match the schema it names starts no thread, and makes no channel.
+    for (const found of typeof body.text === 'string' && body.text.includes('json#') ? findBlocks(body.text) : []) {
+      const schema = found.problem === undefined ? shared.schemaOf(found.id) : undefined
+      const problem = schema ? checkValue(schema, found.data) : null
+      if (problem !== null) throw new Refused(400, 'invalid_block', `The ${found.id} block doesn't match its schema: ${problem}`)
+    }
     const checked = check(known?.name ?? String(body.channel))
     const channel = known ?? makeChannel(body.channel)
     const createdAt = now()
@@ -598,8 +608,11 @@ function fakeBoard(shared: Shared, boardId: string) {
   const MARKED_SEEN = 3
   /** What a list or a claim-next repairs, a request at most: lapsed claims it writes as expired, and waiting tasks a list finds ready. */
   const REPAIRS = 10
-  /** The lapsed claims a claim-next finds: the longest-lapsed in each channel it names, and in all. */
-  const LAPSED_EACH = 25
+  /** The places a claim-next looks in at most: the channels it may claim in, times the owners it takes from. */
+  const PLACES = 200
+  /** What it reads of each place, of ready tasks and of lapsed claims, and of all of them. */
+  const PLACE_READS = 25
+  const READY_IN_ALL = 200
   const LAPSED_IN_ALL = 50
   /** A profile's name, as an actor ID ends with one. */
   const PROFILE_PART = /^[a-z0-9][a-z0-9-]{0,31}$/
@@ -828,18 +841,27 @@ function fakeBoard(shared: Shared, boardId: string) {
     const labeled = named.filter((channel) => may(actor, 'label', channel.id))
     if (named.length > 0 && labeled.length === 0) throw new Refused(403, 'forbidden', 'You may not label there.')
     if (labeled.length > 50) throw new Refused(400, 'channel_tree_too_large', 'Name a prefix with at most 50 channels you may claim in under it.')
-    const owners = new Set([principalId(actor.principal), ...((body.from ?? []) as string[])])
+    // It looks only at what the caller may take: in each channel, one place for each owner it takes unassigned tasks
+    // from, its own principal and each other one `from` names, and with a profile, one for what's assigned to its actor.
+    const self = principalId(actor.principal)
+    const owners = [self, ...new Set(((body.from ?? []) as string[]).filter((owner) => owner !== self))]
+    if (labeled.length * (owners.length + (actor.profile ? 1 : 0)) > PLACES) throw new Refused(400, 'claim_too_wide', `Name fewer owners or a smaller tree: this would look in more than ${PLACES} places.`)
     const wanted = Object.entries((body.labels ?? {}) as Record<string, string>)
-    const inChannel = (channel: { id: string }) => [...threads.values()].filter((t) => t.channelId === channel.id && t.task).sort(oldestFirst)
+    const places = labeled.flatMap((channel) => {
+      const tasks = [...threads.values()].filter((t) => t.channelId === channel.id && t.task)
+      return [...owners.map((owner) => tasks.filter((t) => t.task!.for === null && t.task!.owner === owner)), ...(actor.profile ? [tasks.filter((t) => assignedTo(t.task!, actor))] : [])]
+    })
     const lapsed = (t: Thread) => t.task!.state === 'claimed' && t.task!.claim!.until <= now()
     const longestLapsed = (a: Thread, b: Thread) => a.task!.claim!.until - b.task!.claim!.until
+    /** What's assigned to the caller's actor first, then in `order`. */
+    const assignedFirst = (order: (a: Thread, b: Thread) => number) => (a: Thread, b: Thread) => Number(assignedTo(b.task!, actor)) - Number(assignedTo(a.task!, actor)) || order(a, b)
     const look = () => {
-      // The 200 oldest ready tasks across the channels it names, at most 100 from each, and their claims whose lease
-      // ran out longest ago, 25 from each and 50 in all: found in each channel, so another's can't hide them.
-      const ready = labeled.flatMap((channel) => inChannel(channel).filter((t) => t.task!.state === 'ready').slice(0, 100)).sort(oldestFirst).slice(0, 200)
-      const over = labeled.flatMap((channel) => inChannel(channel).filter(lapsed).sort(longestLapsed).slice(0, LAPSED_EACH)).sort(longestLapsed).slice(0, LAPSED_IN_ALL)
-      const mine = [...ready, ...over].sort(oldestFirst).filter((t) => wanted.every(([key, value]) => rootLabels(t)[key] === value))
-      return { found: mine.find((t) => assignedTo(t.task!, actor)) ?? mine.find((t) => t.task!.for === null && owners.has(t.task!.owner)) ?? null, over }
+      // From each place, its oldest ready tasks and its claims whose lease ran out longest ago, a few of each, and of
+      // all those a bounded number, the assigned ones first. Each is the caller's to take, so only `labels` narrow them.
+      const ready = places.flatMap((tasks) => tasks.filter((t) => t.task!.state === 'ready').sort(oldestFirst).slice(0, PLACE_READS)).sort(assignedFirst(oldestFirst)).slice(0, READY_IN_ALL)
+      const over = places.flatMap((tasks) => tasks.filter(lapsed).sort(longestLapsed).slice(0, PLACE_READS)).sort(assignedFirst(longestLapsed)).slice(0, LAPSED_IN_ALL)
+      const mine = [...ready, ...over].filter((t) => wanted.every(([key, value]) => rootLabels(t)[key] === value)).sort(assignedFirst(oldestFirst))
+      return { found: mine[0] ?? null, over }
     }
     let { found, over } = look()
     if (!found && share.goneOver > 0) {
@@ -849,7 +871,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       for (const completed of marked) share.goneOver = goOn(completed, share.goneOver, undefined)
       ;({ found, over } = look())
     }
-    // The lapsed claims it found there are ended, a few a request, beside the one it takes over: its expiry goes with its claim.
+    // The lapsed claims it found are ended, a few a request, beside the one it takes over, whose expiry goes with its
+    // claim. One on a task that isn't the caller's to take it never read, so it leaves it.
     for (const thread of over) if (thread !== found && share.expiries > 0 && expire(thread)) share.expiries--
     if (found) {
       expire(found)
@@ -1929,8 +1952,9 @@ const BUILT_IN_SCHEMAS: SchemaRow[] = [
 /**
  * The team's data schemas, as Vercel's API keeps them, one registry for every board on the team: its
  * built-ins first, then the team's own by their IDs as text. A version registers once: the same
- * definition again answers it, without saying it made nothing, and another is 409. People and apps
- * register, but for a viewer; a project's token reaches none of it, reads included.
+ * definition again answers it with `created: false`, and another is 409. People and apps
+ * register, but for a viewer, and read them on the team's routes, which answer a project's token 403.
+ * Whoever a board lets in reads them through it (`/boards/:boardId/schemas…`), a project included.
  */
 function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, Role> }) {
   const kept = new Map<string, SchemaRow>()
@@ -1938,18 +1962,21 @@ function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, 
   return {
     /** Every version the team registered, by its ID. */
     kept,
-    /** What `/schemas…` answers, or undefined for another route. */
+    /** What a read of `/schemas` or `/schemas/:id` answers, on the team's routes and through a board alike, or undefined for another path. */
+    read(path: string): unknown {
+      if (path === '/schemas') return { schemas: [...BUILT_IN_SCHEMAS, ...[...kept.values()].sort((a, b) => (a.id < b.id ? -1 : 1))], cursor: null }
+      if (!path.startsWith('/schemas/')) return undefined
+      const id = decodeURIComponent(path.slice('/schemas/'.length))
+      if (!ID.test(id)) throw new Refused(400, 'invalid_schema_id', 'Name a schema as name@version, such as git-commit@1.')
+      const schema = BUILT_IN_SCHEMAS.find((found) => found.id === id) ?? kept.get(id)
+      if (!schema) throw new Refused(404, 'schema_not_found', `Schema ${id} isn't registered for this team.`)
+      return { schema }
+    },
+    /** What the team's `/schemas…` answers, or undefined for another route. */
     route(method: string, path: string, body: Record<string, any>, actor: Actor): unknown {
       if (path !== '/schemas' && !path.startsWith('/schemas/')) return undefined
       if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
-      if (method === 'GET' && path === '/schemas') return { schemas: [...BUILT_IN_SCHEMAS, ...[...kept.values()].sort((a, b) => (a.id < b.id ? -1 : 1))], cursor: null }
-      if (method === 'GET') {
-        const id = decodeURIComponent(path.slice('/schemas/'.length))
-        if (!ID.test(id)) throw new Refused(400, 'invalid_schema_id', 'Name a schema as name@version, such as git-commit@1.')
-        const schema = BUILT_IN_SCHEMAS.find((found) => found.id === id) ?? kept.get(id)
-        if (!schema) throw new Refused(404, 'schema_not_found', `Schema ${id} isn't registered for this team.`)
-        return { schema }
-      }
+      if (method === 'GET') return this.read(path)
       if (method !== 'POST' || path !== '/schemas') return undefined
       if (actor.principal.type === 'user' && (roles[actor.principal.userId] ?? 'member') === 'viewer') throw new Refused(403, 'forbidden')
       if (actor.narrowed) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't change the team's schemas: that's its principal's job.")
@@ -1964,11 +1991,11 @@ function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, 
       if (existing) {
         if (sortedJson(existing.schema) !== sortedJson(schema) || existing.description !== description)
           throw new Refused(409, 'schema_immutable', `${id} is already registered with a different definition. Register a new version instead.`)
-        return { schema: existing }
+        return { schema: existing, created: false }
       }
       const row: SchemaRow = { id, name, version, ...(description !== undefined ? { description } : {}), schema, builtIn: false, createdAt: now(), createdBy: actor }
       kept.set(id, row)
-      return { schema: row }
+      return { schema: row, created: true }
     },
   }
 }
@@ -2056,6 +2083,7 @@ export function fakeMessageboard(
     projectIdHandles: options.projectIdHandles ?? false,
     unscopedSync: options.unscopedSync ?? false,
     tasks: options.tasks ?? true,
+    schemaOf: (id) => (BUILT_IN_SCHEMAS.find((row) => row.id === id) ?? schemas.kept.get(id))?.schema,
   }
 
   const schemas = fakeSchemas({ now, roles })
@@ -2154,6 +2182,8 @@ export function fakeMessageboard(
     // A narrowed caller is never its principal's integration: a narrowed register would replace its registration.
     if (actor.narrowed && /^\/(watchers|sync|inbox)(\/|$)/.test(rest)) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't use its principal's watchers or sync's records.")
     if (method === 'GET' && rest === '') return { board: show(board) }
+    // The team's schemas, through a board: whoever it lets in reads them.
+    if (method === 'GET' && (rest === '/schemas' || rest.startsWith('/schemas/'))) return schemas.read(rest)
     // A board's own me: what the team's says, within what this board's grants give the caller.
     if (method === 'GET' && rest === '/me') {
       const said = me()

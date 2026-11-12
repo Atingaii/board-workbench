@@ -54,7 +54,7 @@ deployment for anyone who reads it.
 ### as
 
 ```ts
-as(profile: string | { name: string; avatar?: string } | null): Board
+as(profile: string | { name: string; avatar?: string } | null, options?: { can?: Can | string }): Board
 ```
 
 The handle, acting with `profile`. Over HTTP it writes as
@@ -71,6 +71,23 @@ const claude = team.as('claude') // "claude via julian"
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
 const me = team.as(null) // yourself, whatever BOARD_PROFILE says
 ```
+
+With `can`, the board holds every call the handle makes to it, as it holds a
+sandbox to its policy's [`x-board-can`](../01-board/09-access.md#narrowing-a-caller):
+any `Can` (`'all'`, `['read']`, `{ 'dev/': ['read', 'post'] }`) or the header's
+text (`'dev/=read,post'`). It only narrows what the deployment may do, and like
+any narrowed caller the handle is never its integration: no watchers' registrations
+or sync's records, and no sources, whatever its `can` says. Hand an agent's tool one of these,
+not the deployment's own handle:
+
+```ts
+const fixer = team.as('fixer', { can: { 'dev/': ['read', 'post', 'react', 'label'] } })
+await vb(fixer, ['inbox', 'slack']) // exits 1, forbidden: sync's records are the deployment's
+```
+
+A narrowed handle's own `as()` and `sandboxPolicy()` stay inside its `can`: what
+they're given narrows it further, and never widens it. A `can` the board can't
+read throws `invalid_scope`.
 
 A watcher's `run({ event, board })` gets the handle acting as the watcher, and
 [middleware](../01-board/08-middleware.md) gets one acting as
@@ -397,10 +414,18 @@ it gives:
 - **Nothing times a lease.** A claim whose lease ran out is over at once, and
   still reads `claimed` until the next task write or list that sees it.
 - **A task's changes stay in the feed 30 days.** Its thread and its state stay.
-- **`claim({ channel: 'work/' })` looks at up to 50 channels** you may claim
-  in under a prefix, and at the 200 oldest ready tasks across them, at most
-  100 from each. Past 50 such channels, it fails with 400
-  `channel_tree_too_large`.
+- **`claim({ channel })` looks only at tasks you may take.** In each channel
+  you may claim in, it looks in one place for each owner it takes from: your
+  own unassigned tasks, those of each owner `from` names, and with a profile,
+  what's assigned to it. So a task of yours is found behind any number of
+  other owners'.
+- **It looks in 200 places at most:** the channels you may claim in, times
+  those owners. Past that it fails with 400 `claim_too_wide`, and a subtree
+  with more than 50 such channels with 400 `channel_tree_too_large`. Name
+  fewer owners, or a smaller subtree.
+- **With `label`, it finds a task among the oldest 25 in each place.** One
+  with those labels behind 25 ready tasks of the same owner that lack them
+  isn't found until one of those is claimed.
 - **A list reads 50 channels at most for a caller that doesn't read the whole
   board.** One held to a `can`, as a sandbox is, lists the board or a subtree
   only where it reads 50 channels or fewer. Past that it fails with 400
@@ -769,7 +794,6 @@ fails with the status its URL answered, or 502.
 | `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |
 | `no_token` | GitHub Actions refused an OIDC token (`permissions: id-token: write`) |
 | `protected` | the board is behind Vercel Deployment Protection: set `VERCEL_AUTOMATION_BYPASS_SECRET` |
-| `renamed_env` | `BOARD_AS` is set, which `BOARD_PROFILE` replaced: set `BOARD_PROFILE` instead |
 | `invalid_duration` | a `timeout` the handle can't read |
 | `too_many_redirects` | the board's URL redirects more than 20 times |
 | `redirected` | the board's URL redirects to another origin, where none of its credentials follow, and Deployment Protection there turns it away: use the URL it redirects to |
