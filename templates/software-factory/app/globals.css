@@ -112,19 +112,6 @@ button {
   text-decoration: underline;
 }
 
-.crumb {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  color: var(--faint);
-  font-weight: 400;
-  text-decoration: none;
-}
-
-.crumb:hover {
-  color: var(--bright);
-}
-
 .site-nav {
   display: flex;
   align-items: center;
