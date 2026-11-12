@@ -344,6 +344,7 @@ with 501 `no_scheduler`. See
 ```ts
 tasks.create(channel: string, input: string | NewTaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
 tasks.create(thread: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
+tasks.createMany(channel: string, tasks: TaskInBatch[], opts?: { id?: string }): Promise<MessageView[]>
 tasks.list(query?: { channel?: string; state?: string; label?: Record<string, string> | string[]; by?: string; owner?: string; for?: string; needs?: string; after?: string; limit?: number }): Promise<{ tasks: ThreadSummaryView[]; cursor: string }>
 tasks.claim(id: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
 tasks.claim(ready: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
@@ -382,6 +383,12 @@ if (claim) {
   canceled), `for` (the one actor of yours that claims it,
   `<your principal>+<profile>`), `claim`, and `lease`. You own the task.
   `claim` comes back when it was made with `claim: true`.
+- **`createMany`** starts a thread for each task in one write: all of them
+  or none, and none shows before all have landed. It answers their roots in
+  the order given. A `TaskInBatch` is `text`, `labels`, `noSync`, and
+  `attachments` as `post` takes them, `for`, and `needs`: a task's ID, or
+  `{ ref }` for a task of the same call, which names itself with `ref`. See
+  [Several tasks at once](#several-tasks-at-once).
 - **`claim`** by ID throws a 409 when the task can't be claimed:
   `task_claimed`, `task_waiting`, `task_blocked`, `task_finished`, or
   `task_assigned`. With `{ channel }` it claims the oldest ready task in that
@@ -414,6 +421,103 @@ if (claim) {
   is `open`, `all`, or one state. Pass `cursor` back as `after` for the next
   page.
 
+#### Several tasks at once
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+const [fix, review, ship] = await team.tasks.createMany(
+  'work',
+  [
+    { ref: 'fix', text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } },
+    { ref: 'review', text: 'review the fix', labels: { step: 'review' }, needs: [{ ref: 'fix' }] },
+    { text: 'ship it', needs: [{ ref: 'review' }, { ref: 'fix' }] },
+  ],
+  { id: 'cve-123' },
+)
+// fix is ready. review and ship wait: review.task.needs is [fix.id].
+```
+
+- **One write.** Every task is made or none is, and the feed has no event of
+  any before all have landed: each task's `message.posted`, then its
+  `task.created`, in the order given.
+- **`ref` names a task for the others of the call.** A task waits for one
+  before it or after it. A `ref` two tasks have, one no task has, and tasks
+  that wait for each other are 400 `invalid_needs`. A `ref` is 1 to 64
+  characters, and means nothing once the call returns: use the IDs it answers.
+- **A task that waits for one of the call waits.** One that waits only for
+  tasks that were there and have all completed is ready in the same write.
+- **Each task is checked as `create` checks one:** its text and blocks, its
+  labels, its files, its assignee, and the tasks it waits for. `post` in the
+  channel, and `label` when any task has labels. There's no `claim`: claim
+  one once it's made.
+- **`id` names the call.** The same `id` again answers the tasks the first
+  call made, as they are now, and makes none. With other tasks it's 409
+  `duplicate_id`.
+- **100 tasks at most.** More is 400 `batch_too_large`, and so is a batch
+  with more than a board holds in one write. Nothing is made.
+  [`local()`](../01-board/10-local.md) holds all 100, one append of at most
+  301 events. Vercel's board holds fewer: see below.
+- **The middleware sees each task's root as a post,** one after the other,
+  before any is written: one it drops makes none. A retry goes through it
+  again.
+
+```ts
+import { board, createTasksInChunks, TasksInChunksError } from '@vercel/board'
+
+const team = board()
+
+// const plan: TaskInBatch[] = …  // 400 tasks, say, that wait for each other by ref
+try {
+  const tasks = await createTasksInChunks(team, 'work', plan, { id: 'migration-7' })
+} catch (error) {
+  if (error instanceof TasksInChunksError) console.log(error.code, error.created.filter(Boolean).length)
+}
+```
+
+`createTasksInChunks(team, channel, tasks, { id? })` makes a plan longer than
+one batch holds, with as many `createMany` calls as it takes. It answers the
+tasks' roots in the order given.
+
+- **It makes each task after the ones it waits for,** so a chunk needs only
+  tasks made before it. A task an earlier chunk made is named by the ID it
+  got. Tasks that can't be ordered are 400 `invalid_needs`, and nothing is
+  sent.
+- **It halves a chunk a board answers `batch_too_large` for,** and goes on
+  with chunks that size.
+- **It isn't one write.** Each chunk is all or nothing, and the chunks land
+  one after another. A ready task of an earlier chunk can be claimed before a
+  later chunk lands, and a chunk that fails leaves the ones before it made.
+- **A failure stops it.** It throws a `TasksInChunksError` with the failure's
+  own `code`, `status`, and `message`, and `created`: the task made for each
+  of `tasks`, at its place, or `undefined`.
+- **With `id`, call it again.** Each chunk goes under an ID made from `id` and
+  the chunk's place, so the same call again answers the chunks that landed
+  and makes the rest. That holds while the board holds as much in one write
+  as it did: a plan that splits another way is other chunks.
+
+A plan that must not start before all of it is there waits for a task of your
+own. Nothing in `createTasksInChunks` does this: it's a task every task of
+the plan needs, which you hold and complete.
+
+```ts
+import { board, createTasksInChunks } from '@vercel/board'
+
+const team = board()
+
+// A task only you hold: nothing that waits for it is ready until it completes.
+const { claim: gate } = await team.tasks.create('work', { text: 'migration-7 is being planned', claim: true })
+// const plan: TaskInBatch[] = …
+await createTasksInChunks(team, 'work', plan.map((task) => ({ ...task, needs: [...(task.needs ?? []), gate!.task.id] })), { id: 'migration-7' })
+await gate!.complete('planned') // now the plan's first tasks are ready
+```
+
+A claim's lease can run out while a long plan lands: renew it, or ask for a
+longer one. If the plan fails, cancel the gate and what was made waits for
+good, or run it again.
+
 Vercel's board keeps tasks on its threads, and a claim there differs in what
 it gives:
 
@@ -438,6 +542,16 @@ it gives:
   board.** One held to a `can`, as a sandbox is, lists the board or a subtree
   only where it reads 50 channels or fewer. Past that it fails with 400
   `channel_tree_too_large`: name a channel, or a smaller subtree.
+- **A batch holds what fits one of the API's writes: 15 plain tasks.** A
+  task's labels, files, and needs count toward it, so a chain of 13 fits, and
+  11 tasks with a label each. More is 400 `batch_too_large`, with nothing
+  made, and its message says how many the batch counts for.
+- **A batch's request is 64 KB at most,** which long texts reach first: six
+  tasks of 10,000 characters fit, and seven don't. That's `batch_too_large`
+  too, with nothing made, so one code says "send less". `createTasksInChunks`
+  halves until a chunk fits both.
+- **A file is on one task.** Two tasks of a batch with the same file are 400
+  `invalid_attachments`.
 - **A completion readies 65 of the tasks that waited for it before it
   answers.** Any more become ready as later task requests reach them: a claim
   of one, a list that shows one or the completed task, or a

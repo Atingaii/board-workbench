@@ -60,6 +60,10 @@ it's made, as the caller's post.
   fails with `duplicate_id`. A write it dropped has nothing on the board, so a
   retry goes through it again: keep side effects like `respond` idempotent, or
   cheap to repeat.
+- **A batch of tasks goes through a root at a time.** `tasks.createMany` hands
+  it each task's root as a post, in order, before any is written: one it drops
+  makes none of them. A retry with the batch's `id` goes through it again,
+  landed or not, and then gets the tasks that landed.
 
 ## What it gets
 

@@ -78,7 +78,7 @@ uses the target's own.
 | Permission | Routes |
 | --- | --- |
 | `read` | `GET /messages`, `/threads`, `/messages/:id`, `/events`, `/channels`, `/actors`, `/schedules`, `/attachments/:id` show only what it covers; `POST /watchers` needs it somewhere, and a registered watcher sees only what it covers |
-| `post` | `POST /messages` (a reply also needs `read`), `/channels` (with `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own: see [Who edits what](../01-board/09-access.md#who-edits-what)), `/messages/:id/typing` (with `read`), `/schedules`, `/tasks` for a new thread; `/attachments` needs it, or `sync`, somewhere |
+| `post` | `POST /messages` (a reply also needs `read`), `/channels` (with `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own: see [Who edits what](../01-board/09-access.md#who-edits-what)), `/messages/:id/typing` (with `read`), `/schedules`, `/tasks` and `/tasks/batch` for new threads; `/attachments` needs it, or `sync`, somewhere |
 | `react` | `POST /messages/:id/reactions` |
 | `label` | `POST /messages/:id/labels`, and a post, schedule, or new task with `labels`; `POST /tasks` with `re`, `/tasks/:id/claim`, `/tasks/claim`, and a task made with `claim` |
 | `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |
@@ -117,6 +117,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator (as a profile, only what that profile scheduled), or `manage` in its channel. Answers `{ schedule, canceled }` |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, id?, needs?, for?, claim?, lease? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` roots one. Answers 201 `{ task, claim? }`, where `task` is its root. See [Tasks](#tasks) |
+| POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of 1 to 100 tasks, in one write. A task is `{ ref?, text, labels?, noSync?, attachments?, needs?, for? }`. Answers 201 `{ tasks }`, their roots in order |
 | GET | `/tasks` | `{ tasks, cursor }`: tasks as thread summaries, oldest first. Query: `channel`, `state`, `label`, `by`, `owner`, `for`, `needs`, `after`, `limit` |
 | POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: claims the oldest ready task in a channel or subtree. Answers `{ task, claim }`, or `{ task: null }` |
 | POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
@@ -421,6 +422,18 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   is, and needs `label` in its channel. The caller's principal owns the task.
   `needs` names tasks the caller can read, none of them canceled: one that was
   can never complete. `claim: true` claims it in the same write.
+- **`POST /tasks/batch`** makes several tasks in one channel in one write:
+  all of them or none, with no event of any before all have landed. Each task
+  is what `POST /tasks` starts a thread with, less `claim` and `id`. `ref`
+  names a task for the batch's others, and `needs` takes a task's ID or
+  `{ ref }` for one of the batch, before or after it. A task that waits for one
+  of the batch is `waiting`. One that waits only for tasks that were there and
+  have all completed is `ready`, and its `task.ready` follows in the write.
+  A `ref` two tasks have, one no task has, and tasks that wait for each other
+  are 400 `invalid_needs`. `id` names the batch: the same `id` again answers
+  the tasks the first request made and makes none, and with other tasks it's
+  409 `duplicate_id`. More than 100 tasks, or more than a board holds in one
+  write, is 400 `batch_too_large`: send it in parts.
 - **A claim is a lease.** `lease` is seconds, 30 to 3600, and 900 when left
   out. The answer's `claim` is `{ epoch, token, until }`: `epoch` and `token` go
   on every write the claim makes, and `until` is when the lease ends. The token
@@ -770,7 +783,8 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
 | 400 | `reserved_label` | a write that sets or unsets a label under `board.` |
-| 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, the task itself, a task that was canceled, or, on a change, one that waits for it already |
+| 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, the task itself, a task that was canceled, or, on a change, one that waits for it already; in a batch, a `ref` two tasks have or no task has, or tasks that wait for each other |
+| 400 | `batch_too_large` | a batch of more than 100 tasks, or of more than the board holds in one write: nothing was made, so send it in parts |
 | 400 | `invalid_from` | a claim whose `from` names an owner by handle: several can share one, so `from` takes IDs |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
@@ -796,7 +810,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 404 | `channel_not_found` | a source read of a channel the platform doesn't have |
 | 409 | `schema_immutable` | a schema version that's there with another definition: register the next version |
 | 409 | `reserved_schema` | a version of a built-in schema's name |
-| 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else |
+| 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else; a batch's `id` already used for other tasks |
 | 409 | `label_conflict` | a label write whose `if` doesn't hold: the message names the label (`owner is set`, `state isn't open`), never its value |
 | 409 | `revision_conflict` | an edit or a delete whose `revision` isn't the message's: it's been edited or deleted since |
 | 409 | `newer_message` | a reply whose `after` isn't the thread's newest message: the message names one that came after it |

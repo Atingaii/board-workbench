@@ -3641,6 +3641,35 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   one is 400 `invalid_needs` too, when a task is made and when a thread is
   made one, on every backend: its maker hears at once. A failed task is one,
   since `reopen` can retry it.
+- **Several tasks are made in one write.** `team.tasks.createMany(channel,
+  tasks, { id? })` (`POST /tasks/batch`) starts a thread for each of up to
+  100 tasks in one channel: all of them or none, on every backend, and no
+  event of any before all have landed. Each is what `POST /tasks` starts a
+  thread with, less `claim` and `id`, and is checked as one is. A task names
+  itself with `ref` for the others of the batch, and `needs` takes a task's
+  ID or `{ ref }`, for a task before it or after it. The tasks of a batch are
+  new, so one that needs another of them waits, and they can close a cycle
+  only among themselves: a `ref` two tasks have, one no task has, a task that
+  needs itself, and tasks that need each other are 400 `invalid_needs`,
+  checked from the batch alone. A task that needs only tasks that were there
+  and have all completed is ready in the same write, with its `task.ready`.
+  The answer has the tasks' roots in the order given, which is the order
+  their events land and the order they list in. `id` names the batch: again,
+  it answers the tasks the first request made and makes none, and with other
+  tasks it's 409 `duplicate_id`. More than 100 tasks is 400
+  `batch_too_large`, and so is a batch with more than a backend holds in one
+  write: `local()` holds all 100, one append of at most 301 events, and
+  Vercel's board what fits one of the API's transactions, 15 plain tasks.
+  Nothing is made, and the sender splits it.
+- **A plan longer than a batch is several batches.** `createTasksInChunks(
+  team, channel, tasks, { id? })`, a plain function on `tasks.createMany`,
+  makes each task after the ones it waits for, names a task an earlier batch
+  made by its ID, halves a batch a board answers `batch_too_large` for, and
+  sends each under an ID made from the caller's. It isn't one write: a ready
+  task of an earlier batch can be claimed before a later one lands, and a
+  batch that fails stops it with what the batches before it made. A plan
+  that must not start early waits for a task its maker holds, and completes
+  when the plan is there: the caller composes that.
 - **A failed or canceled prerequisite never readies its dependents.** `vb
   tasks reopen <id>` retries a failed task in place, and its dependents keep
   waiting for it. One canceled after its dependents were made leaves them
@@ -3762,6 +3791,7 @@ Task changes are board facts, in the board log:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, needs?, for?, claim?, lease?, id? }` starts a thread as a task (its root takes files as a post does, and may be empty with one), or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` one. Answers 201 `{ task, claim? }`, where `task` is its root. Needs `post` for a new thread (and `label` for its labels), or `label` in its channel to make `re` one, and `label` for `claim`. `re` is a root that's there: 409 `already_a_task` for one that's a task. A retry with the same `id` answers the task that landed, without the claim it was made with, whose token was answered once |
+| POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of 1 to 100 tasks in one write, all or none. A task is `{ ref?, text, labels?, noSync?, attachments?, needs?: (MessageId \| { ref })[], for? }`. Answers 201 `{ tasks }`, their roots in order. 400 `invalid_needs` for a `ref` two tasks have or none has, or tasks that need each other; 400 `batch_too_large` for more than a board holds in one write |
 | GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `for`, `needs` (the tasks waiting on one). Answers `{ tasks, cursor }`; `after` (a `cursor` it reported) and `limit` page |
 | POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists by ID, claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
 | POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
