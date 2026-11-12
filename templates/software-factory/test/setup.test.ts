@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { setup, type Deps, type Step } from "../lib/setup.ts";
+import { isDone, setup, type Deps, type Fix, type Step } from "../lib/setup.ts";
 
 // The launcher's checks, driven as the page drives them, against a fake network: what a person sees is
-// each step's status and what to do, and what the outside world sees is the requests it sends.
+// each step's checks, done or with what to do, and what the outside world sees is the requests it sends.
 
 const jwt = (claims: object) => `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
 
@@ -15,7 +15,6 @@ const PRODUCTION = {
   VERCEL_PROJECT_PRODUCTION_URL: "factory.acme.dev",
   VERCEL_GIT_REPO_OWNER: "acme",
   VERCEL_GIT_REPO_SLUG: "factory",
-  VERCEL_AUTOMATION_BYPASS_SECRET: "bypass",
 };
 
 type Routes = Record<string, (init?: RequestInit, url?: string) => Response>;
@@ -44,7 +43,7 @@ function fake(options: { env?: Record<string, string | undefined>; routes?: Rout
     synced: {
       connectors: { github: "github/factory", slack: "slack/factory" },
       repoChannels: { "acme/factory": "dev/factory" },
-      slackChannels: { "#factory": "dev" },
+      slackChannels: { "#factory-rsi": "dev/factory" },
       board: null,
     },
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
@@ -66,46 +65,70 @@ function fake(options: { env?: Record<string, string | undefined>; routes?: Rout
   return { deps, requests };
 }
 
-const byId = (steps: Step[]) => Object.fromEntries(steps.map((step) => [step.id, step]));
-const statuses = (steps: Step[]) => Object.fromEntries(steps.map((step) => [step.id, step.status]));
-const commands = (step: Step) => (step.fix ?? []).flatMap((fix) => fix.commands ?? []);
-const links = (step: Step) => (step.fix ?? []).flatMap((fix) => (fix.link ? [fix.link.href] : []));
+/** The steps a protected deployment shows. */
+async function shown(deps: Deps): Promise<Record<string, Step>> {
+  const result = await setup(deps);
+  assert.equal(result.open, false, "the launcher should show its steps");
+  return Object.fromEntries((result.open ? [] : result.steps).map((step) => [step.id, step]));
+}
+/** What an open deployment shows instead: the one thing to do. */
+async function onlyProtect(deps: Deps): Promise<Fix> {
+  const result = await setup(deps);
+  assert.equal(result.open, true, "the launcher should show only how to protect the deployment");
+  return (result as { fix: Fix }).fix;
+}
+const done = (steps: Record<string, Step>) => Object.fromEntries(Object.entries(steps).map(([id, step]) => [id, isDone(step)]));
+const todo = (step: Step) => step.checks.filter((check) => !check.done);
+const labels = (step: Step) => step.checks.map((check) => check.label);
+const commands = (step: Step) => todo(step).flatMap((check) => check.fix?.commands ?? []);
+const links = (step: Step) => todo(step).flatMap((check) => (check.fix?.link ? [check.fix.link.href] : []));
 
-test("a factory that's set up passes every step, with Slack left optional", async () => {
-  const steps = await setup(fake().deps);
-  assert.deepEqual(statuses(steps), { vercel: "done", github: "done", slack: "skipped", try: "done" });
-  assert.equal(byId(steps).slack!.optional, true);
+test("a factory that's set up passes every step but Slack, which stays optional", async () => {
+  const steps = await shown(fake().deps);
+  assert.deepEqual(done(steps), { vercel: true, github: true, slack: false, try: true });
+  assert.equal(steps.slack!.optional, true);
+});
+
+test("it asks for no secret to get through its own protection, and shows no balance", async () => {
+  const { vercel } = await shown(fake({ deps: { credits: async () => 16.44 } }).deps);
+  assert.deepEqual(labels(vercel!), [
+    "Deployment Protection is on.",
+    "This project can use the team's board.",
+    "It can sync GitHub and Slack with the board.",
+    "AI Gateway has credits.",
+  ]);
 });
 
 test("GitHub names the repos the app is on that come into no channel", async () => {
   // The app is on acme/factory, which comes into dev/factory on its own, and acme/web, which no one mapped.
-  const { github } = byId(await setup(fake().deps));
-  assert.equal(github!.status, "done");
-  assert.equal(github!.summary, "Works on 2 repos, its own code included. acme/web isn't in repoChannels, so its PRs and issues stay off the board.");
+  const { github } = await shown(fake().deps);
+  assert.equal(isDone(github!), true);
+  assert.ok(labels(github!).includes("Its app is on 2 repos. acme/web isn't in repoChannels, so its PRs and issues stay off the board."));
 });
 
 test("GitHub asks Connect for a token that writes to the factory's own repo alone, as the agent's turns do", async () => {
   const asked: unknown[] = [];
-  const { github } = byId(await setup(fake({ deps: { connect: async (connector, scope) => (asked.push(scope ?? null), connector.startsWith("slack/") ? notFound(connector) : "app-token") } }).deps));
-  assert.equal(github!.status, "done");
+  const { github } = await shown(fake({ deps: { connect: async (connector, scope) => (asked.push(scope ?? null), connector.startsWith("slack/") ? notFound(connector) : "app-token") } }).deps);
+  assert.equal(isDone(github!), true);
   assert.deepEqual(asked.filter(Boolean), [[{ type: "github_app_installation", org: "acme", repositories: ["factory"], permissions: ["contents:write"] }]]);
 });
 
 test("GitHub isn't done until the app can write to the factory's own repo", async () => {
   // GitHub refuses a token with contents:write for an app that can't write there.
-  const { github } = byId(
-    await setup(fake({ deps: { connect: async (connector, scope) => (scope ? Promise.reject(new Error("GitHub installation token failed")) : connector.startsWith("slack/") ? notFound(connector) : "app-token") } }).deps),
+  const { github } = await shown(
+    fake({ deps: { connect: async (connector, scope) => (scope ? Promise.reject(new Error("GitHub installation token failed")) : connector.startsWith("slack/") ? notFound(connector) : "app-token") } }).deps,
   );
-  assert.equal(github!.status, "todo");
-  assert.equal(github!.fix?.[0]?.text, "Give the app write access to acme/factory, so the agent can change its own code.");
+  assert.deepEqual(todo(github!).map((check) => [check.label, check.fix?.text]), [
+    ["The app can't write to acme/factory.", "Give the app write access to acme/factory, so the agent can change its own code."],
+  ]);
   assert.deepEqual(links(github!), ["https://github.com/apps/acme-factory/installations/new"]);
 });
 
 test("GitHub says nothing more when every repo the app is on comes in", async () => {
-  const { github } = byId(
-    await setup(fake({ routes: { "https://api.github.com/installation/repositories": () => json({ total_count: 1, repositories: [{ full_name: "acme/factory" }] }) } }).deps),
+  const { github } = await shown(
+    fake({ routes: { "https://api.github.com/installation/repositories": () => json({ total_count: 1, repositories: [{ full_name: "acme/factory" }] }) } }).deps,
   );
-  assert.equal(github!.summary, "Works on 1 repo, its own code included.");
+  assert.ok(labels(github!).includes("Its app is on 1 repo."));
 });
 
 test("an open production shows only how to protect it, and asks nothing of GitHub or the board", async () => {
@@ -114,9 +137,8 @@ test("an open production shows only how to protect it, and asks nothing of GitHu
     routes: { "https://factory.acme.dev/icon.svg": () => new Response("<svg/>", { status: 200 }) },
     deps: { messages: async () => ((read = true), []), access: async () => ((read = true), {}) },
   });
-  const steps = await setup(deps);
-  assert.deepEqual(statuses(steps), { vercel: "todo", github: "locked", slack: "locked", try: "locked" });
-  assert.deepEqual(links(byId(steps).vercel!), ["https://vercel.com/acme/factory/settings/deployment-protection"]);
+  const fix = await onlyProtect(deps);
+  assert.equal(fix.link?.href, "https://vercel.com/acme/factory/settings/deployment-protection");
   assert.deepEqual(requests, ["https://factory.acme.dev/icon.svg"]);
   assert.equal(read, false);
 });
@@ -126,93 +148,79 @@ test("an open preview shows only how to protect it, even while production is clo
     deps: { host: "factory-git-fix-acme.vercel.app" },
     routes: { "https://factory-git-fix-acme.vercel.app/icon.svg": () => new Response("<svg/>", { status: 200 }) },
   });
-  const steps = await setup(deps);
-  assert.deepEqual(statuses(steps), { vercel: "todo", github: "locked", slack: "locked", try: "locked" });
+  await onlyProtect(deps);
   assert.deepEqual(requests, ["https://factory-git-fix-acme.vercel.app/icon.svg"]);
 });
 
 test("a protection check that fails shows nothing else, as if the deployment were open", async () => {
   const { deps, requests } = fake({ deps: { host: "unreachable.acme.dev" } });
-  const steps = await setup(deps);
-  assert.deepEqual(statuses(steps), { vercel: "error", github: "locked", slack: "locked", try: "locked" });
-  assert.match(byId(steps).vercel!.summary, /Couldn't check that this deployment is protected/);
+  const fix = await onlyProtect(deps);
+  assert.match(fix.text, /Couldn't check that this deployment is protected/);
   assert.deepEqual(requests, ["https://unreachable.acme.dev/icon.svg"]);
 });
 
-test("a protected production without an automation bypass isn't ready, but shows the rest", async () => {
-  const steps = await setup(fake({ env: { ...PRODUCTION, VERCEL_AUTOMATION_BYPASS_SECRET: undefined } }).deps);
-  const { vercel, github } = byId(steps);
-  assert.equal(vercel!.status, "todo");
-  assert.deepEqual(links(vercel!), ["https://vercel.com/acme/factory/settings/deployment-protection"]);
-  assert.equal(github!.status, "done");
+test("a team whose board nobody has opened yet is told to open it once, with the command that does", async () => {
+  // What board() throws for a project the API names no board to: a team has one once a person has used it.
+  const refused = Object.assign(new Error("this project has no access to the team's board (prj_factory, production)."), { code: "board_not_granted" });
+  const { vercel, try: tryIt } = await shown(fake({ deps: { access: () => Promise.reject(refused) } }).deps);
+  assert.deepEqual(todo(vercel!).map((check) => check.label), ["This project can't use the team's board yet."]);
+  assert.deepEqual(commands(vercel!), ["npx @vercel/board inspect --scope acme"]);
+  // Try it waits on the board, and says so in its own words, not the board's.
+  assert.equal(todo(tryIt!)[0]?.fix?.text, "The board comes first: see Vercel, above.");
 });
 
-test("a project the board hasn't let in sees the board's own words, and its way out", async () => {
-  // What board() throws for a project with no grant: the message, and the command that grants it.
-  const refused = Object.assign(new Error("this project has no access to the team's board (prj_factory, production)."), {
-    code: "board_not_granted",
-    hint: "Grant it: vb grants create --project prj_factory --environment production --can '*=read,post,react,label'",
-  });
-  const { vercel } = byId(await setup(fake({ deps: { access: () => Promise.reject(refused) } }).deps));
-  assert.equal(vercel!.status, "todo");
-  assert.deepEqual(vercel!.rows?.find(([label]) => label === "board"), ["board", "no access"]);
-  assert.equal(
-    vercel!.fix?.[0]?.text,
-    "this project has no access to the team's board (prj_factory, production). Grant it: vb grants create --project prj_factory --environment production --can '*=read,post,react,label'",
-  );
+test("a board that can't be reached for another reason says what it answered", async () => {
+  const { vercel } = await shown(fake({ deps: { access: () => Promise.reject(new Error("Vercel's API answered 503")) } }).deps);
+  assert.equal(todo(vercel!)[0]?.fix?.text, "Couldn't reach the board: Vercel's API answered 503");
 });
 
 test("a project the board's grants don't let sync isn't ready, and is told who can let it, with no grant of the launcher's own", async () => {
-  const { vercel } = byId(await setup(fake({ deps: { access: async () => ({ "*": ["read", "post", "react", "label"] }) } }).deps));
-  assert.equal(vercel!.status, "todo");
-  assert.deepEqual(vercel!.rows?.find(([label]) => label === "board"), ["board", "can't sync"]);
-  assert.equal(vercel!.fix?.[0]?.text, "The board's grants don't let this project sync, so GitHub and Slack won't reach it. Someone who manages the board can let it.");
+  const { vercel } = await shown(fake({ deps: { access: async () => ({ "*": ["read", "post", "react", "label"] }) } }).deps);
+  assert.deepEqual(todo(vercel!).map((check) => [check.label, check.fix?.text]), [
+    ["It can't sync GitHub and Slack with the board.", "The board's grants were narrowed. Someone who manages the board can let this project sync."],
+  ]);
   assert.deepEqual(commands(vercel!), []);
 });
 
 test("sync in one channel pattern is enough for the Vercel step", async () => {
-  const { vercel } = byId(await setup(fake({ deps: { access: async () => ({ "*": ["read"], "dev/": ["read", "post", "sync"] }) } }).deps));
-  assert.equal(vercel!.status, "done");
+  const { vercel } = await shown(fake({ deps: { access: async () => ({ "*": ["read"], "dev/": ["read", "post", "sync"] }) } }).deps);
+  assert.equal(isDone(vercel!), true);
 });
 
 test("a GitHub connector that isn't attached says how to create and attach it, a command per box", async () => {
-  const { github } = byId(await setup(fake({ deps: { connect: async () => Promise.reject(new Error("connector not found")) } }).deps));
-  assert.equal(github!.status, "todo");
+  const { github } = await shown(fake({ deps: { connect: async () => Promise.reject(new Error("connector not found")) } }).deps);
+  assert.equal(isDone(github!), false);
   assert.deepEqual(commands(github!), [
     "vercel connect create github --name factory --triggers --trigger-project factory --trigger-path /api/board/webhooks/github --scope acme",
   ]);
 });
 
 test("GitHub isn't done until the app is on the factory's own repo", async () => {
-  const { github } = byId(
-    await setup(
-      fake({
-        routes: { "https://api.github.com/installation/repositories": () => json({ total_count: 1, repositories: [{ full_name: "acme/web" }] }) },
-      }).deps,
-    ),
+  const { github } = await shown(
+    fake({
+      routes: { "https://api.github.com/installation/repositories": () => json({ total_count: 1, repositories: [{ full_name: "acme/web" }] }) },
+    }).deps,
   );
-  assert.equal(github!.status, "todo");
+  assert.deepEqual(todo(github!).map((check) => check.label), ["The app isn't on acme/factory."]);
   assert.deepEqual(links(github!), ["https://github.com/apps/acme-factory/installations/new"]);
 });
 
 test("an app GitHub lists with every permission false is done once it can write", async () => {
   // How GitHub answers /installation/repositories for an app's token, whatever the app may do.
-  const { github } = byId(
-    await setup(
-      fake({
-        routes: {
-          "https://api.github.com/installation/repositories": () =>
-            json({ total_count: 1, repositories: [{ full_name: "acme/factory", permissions: { admin: false, push: false, pull: false } }] }),
-        },
-      }).deps,
-    ),
+  const { github } = await shown(
+    fake({
+      routes: {
+        "https://api.github.com/installation/repositories": () =>
+          json({ total_count: 1, repositories: [{ full_name: "acme/factory", permissions: { admin: false, push: false, pull: false } }] }),
+      },
+    }).deps,
   );
-  assert.equal(github!.status, "done");
+  assert.equal(isDone(github!), true);
 });
 
-test("Slack without its connector shows how to create and attach it, and nothing to redeploy", async () => {
-  const { slack } = byId(await setup(fake().deps));
-  assert.equal(slack!.status, "skipped");
+test("Slack without its connector shows how to create it, then to invite its app", async () => {
+  const { slack } = await shown(fake().deps);
+  assert.deepEqual(todo(slack!).map((check) => check.label), ["There's no Slack connector for this project yet.", "Its app isn't in #factory-rsi yet."]);
   assert.deepEqual(commands(slack!), [
     "vercel connect create slack --name factory --triggers --trigger-project factory --trigger-path /api/board/webhooks/slack --scope acme",
   ]);
@@ -222,7 +230,7 @@ test("Slack without its connector shows how to create and attach it, and nothing
 const conversations = (...channels: { id: string; name: string }[]) => (_init?: RequestInit, url = "") =>
   url.includes("private_channel") ? json({ ok: false, error: "missing_scope", needed: "groups:read" }) : json({ ok: true, channels });
 
-test("Slack set up without its app in the channel says to invite it, and blocks nothing", async () => {
+test("Slack set up without its app in the channel says to invite it, and holds up nothing", async () => {
   const { deps, requests } = fake({
     deps: { connect: async () => "app-token" },
     routes: {
@@ -230,67 +238,68 @@ test("Slack set up without its app in the channel says to invite it, and blocks 
       "https://slack.com/api/users.conversations": conversations({ id: "C1", name: "general" }),
     },
   });
-  const steps = await setup(deps);
-  const { slack } = byId(steps);
-  assert.equal(slack!.status, "todo");
-  assert.deepEqual(commands(slack!), ["/invite @factory"]);
+  const steps = await shown(deps);
+  assert.deepEqual(todo(steps.slack!).map((check) => check.label), ["Its app isn't in #factory-rsi yet."]);
+  assert.deepEqual(commands(steps.slack!), ["/invite @factory"]);
+  // It says what the channel is for, and links to where another one is named, in this factory's own repo.
+  assert.match(todo(steps.slack!)[0]!.fix!.text, /where the factory updates itself/);
+  assert.deepEqual(links(steps.slack!), ["https://github.com/acme/factory/blob/main/app/api/board/%5B%5B...path%5D%5D/channels.ts"]);
   assert.ok(requests.includes("https://slack.com/api/auth.test"));
-  assert.equal(steps.filter((step) => !step.optional && step.status !== "done").length, 0);
+  assert.deepEqual(Object.values(steps).filter((step) => !step.optional && !isDone(step)), []);
 });
 
 test("Slack's app in its channel, by name, is done", async () => {
-  const { slack } = byId(
-    await setup(
-      fake({
-        deps: { connect: async () => "app-token" },
-        routes: {
-          "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
-          "https://slack.com/api/users.conversations": conversations({ id: "C2", name: "factory" }),
-        },
-      }).deps,
-    ),
+  const { slack } = await shown(
+    fake({
+      deps: { connect: async () => "app-token" },
+      routes: {
+        "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
+        "https://slack.com/api/users.conversations": conversations({ id: "C2", name: "factory-rsi" }),
+      },
+    }).deps,
   );
-  assert.equal(slack!.status, "done");
+  assert.equal(isDone(slack!), true);
 });
 
-test("try waits until someone posts and the agent replies", async () => {
-  const nothing = byId(await setup(fake({ deps: { messages: async () => [] } }).deps));
-  assert.equal(nothing.try!.status, "waiting");
-  const unanswered = byId(await setup(fake({ deps: { messages: async () => [message("12", null)] } }).deps));
-  assert.equal(unanswered.try!.status, "waiting");
+test("try isn't done until someone has posted and the agent has replied", async () => {
+  const nothing = await shown(fake({ deps: { messages: async () => [] } }).deps);
+  assert.deepEqual(todo(nothing.try!).map((check) => check.label), ["Nobody has posted yet.", "The agent hasn't replied yet."]);
+  const unanswered = await shown(fake({ deps: { messages: async () => [message("12", null)] } }).deps);
+  assert.deepEqual(todo(unanswered.try!).map((check) => check.label), ["The agent hasn't replied yet."]);
 });
 
 test("try says how to open the board in its own step, on this team and by the board's name, so the agent's tool has it too", async () => {
   const waiting = fake({ deps: { messages: async () => [] } });
-  assert.deepEqual(commands(byId(await setup(waiting.deps)).try!), ["npx @vercel/board inspect --scope acme"]);
+  assert.deepEqual(commands((await shown(waiting.deps)).try!), ["npx @vercel/board inspect --scope acme"]);
   const named = fake({ deps: { messages: async () => [] } });
   named.deps.synced.board = "factory-dev";
-  assert.deepEqual(commands(byId(await setup(named.deps)).try!), ["npx @vercel/board inspect --scope acme --name factory-dev"]);
+  assert.deepEqual(commands((await shown(named.deps)).try!), ["npx @vercel/board inspect --scope acme --name factory-dev"]);
 });
 
-test("locally, the board needs nothing, and signing in is one link and one pull", async () => {
+test("locally, nothing asks whether the deployment is protected, and signing in is one link and one pull", async () => {
   const { deps, requests } = fake({
     env: { PORT: "3000" },
     deps: {
       oidc: async () => Promise.reject(new Error("no token")),
       credits: async () => Promise.reject(new Error("no token")),
+      access: async () => Promise.reject(new Error("no team to find a board for")),
       connect: async () => Promise.reject(new Error("The 'x-vercel-oidc-token' header is missing")),
     },
   });
-  const { vercel, github } = byId(await setup(deps));
-  assert.equal(vercel!.status, "todo");
-  assert.deepEqual(commands(vercel!), ["vercel link", "vercel env pull"]);
+  const { vercel, github } = await shown(deps);
+  assert.equal(isDone(vercel!), false);
+  assert.deepEqual([...new Set(commands(vercel!))], ["vercel link", "vercel env pull"]);
   assert.deepEqual(commands(github!), ["vercel link", "vercel env pull"]);
   assert.ok(!requests.some((url) => url.includes("icon.svg")));
 });
 
 test("AI Gateway without credits says where to add them", async () => {
-  const { vercel } = byId(await setup(fake({ deps: { credits: async () => 0 } }).deps));
-  assert.equal(vercel!.status, "todo");
+  const { vercel } = await shown(fake({ deps: { credits: async () => 0 } }).deps);
+  assert.deepEqual(todo(vercel!).map((check) => check.label), ["AI Gateway is out of credits."]);
   assert.deepEqual(links(vercel!), ["https://vercel.com/acme/~/ai"]);
 });
 
 test("a team billed for AI Gateway usage, with a negative balance, is ready", async () => {
-  const { vercel } = byId(await setup(fake({ deps: { credits: async () => -1194239.37 } }).deps));
-  assert.equal(vercel!.status, "done");
+  const { vercel } = await shown(fake({ deps: { credits: async () => -1194239.37 } }).deps);
+  assert.equal(isDone(vercel!), true);
 });

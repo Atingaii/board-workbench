@@ -88,6 +88,26 @@ test("a wake-up finds the thread's session by the thread, then delivers once und
   ]);
 });
 
+test("on Vercel, a wake-up carries the deployment's OIDC token twice: for eve, and to get through its own Deployment Protection", async () => {
+  const sent: Record<string, string>[] = [];
+  const fake = (async (_url: string, init: RequestInit) => (sent.push(init.headers as Record<string, string>), new Response(JSON.stringify({ ok: true, sessionId: "wrun_a" }), { status: 200 }))) as never;
+  // Even on a project that has a bypass secret, the wake-up doesn't carry it: a preview holds that secret too.
+  const before = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  process.env.VERCEL_AUTOMATION_BYPASS_SECRET = "shared-secret";
+  try {
+    await send(WAKE, fake, async () => "oidc-token");
+  } finally {
+    if (before === undefined) delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    else process.env.VERCEL_AUTOMATION_BYPASS_SECRET = before;
+  }
+  for (const headers of sent) {
+    assert.equal(headers.authorization, "Bearer oidc-token");
+    assert.equal(headers["x-vercel-trusted-oidc-idp-token"], "oidc-token");
+    assert.equal(headers["x-vercel-protection-bypass"], undefined);
+  }
+  assert.equal(sent.length, 2);
+});
+
 test("a session that ended since it was found is replaced, and the wake-up delivered to the new one", async () => {
   const { requests, fake } = eve([
     [200, { ok: true, sessionId: "wrun_old" }],

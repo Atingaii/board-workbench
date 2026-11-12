@@ -261,22 +261,10 @@ button {
   font-size: 0.85rem;
 }
 
-.step[data-status="done"] .marker {
+.step[data-done] .marker {
   border-color: var(--ink);
   background: var(--ink);
   color: var(--bg);
-}
-
-.step[data-current] .marker,
-.step[data-status="error"] .marker,
-.step[data-status="waiting"] .marker {
-  border-color: var(--bright);
-  color: var(--bright);
-}
-
-.step[data-status="skipped"] .marker,
-.step[data-status="locked"] .marker {
-  border-style: dashed;
 }
 
 .step-head {
@@ -288,103 +276,61 @@ button {
 
 .step-head h2 {
   margin: 0;
-  color: var(--ink);
+  color: var(--bright);
   font-size: 1rem;
   font-weight: 600;
 }
 
-.step[data-current] .step-head h2 {
-  color: var(--bright);
-}
-
-.step[data-status="locked"] .step-head h2,
-.step[data-status="skipped"] .step-head h2 {
-  color: var(--muted);
+.step[data-done] .step-head h2 {
+  color: var(--ink);
 }
 
 .status {
   margin-left: auto;
   color: var(--faint);
-  font-size: 0.8rem;
-  text-transform: uppercase;
+  font-size: 0.85rem;
 }
 
-.step[data-current] .status,
-.step[data-status="error"] .status {
-  color: var(--bright);
-}
-
-.summary {
-  margin: 0.15rem 0 0;
-  max-width: 40rem;
-}
-
-/* Columns, not colons: a row's label, then its value. */
-.rows {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 0.15rem 1.25rem;
-  margin: 0.75rem 0 0;
-}
-
-.rows > div {
-  display: contents;
-}
-
-.rows dt {
-  color: var(--faint);
-}
-
-.rows dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--ink);
-}
-
-.fix {
-  margin: 1rem 0 0;
-  padding-left: 1.25rem;
-}
-
-.fix > li::marker {
-  color: var(--faint);
-}
-
-.fix > li + li {
-  margin-top: 0.9rem;
-}
-
-.fix p {
-  margin: 0 0 0.5rem;
-  color: var(--ink);
-}
-
-.how {
-  margin-top: 0.6rem;
-}
-
-.how summary {
-  display: inline-flex;
-  gap: 0.5rem;
-  color: var(--faint);
-  cursor: default;
+/* A step's checks: what's there, and under what isn't, what to do about it. */
+.checks {
+  margin: 0.6rem 0 0;
+  padding: 0;
   list-style: none;
 }
 
-.how summary::-webkit-details-marker {
-  display: none;
+.checks > li {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: 0.6rem;
 }
 
-.how summary::before {
-  content: "+";
+.checks > li + li {
+  margin-top: 0.45rem;
 }
 
-.how[open] summary::before {
-  content: "−";
+.checks > li > svg {
+  margin-top: 0.3rem;
+  color: var(--faint);
 }
 
-.how summary:hover {
+.checks p {
+  margin: 0;
+  max-width: 44rem;
   color: var(--bright);
+}
+
+.checks > li[data-done] p {
+  color: var(--muted);
+}
+
+.todo {
+  margin: 0.35rem 0 0.6rem;
+}
+
+.todo p,
+.checks .todo p {
+  margin: 0 0 0.5rem;
+  color: var(--ink);
 }
 
 /* ── code ────────────────────────────────────────────────────────── */
@@ -417,7 +363,7 @@ pre {
 
 .command + .command,
 .command + .button,
-.fix p + .button {
+.todo p + .button {
   margin-top: 0.5rem;
 }
 
@@ -435,12 +381,6 @@ pre {
   background: none;
   color: var(--faint);
   cursor: default;
-}
-
-/* A single thing to do needs no number. */
-.fix:has(> li:only-child) {
-  padding-left: 0;
-  list-style: none;
 }
 
 .copy:hover {

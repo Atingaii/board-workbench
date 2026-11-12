@@ -14,6 +14,13 @@ export const OWN_REPO = ownRepo();
 /** This deployment's own origin: its URL on Vercel, the dev server's locally. Not `PORT` under eve, whose dev process has its own. */
 export const ORIGIN = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${process.env.PORT ?? 3000}`;
 
+/**
+ * This deployment's OIDC token on Vercel, and none on your machine. It's what the deployment calls
+ * itself with: Deployment Protection's Trusted Sources let a project reach its own environment with
+ * it, in `x-vercel-trusted-oidc-idp-token`, and no other.
+ */
+export const ownToken = async (): Promise<string | null> => (process.env.VERCEL_URL ? (await import("@vercel/oidc")).getVercelOidcToken() : null);
+
 type Author = { principal: string; profile: string | null };
 
 /**
