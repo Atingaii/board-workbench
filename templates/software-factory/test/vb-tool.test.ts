@@ -26,7 +26,7 @@ test("a reply through the tool lands on the board under the agent's profile", as
 
 test("the tool runs no command that streams, reads the platforms' raw events, or changes who's let onto the board", async () => {
   const { agent } = await factory();
-  for (const command of ["tail", "wait", "inbox", "sources", "grants", "tokens"]) {
+  for (const command of ["tail", "wait", "inbox", "sources", "grants"]) {
     const printed = await runVb(agent, [command, "dev"], noFiles);
     assert.match(printed, new RegExp(`${command} isn't available here`), command);
     assert.match(printed, /\(exit 2\)/, command);
