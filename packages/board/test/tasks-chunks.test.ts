@@ -137,6 +137,42 @@ describe('createTasksInChunks', () => {
     expect(await all(team)).toHaveLength(236)
   })
 
+  it('refuses other tasks under an id it made a plan with, and makes none of them beside the first ones', async () => {
+    const { team } = localTeam()
+    const plan = steps(230)
+    const made = await createTasksInChunks(team, 'work', plan, { id: 'release-42' })
+    const refused = async (other: TaskInBatch[]) =>
+      createTasksInChunks(team, 'work', other, { id: 'release-42' }).then(
+        () => null,
+        (error: unknown) => error as TasksInChunksError,
+      )
+    // One task more at the end: the batches that are the same are found, and the one that isn't is refused, whole.
+    const longer = await refused([...plan, { text: 'one more' }])
+    expect(longer).toMatchObject({ name: 'TasksInChunksError', code: 'duplicate_id', status: 409 })
+    expect(longer!.created.filter((root) => root !== undefined)).toHaveLength(200)
+    // One task changed in the first batch: nothing of the plan is this id's.
+    const changed = await refused(plan.map((task, n) => (n === 70 ? { ...task, text: 'another step 70' } : task)))
+    expect(changed).toMatchObject({ code: 'duplicate_id', status: 409 })
+    expect(changed!.created.every((root) => root === undefined)).toBe(true)
+    expect((await all(team)).map((root) => root.id).sort()).toEqual(made.map((root) => root.id).sort())
+  })
+
+  it('finds the batches an earlier call halved, when the board would now take them whole', async () => {
+    const { team, sent, front } = localTeam()
+    const plan = steps(230)
+    // A board that holds 50 tasks in a write: the first call halves down to that.
+    front.fail = async (request) => (((await request.clone().json()) as Batch).tasks.length > 50 ? Response.json({ error: { code: 'batch_too_large', message: 'this board holds 50 tasks in a write' } }, { status: 400 }) : null)
+    const made = await createTasksInChunks(team, 'work', plan, { id: 'release-42' })
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([100, 50, 50, 50, 50, 30])
+    // The same call once it holds 100: each id is taken by the 50 the first call made under it, and that's what it asks for next.
+    front.fail = null
+    sent.length = 0
+    const again = await createTasksInChunks(team, 'work', plan, { id: 'release-42' })
+    expect(again.map((root) => root.id)).toEqual(made.map((root) => root.id))
+    expect(sent).toEqual([])
+    expect(await all(team)).toHaveLength(230)
+  })
+
   it('stops at the first batch a board refuses, with what the batches before it made, and makes nothing of a plan it can not order', async () => {
     const { team, sent } = localTeam()
     // The 151st task waits for a task that isn't there: the board refuses its batch, whole.

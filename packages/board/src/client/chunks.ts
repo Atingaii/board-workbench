@@ -31,8 +31,9 @@ export class TasksInChunksError extends BoardError {
  * Makes `tasks` in `channel` with as many `tasks.createMany` calls as it takes, and answers their
  * roots in the order given. It makes each task after the ones it waits for by `key`, names a task
  * an earlier chunk made by the ID it got, and halves a chunk a board answers `batch_too_large`
- * for. With `id`, each chunk goes under an ID made from it and the chunk's place, so calling again
- * with the same `id` and tasks answers the chunks that landed and makes the rest.
+ * for. With `id`, each chunk goes under an ID made from it and where the chunk starts, so calling
+ * again with the same `id` and tasks answers the chunks that landed and makes the rest, and other
+ * tasks under that `id` are a 409 `duplicate_id`, never made beside the first ones.
  *
  * It isn't one write. Each chunk is all or nothing, and the chunks land one after another: a task
  * of an earlier chunk that's ready can be claimed before a later chunk lands. When a chunk fails
@@ -57,12 +58,15 @@ export async function createTasksInChunks(board: TaskBatches, channel: string, t
       return { ...task, needs: task.needs.map((need) => (typeof need === 'string' ? need : (created[places.get(need.key)!]?.id ?? need))) }
     })
     try {
-      const made = await board.tasks.createMany(channel, chunk, options.id !== undefined ? { id: `${options.id}/${from}+${picked.length}` } : {})
+      const made = await board.tasks.createMany(channel, chunk, options.id !== undefined ? { id: `${options.id}/${from}` } : {})
       for (const [n, at] of picked.entries()) created[at] = made[n]
       from += picked.length
     } catch (error) {
-      // More than this board holds in one write, and nothing was made: half of it, from the same place.
-      if (error instanceof BoardError && error.code === 'batch_too_large' && picked.length > 1) size = Math.ceil(picked.length / 2)
+      // More than this board holds in one write, and nothing was made: half of it, from the same place. A chunk's ID
+      // names where it starts, so one an earlier call halved is found the same way: the ID is taken by fewer tasks,
+      // until this call asks for as many. Tasks that were never those are refused down to the last one.
+      const split = error instanceof BoardError && (error.code === 'batch_too_large' || (error.code === 'duplicate_id' && options.id !== undefined))
+      if (split && picked.length > 1) size = Math.ceil(picked.length / 2)
       else throw new TasksInChunksError(error, created)
     }
   }
