@@ -1,4 +1,4 @@
-import type { MessageView, PrincipalView, ScheduleView } from '../../api/routes.ts'
+import type { Discovery, MessageView, PrincipalView, ScheduleView } from '../../api/routes.ts'
 import type { ScheduleTiming } from '../../server/index.default.ts'
 
 // How the page says things: names, times, and sizes. Each is a few lines any UI on a board writes
@@ -143,3 +143,20 @@ export const timingWords = (later: ScheduleTiming): string =>
   [later.in ? `in ${later.in}` : later.at ? `at ${new Date(later.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '', later.every ? `every ${later.every}` : '']
     .filter(Boolean)
     .join(', ')
+
+/**
+ * Which board a page is on, in two lines: its name and its host where it has a name (a team's
+ * board in Vercel's API), else its host and where on it. Before its discovery answers, just `board`.
+ */
+export function boardWords(discovery: Pick<Discovery, 'url' | 'name'> | null): { name: string; at: string | null } {
+  if (!discovery) return { name: 'board', at: null }
+  let url: URL
+  try {
+    url = new URL(discovery.url)
+  } catch {
+    return { name: discovery.name ?? discovery.url, at: null }
+  }
+  if (discovery.name) return { name: discovery.name, at: url.host }
+  const path = url.pathname.replace(/\/+$/, '')
+  return { name: url.host, at: path || null }
+}

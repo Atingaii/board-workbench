@@ -81,7 +81,12 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
   border-bottom: 1px solid var(--hairline);
   color: var(--bright);
   font-weight: 600;
+  gap: 8px;
 }
+/* Which board this is: its name, and where it is under it. */
+.brand .which { display: grid; min-width: 0; line-height: 1.3; }
+.brand .name, .brand .at { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brand .at { color: var(--faint); font-size: 11px; font-weight: 400; }
 .sidebar h2 { display: flex; align-items: center; justify-content: space-between; height: 18px; margin: 16px 8px 4px; font-size: 11px; font-weight: 500; color: var(--faint); }
 .sidebar h2 .tool { min-width: 20px; height: 20px; margin-right: -6px; padding: 0; color: var(--faint); }
 .sidebar .item.settings { gap: 8px; color: var(--faint); font-size: 12px; }
@@ -105,8 +110,7 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .whoami-wrap { padding-top: 2px; }
 .whoami { width: 100%; display: flex; align-items: center; gap: 6px; padding: 6px 8px; color: var(--muted); font-size: 11px; text-align: left; }
 .whoami:hover, .whoami[data-popup-open] { background: var(--shade); color: var(--bright); }
-.whoami .grow { display: grid; }
-.whoami .as, .whoami .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whoami .as { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .whoami.naming { flex-direction: column; align-items: stretch; }
 .whoami.naming .send { align-self: flex-end; }
 .whoami.naming input { width: 100%; height: 28px; padding: 0 8px; border: 0; outline: 1px solid var(--muted); background: var(--shade); font-size: 12px; }

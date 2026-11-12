@@ -591,7 +591,7 @@ channels(): Promise<ChannelView[]>  // { path, lastIndex?, messages?, threads? }
 createChannel(path: string, options?: { private?: boolean }): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this handle writes as
-discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, project_id, version, sync
+discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, project_id, version, sync, name?
 ```
 
 `me()` returns `{ actor, principal, kind, handle, name, avatar, profile,

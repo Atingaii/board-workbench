@@ -2241,8 +2241,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async discovery() {
       const who = { profile: null }
       const team = await teamId()
-      // A board named by its ID is read, so `whoami` names only one there is and you can reach.
-      if (options.board) await api(who, 'GET', await onBoard(who))
+      // The board is read for its name. One named by its ID is read either way, so `whoami` names only
+      // one there is and you can reach; one found by its name, or as the team's default, says no name
+      // to a caller who may not read it.
+      const found = await api<{ board: { name?: string } }>(who, 'GET', await onBoard(who)).catch((error: unknown) => {
+        if (options.board || !(error instanceof HttpError) || error.status !== 403) throw error
+        return null
+      })
       // The team's ID: the API says it when this board names the team by its slug, or not at all.
       const id = team?.startsWith('team_') ? team : (await self(who)).teamId
       return {
@@ -2252,6 +2257,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         audience: origin,
         team_id: id,
         project_id: null,
+        ...(found?.board.name ? { name: found.board.name } : {}),
         sync: (binding?.sync ?? []).map(({ key, platform }) => ({ key, platform })),
         // The API finds a project's deployment for a path, and wakes it through its Deployment Protection.
         wake_by_path: true,
