@@ -375,14 +375,14 @@ describe('the conformance kit', () => {
       const before = await registered()
       const report = await conformance(asV0, narrowedV0)
       // What registers is skipped; noSync, an account lookup, and a narrowed caller's refused registration register nothing.
-      expect(watcherStatuses(report)).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
+      expect(watcherStatuses(report)).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
       expect(await registered()).toEqual(before)
     }
     // One with nothing in it is checked, and is left as it was.
     const empty = { owner: 'vercel:project:prj_v0:production', url: null, watch: {}, sync: [] }
     expect((await v0('POST', '/watchers', { watch: {} })).status).toBe(200)
     const report = await conformance(asV0, narrowedV0)
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect(await registered()).toEqual([empty])
   })
 
@@ -393,7 +393,7 @@ describe('the conformance kit', () => {
     const narrowedV0 = { withCan: withCan(older, () => deploymentToken('v0', 'prj_v0', 'production')) }
     const watching = { url: null, watch: { fix: { tail: 'feedback' } }, sync: [] }
     expect((await v0('POST', '/watchers', watching)).status).toBe(200)
-    expect(watcherStatuses(await conformance(asV0, narrowedV0))).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
+    expect(watcherStatuses(await conformance(asV0, narrowedV0))).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
     expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([watching])
     // An empty one fails the check, since the board took the path, and is left as it was.
     expect((await v0('POST', '/watchers', { watch: {} })).status).toBe(200)
@@ -409,12 +409,12 @@ describe('the conformance kit', () => {
     const v0 = caller(byPath, await deploymentToken('v0', 'prj_v0', 'production'))
     expect((await v0('POST', '/watchers', { path: '/api/board', watch: {} })).status).toBe(200)
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'production')), { withCan: withCan(byPath, () => deploymentToken('v0', 'prj_v0', 'production')) })
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', watch: {} }])
     // A person's token names no project to wake.
     const personal = wakingByPath(testBoard({ scheduler: fakeQueue().scheduler }).fetch)
     const person = await conformance(await clientOf(personal), { withCan: withCan(personal) })
-    expect(watcherStatuses(person)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
+    expect(watcherStatuses(person)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
   })
 
   it("checks a preview's path with its branch, and gives the branch back", async () => {
@@ -422,7 +422,7 @@ describe('the conformance kit', () => {
     const preview = caller(byPath, await deploymentToken('v0', 'prj_v0', 'preview'))
     expect((await preview('POST', '/watchers', { path: '/api/board', branch: 'jb/watchers', watch: {} })).status).toBe(200)
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')), { withCan: withCan(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')) })
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect((await preview('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', branch: 'jb/watchers', watch: {} }])
   })
 

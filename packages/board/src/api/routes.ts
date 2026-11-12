@@ -563,8 +563,10 @@ export const SyncFindQuery = z.object({
 export const SyncCopiesQuery = z.object({ message: repeated.pipe(z.array(Ref).min(1).max(100)) })
 
 /** Platform events for a sync key's inbox, each with the platform's own ID for it, which dedupes it. */
+/** The longest inbox event ID a board takes: Vercel's API refuses a longer one. */
+export const INBOX_EVENT_ID_MAX = 300
 export const InboxPushBody = z.object({
-  events: z.array(z.object({ id: z.string().min(1).max(300), event: ExternalEvent, raw: z.unknown() })).min(1).max(50),
+  events: z.array(z.object({ id: z.string().min(1).max(INBOX_EVENT_ID_MAX), event: ExternalEvent, raw: z.unknown() })).min(1).max(50),
 })
 export const InboxNextQuery = z.object({ limit: z.coerce.number().int().min(1).max(50).optional() })
 export const InboxAckBody = z.object({ lease: z.string().min(1).max(64), error: z.string().min(1).max(500).optional() })
