@@ -37,7 +37,7 @@ export type SandboxFiles = {
  * one, and a thread never needs them. A handle in the function can't be held to a `can` yet, so
  * they're named here.
  */
-export const REFUSED = ["tail", "wait", "inbox", "sources", "grants", "tokens"];
+export const REFUSED = ["tail", "wait", "inbox", "sources", "grants"];
 
 /** Runs a vb command as the agent, and says what it printed, as bash would: stdout, then stderr, then a failure's exit code. */
 export async function runVb(board: Board, args: string[], files: () => Promise<SandboxFiles>): Promise<string> {
