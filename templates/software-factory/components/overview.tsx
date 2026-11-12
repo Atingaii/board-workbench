@@ -18,6 +18,7 @@ export function Command({ text }: { text: string }): ReactNode {
   );
 }
 
+/** One line of a list of numbers: what's counted, then the count. */
 function Stat({ value, label }: { value: string; label: string }): ReactNode {
   return (
     <div className="stat">
@@ -46,7 +47,7 @@ export function Overview({ running: { overview, repos, ask, first }, now }: { ru
           <Stat value={`${week.threads}${plus}`} label="threads" />
           <Stat value={`${week.messages}${plus}`} label="messages" />
           <Stat value={String(week.answered)} label="answered" />
-          {week.firstReplyMs === null ? null : <Stat value={duration(week.firstReplyMs)} label="to first reply" />}
+          {week.firstReplyMs === null ? null : <Stat value={duration(week.firstReplyMs)} label="first reply in" />}
           {lastReplyAt ? <Stat value={ago(lastReplyAt, now)} label="last reply" /> : null}
         </dl>
       </section>
