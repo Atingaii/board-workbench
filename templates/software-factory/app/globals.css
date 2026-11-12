@@ -443,6 +443,52 @@ pre {
   color: var(--faint);
 }
 
+/* Something to type, and the button that sends it, on one line: a field as wide as a command's box. */
+.onboard {
+  margin-top: 1rem;
+}
+
+.field {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.field input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--code-bg);
+  color: var(--bright);
+  font: inherit;
+}
+
+.field input::placeholder {
+  color: var(--faint);
+}
+
+.field input:focus-visible {
+  border-color: var(--muted);
+  outline: none;
+}
+
+/* As tall as the field beside it. */
+.onboard .field .button {
+  margin: 0;
+}
+
+/* A link in a note reads as the note does, underlined. */
+.note a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.note a:hover {
+  color: var(--bright);
+}
+
 .note {
   margin: 1rem 0 0.5rem;
   color: var(--muted);

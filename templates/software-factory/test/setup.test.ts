@@ -150,6 +150,19 @@ test("GitHub counts the repos the app is on that come into no channel, without n
   assert.match(linked(installed!.link!.href), /^export const repoChannels\b/);
 });
 
+test("the checks find where the GitHub app is added to more repos, by the app's own name, and nowhere when GitHub doesn't say it", async () => {
+  const found = async (deps: Deps) => {
+    const result = await setup(deps);
+    return result.open ? undefined : result.found.install;
+  };
+  // GitHub names the app's bot, and the app is that without the suffix.
+  const bot = fake({ routes: { "https://api.github.com/graphql": () => json({ data: { viewer: { login: "acme-factory[bot]" } } }) } });
+  assert.equal(await found(bot.deps), "https://github.com/apps/acme-factory/installations/new");
+  assert.equal(await found(fake({ routes: { "https://api.github.com/graphql": () => json({}, 502) } }).deps), null);
+  // With no connector there's no app to name.
+  assert.equal(await found(fake({ deps: { connect: (connector) => notFound(connector) } }).deps), null);
+});
+
 test("GitHub asks Connect for a token that writes to the factory's own repo alone, as the agent's turns do", async () => {
   const asked: unknown[] = [];
   const { github } = await shown(fake({ deps: { connect: async (connector, scope) => (asked.push(scope ?? null), connector.startsWith("slack/") ? notFound(connector) : "app-token") } }).deps);
@@ -654,8 +667,11 @@ test("once it runs, the markdown opens with what the factory has been doing, and
       lastReplyAt: "2026-11-12T11:56:00.000Z",
       pulls: { open: 1, merged: 3, closed: 1 },
     },
-    repos: [{ repo: "acme/factory", channel: "project-factory/rsi" }],
-    ask: { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 3 },
+    repos: [
+      { repo: "acme/factory", channel: "project-factory/rsi", slack: "#factory-rsi" },
+      { repo: "acme/web", channel: "project-factory/web", slack: null },
+    ],
+    ask: { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 3, install: "https://github.com/apps/acme-factory/installations/new" },
     join: "",
     first: null,
   };
@@ -677,17 +693,20 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
 
 ## Repos
 
-- acme/factory in \`project-factory/rsi\`
-- 3 more have the GitHub app. To onboard one, ask in #factory-rsi: onboard <owner>/<repo>
+- acme/factory in \`project-factory/rsi\`, #factory-rsi in Slack
+- acme/web in \`project-factory/web\`
+- 3 more have the GitHub app. Onboard one: POST /api/launcher/onboard with {"repo": "<owner>/<repo>"}, or ask in #factory-rsi: onboard <owner>/<repo>
+- [Add the GitHub app to more repos](https://github.com/apps/acme-factory/installations/new)
 
 ## 1. Vercel (done)
 `),
     text,
   );
   // A week the read didn't reach the end of says so, and with no Slack channel the ask is on the board.
-  const busy = markdown(await setup(fake().deps), INSPECT, { ...running, overview: { ...running.overview, week: { ...running.overview.week, more: true, firstReplyMs: null } }, ask: { channel: "project-factory/rsi", slack: null, waiting: null } });
+  const busy = markdown(await setup(fake().deps), INSPECT, { ...running, overview: { ...running.overview, week: { ...running.overview.week, more: true, firstReplyMs: null } }, ask: { channel: "project-factory/rsi", slack: null, waiting: null, install: null } });
   assert.ok(busy.includes("- 6+ threads, 22+ messages\n- 5 answered\n"), busy);
-  assert.ok(busy.includes("- To onboard one, ask in project-factory/rsi: onboard <owner>/<repo>"), busy);
+  // And when GitHub didn't say the app's name, there's nowhere to send anyone to add it.
+  assert.ok(busy.includes(`- acme/web in \`project-factory/web\`\n- Onboard one: POST /api/launcher/onboard with {"repo": "<owner>/<repo>"}, or ask in project-factory/rsi: onboard <owner>/<repo>\n\n## 1. Vercel`), busy);
   // While its README is still the template's, the first task comes before the week: on offer, then where it is.
   const offer = markdown(await setup(fake().deps), INSPECT, { ...running, first: "offer" });
   assert.ok(offer.includes("checked on this request.\n\n## First task\n\n- Make the README yours: the factory opens a pull request. Start: POST /api/launcher/first-task\n\n## This week\n"), offer);

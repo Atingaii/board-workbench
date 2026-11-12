@@ -41,10 +41,11 @@ export type Me = { principal: string; can: Record<string, readonly string[]> };
 /**
  * What the checks came across on the way, for the page to show once the factory runs: this
  * deployment on its board (null when it can't use it), the latest messages in its channels, how
- * many repos its GitHub app is on that come into no channel (null when that couldn't be told), and
- * where its first task stands (null when there's none to offer).
+ * many repos its GitHub app is on that come into no channel (null when that couldn't be told),
+ * where on GitHub that app is added to more repos (null when its name couldn't be told), and where
+ * its first task stands (null when there's none to offer).
  */
-export type Found = { me: Me | null; recent: MessageView[]; waiting: number | null; first: FirstTask };
+export type Found = { me: Me | null; recent: MessageView[]; waiting: number | null; install: string | null; first: FirstTask };
 
 /** How many messages one read of the factory's channels asks for. */
 export const READ = 200;
@@ -198,7 +199,7 @@ export async function setup(deps: Deps): Promise<Setup> {
     }
   }
   const vercel = await vercelStep(deps, local, project);
-  const found: Found = { me: vercel.me, recent: [], waiting: null, first: null };
+  const found: Found = { me: vercel.me, recent: [], waiting: null, install: null, first: null };
   const [connected, mirrored] = [githubStep(deps, project, found), slackStep(deps, project)];
   const [github, slack, tryIt] = await Promise.all([connected, mirrored, tryStep(deps, project, found, connected, mirrored)]);
   return { open: false, steps: [vercel.step, github, slack, tryIt], found };
@@ -287,7 +288,9 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
 
   const [{ total_count, repositories }, viewer] = read;
   const app = viewer?.replace(/\[bot\]$/, "") ?? null;
-  const install = app ? { link: { href: `https://github.com/apps/${app}/installations/new`, label: "Configure the app" } } : {};
+  // Where GitHub asks which repos the app is on: GitHub lists them there for whoever may see them.
+  found.install = app ? `https://github.com/apps/${app}/installations/new` : null;
+  const install = found.install ? { link: { href: found.install, label: "Configure the app" } } : {};
   if (total_count === 0) return step("github", [...tasks, todo(INSTALL, install)]);
   // Installed but in no channel: the board drops their PRs and issues (matched as GitHub writes them).
   // How many, and not which: the app's repos are read as the app, and whoever can open the deployment
