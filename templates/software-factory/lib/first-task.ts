@@ -23,19 +23,20 @@ export const templateReadme = (readme: string | undefined): boolean => readme?.i
  */
 export type FirstTask = "offer" | "started" | null;
 
-export function firstTask(readme: string | undefined, recent: MessageView[]): FirstTask {
+export function firstTask(readme: string | undefined, threads: MessageView[]): FirstTask {
   if (!templateReadme(readme)) return null;
-  return recent.some((message) => message.labels[FIRST_TASK_LABEL]) ? "started" : "offer";
+  return threads.some((message) => message.labels[FIRST_TASK_LABEL]) ? "started" : "offer";
 }
 
 /**
  * Starts it: the factory opens the thread itself, where it changes itself, and hands it to its
  * agent as the watcher would. The agent's own message wakes nobody, so the wake-up is sent here.
  * Asked twice, it starts once: the post carries an ID the board keeps one message for, and the
- * wake-up a key the agent's channel takes once.
+ * wake-up a key the agent's channel takes once. The ID names the channel, since a board keeps one
+ * message per ID and a team's factories share a board.
  */
 export async function startFirstTask(agent: Pick<Board, "post">, channel: string, wake: (message: AgentMessage) => Promise<void>): Promise<MessageView> {
-  const root = await agent.post(channel, { text: FIRST_TASK_TEXT, labels: { [FIRST_TASK_LABEL]: "readme" }, id: FIRST_TASK_LABEL });
+  const root = await agent.post(channel, { text: FIRST_TASK_TEXT, labels: { [FIRST_TASK_LABEL]: "readme" }, id: `${FIRST_TASK_LABEL}:${channel.replaceAll("/", ".")}` });
   await wake({ thread: root.id, key: `${FIRST_TASK_LABEL}-${root.id}`, text: `New board thread #${root.id}.` });
   return root;
 }

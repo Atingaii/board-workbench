@@ -10,7 +10,8 @@ import { channel } from "@/lib/project";
 // page's Start button posts here, and so can an agent setting the factory up.
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// The wake-up is tried 3 times, 30 seconds each at most, and says so in the thread when it never gets there.
+export const maxDuration = 300;
 
 const refuse = (message: string) => Response.json({ error: { code: "forbidden", message } }, { status: 403 });
 

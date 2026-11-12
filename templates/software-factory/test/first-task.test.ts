@@ -42,6 +42,15 @@ test("asked twice, it starts once: one thread, and the same wake-up key, which t
   assert.equal(new Set(woken.map((message) => message.key)).size, 1);
 });
 
+test("a team's factories share a board, and each starts its own first task there", async () => {
+  const team = board({ backend: local({ memory: true }) });
+  const wake = async () => {};
+  const a = await startFirstTask(team, "project-web/rsi", wake);
+  const b = await startFirstTask(team, "project-api/rsi", wake);
+  assert.notEqual(a.id, b.id);
+  assert.deepEqual((await team.messages({ channel: "project-api/" })).messages.map((message) => message.id), [b.id]);
+});
+
 test("the first task is on offer while the README is the template's and nothing started it, and gone once the README is the team's", async () => {
   const team = board({ backend: local({ memory: true }) });
   await team.post("project-factory/rsi", "hello");

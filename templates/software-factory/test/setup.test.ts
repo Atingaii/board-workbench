@@ -41,7 +41,7 @@ const me = (can: Record<string, string[]>) => ({ principal: DEPLOYMENT, can });
 
 /** A message by a person, or by the agent. */
 const message = (id: string, from: "ada" | "agent", re: string | null = null) =>
-  ({ id, re, by: { principal: from === "agent" ? DEPLOYMENT : "vercel:user:u_ada", profile: null, actor: "a" }, createdAt: "2026-11-03T00:00:00.000Z" }) as never;
+  ({ id, re, labels: {}, by: { principal: from === "agent" ? DEPLOYMENT : "vercel:user:u_ada", profile: null, actor: "a" }, createdAt: "2026-11-03T00:00:00.000Z" }) as never;
 
 function fake(options: { env?: Record<string, string | undefined>; routes?: Routes; deps?: Partial<Deps> } = {}) {
   const requests: string[] = [];
@@ -396,7 +396,7 @@ test("Slack's app in its channel, by name, is done", async () => {
 });
 
 /** A reply by this deployment under a profile. */
-const under = (profile: string) => ({ id: "13", re: "12", by: { principal: DEPLOYMENT, profile, actor: "a" } }) as never;
+const under = (profile: string) => ({ id: "13", re: "12", labels: {}, by: { principal: DEPLOYMENT, profile, actor: "a" } }) as never;
 
 test("what the deployment's watcher wrote, or its sync brought in, isn't the agent's reply", async () => {
   const steps = await shown(fake({ deps: { messages: async () => [message("12", "ada"), under("wake"), under("github:user:583231")] } }).deps);
@@ -460,6 +460,18 @@ test("the first task isn't offered before the factory can write to its own repo,
   // A README the team already made its own: the step says where to ask, and how to open the board.
   const [own] = todo((await shown(fake({ deps: { messages: async () => [] } }).deps)).try!);
   assert.deepEqual(own, { label: "Give it its first task", done: false, hint: "Ask it anything in project-factory/rsi.", commands: ["npx @vercel/board inspect --scope acme"] });
+});
+
+test("a first task started long ago, past what one read brings, isn't offered again", async () => {
+  // Its channels are busy with other things: the page asks for the first task's thread by its label.
+  const opened = { id: "20", re: null, labels: { "first-task": "readme" }, by: { principal: DEPLOYMENT, profile: null, actor: "a" } } as never;
+  const asked: unknown[] = [];
+  const busy = await setup(untouched({ messages: async () => [message("90", "ada")], threads: async (query) => (asked.push(query), [opened]) }).deps);
+  assert.equal(busy.open ? null : busy.found.first, "started");
+  assert.deepEqual(asked, [{ channel: "project-factory/", label: ["first-task"], limit: 1 }]);
+  // With no such thread, it's on offer.
+  const none = await setup(untouched({ messages: async () => [message("90", "ada")] }).deps);
+  assert.equal(none.open ? null : none.found.first, "offer");
 });
 
 test("once the first task started, it's the factory's to finish: the thread it opened isn't its reply", async () => {

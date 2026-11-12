@@ -1,6 +1,6 @@
 import type { Board, MessageView } from "@vercel/board";
 import { byAgent } from "../agent/lib/identity.ts";
-import { FIRST_TASK_PATH, firstTask, type FirstTask } from "./first-task.ts";
+import { FIRST_TASK_LABEL, FIRST_TASK_PATH, firstTask, type FirstTask } from "./first-task.ts";
 import { githubScope, ownRepo } from "./github.ts";
 import { projectOf, type Project } from "./project.ts";
 
@@ -378,6 +378,11 @@ async function tryStep(deps: Deps, project: Project, found: Found, github: Promi
   const replied = recent.some((m) => m.re !== null && byAgent(m.by, me.principal));
   // The first task is a pull request in the factory's own repo, so it's offered once the app can write there.
   found.first = isDone(await github) ? firstTask(deps.source("README.md"), recent) : null;
+  // Its thread may be older than what one read brings: before offering it again, ask for it by its label.
+  if (found.first === "offer") {
+    const started = await deps.threads({ channel: `${deps.synced.home}/`, label: [FIRST_TASK_LABEL], limit: 1 }).catch(() => []);
+    found.first = firstTask(deps.source("README.md"), started) ?? "offer";
+  }
   // Where people ask it things: where the factory changes itself, in Slack once its channel is mirrored there.
   const rsi = `${deps.synced.home}/rsi`;
   const mirror = mirrorOf(deps.synced.slackChannels, rsi);
