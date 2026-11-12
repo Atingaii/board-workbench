@@ -441,6 +441,18 @@ test("try suggests a first ask, where the factory changes itself: in Slack once 
     }).deps,
   );
   assert.equal(todo(slack.try!)[0]!.hint, "A good first ask, in #factory-rsi: make the README ours.");
+  // A Slack channel mapped by its ID has no name to say: the ask is for the board.
+  const byId = fake({
+    deps: { messages: async () => [], connect: async () => "app-token" },
+    routes: {
+      "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
+      "https://slack.com/api/users.conversations": conversations({ id: "C0123ABC", name: "factory-rsi" }),
+    },
+  });
+  byId.deps.synced.slackChannels = { C0123ABC: "project-factory/rsi" };
+  const mapped = await shown(byId.deps);
+  assert.equal(isDone(mapped.slack!), true);
+  assert.equal(todo(mapped.try!)[0]!.hint, "A good first ask, in project-factory/rsi: make the README ours.");
   // Once someone has posted, there's nothing to suggest.
   const posted = await shown(fake({ deps: { messages: async () => [message("12", "ada")] } }).deps);
   assert.deepEqual(posted.try!.tasks.filter((task) => task.hint), []);

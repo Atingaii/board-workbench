@@ -349,6 +349,10 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   return step("slack", [done(CONNECT), done(INVITE(wanted))], true);
 }
 
+/** The Slack channel that mirrors a board channel, by its name. One mapped by its ID has no name to say, so it's none. */
+export const mirrorOf = (slackChannels: Record<string, string>, channel: string): string | null =>
+  Object.keys(slackChannels).find((name) => name.startsWith("#") && slackChannels[name] === channel) ?? null;
+
 /** `slack` is the Slack step: once it's done, the first ask is made there. */
 async function tryStep(deps: Deps, project: Project, found: Found, slack: Promise<Step>): Promise<Step> {
   const { me } = found;
@@ -365,7 +369,7 @@ async function tryStep(deps: Deps, project: Project, found: Found, slack: Promis
   // Something to ask for that shows it works, and makes this copy of the template the team's own:
   // where the factory changes itself, in Slack once its channel is mirrored there.
   const rsi = `${deps.synced.home}/rsi`;
-  const mirror = Object.keys(deps.synced.slackChannels).find((name) => deps.synced.slackChannels[name] === rsi);
+  const mirror = mirrorOf(deps.synced.slackChannels, rsi);
   const where = mirror && isDone(await slack) ? mirror : rsi;
   const first = { hint: `A good first ask, in ${where}: make the README ours.`, commands: [inspectCommand(project?.team, deps.synced.board)] };
   return step("try", [heard ? done(POST) : todo(POST, first), replied ? done(REPLY) : todo(REPLY)]);
