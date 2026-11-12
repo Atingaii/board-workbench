@@ -128,6 +128,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/tasks/:id/unblock` | No body. A task that isn't blocked stays as it is |
 | POST | `/tasks/:id/reopen` | No body. A failed task is ready again |
 | POST | `/tasks/:id/assign` | `{ for }`: one of the owner's actors, or `null` for anyone who may claim it |
+| POST | `/tasks/:id/needs` | `{ needs }`: the IDs of the tasks it waits for now, in place of what it waited for |
 | POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled |
 | GET | `/grants` | `{ grants }`: each one's `id`, `principals`, `can`, `capped`, `by`, and `at`. Needs `manage` at `*`, or a team owner. See [Grants](#grants) |
 | POST | `/grants` | `{ principals, can }`: a new grant, even for principals another grant names. Needs `manage` at each pattern in `can`, and under each wherever your `x-board-can`'s or your own grants' limits narrow you, and what `everyone` gives wherever it gives something; `manage` everywhere to name an `oidc` principal. A key it doesn't know is 400. Answers `{ grant }` |
@@ -441,10 +442,20 @@ A task is a thread with a state. Its ID is its root's, and its root carries
 - **Completing a task** readies each task that waited only for it, in the same
   write. A failed or canceled one readies nothing.
 - **Its owner changes it,** while it may post or label in its channel, and so
-  does `manage` there: `block`, `unblock`, `reopen`, `assign`, and `cancel`.
+  does `manage` there: `block`, `unblock`, `reopen`, `assign`, `needs`, and
+  `cancel`.
   Anyone else gets 403 `task_not_owned`. A caller that writes as a profile
   owns only the tasks it made, and its principal, as no profile, any of them,
   as with [who edits what](../01-board/09-access.md#who-edits-what).
+- **What a task needs can change,** while it's waiting, ready, or blocked and
+  no one has claimed it: `POST /tasks/:id/needs` replaces them, checked as a
+  new task's are. It waits for the new ones in that write, and `task.ready`
+  follows in it when they've all completed; with none it's ready, a blocked
+  task stays blocked, and the same set changes nothing. One that waits for the
+  task already, through however many tasks, is 400 `invalid_needs`: the board
+  walks up to 500 tasks behind the new ones, and refuses a change it would
+  have to walk further for. A claimed task is 409 `task_claimed`, and a
+  finished one 409 `task_finished`.
 - **`GET /tasks`** lists open tasks unless `state` is `all` or one state. `owner`
   and `for` take a handle or an ID, and `needs` a task's ID. Each task is
   `{ message, replies, last }`, as [a thread summary](#listing-threads) is.
@@ -657,6 +668,7 @@ the thread key:
 | `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar`, `host`, `verified` | an actor writes for the first time or changes its display details. `host` (server) marks a principal a host's `authenticate` made, or one of its profiles, which sync never writes as. `verified` (server) says this write's credential named the actor as shown: under the handle it gave the principal, as itself or after `via`; each `actor.seen` says it anew, and its absence clears it |
 | `task.created` | `id`, `needs`, `for`, `by` | the thread rooted at `id` becomes a task, owned by `by.principal`. It waits while it has `needs` |
 | `task.assigned` | `id`, `for`, `by` | a task is assigned to an actor, or with `null` to anyone |
+| `task.needs_changed` | `id`, `needs`, `by` | what a task waits for changes. It waits while it has `needs`, until `task.ready`, and with none it's ready |
 | `task.ready` | `id` | (server) every task it needs has completed |
 | `task.claimed` | `id`, `epoch`, `until`, `by` | (server) `by` holds it until `until`. The log keeps the hash of the claim's token, which no view shows |
 | `task.renewed` | `id`, `epoch`, `until`, `by` | a claim's lease is extended |
@@ -752,7 +764,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
 | 400 | `reserved_label` | a write that sets or unsets a label under `board.` |
-| 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, the task itself, or a task that was canceled |
+| 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, the task itself, a task that was canceled, or, on a change, one that waits for it already |
 | 400 | `invalid_from` | a claim whose `from` names an owner by handle: several can share one, so `from` takes IDs |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
@@ -765,7 +777,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `platform_error`, `invalid_target`, `unsupported` | a source read the platform failed, of a target it can't read, or on a platform that reads nothing on demand |
 | 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
 | 403 | `forbidden` | a caller no grant lets in (the `hint` is the grant to create), a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-can` |
-| 403 | `task_not_owned` | blocking, unblocking, reopening, assigning, or canceling a task as neither its owner nor `manage` in its channel. A profile owns only the tasks it made; its principal, as itself, any of them |
+| 403 | `task_not_owned` | blocking, unblocking, reopening, assigning, canceling, or changing the needs of a task as neither its owner nor `manage` in its channel. A profile owns only the tasks it made; its principal, as itself, any of them |
 | 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
 | 403 | `not_a_project` | a `path` in `POST /watchers` from a caller that isn't a Vercel project, on a board that wakes by path: a path is on the caller's own project |
 | 404 | `not_found` | no such route, a request a board with no backend doesn't serve, or a webhook for a sync entry the board doesn't have |
@@ -783,7 +795,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 409 | `revision_conflict` | an edit or a delete whose `revision` isn't the message's: it's been edited or deleted since |
 | 409 | `newer_message` | a reply whose `after` isn't the thread's newest message: the message names one that came after it |
 | 409 | `already_a_task` | `POST /tasks` with `re` for a thread that's a task |
-| 409 | `task_claimed` | a claim of a task someone holds, a claim that lost a race, or a hold without the claim on a task someone holds |
+| 409 | `task_claimed` | a claim of a task someone holds, a claim that lost a race, or a hold or a change of needs without the claim on a task someone holds |
 | 409 | `task_assigned` | a claim of a task assigned to another actor |
 | 409 | `task_waiting`, `task_blocked`, `task_finished` | a claim, or another change, of a task in a state that doesn't take it |
 | 409 | `claim_lost` | a claim's write once the claim is over: released, settled, held, taken over, or past its lease |

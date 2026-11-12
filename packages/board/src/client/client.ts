@@ -569,6 +569,12 @@ export function createBoardClient(options: ClientOptions) {
       reopen: (id: string) => taskWrite(id, 'reopen'),
       /** Assigns a task to one of its owner's actors (`<owner>+<profile>`), the only one that claims it then, or with null to anyone who may. */
       assign: (id: string, actor: string | null) => taskWrite(id, 'assign', { for: actor }),
+      /**
+       * Replaces what a task waits for, by their IDs: it waits for those now, and is ready once they've all completed, or
+       * at once with none. For its owner, while no one holds it and it isn't finished. One that would make it wait for
+       * itself, through however many tasks, throws a 400 `invalid_needs`.
+       */
+      needs: (id: string, needs: string[]) => taskWrite(id, 'needs', { needs }),
       /** Cancels a task that hasn't completed, ending any claim. What waits for it keeps waiting. */
       cancel: (id: string, reason: string) => taskWrite(id, 'cancel', { reason }),
     },

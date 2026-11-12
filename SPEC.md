@@ -3606,8 +3606,23 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   read, in any channel, whoever owns it. One that doesn't exist, isn't a task,
   or would close a cycle is 400 `invalid_needs`, and so is one the caller
   can't read, in the same words: a task that became ready would say when a
-  task out of sight completed. Needs never change and nothing can need a
-  thread before it's a task, so the only cycle is a task that needs itself.
+  task out of sight completed. Nothing can need a thread before it's a task,
+  so a new task closes no cycle but by needing itself.
+- **What a task needs can change.** `team.tasks.needs(id, needs)` (`POST
+  /tasks/:id/needs`) replaces a task's prerequisites: for its owner, or
+  `manage` in its channel (403 `task_not_owned`), while it's waiting, ready,
+  or held for a person, and no one has claimed it. A claimed task is 409
+  `task_claimed`, since its claim was taken on what it needed; a claim whose
+  lease ran out is expired first, in the same write; a finished task is 409
+  `task_finished`. The new ones are checked as a new task's are, and must
+  close no cycle: one that waits for the task already, through however many
+  tasks, is 400 `invalid_needs`. The board walks what the new prerequisites
+  need, up to 500 tasks, and refuses a change it would have to walk further
+  for. In one write the task waits for them (`task.needs_changed`), and
+  `task.ready` follows when they've all completed; with none it's ready. A
+  held task stays held, and the same set changes nothing. A claim, a
+  completion readying what waited for it, and an unblock each go by what a
+  task needs as of their own write.
 - **A canceled task is no prerequisite.** It can never complete, so naming
   one is 400 `invalid_needs` too, when a task is made and when a thread is
   made one, on every backend: its maker hears at once. A failed task is one,
@@ -3695,6 +3710,7 @@ Task changes are board facts, in the board log:
 // Each carries `thread`, its root's thread key, beside `id`, as every by-ID event does: lanes go by it.
 'task.created':   z.object({ id: MessageId, thread, needs: z.array(MessageId), for: ActorId.nullable(), by: Author }), // the thread at `id` is a task; by.principal owns it
 'task.assigned':  z.object({ id, thread, for: ActorId.nullable(), by }),             // null: back to the pool
+'task.needs_changed': z.object({ id, thread, needs: z.array(MessageId), by }),       // what it waits for now, in place of what it waited for
 'task.ready':     z.object({ id, thread }),                                          // (server) every prerequisite has completed
 'task.claimed':   z.object({ id, thread, epoch, until, token, by }),                 // (server) until: ISO; token: the SHA-256 of the claim's secret, in no view
 'task.renewed':   z.object({ id, thread, epoch, until, by }),
@@ -3712,7 +3728,9 @@ Task changes are board facts, in the board log:
   Each event changes one root, so a fold of one message can't look at
   another's: `task.ready` is what says its prerequisites completed. A task made
   when they already have gets it in the same write, and so does one unblocked
-  once they have. A task needs at most 20 others.
+  once they have, and one whose needs change to ones that have: from
+  `task.needs_changed` it waits again while it has any, and with none it's
+  ready. A task needs at most 20 others.
 - **A write a task has moved on from changes nothing in the fold:** an older
   epoch, a finished task, a second `task.created`. The writes refuse first;
   the fold is what holds for whoever folds the log themselves.
@@ -3741,6 +3759,7 @@ Task changes are board facts, in the board log:
 | POST | `/tasks/:id/unblock` | `{}` |
 | POST | `/tasks/:id/reopen` | `{}`: a failed task only |
 | POST | `/tasks/:id/assign` | `{ for: ActorId \| null }`: one of the owner's actors, or the pool |
+| POST | `/tasks/:id/needs` | `{ needs: MessageId[] }`: what the task waits for now, in place of what it waited for, and none for a task that waits for nothing. Its owner's or `manage`'s, while no one holds it and it isn't finished |
 | POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled; a claimed one's claim ends |
 
 A task reads like the thread it is: `GET /messages/:id`. `lease` and `wait`

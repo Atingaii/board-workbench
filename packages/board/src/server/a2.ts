@@ -610,6 +610,7 @@ function build(options: A2Options, binding: BoardBinding) {
     unblockTask: async (caller, { id }) => tasks.unblock(await identityOf(caller), messageAt(id)),
     reopenTask: async (caller, { id }) => tasks.reopen(await identityOf(caller), messageAt(id)),
     assignTask: async (caller, { id, for: actor }) => tasks.assign(await identityOf(caller), messageAt(id), actor),
+    setTaskNeeds: async (caller, { id, needs }) => tasks.needs(await identityOf(caller), messageAt(id), needs),
     cancelTask: async (caller, { id, reason }) => tasks.cancel(await identityOf(caller), messageAt(id), reason),
     grants: async (caller) => access.grants(await identityOf(caller)),
     createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),

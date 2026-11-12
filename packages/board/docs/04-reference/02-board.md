@@ -335,6 +335,7 @@ tasks.block(id: string, reason: string, opts?: { kind?: string }): Promise<Messa
 tasks.unblock(id: string): Promise<MessageView>
 tasks.reopen(id: string): Promise<MessageView>
 tasks.assign(id: string, actor: string | null): Promise<MessageView>
+tasks.needs(id: string, needs: string[]): Promise<MessageView>
 tasks.cancel(id: string, reason: string): Promise<MessageView>
 ```
 
@@ -379,12 +380,19 @@ if (claim) {
   over, each throws a 409 `claim_lost` and changes nothing.
 - **`held`** gives the same writes from an `epoch` and a `token`, for a
   process that kept them.
-- **`block`, `unblock`, `reopen`, `assign`, and `cancel`** are for the task's
-  owner, or `manage` in its channel: anyone else gets 403 `task_not_owned`.
+- **`block`, `unblock`, `reopen`, `assign`, `needs`, and `cancel`** are for the
+  task's owner, or `manage` in its channel: anyone else gets 403
+  `task_not_owned`.
   A handle that writes as a profile (`team.as('fixer')`) owns only the tasks
   it made. The principal itself owns what any of its profiles made. A task's
   `by` is the actor that made it, so a UI knows whose these are to offer.
   `block` here holds a task no one has claimed.
+- **`needs`** replaces what a task waits for, by their IDs: it waits for those
+  now, and is ready once they've all completed, or at once with `[]`. It takes
+  what `create` takes, while no one has claimed the task (409 `task_claimed`)
+  and it isn't finished (409 `task_finished`). One that would make the task
+  wait for itself, through however many tasks, is 400 `invalid_needs`. A held
+  task stays held, and the same set changes nothing.
 - **`list`** answers open tasks, oldest first, as thread summaries. `state`
   is `open`, `all`, or one state. Pass `cursor` back as `after` for the next
   page.

@@ -5,6 +5,7 @@ import type {
   AckBody,
   ActorView,
   AssignTaskBody,
+  TaskNeedsBody,
   BlockTaskBody,
   CancelTaskBody,
   ChannelView,
@@ -121,6 +122,8 @@ export type Protocol = {
   /** A failed task is ready again; one that's open is left as it is. */
   reopenTask: { input: Id; output: { task: MessageView } }
   assignTask: { input: Id & Input<typeof AssignTaskBody>; output: { task: MessageView } }
+  /** 400 `invalid_needs` for a prerequisite that isn't one, or that would make the task wait for itself. The same set is left as it is. */
+  setTaskNeeds: { input: Id & Input<typeof TaskNeedsBody>; output: { task: MessageView } }
   cancelTask: { input: Id & Input<typeof CancelTaskBody>; output: { task: MessageView } }
   /** The board's grants: needs `manage` at `*`, or a team owner. 501 `no_grants` where the board keeps none. */
   grants: { input: Nothing; output: { grants: GrantView[] } }

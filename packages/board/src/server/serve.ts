@@ -1,6 +1,7 @@
 import {
   AckBody,
   AssignTaskBody,
+  TaskNeedsBody,
   BlockTaskBody,
   CancelTaskBody,
   ClaimReadyTaskBody,
@@ -170,6 +171,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return { id, ...BlockTaskBody.parse(await body()) }
     case 'assignTask':
       return { id, ...AssignTaskBody.parse(await body()) }
+    case 'setTaskNeeds':
+      return { id, ...TaskNeedsBody.parse(await body()) }
     case 'cancelTask':
       return { id, ...CancelTaskBody.parse(await body()) }
     case 'createGrant':

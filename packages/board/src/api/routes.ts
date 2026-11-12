@@ -276,6 +276,8 @@ export const BlockTaskBody = z
   .refine((body) => (body.epoch === undefined) === (body.token === undefined), { message: 'a claim is its `epoch` and its `token`: pass both, or neither' })
 /** The one actor of its owner's that claims the task, or null for anyone who may. */
 export const AssignTaskBody = z.object({ for: ActorId.nullable() })
+/** The tasks it waits for now, in place of what it waited for: none, for a task that waits for nothing. */
+export const TaskNeedsBody = z.object({ needs: z.array(Ref).max(TASK_NEEDS_MAX) })
 export const CancelTaskBody = z.object({ reason: TaskNote })
 
 const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
@@ -1063,6 +1065,8 @@ export const routes = {
   unblockTask: { method: 'POST', path: '/tasks/:id/unblock' },
   reopenTask: { method: 'POST', path: '/tasks/:id/reopen' },
   assignTask: { method: 'POST', path: '/tasks/:id/assign', body: AssignTaskBody },
+  /** Replaces what a task waits for, while no one holds it and it isn't finished. */
+  setTaskNeeds: { method: 'POST', path: '/tasks/:id/needs', body: TaskNeedsBody },
   cancelTask: { method: 'POST', path: '/tasks/:id/cancel', body: CancelTaskBody },
   /** Listing grants needs manage at `*`; changing one, manage at each pattern its `can` names. Team owners always may. */
   grants: { method: 'GET', path: '/grants' },

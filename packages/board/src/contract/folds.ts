@@ -212,6 +212,7 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       return labeled(message)
     }
     case 'task.assigned':
+    case 'task.needs_changed':
     case 'task.ready':
     case 'task.claimed':
     case 'task.renewed':
@@ -253,6 +254,13 @@ function foldTask(task: Task, event: Exclude<TaskEvent, { type: 'task.created' }
     case 'task.assigned':
       if (task.for === event.payload.for) return false
       task.for = event.payload.for
+      return true
+    case 'task.needs_changed':
+      // What it waits for changes while no one holds it and it isn't finished. It waits again when it waits for
+      // any task: `task.ready` follows at once when they've all completed. One held for a person stays held.
+      if (task.state !== 'waiting' && task.state !== 'ready' && task.state !== 'blocked') return false
+      task.needs = [...event.payload.needs]
+      if (task.state !== 'blocked') task.state = task.needs.length > 0 ? 'waiting' : 'ready'
       return true
     case 'task.ready':
       if (task.state !== 'waiting') return false

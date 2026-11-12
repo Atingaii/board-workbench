@@ -151,6 +151,12 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: `/tasks/${secret.task}/assign`, body: { for: null }, status: 404 },
     { method: 'POST', path: `/tasks/${open.task}/assign`, body: { for: null }, status: 403 },
   ],
+  setTaskNeeds: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/needs`, body: { needs: [] }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/needs`, body: { needs: [] }, status: 403 },
+    // What it would wait for is checked only once it's the caller's to change: a task it can't read stays out of sight.
+    { method: 'POST', path: `/tasks/${open.task}/needs`, body: { needs: [secret.task] }, status: 403 },
+  ],
   cancelTask: ({ secret, open }) => [
     { method: 'POST', path: `/tasks/${secret.task}/cancel`, body: { reason: 'mine now' }, status: 404 },
     { method: 'POST', path: `/tasks/${open.task}/cancel`, body: { reason: 'mine now' }, status: 403 },

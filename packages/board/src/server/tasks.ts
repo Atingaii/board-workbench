@@ -46,6 +46,9 @@ const stateNow = (task: Task, at: number): TaskState => (lapsed(task, at) ? 'rea
 
 const finished = (task: Task) => task.state === 'completed' || task.state === 'failed' || task.state === 'canceled'
 
+/** How many tasks a change of what a task needs walks, behind the new ones, to see that none waits for it. */
+export const NEEDS_WALK_MAX = 500
+
 /** Whether `value` is shaped like an ID, `<where it's from>:<who>`, as every principal's and actor's is. What it names is a credential's to say, never a client's. */
 const isId = (value: string) => /^[^\s:]+:\S+$/.test(value)
 
@@ -284,6 +287,31 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       if (need.task.state === 'canceled') throw invalid(value, 'was canceled: it can never complete')
     }
     return { ids, completed: ids.every((id) => found.get(id)!.task!.state === 'completed') }
+  }
+
+  /**
+   * Refuses prerequisites that would make task `id` wait for itself: one that waits for it already,
+   * through however many tasks. A new task can't be waited for, so only a change of what a task
+   * needs can close a cycle. It walks what the new ones need, and what those need, a level a read,
+   * and gives up past `NEEDS_WALK_MAX` tasks: a change it can't check is refused too.
+   */
+  async function acyclic(id: number, needs: readonly number[], position: number) {
+    const invalid = (need: number, why: string) => badRequest(`needs: #${need} ${why}`, 'invalid_needs')
+    /** Each task the walk reached, by the new prerequisite it reached it from. */
+    const from = new Map<number, number>(needs.map((need) => [need, need]))
+    for (let level = [...needs]; level.length > 0; ) {
+      const found = await writes().reads.tables.messagesAt(level, position)
+      const next: number[] = []
+      for (const at of level)
+        for (const need of found.get(at)?.task?.needs ?? []) {
+          if (need === id) throw invalid(from.get(at)!, `waits for #${id} already: they would wait for each other`)
+          if (from.has(need)) continue
+          from.set(need, from.get(at)!)
+          next.push(need)
+        }
+      if (from.size > NEEDS_WALK_MAX) throw invalid(needs[0]!, `has more than ${NEEDS_WALK_MAX} tasks behind it and the others: too many to check that none waits for #${id}`)
+      level = next
+    }
   }
 
   /** Whether every task `task` waits for has completed, as of `position`, leaving out `but`, which is completing now. */
@@ -640,6 +668,34 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       const root = await changeTask(identity, id, (found) => {
         if (finished(found.task)) throw conflict('task_finished', `#${id} is ${found.task.state}`)
         return found.task.for === assigned ? [] : [{ type: 'task.assigned', payload: { id, thread: found.thread, for: assigned, by: identity.author } }]
+      })
+      return { task: await shown(identity, root) }
+    },
+
+    /**
+     * Replaces what a task waits for, for its owner or `manage`, while no one holds it and it isn't
+     * finished. They're checked as a new task's are, and must leave it waiting for no task that
+     * waits for it. It waits for them from this write, and `task.ready` follows in it when they've
+     * all completed; with none it's ready. A held task stays held, and the same set changes nothing.
+     */
+    async needs(identity: Identity, id: number, refs: readonly string[]): Promise<{ task: MessageView }> {
+      const { principal } = identity
+      owns(identity, await taskOf(principal.access, id))
+      const root = await changeTask(identity, id, async (found, position) => {
+        const { task } = found
+        if (finished(task)) throw conflict('task_finished', `#${id} is ${task.state}`)
+        // A claim whose lease ran out is over: its expiry goes first, in the same append.
+        const over = lapsed(task, Date.now())
+        if (task.state === 'claimed' && !over) throw conflict('task_claimed', `#${id} is claimed until ${task.claim!.until}: what it needs changes once no one holds it`)
+        const needs = await needsAt(principal.access, refs, position, id)
+        if (needs.ids.length === task.needs.length && needs.ids.every((need) => task.needs.includes(need))) return []
+        await acyclic(id, needs.ids, position)
+        const about = { id, thread: found.thread }
+        return [
+          ...(over ? [{ type: 'task.expired' as const, payload: { ...about, epoch: task.epoch } }] : []),
+          { type: 'task.needs_changed', payload: { ...about, needs: needs.ids, by: identity.author } },
+          ...(needs.ids.length > 0 && needs.completed && task.state !== 'blocked' ? [{ type: 'task.ready' as const, payload: about }] : []),
+        ]
       })
       return { task: await shown(identity, root) }
     },
