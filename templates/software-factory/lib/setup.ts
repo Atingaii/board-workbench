@@ -191,7 +191,8 @@ export async function setup(deps: Deps): Promise<Setup> {
   }
   const vercel = await vercelStep(deps, local, project);
   const found: Found = { me: vercel.me, recent: [], waiting: null };
-  const [github, slack, tryIt] = await Promise.all([githubStep(deps, project, found), slackStep(deps, project), tryStep(deps, project, found)]);
+  const mirrored = slackStep(deps, project);
+  const [github, slack, tryIt] = await Promise.all([githubStep(deps, project, found), mirrored, tryStep(deps, project, found, mirrored)]);
   return { open: false, steps: [vercel.step, github, slack, tryIt], found };
 }
 
@@ -348,7 +349,8 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   return step("slack", [done(CONNECT), done(INVITE(wanted))], true);
 }
 
-async function tryStep(deps: Deps, project: Project, found: Found): Promise<Step> {
+/** `slack` is the Slack step: once it's done, the first ask is made there. */
+async function tryStep(deps: Deps, project: Project, found: Found, slack: Promise<Step>): Promise<Step> {
   const { me } = found;
   const POST = "Post on the board, or open an issue";
   const REPLY = "Get a reply from the agent";
@@ -360,7 +362,13 @@ async function tryStep(deps: Deps, project: Project, found: Found): Promise<Step
   found.recent = recent;
   const heard = recent.some((m) => !byAgent(m.by, me.principal));
   const replied = recent.some((m) => byAgent(m.by, me.principal));
-  return step("try", [heard ? done(POST) : todo(POST, { commands: [inspectCommand(project?.team, deps.synced.board)] }), replied ? done(REPLY) : todo(REPLY)]);
+  // Something to ask for that shows it works, and makes this copy of the template the team's own:
+  // where the factory changes itself, in Slack once its channel is mirrored there.
+  const rsi = `${deps.synced.home}/rsi`;
+  const mirror = Object.keys(deps.synced.slackChannels).find((name) => deps.synced.slackChannels[name] === rsi);
+  const where = mirror && isDone(await slack) ? mirror : rsi;
+  const first = { hint: `A good first ask, in ${where}: make the README ours.`, commands: [inspectCommand(project?.team, deps.synced.board)] };
+  return step("try", [heard ? done(POST) : todo(POST, first), replied ? done(REPLY) : todo(REPLY)]);
 }
 
 /** What the checks ask the board, as this deployment. */
