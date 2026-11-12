@@ -33,11 +33,10 @@ async function pageOf(provided: (() => Promise<string>) | undefined): Promise<st
     throw new Failed({
       class: 'unknown',
       reason: 'no_inspector_page',
-      message: "The inspector's page isn't beside board's CLI.",
-      next: [
-        { instruction: "An app that bundles board's CLI passes it to createApp as inspectorPage" },
-        { instruction: 'From source, build board first: pnpm --filter @vercel/board build' },
-      ],
+      // A broken install, or an app that bundles board's CLI without handing it the page: either
+      // way, the person who ran it can only reinstall or update. How an app hands it over is in the docs.
+      message: "The inspector's page isn't installed with this CLI.",
+      next: [{ instruction: 'Reinstall or update the CLI' }],
     })
   return found
 }
