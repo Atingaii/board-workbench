@@ -100,6 +100,8 @@
     "@types/react-dom": "^19.3.0",
     "@vercel/connect": "^2.3.4",
     "ai": "^7.0.130",
+    "ajv": "8.17.1",
+    "ajv-formats": "2.1.1",
     "chat": "^4.41.1",
     "esbuild": "0.28.1",
     "experimental-a2": "0.24.0",
