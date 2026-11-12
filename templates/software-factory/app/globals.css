@@ -391,6 +391,12 @@ pre {
   margin: 0;
 }
 
+/* What a number counts comes first for a reader, and under it for the eye. */
+.stat {
+  display: flex;
+  flex-direction: column-reverse;
+}
+
 .stat dd {
   margin: 0;
   color: var(--bright);

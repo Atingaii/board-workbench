@@ -30,8 +30,8 @@ const median = (values: number[]): number | null => {
 
 /**
  * `recent` is the latest messages in the factory's channels, a read of at most `limit`; `pulls`,
- * the messages there labeled as a pull request's; `principal`, who this deployment is on the board,
- * which tells the agent's messages from the rest.
+ * the roots of the threads there labeled as a pull request's; `principal`, who this deployment is on
+ * the board, which tells the agent's messages from the rest.
  */
 export function overview(recent: MessageView[], pulls: MessageView[], principal: string, now: Date, limit: number): Overview {
   const at = (message: MessageView) => Date.parse(message.createdAt);
@@ -51,7 +51,7 @@ export function overview(recent: MessageView[], pulls: MessageView[], principal:
   });
   const replies = recent.filter(agent).map(at);
 
-  const roots = pulls.filter((message) => message.re === null && message.labels.pr);
+  const roots = pulls.filter((message) => message.labels.pr);
   const state = (message: MessageView) => message.labels.state;
   return {
     week: {

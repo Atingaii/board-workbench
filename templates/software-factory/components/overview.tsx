@@ -19,8 +19,8 @@ export function Command({ text }: { text: string }): ReactNode {
 function Stat({ value, label }: { value: string; label: string }): ReactNode {
   return (
     <div className="stat">
-      <dd>{value}</dd>
       <dt>{label}</dt>
+      <dd>{value}</dd>
     </div>
   );
 }

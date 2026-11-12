@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { agentPrompt, joinPrompt, markdown } from "../lib/markdown.ts";
 import { channel } from "../lib/project.ts";
-import { isDone, setup, type Deps, type Step, type Task } from "../lib/setup.ts";
+import { boardDeps, isDone, setup, type Deps, type Step, type Task } from "../lib/setup.ts";
 
 // The launcher's steps, driven as the page drives them, against a fake network: what a person sees is
 // each step's tasks, done or with what helps do them, and what the outside world sees is the requests it sends.
@@ -70,6 +70,7 @@ function fake(options: { env?: Record<string, string | undefined>; routes?: Rout
     // What a new board gives every project on the team.
     me: async () => me({ "*": ["read", "post", "react", "label", "sync"] }),
     messages: async () => [message("12", "ada"), message("13", "agent", "12")],
+    threads: async () => [],
     source: sources(() => CHANNELS),
     ...options.deps,
   };
@@ -617,13 +618,31 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
 });
 
 test("the prompt for an agent to join names the team's board, the factory's channels, and where its ways are written", () => {
-  const prompt = joinPrompt({ origin: "https://factory.acme.dev", team: "acme", home: "project-factory", repo: "acme/factory" });
+  const prompt = joinPrompt({ origin: "https://factory.acme.dev", team: "acme", board: null, home: "project-factory", repo: "acme/factory" });
   assert.ok(prompt.startsWith("Join the software factory at https://factory.acme.dev"));
   assert.ok(prompt.includes("vercel board whoami --scope acme"));
   assert.ok(prompt.includes("vercel board read project-factory/ --scope acme"));
   assert.ok(prompt.includes("https://github.com/acme/factory"));
   // Off a deployment from Git there's no repo to point at, and with no team the CLI's own linked one is used.
-  const bare = joinPrompt({ origin: "http://localhost:3000", team: undefined, home: "project-factory", repo: null });
+  const bare = joinPrompt({ origin: "http://localhost:3000", team: undefined, board: null, home: "project-factory", repo: null });
   assert.ok(!bare.includes("github.com") && !bare.includes("--scope"));
   assert.ok(bare.includes("vercel board read project-factory/\n"));
+  // A preview's or a dev server's board isn't the team's default one: the commands name it, or they'd reach production's.
+  const named = joinPrompt({ origin: "https://factory-git-fix.acme.dev", team: "acme", board: "factory-dev", home: "project-factory", repo: null });
+  assert.ok(named.includes("vercel board whoami --scope acme --name factory-dev"));
+  assert.ok(named.includes("vercel board read project-factory/ --scope acme --name factory-dev"));
+});
+
+test("the pull requests the page reads are their threads' roots, however many replies bury them", async () => {
+  // A real board kept in memory, with one busy pull request: more replies than one read of messages brings.
+  const { board } = await import("@vercel/board");
+  const { local } = await import("@vercel/board/backend-local");
+  const team = board({ backend: local({ memory: true }) });
+  const busy = await team.post("project-factory/web", { text: "PR #1: Fix the build", labels: { pr: "acme/web#1", state: "open" } });
+  const quiet = await team.post("project-factory/rsi", { text: "PR #2: Tidy the README", labels: { pr: "acme/factory#2", state: "merged" } });
+  await team.post("project-factory", "not a pull request");
+  await team.post("elsewhere", { text: "PR #9: another factory's", labels: { pr: "acme/other#9", state: "open" } });
+  for (let i = 0; i < 12; i++) await team.reply(busy.id, `ci run ${i}`);
+  const roots = await boardDeps(team).threads({ channel: "project-factory/", label: ["pr"], limit: 10 });
+  assert.deepEqual(roots.map((root) => root.id).sort(), [busy.id, quiet.id].sort());
 });

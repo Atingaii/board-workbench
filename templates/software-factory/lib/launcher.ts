@@ -41,14 +41,15 @@ export async function check(host: string | null): Promise<Launcher> {
   const origin = `${local ? "http" : "https"}://${host ?? deps.env.VERCEL_PROJECT_PRODUCTION_URL ?? "localhost"}`;
   let running: Running | null = null;
   if (!result.open && result.found.me && progress(result.steps).running) {
-    // The threads the GitHub sync labels as pull requests, in this factory's channels. One more read, only once it runs.
-    const pulls = await deps.messages({ channel: `${home}/`, label: ["pr"], limit: READ }).catch(() => []);
+    // The threads the GitHub sync labels as pull requests, in this factory's channels: their roots, one
+    // per thread however many replies it has. One more read, only once it runs.
+    const pulls = await deps.threads({ channel: `${home}/`, label: ["pr"], limit: READ }).catch(() => []);
     const rsi = channel("rsi");
     running = {
       overview: overview(result.found.recent, pulls, result.found.me.principal, new Date(), READ),
       repos: Object.entries(repoChannels).map(([repo, to]) => ({ repo, channel: to })),
       ask: { channel: rsi, slack: Object.keys(slackChannels).find((name) => slackChannels[name] === rsi) ?? null, waiting: result.found.waiting?.length ?? null },
-      join: joinPrompt({ origin, team, home, repo: ownRepo(deps.env) }),
+      join: joinPrompt({ origin, team, board: boardName, home, repo: ownRepo(deps.env) }),
     };
   }
   return { result, inspect: inspectCommand(team, boardName), origin, local, running };

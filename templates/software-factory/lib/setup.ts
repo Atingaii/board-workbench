@@ -88,7 +88,9 @@ export type Deps = {
   /** Who this deployment is on its board, and what it may do there, by channel pattern. Rejects with the board's own error when it can't use it. */
   me(): Promise<Me>;
   /** The board's latest messages in a channel, newest last. */
-  messages(query: { channel: string; limit: number; label?: string[] }): Promise<MessageView[]>;
+  messages(query: { channel: string; limit: number }): Promise<MessageView[]>;
+  /** The roots of the latest threads in a channel that carry a label, one per thread however many replies it has, the last active last. */
+  threads(query: { channel: string; label: string[]; limit: number }): Promise<MessageView[]>;
   /** A file of this factory as it was deployed, by its path from the project's root, to link to its lines. Nothing when it can't be read. */
   source(file: string): string | undefined;
 };
@@ -360,16 +362,17 @@ async function tryStep(deps: Deps, project: Project, found: Found): Promise<Step
 }
 
 /** What the checks ask the board, as this deployment. */
-export const boardDeps = (board: Board): { me: Deps["me"]; messages: Deps["messages"] } => ({
+export const boardDeps = (board: Board): Pick<Deps, "me" | "messages" | "threads"> => ({
   me: async () => {
     const { principal, can } = await board.me();
     return { principal, can };
   },
   messages: async (query) => (await board.messages(query)).messages,
+  threads: async (query) => (await board.threads(query)).threads.map((thread) => thread.message),
 });
 
 /** The checks' real dependencies, loaded only when the launcher runs. */
-export async function liveDeps(board: { me: Deps["me"]; messages: Deps["messages"] }, synced: Synced): Promise<Deps> {
+export async function liveDeps(board: Pick<Deps, "me" | "messages" | "threads">, synced: Synced): Promise<Deps> {
   const [{ getVercelOidcToken }, { getToken }, { gateway }, { readFileSync }, { join }] = await Promise.all([
     import("@vercel/oidc"),
     import("@vercel/connect"),
@@ -386,6 +389,7 @@ export async function liveDeps(board: { me: Deps["me"]; messages: Deps["messages
     credits: async () => Number((await gateway.getCredits()).balance),
     me: board.me,
     messages: board.messages,
+    threads: board.threads,
     // next.config.ts keeps the files the launcher links to in every route's function.
     source: (file) => {
       try {

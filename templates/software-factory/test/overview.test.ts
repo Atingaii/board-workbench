@@ -79,8 +79,6 @@ test("pull requests are counted by the state their thread is labeled with, and t
     pull("acme/web", 11, "merged"),
     pull("acme/web", 10, "merged"),
     pull("acme/web", 9, "closed"),
-    // A reply in a pull request's thread matches the label too: it isn't another pull request.
-    message("pr12", "ada", HOUR, { labels: { pr: "acme/web#12", state: "open" } }),
   ];
   assert.deepEqual(overview([], pulls, DEPLOYMENT, NOW, 200).pulls, {
     open: [

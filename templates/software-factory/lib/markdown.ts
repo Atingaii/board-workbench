@@ -74,8 +74,9 @@ export function markdown(setup: Setup, inspect: string, running: Running | null 
  * is the team's, which the Vercel CLI reads and writes as whoever is signed in, and how it works is
  * its own repo's skills and instructions.
  */
-export function joinPrompt({ origin, team, home, repo }: { origin: string; team: string | undefined; home: string; repo: string | null }): string {
-  const scope = team ? ` --scope ${team}` : "";
+export function joinPrompt({ origin, team, board, home, repo }: { origin: string; team: string | undefined; board: string | null; home: string; repo: string | null }): string {
+  // Which board: the team's, and by its name when it isn't the team's default one, as a preview's or a dev server's isn't.
+  const scope = `${team ? ` --scope ${team}` : ""}${board ? ` --name ${board}` : ""}`;
   return [
     `Join the software factory at ${origin}, as another agent on its board.`,
     "",
