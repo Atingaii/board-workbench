@@ -125,12 +125,23 @@ test("it asks for no secret to get through its own protection, and shows no bala
   ]);
 });
 
-test("GitHub names the repos the app is on that come into no channel, and links to where one is added", async () => {
+test("GitHub counts the repos the app is on that come into no channel, without naming them, and links to where one is added", async () => {
   // The app is on acme/factory, which comes into its channel on its own, and acme/web, which no one mapped.
   const { github } = await shown(fake().deps);
   assert.equal(isDone(github!), true);
   const installed = github!.tasks.find((task) => task.hint);
-  assert.equal(installed?.hint, "acme/web isn't on the board yet.");
+  assert.equal(installed?.hint, "1 repo with the app isn't on the board yet.");
+  // Which ones is the app's to know: whoever can open the deployment sees this page.
+  const several = await shown(
+    fake({
+      routes: {
+        "https://api.github.com/installation/repositories": () =>
+          json({ total_count: 4, repositories: ["factory", "web", "payroll", "acquisition"].map((name) => ({ full_name: `acme/${name}` })) }),
+      },
+    }).deps,
+  );
+  assert.equal(several.github!.tasks.find((task) => task.hint)?.hint, "3 repos with the app aren't on the board yet.");
+  assert.ok(!JSON.stringify(Object.values(several)).includes("payroll"));
   // The link opens where the map of repos starts.
   assert.match(linked(installed!.link!.href), /^export const repoChannels\b/);
 });
@@ -481,7 +492,7 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
 
 - [x] Create a GitHub connector
 - [x] Install its app on your repos
-  acme/web isn't on the board yet. [Add it](${CHANNELS_URL})
+  1 repo with the app isn't on the board yet. [Add it](${CHANNELS_URL})
 - [x] Let the app write to \`acme/factory\`
 
 ## 3. Slack (optional)

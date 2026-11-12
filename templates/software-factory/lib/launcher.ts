@@ -48,7 +48,7 @@ export async function check(host: string | null): Promise<Launcher> {
     running = {
       overview: overview(result.found.recent, pulls, result.found.me.principal, new Date(), READ),
       repos: Object.entries(repoChannels).map(([repo, to]) => ({ repo, channel: to })),
-      ask: { channel: rsi, slack: Object.keys(slackChannels).find((name) => slackChannels[name] === rsi) ?? null, waiting: result.found.waiting?.length ?? null },
+      ask: { channel: rsi, slack: Object.keys(slackChannels).find((name) => slackChannels[name] === rsi) ?? null, waiting: result.found.waiting },
       join: joinPrompt({ origin, team, board: boardName, home, repo: ownRepo(deps.env) }),
     };
   }

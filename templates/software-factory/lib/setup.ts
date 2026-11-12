@@ -36,10 +36,10 @@ export type Me = { principal: string; can: Record<string, readonly string[]> };
 
 /**
  * What the checks came across on the way, for the page to show once the factory runs: this
- * deployment on its board (null when it can't use it), the latest messages in its channels, and the
- * repos its GitHub app is on that come into no channel (null when that couldn't be told).
+ * deployment on its board (null when it can't use it), the latest messages in its channels, and how
+ * many repos its GitHub app is on that come into no channel (null when that couldn't be told).
  */
-export type Found = { me: Me | null; recent: MessageView[]; waiting: string[] | null };
+export type Found = { me: Me | null; recent: MessageView[]; waiting: number | null };
 
 /** How many messages one read of the factory's channels asks for. */
 export const READ = 200;
@@ -281,11 +281,13 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
   const install = app ? { link: { href: `https://github.com/apps/${app}/installations/new`, label: "Configure the app" } } : {};
   if (total_count === 0) return step("github", [...tasks, todo(INSTALL, install)]);
   // Installed but in no channel: the board drops their PRs and issues (matched as GitHub writes them).
+  // How many, and not which: the app's repos are read as the app, and whoever can open the deployment
+  // sees this page, whatever they can see on GitHub.
   const mapped = deps.synced.repoChannels;
-  const off = total_count > repositories.length ? [] : repositories.map((repo) => repo.full_name).filter((name) => !(name in mapped));
-  found.waiting = total_count > repositories.length ? null : off;
+  const off = total_count > repositories.length ? [] : repositories.filter((repo) => !(repo.full_name in mapped));
+  found.waiting = total_count > repositories.length ? null : off.length;
   const several = off.length > 1;
-  const unmapped = `${off.slice(0, 2).join(", ")}${off.length > 2 ? `, +${off.length - 2}` : ""} ${several ? "aren't" : "isn't"} on the board yet.`;
+  const unmapped = `${off.length} ${several ? "repos" : "repo"} with the app ${several ? "aren't" : "isn't"} on the board yet.`;
   // The link opens where the map of repos starts.
   const map = sourceLink(deps, CHANNELS_FILE, several ? "Add them" : "Add it", (lines) => lines.findIndex((line) => line.startsWith("export const repoChannels")));
   tasks.push(done(INSTALL, off.length ? { hint: unmapped, ...map } : {}));
