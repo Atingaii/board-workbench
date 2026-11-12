@@ -61,6 +61,11 @@ pnpm build
   `setup_steps` tool. `/` answers the markdown to whatever doesn't ask for a page (the rewrites in
   `next.config.ts`), so someone can tell their agent "set up" and the deployment's URL. A link to
   `channels.ts` opens on a line found in the file as deployed, never a remembered number.
+- **The launcher writes one thing, when asked: the factory's first task** (`lib/first-task.ts`,
+  `POST /api/launcher/first-task`). While the README is still the template's, the page offers to
+  start it: the factory opens a thread where it changes itself, labeled `first-task`, and hands
+  it to its agent as the watcher would, since its own message wakes nobody. Asked twice it starts
+  once, and only the deployment's own page or a client that isn't a browser may ask.
 - **While strangers can open the deployment, the page and `app/api/launcher/` say only how to
   protect it,** and nothing about the factory.
 - **The deployment calls itself with its OIDC token, and no bypass secret.** The watcher reaches the
