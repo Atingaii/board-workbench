@@ -976,7 +976,9 @@ What can go wrong, by `reason`:
 | `invalid_needs` | `--needs` named something that isn't a task you can read | 2 |
 | `invalid_from` | `--from` named an owner by handle: several can share one, so it takes IDs | 2 |
 | `command_not_found` | `run`'s command couldn't start. The task is released | 1 |
-| `no_tasks` | the board keeps no tasks, as Vercel's doesn't yet | 1 |
+| `claim_too_wide` | on Vercel's board, `--ready` with `--from` would look in more than 200 places, its channels times the owners it takes from: name fewer owners, or a smaller subtree | 1 |
+| `channel_tree_too_large` | on Vercel's board, `--ready` named a subtree with more than 50 channels you may claim in, or a list more than 50 for a caller that doesn't read the whole board: name a channel, or a smaller subtree | 1 |
+| `no_tasks` | the board keeps no tasks | 1 |
 
 ```text
 $ vb tasks claim 832

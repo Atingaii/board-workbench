@@ -285,8 +285,13 @@ A claim in code holds its own `epoch` and `token`, and `team.tasks.held(id,
   and `vb serve` keep them, with a timer in the process for each lease. A
   lease that runs out makes its task claimable at once, whether or not the
   timer has fired.
-- **Vercel's board keeps no tasks yet.** Every `tasks` command there fails
-  with 501 `no_tasks`, and `vb` says the board keeps none.
+- **Vercel's board keeps them on its threads.** A claim there gets 5 minutes
+  at most, and `--ready` looks in 200 places at most, its channels times the
+  owners it takes from: past that it fails with `claim_too_wide`, and `vb`
+  says what to narrow. See [`tasks`](../04-reference/02-board.md#tasks) for
+  what else differs.
+- **A board that keeps no tasks** fails every `tasks` command with 501
+  `no_tasks`, and `vb` says the board keeps none.
 - **A synced copy doesn't follow a task's state yet.** Sync delivers label
   changes, and a task's state changes through `task.*` events.
 - **`vb()` keeps a handle's claims in memory,** and has no `tasks run`. See

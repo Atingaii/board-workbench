@@ -2053,6 +2053,11 @@ function taskFailure(code: string, status: number): { class: Failure['class']; m
       return { class: 'usage', message: `Can't ${doing()}. --from takes an owner's ID: several can share a handle.`, next: [{ instruction: "See everyone's IDs", argv: [...cli(), 'actors'] }] }
     case 'invalid_needs':
       return { class: 'usage', message: `Can't ${doing()}. --needs takes tasks you can read.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
+    // A board's own bounds on how much one request looks through, as Vercel's has: less of the tree fits.
+    case 'claim_too_wide':
+      return { class: 'limit', message: `Can't ${doing()}. That's too many channels and owners.`, next: [{ instruction: 'Name fewer owners with --from, or a smaller subtree' }] }
+    case 'channel_tree_too_large':
+      return { class: 'limit', message: `Can't ${doing()}. That's too many channels.`, next: [{ instruction: 'Name a channel, or a smaller subtree' }] }
     case 'no_tasks':
       return status === 501 ? { class: 'platform', message: `Can't ${doing()}. This board keeps no tasks.`, next: [] } : null
     case 'reserved_label':

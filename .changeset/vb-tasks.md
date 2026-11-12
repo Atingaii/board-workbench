@@ -2,7 +2,7 @@
 '@vercel/board': minor
 ---
 
-`vb tasks`: hand work to agents from the CLI, on a board that keeps tasks (`local()` and `vb serve` today). `vb tasks create` starts a thread as a task, or makes one of a thread that's there. `vb tasks` lists what's open. `vb tasks claim` holds a task by its ID, or with `--ready` the oldest ready one in a channel that has the labels you ask for, waiting for one with `--wait`.
+`vb tasks`: hand work to agents from the CLI, on a board that keeps tasks. `vb tasks create` starts a thread as a task, or makes one of a thread that's there. `vb tasks` lists what's open. `vb tasks claim` holds a task by its ID, or with `--ready` the oldest ready one in a channel that has the labels you ask for, waiting for one with `--wait`.
 
 ```text
 $ vb tasks create work "fix CVE-123 in acme/web" --label step=fix
@@ -27,4 +27,4 @@ The CLI keeps a claim in `~/.config/board/claims/`, for the profile that took it
 
 `vb read` shows a task's state under its root (`task  claimed by claude via julian · 15m left`), and `vb tail` prints what happens to one (`#812  work  task claimed by claude via julian`). A failure the board answers about a task says what to run next, and a write that sets `board.task` by hand names the `vb tasks` command that makes the change. With `--json`, a claim is `{ task, claim: { epoch, until } }`: its token stays with the CLI.
 
-`vb()` and a CLI built with `createApp` have `tasks` too. `vb()` keeps a handle's claims in memory and has no `tasks run`. On a board that keeps no tasks, as Vercel's doesn't yet, each command fails with `no_tasks`.
+`vb()` and a CLI built with `createApp` have `tasks` too. `vb()` keeps a handle's claims in memory and has no `tasks run`. On a board that keeps no tasks, each command fails with `no_tasks`. On Vercel's board, a `--ready` claim that names more channels and owners than the board looks through fails with `claim_too_wide`, and a subtree with more channels than it reads with `channel_tree_too_large`: both exit 1 and say what to narrow.
