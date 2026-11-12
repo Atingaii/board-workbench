@@ -364,6 +364,13 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
 export const mirrorOf = (slackChannels: Record<string, string>, channel: string): string | null =>
   Object.keys(slackChannels).find((name) => name.startsWith("#") && slackChannels[name] === channel) ?? null;
 
+/** A repo the factory works on, and where it shows: its board channel, and the Slack channel that mirrors it, when one does by name. */
+export type Listed = { repo: string; channel: string; slack: string | null };
+
+/** The repos the board brings in, in the map's order, each with where it shows. */
+export const reposOf = ({ repoChannels, slackChannels }: Pick<Synced, "repoChannels" | "slackChannels">): Listed[] =>
+  Object.entries(repoChannels).map(([repo, channel]) => ({ repo, channel, slack: mirrorOf(slackChannels, channel) }));
+
 /**
  * `github` and `slack` are those steps: the first task needs the first one done, since it's a pull
  * request in the factory's own repo, and once the second is, the factory is asked things there.

@@ -1,11 +1,13 @@
 import { agentBoard } from "@/agent/lib/vb-tool";
 import { WATCHER } from "@/agent/lib/identity";
 import { sendToAgent } from "@/agent/lib/wake";
-import { factory, repoChannels } from "@/app/api/board/[[...path]]/factory";
+import { factory, repoChannels, slackChannels } from "@/app/api/board/[[...path]]/factory";
 import { ownRequest } from "@/lib/first-task";
 import { check } from "@/lib/launcher";
+import { shows } from "@/lib/markdown";
 import { onboarded, repoName, startOnboarding } from "@/lib/onboard";
 import { channel } from "@/lib/project";
+import { reposOf } from "@/lib/setup";
 
 // Asks the factory to onboard a repo, with `{ "repo": "<owner>/<repo>" }`: the page's Onboard
 // button posts here, and so can an agent. The factory opens a thread where it changes itself, and
@@ -26,9 +28,9 @@ export async function POST(request: Request): Promise<Response> {
   const { result } = await check(host);
   // As on the page: nothing about the factory, and nothing from it, while anyone can ask.
   if (result.open) return refuse("onboarding is off until this deployment is protected");
-  // Already in: say where, from the map the page shows.
-  const mapped = onboarded(repo, repoChannels);
-  if (mapped) return Response.json({ started: false, repo: mapped, channel: repoChannels[mapped] });
+  // Already in: say where, as its row on the page says it.
+  const listed = onboarded(repo, reposOf({ repoChannels, slackChannels }));
+  if (listed) return Response.json({ started: false, repo: listed.repo, where: shows(listed) });
   // A wake-up that never gets there is said in the thread, as the watcher says it.
   const root = await startOnboarding(agentBoard(factory), channel("rsi"), repo, (message) => sendToAgent(factory.as(WATCHER), message));
   return Response.json({ started: true, repo, thread: root.id });

@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useState, useTransition } from "react";
 
-type Answer = { started: true; repo: string } | { started: false; repo: string; channel: string };
+type Answer = { started: true; repo: string } | { started: false; repo: string; where: string } | { error: { message: string } };
 
 /**
  * A repo to onboard, typed or pasted, and the button that asks the factory for it: a POST to the
@@ -22,9 +22,11 @@ export function Onboard({ path, where }: { path: string; where: string }): React
         start(async () => {
           const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repo }) }).catch(() => null);
           if (response?.status === 400) return setSaid("Write it as GitHub does: owner/repo.");
-          const answer = response?.ok ? ((await response.json().catch(() => null)) as Answer | null) : null;
+          const answer = response ? ((await response.json().catch(() => null)) as Answer | null) : null;
+          // Nothing answered, or nothing that reads: trying again may help. A refusal says why, and trying again won't.
           if (!answer) return setSaid("Couldn't ask the factory. Try again.");
-          if (!answer.started) return setSaid(`${answer.repo} is already in ${answer.channel}.`);
+          if ("error" in answer) return setSaid(`Couldn't ask the factory: ${answer.error.message}.`);
+          if (!answer.started) return setSaid(`${answer.repo} is already in ${answer.where}.`);
           setRepo("");
           setSaid(`Asked in ${where}. The factory opens a pull request for ${answer.repo}.`);
         });
