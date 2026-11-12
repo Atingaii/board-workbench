@@ -1015,6 +1015,24 @@ describe('sync', () => {
     logged.mockRestore()
   })
 
+  it("refuses an inbox event ID over 300 characters in-process, as Vercel's API does, and takes one of 300", async () => {
+    const { board, webhook } = setup()
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const push = board.backend.inboxPush.bind(board.backend)
+    // The board's own sync, its event's ID stretched to `length`.
+    const stretched = (length: number): typeof push => (caller, input, signal) =>
+      push(caller, { ...input, events: input.events.map((event) => ({ ...event, id: event.id.padEnd(length, 'x') })) }, signal)
+    const spy = vi.spyOn(board.backend, 'inboxPush')
+    spy.mockImplementationOnce(stretched(301))
+    expect((await webhook('slack', { type: 'message', threadId: 'slack:C1:600', id: '600', text: 'too long', user: 'U_ADA' })).status).toBe(200)
+    expect(logged).toHaveBeenCalledWith('[board] dropped an event the board refuses', expect.objectContaining({ status: 400 }))
+    spy.mockImplementationOnce(stretched(300))
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:601', id: '601', text: 'just fits', user: 'U_ADA' })
+    const julian = caller(board.fetch, await personToken())
+    await vi.waitFor(async () => expect((await read(julian, 'firehose')).map((m) => m.text)).toEqual(['just fits']))
+    logged.mockRestore()
+  })
+
   it('keeps a reply imported with `noSync` on the board, and still delivers the rest of its thread', async () => {
     const { board, s, webhook } = setup({
       githubClient: { rest: { pulls: { get: vi.fn() } } },
