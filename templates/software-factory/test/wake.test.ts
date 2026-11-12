@@ -41,10 +41,17 @@ test("the agent's own message doesn't wake it, but a check-in it scheduled does"
   assert.equal((await woken(posted({ by: agent, schedule: "s1" }))).got.length, 1);
 });
 
-test("what the deployment writes under a profile isn't the agent: a message its sync brought in wakes it", async () => {
-  assert.equal((await woken(posted({ by: by(DEPLOYMENT, "github:octocat") }))).got.length, 1);
+test("what the deployment's sync brought in, and its watcher's own word, aren't the agent's: they wake it", async () => {
+  assert.equal((await woken(posted({ by: by(DEPLOYMENT, "github:user:583231") }))).got.length, 1);
+  assert.equal((await woken(posted({ by: by(DEPLOYMENT, "wake") }))).got.length, 1);
   // And a person who names a profile after the project is still a person.
   assert.equal((await woken(posted({ by: by("vercel:user:u_ada", "factory") }))).got.length, 1);
+});
+
+test("the agent under a profile it named is still the agent: as it wrote at first, or as BOARD_PROFILE says", async () => {
+  assert.deepEqual((await woken(posted({ by: by(DEPLOYMENT, "factory") }))).got, []);
+  assert.deepEqual((await woken(posted({ by: by(DEPLOYMENT, "night-shift") }))).got, []);
+  assert.equal((await woken(posted({ by: by(DEPLOYMENT, "factory"), schedule: "s1" }))).got.length, 1);
 });
 
 test("a reaction to the agent's message wakes it, but not its own, and not one on someone else's message", async () => {

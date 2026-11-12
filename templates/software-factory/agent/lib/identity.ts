@@ -22,9 +22,16 @@ export const ownToken = async (): Promise<string | null> => (process.env.VERCEL_
 
 type Author = { principal: string; profile: string | null };
 
+/** The watcher's ID (`factory.ts` names its watcher by it), which the board has it write under. */
+export const WATCHER = "wake";
+
 /**
- * Whether the agent wrote a message: this deployment (`principal`, which its watcher reads from the
- * board), with no profile. What else the deployment writes has one: its watcher's own replies, named
- * for the watcher, and what its sync brings in from GitHub and Slack, named for who wrote it there.
+ * Whether the agent wrote a message, or reacted: this deployment (`principal`, which its watcher
+ * reads from the board), as itself. That's under no profile, as it writes now, or under one it named:
+ * `factory`, as it wrote at first, or what a project's BOARD_PROFILE says. What else the deployment
+ * writes isn't the agent's: its watcher's own replies, under the watcher's ID, and what its sync
+ * brings in from GitHub and Slack, each under a platform's profile of who wrote it there
+ * (`slack:user:U0456`), the only kind with a colon.
  */
-export const byAgent = (by: Author, principal: string): boolean => by.principal === principal && by.profile === null;
+export const byAgent = (by: Author, principal: string): boolean =>
+  by.principal === principal && (by.profile === null || (!by.profile.includes(":") && by.profile !== WATCHER));

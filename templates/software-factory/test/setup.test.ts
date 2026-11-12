@@ -366,10 +366,18 @@ test("Slack's app in its channel, by name, is done", async () => {
   assert.equal(isDone(slack!), true);
 });
 
-test("what the deployment writes under a profile isn't the agent's reply: its watcher's, or what its sync brought in", async () => {
-  const by = (profile: string) => ({ id: "13", re: "12", by: { principal: DEPLOYMENT, profile, actor: "a" } }) as never;
-  const steps = await shown(fake({ deps: { messages: async () => [message("12", "ada"), by("wake"), by("github:octocat")] } }).deps);
+/** A reply by this deployment under a profile. */
+const under = (profile: string) => ({ id: "13", re: "12", by: { principal: DEPLOYMENT, profile, actor: "a" } }) as never;
+
+test("what the deployment's watcher wrote, or its sync brought in, isn't the agent's reply", async () => {
+  const steps = await shown(fake({ deps: { messages: async () => [message("12", "ada"), under("wake"), under("github:user:583231")] } }).deps);
   assert.deepEqual(labels(todo(steps.try!)), ["Get a reply from the agent"]);
+});
+
+test("a reply from when the agent wrote under a profile of its own still counts", async () => {
+  // A factory set up before its agent wrote as the factory itself: its replies are under `factory`.
+  const steps = await shown(fake({ deps: { messages: async () => [message("12", "ada"), under("factory")] } }).deps);
+  assert.equal(isDone(steps.try!), true);
 });
 
 test("try isn't done until someone has posted and the agent has replied", async () => {
@@ -507,8 +515,20 @@ test("as markdown, a factory that isn't set up says so first, and gives each com
 `),
     text,
   );
-  // Nothing to watch until it runs.
-  assert.ok(!text.includes(INSPECT));
+  // The board's command isn't in a task here, so it's under the steps.
+  assert.ok(text.endsWith(`## Watch the board\n\n\`\`\`\n${INSPECT}\n\`\`\`\n`), text);
+});
+
+test("the command that opens the board is on the launcher once, always: in the task that asks for it, or under the steps", async () => {
+  const count = (text: string) => text.split(INSPECT).length - 1;
+  // Nobody has posted: the task that says to post carries it.
+  const fresh = markdown(await setup(fake({ deps: { messages: async () => [] } }).deps), INSPECT);
+  assert.equal(count(fresh), 1);
+  assert.ok(!fresh.includes("## Watch the board"));
+  // Someone has, and the agent hasn't replied yet: no task carries it, so it's under the steps.
+  const waiting = markdown(await setup(fake({ deps: { messages: async () => [message("12", "ada")] } }).deps), INSPECT);
+  assert.equal(count(waiting), 1);
+  assert.ok(waiting.includes("## Watch the board"));
 });
 
 test("as markdown, an open deployment says only how to protect it", async () => {

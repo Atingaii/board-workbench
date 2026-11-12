@@ -1,6 +1,7 @@
 import { board } from "@vercel/board";
 import { github, repos } from "@vercel/board/sync-github";
 import { channels, slack } from "@vercel/board/sync-slack";
+import { WATCHER } from "../../../../agent/lib/identity.ts";
 import { wakeAgent } from "../../../../agent/lib/wake.ts";
 import { projectName } from "../../../../lib/project.ts";
 import { repoChannels, slackChannels } from "./channels.ts";
@@ -31,6 +32,6 @@ export const factory = board({
     // Every message in dev and the channels under it. A watcher writes as a profile named for its
     // ID, and the agent as the deployment itself: the board never wakes a watcher for its own
     // writes, so this way the agent's check-ins reach it.
-    wake: { tail: "dev/", run: (context) => wakeAgent(context) },
+    [WATCHER]: { tail: "dev/", run: (context) => wakeAgent(context) },
   },
 });
