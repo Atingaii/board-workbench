@@ -426,6 +426,38 @@ test("try says how to open the board in its own step, on this team and by the bo
   assert.deepEqual(commands((await shown(named.deps)).try!), ["npx @vercel/board inspect --scope acme --name factory-dev"]);
 });
 
+test("try suggests a first ask, where the factory changes itself: in Slack once its channel is mirrored there", async () => {
+  // Slack isn't connected: the ask is for the board.
+  const board = await shown(fake({ deps: { messages: async () => [] } }).deps);
+  assert.equal(todo(board.try!)[0]!.hint, "A good first ask, in project-factory/rsi: make the README ours.");
+  // Slack is, with its app in the channel.
+  const slack = await shown(
+    fake({
+      deps: { messages: async () => [], connect: async () => "app-token" },
+      routes: {
+        "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
+        "https://slack.com/api/users.conversations": conversations({ id: "C2", name: "factory-rsi" }),
+      },
+    }).deps,
+  );
+  assert.equal(todo(slack.try!)[0]!.hint, "A good first ask, in #factory-rsi: make the README ours.");
+  // A Slack channel mapped by its ID has no name to say: the ask is for the board.
+  const byId = fake({
+    deps: { messages: async () => [], connect: async () => "app-token" },
+    routes: {
+      "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
+      "https://slack.com/api/users.conversations": conversations({ id: "C0123ABC", name: "factory-rsi" }),
+    },
+  });
+  byId.deps.synced.slackChannels = { C0123ABC: "project-factory/rsi" };
+  const mapped = await shown(byId.deps);
+  assert.equal(isDone(mapped.slack!), true);
+  assert.equal(todo(mapped.try!)[0]!.hint, "A good first ask, in project-factory/rsi: make the README ours.");
+  // Once someone has posted, there's nothing to suggest.
+  const posted = await shown(fake({ deps: { messages: async () => [message("12", "ada")] } }).deps);
+  assert.deepEqual(posted.try!.tasks.filter((task) => task.hint), []);
+});
+
 test("locally, nothing asks whether the deployment is protected, and signing in is one link and one pull, said once", async () => {
   const { deps, requests } = fake({
     env: { PORT: "3000" },

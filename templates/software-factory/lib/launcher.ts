@@ -3,7 +3,7 @@ import { ownRepo } from "./github.ts";
 import { joinPrompt } from "./markdown.ts";
 import { overview, type Overview } from "./overview.ts";
 import { channel, projectOf } from "./project.ts";
-import { boardDeps, inspectCommand, isLocal, liveDeps, progress, READ, setup, type Setup } from "./setup.ts";
+import { boardDeps, inspectCommand, isLocal, liveDeps, mirrorOf, progress, READ, setup, type Setup } from "./setup.ts";
 
 // The launcher, checked now, for whichever of its faces was asked: the page, its markdown, or the
 // steps the agent's setup_steps tool reads.
@@ -48,7 +48,7 @@ export async function check(host: string | null): Promise<Launcher> {
     running = {
       overview: overview(result.found.recent, pulls, result.found.me.principal, new Date(), READ),
       repos: Object.entries(repoChannels).map(([repo, to]) => ({ repo, channel: to })),
-      ask: { channel: rsi, slack: Object.keys(slackChannels).find((name) => slackChannels[name] === rsi) ?? null, waiting: result.found.waiting },
+      ask: { channel: rsi, slack: mirrorOf(slackChannels, rsi), waiting: result.found.waiting },
       join: joinPrompt({ origin, team, board: boardName, home, repo: ownRepo(deps.env) }),
     };
   }

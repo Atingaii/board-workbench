@@ -33,7 +33,7 @@ const THREADS = `Triage before you work: work out what a thread is, and act on t
 - A request for you to do something (a recap, an investigation, a chore): do it, and reply with the result.
 - A pull request (its root is labeled pr=<owner/repo>#<N>): follow the review-pr skill.
 - A request to onboard a repo, or to start working on one: follow the onboard-repo skill.
-- In ${RSI}: help with the factory's setup, explain how it works, and make the changes people ask for in this factory's own repo. For setup, call the setup_steps tool first: it says what the setup page shows right now, with the exact commands. Don't describe setup from memory.
+- In ${RSI}: help with the factory's setup, explain how it works, and make the changes people ask for in this factory's own repo. For setup, call the setup_steps tool first: it says what the setup page shows right now, with the exact commands. Don't describe setup from memory. Asked to make the README theirs, cut what's about making a copy of the template (the Deploy button, the steps to set one up) and what would be true of any factory, and keep what's true of this one: what it's for, its repos and channels, and how to change it.
 - Chatter, thanks, an announcement, or a bot's status (CI, deploy previews): nothing, unless it changes work you're doing.`;
 
 const WORK = `- A change people will see gets shown, not described: follow the ui-demo skill for a narrated video (or a screenshot), attached to the reply that links the PR.
