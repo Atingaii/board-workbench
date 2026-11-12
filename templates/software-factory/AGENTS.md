@@ -49,8 +49,9 @@ pnpm build
   (`agent/tools/vb.ts`), so `vb typing` and reads reach Slack through the board's sync. That handle
   is held to the factory's own channels (`AGENT_CAN` in `agent/lib/vb-tool.ts`: read, post, react,
   label), and the board refuses it the rest: other channels, sync's raw events, sources, grants.
-  The tool keeps no list of commands of its own. It has no profile: the board and Slack show it by the Vercel project's name, not as a name "via" the
-  project. What else the deployment writes has a profile, which is how the watcher and the
+  The tool keeps no list of commands of its own. It has no profile: the board and Slack show it
+  by the Vercel project's name, not as a name "via" the project. What else the deployment writes
+  has a profile, which is how the watcher and the
   launcher know the agent's messages (`byAgent`): its watcher's replies (`wake`), and what its sync
   brings in. The board never wakes a watcher for its own writes, so the agent's check-ins reach
   it. The agent's `setup_steps` tool asks the setup page's own `/api/launcher/steps`.
