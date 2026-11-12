@@ -55,6 +55,9 @@ export async function sendToAgent(board: Pick<WatcherContext["board"], "reply">,
   }
 }
 
+/** How long to wait, each time, for a session that just started to take its first message: about a second in all, usually. */
+const READY_MS = [250, 500, 1_000, 2_000];
+
 /**
  * Hands a wake-up to the thread's eve session, over eve's own channel on this deployment (/eve/v1),
  * as this deployment: its OIDC token says who's calling, and gets the call through Deployment
@@ -63,7 +66,7 @@ export async function sendToAgent(board: Pick<WatcherContext["board"], "reply">,
  * delivers twice starts no second turn. Nothing here keeps a map of sessions. The board runs a
  * thread's events in order: two first wake-ups at the very same moment could each start a session.
  */
-export async function send({ thread, key, text }: AgentMessage, request: typeof fetch = fetch, oidc: () => Promise<string | null> = ownToken): Promise<void> {
+export async function send({ thread, key, text }: AgentMessage, request: typeof fetch = fetch, oidc: () => Promise<string | null> = ownToken, readyMs = READY_MS): Promise<void> {
   const token = await oidc();
   const post = async (path: string, body: object) => {
     const response = await request(`${ORIGIN}${path}`, {
@@ -86,8 +89,19 @@ export async function send({ thread, key, text }: AgentMessage, request: typeof 
     return opened.sessionId;
   };
   const deliver = (session: string) => post(`/eve/v1/session/${session}`, { message: text, clientContext: { board: { thread } }, idempotencyKey: key });
-  let sent = await deliver(await open());
+  let session = await open();
+  let sent = await deliver(session);
   // The session ended since it was found (idle for too long, or reset): the thread gets a new one.
-  if (sent.code === "session_not_active") sent = await deliver(await open());
+  if (sent.code === "session_not_active") {
+    session = await open();
+    sent = await deliver(session);
+  }
+  // A session that just started isn't taking messages for a moment, and eve says to try again. That's
+  // every thread's first wake-up, so it's waited out here: failing it would cost the thread seconds.
+  for (const wait of readyMs) {
+    if (sent.code !== "session_not_ready") break;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    sent = await deliver(session);
+  }
   if (!sent.ok) throw failed("a wake-up", sent);
 }
