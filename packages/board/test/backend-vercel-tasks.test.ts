@@ -421,16 +421,22 @@ describe("vercel()'s tasks", () => {
     expect(await ask({ tasks: [{ text: 'labeled', labels: { step: 'fix' } }] }, 'plans=read,post')).toEqual([403, 'forbidden'])
     expect(await ask({ tasks: [{ text: '   ' }, { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_message'])
     expect(await ask({ tasks: [{ text: 'x', labels: { 'board.task': 'ready' } }] })).toEqual([400, 'reserved_label'])
+    expect(await ask({ tasks: [{ text: 'x', labels: Object.fromEntries(Array.from({ length: 17 }, (_, n) => [`k${n}`, 'v'])) }] })).toEqual([400, 'too_many_labels'])
     expect(await ask({ tasks: [{ text: 'x', for: `${ADA}+fixer` }] })).toEqual([400, 'invalid_for'])
     expect(await ask({ tasks: [{ text: 'one', attachments: [file.id] }, { text: 'two', attachments: [file.id] }, { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_attachments'])
     expect(await ask({ tasks: [...plain(16), { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_needs'])
     const wrong = `revert this\n\n${block('git-commit@1', { sha: 'a'.repeat(40) })}`
     expect(await ask({ tasks: [...plain(15), { text: wrong }] })).toEqual([400, 'batch_too_large', 106, 100])
     expect(await ask({ tasks: [{ text: wrong }, { text: 'x', needs: [`thr_${crypto.randomUUID()}`] }] })).toEqual([400, 'invalid_block'])
+    // A caller narrowed to channels hears of a task it can't read there before its blocks are looked at.
+    expect(await ask({ tasks: [{ text: wrong }, { text: 'x', needs: [thread] }] }, 'plans=read,post')).toEqual([400, 'invalid_needs'])
     expect(await ask({ tasks: [{ text: 'x', needs: [`thr_${crypto.randomUUID()}`] }, { text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([400, 'invalid_needs'])
-    expect(await ask({ tasks: [{ text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([404, 'attachment_not_found'])
     // None of it left a task, or the channel it named.
     expect((await julian.channels()).map((channel) => channel.path)).not.toContain('plans')
+    // A file is looked at last, once the channel a batch names is made, as for one task: a batch refused for one leaves the channel, and no task.
+    expect(await ask({ channel: 'filed', tasks: [{ text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([404, 'attachment_not_found'])
+    expect((await julian.channels()).map((channel) => channel.path)).toContain('filed')
+    expect((await julian.tasks.list({ channel: 'filed', state: 'all' })).tasks).toEqual([])
     expect(await ask({ tasks: plain(15) })).toEqual([200, null])
   })
 
@@ -1339,6 +1345,7 @@ describe("vercel()'s tasks", () => {
       ['create', () => julian.tasks.create('dev', 'a task')],
       ['create and claim', () => julian.tasks.create('dev', { text: 'a task', claim: true, id: 'once' })],
       ['create from a thread', () => julian.tasks.create({ re: root.id })],
+      ['create several', () => julian.tasks.createMany('dev', [{ ref: 'a', text: 'a task' }, { text: 'another', needs: [{ ref: 'a' }] }], { id: 'once' })],
       ['claim', () => julian.tasks.claim(root.id)],
       ['claim the next', () => julian.tasks.claim({ channel: 'dev', wait: 30 })],
       ['renew', () => julian.tasks.held(root.id, proof).renew()],

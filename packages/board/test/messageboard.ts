@@ -847,9 +847,9 @@ function fakeBoard(shared: Shared, boardId: string) {
   }
 
   /**
-   * Several threads in one channel, each started as a task, in one transaction: every refusal comes before anything is
-   * written, in the order the API checks, and a batch by a channel's name makes the channel only once nothing is left
-   * to refuse. Each task is made a millisecond after the one before it, so they list and are claimed in the body's order.
+   * Several threads in one channel, each started as a task, in one transaction: every refusal comes before any task is
+   * written, in the order the API checks. Each task is made a millisecond after the one before it, so they list and are
+   * claimed in the body's order.
    */
   function makeBatch(actor: Actor, body: Record<string, any>): Thread[] {
     type Asked = { ref?: string; text: string; labels?: Record<string, string>; noSync?: boolean; attachments?: string[]; needs?: (string | { ref: string })[]; for?: string | null }
@@ -874,12 +874,11 @@ function fakeBoard(shared: Shared, boardId: string) {
     // Each task's own fields, in the body's order, then a file two of them carry.
     const owner = principalId(actor.principal)
     for (const task of tasks) {
-      const files = task.attachments ?? []
-      if (!Array.isArray(files) || files.length > 10 || files.some((id) => typeof id !== 'string') || new Set(files).size !== files.length) throw new Refused(400, 'invalid_attachments')
-      if (typeof task.text !== 'string' || (!task.text.trim() && !(files.length && task.text === '')) || task.text.length > 10_000) throw new Refused(400, 'invalid_message')
+      if (typeof task.text !== 'string' || (!task.text.trim() && !(task.attachments?.length && task.text === '')) || task.text.length > 10_000) throw new Refused(400, 'invalid_message')
       const labels = task.labels ?? {}
-      if (typeof labels !== 'object' || Object.keys(labels).length > 16 || Object.values(labels).some((value) => typeof value !== 'string')) throw new Refused(400, 'invalid_label')
+      if (typeof labels !== 'object' || Object.values(labels).some((value) => typeof value !== 'string')) throw new Refused(400, 'invalid_label')
       if (Object.keys(labels).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
+      if (Object.keys(labels).length > 16) throw new Refused(400, 'too_many_labels')
       if ((task.for ?? null) !== null && !profileOf(owner, task.for)) throw new Refused(400, 'invalid_for', "A task is assigned to one of its owner's profiles.")
     }
     const carried = tasks.flatMap((task) => task.attachments ?? [])
@@ -910,22 +909,26 @@ function fakeBoard(shared: Shared, boardId: string) {
     // What fits one transaction, by the body's count, and one kept answer.
     const items = batchItems(tasks)
     if (items > BATCH_ITEMS) throw new Refused(400, 'batch_too_large', `This batch takes ${items} items, and a transaction holds ${BATCH_ITEMS}: send it in parts.`, undefined, undefined, { items, limit: BATCH_ITEMS })
-    // What takes a read: blocks, the tasks that were there, and the files.
+    // What takes a read, in the API's order. A caller narrowed to channels is first told of a task it can't read there.
+    const wanted = tasks.map((task) => (task.needs ?? []).filter((need) => typeof need === 'string'))
+    if (actor.can) for (const id of wanted.flat()) if (threads.has(id) && !mayRead(actor, threads.get(id)!.channelId)) throw new Refused(400, 'invalid_needs', `${id} is not a task you can wait for.`)
     for (const task of tasks)
       for (const found of task.text.includes('json#') ? findBlocks(task.text) : []) {
         const schema = found.problem === undefined ? shared.schemaOf(found.id) : undefined
         const problem = schema ? checkValue(schema, found.data) : null
         if (problem !== null) throw new Refused(400, 'invalid_block', `The ${found.id} block doesn't match its schema: ${problem}`)
       }
-    const there = tasks.map((task) => checkedNeeds(actor, (task.needs ?? []).filter((need) => typeof need === 'string'), null))
+    const there = wanted.map((needs) => checkedNeeds(actor, needs, null))
+    // A batch by a channel's name makes the channel once all but its files have passed, as one task by name does: only a
+    // batch refused for a file leaves a channel behind.
+    const channel = known ?? makeChannel(name)
     for (const id of carried) {
       const attachment = attachments.get(id)
       if (!attachment || !samePrincipal(attachment.createdBy.principal, actor.principal)) throw new Refused(404, 'attachment_not_found')
       if (attachment.state !== 'ready') throw new Refused(409, 'attachment_not_ready')
       if (attachment.messageId) throw new Refused(409, 'attachment_already_posted')
     }
-    // The write: the channel on its first post, then each task, a millisecond after the one before.
-    const channel = known ?? makeChannel(name)
+    // The write: each task, a millisecond after the one before.
     const first = now()
     const made = tasks.map((_, at): Thread => ({ id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: first + at, createdAt: first + at, createdBy: actor, messages: [] }))
     for (const [at, task] of tasks.entries()) {
