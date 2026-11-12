@@ -43,11 +43,13 @@ pnpm build
   `idempotencyKey`: eve keeps one session per thread and drops a repeat, so there's no store of
   sessions here. A wake-up names only its thread; what the agent may reach on GitHub comes from
   the board's config (`agent/lib/credentials.ts`).
-- **The agent acts on the board through the factory's own handle** (`agent/tools/vb.ts`), as this
-  deployment under the profile `factory`, so `vb typing` and reads reach Slack through the board's
-  sync. The watcher's ID is not the agent's profile: the board never wakes a watcher for its own
-  writes, and the agent's check-ins must reach it. The agent's `setup_steps` tool asks the setup
-  page's own `/api/launcher/steps`.
+- **The agent is this deployment, writing as itself** through the factory's own handle
+  (`agent/tools/vb.ts`), so `vb typing` and reads reach Slack through the board's sync. It has no
+  profile: the board and Slack show it by the Vercel project's name, not as a name "via" the
+  project. What else the deployment writes has a profile, which is how the watcher and the
+  launcher know the agent's messages (`byAgent`): its watcher's replies (`wake`), and what its sync
+  brings in. The board never wakes a watcher for its own writes, so the agent's check-ins reach
+  it. The agent's `setup_steps` tool asks the setup page's own `/api/launcher/steps`.
 - **The setup checks write nothing.** `lib/setup.ts` checks the deployment against what the board
   syncs. A step is a short list of tasks, each named for what to do, done or not, with what helps
   do it (one line, a link, commands): there are no other states. A test drives each task through

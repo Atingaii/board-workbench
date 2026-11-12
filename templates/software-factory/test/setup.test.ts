@@ -34,8 +34,13 @@ const notFound = (connector: string) =>
   Promise.reject(Object.assign(new Error(`Connector not found: ${connector}`), { name: "ConnectError", status: 404, code: "not_found" }));
 
 
-const message = (id: string, profile: string | null, re: string | null = null) =>
-  ({ id, re, by: { principal: "p", profile, actor: "a" }, createdAt: "2026-11-03T00:00:00.000Z" }) as never;
+/** This deployment on its board: who the agent writes as, with no profile. */
+const DEPLOYMENT = "vercel:project:prj_factory:production";
+const me = (can: Record<string, string[]>) => ({ principal: DEPLOYMENT, can });
+
+/** A message by a person, or by the agent. */
+const message = (id: string, from: "ada" | "agent", re: string | null = null) =>
+  ({ id, re, by: { principal: from === "agent" ? DEPLOYMENT : "vercel:user:u_ada", profile: null, actor: "a" }, createdAt: "2026-11-03T00:00:00.000Z" }) as never;
 
 function fake(options: { env?: Record<string, string | undefined>; routes?: Routes; deps?: Partial<Deps> } = {}) {
   const requests: string[] = [];
@@ -61,8 +66,8 @@ function fake(options: { env?: Record<string, string | undefined>; routes?: Rout
     connect: async (connector) => (connector.startsWith("slack/") ? notFound(connector) : "app-token"),
     credits: async () => 5,
     // What a new board gives every project on the team.
-    access: async () => ({ "*": ["read", "post", "react", "label", "sync"] }),
-    messages: async () => [message("12", null), message("13", "factory", "12")],
+    me: async () => me({ "*": ["read", "post", "react", "label", "sync"] }),
+    messages: async () => [message("12", "ada"), message("13", "agent", "12")],
     source: sources(() => CHANNELS),
     ...options.deps,
   };
@@ -154,7 +159,7 @@ test("an open production shows only how to protect it, and asks nothing of GitHu
   let read = false;
   const { deps, requests } = fake({
     routes: { "https://factory.acme.dev/icon.svg": () => new Response("<svg/>", { status: 200 }) },
-    deps: { messages: async () => ((read = true), []), access: async () => ((read = true), {}) },
+    deps: { messages: async () => ((read = true), []), me: async () => ((read = true), me({})) },
   });
   const task = await onlyProtect(deps);
   assert.equal(task.link?.href, "https://vercel.com/acme/factory/settings/deployment-protection");
@@ -182,7 +187,7 @@ test("a protection check that fails shows nothing else, as if the deployment wer
 test("a team whose board nobody has opened yet is told to open it once, with the command that does", async () => {
   // What board() throws for a project the API names no board to: a team has one once a person has used it.
   const refused = Object.assign(new Error("this project has no access to the team's board (prj_factory, production)."), { code: "board_not_granted" });
-  const { vercel, try: tryIt } = await shown(fake({ deps: { access: () => Promise.reject(refused) } }).deps);
+  const { vercel, try: tryIt } = await shown(fake({ deps: { me: () => Promise.reject(refused) } }).deps);
   assert.deepEqual(labels(todo(vercel!)), ["Open the team's board once"]);
   assert.deepEqual(commands(vercel!), ["npx @vercel/board inspect --scope acme"]);
   // Try it waits on the board: its tasks are still to do, with nothing of the board's error under them.
@@ -193,13 +198,13 @@ test("a team whose board nobody has opened yet is told to open it once, with the
 });
 
 test("a board that can't be reached for another reason says what it answered", async () => {
-  const { vercel } = await shown(fake({ deps: { access: () => Promise.reject(new Error("Vercel's API answered 503")) } }).deps);
+  const { vercel } = await shown(fake({ deps: { me: () => Promise.reject(new Error("Vercel's API answered 503")) } }).deps);
   assert.equal(todo(vercel!)[0]?.hint, "Vercel's API answered 503");
   assert.deepEqual(commands(vercel!), []);
 });
 
 test("a project the board's grants don't let sync isn't ready, and is told who can let it, with no grant of the launcher's own", async () => {
-  const { vercel } = await shown(fake({ deps: { access: async () => ({ "*": ["read", "post", "react", "label"] }) } }).deps);
+  const { vercel } = await shown(fake({ deps: { me: async () => me({ "*": ["read", "post", "react", "label"] }) } }).deps);
   assert.deepEqual(todo(vercel!).map((task) => [task.label, task.hint]), [
     ["Let this project sync on the board", "Its grants were narrowed. Whoever manages the board can widen them."],
   ]);
@@ -207,7 +212,7 @@ test("a project the board's grants don't let sync isn't ready, and is told who c
 });
 
 test("sync in one channel pattern is enough for the Vercel step", async () => {
-  const { vercel } = await shown(fake({ deps: { access: async () => ({ "*": ["read"], "dev/": ["read", "post", "sync"] }) } }).deps);
+  const { vercel } = await shown(fake({ deps: { me: async () => me({ "*": ["read"], "dev/": ["read", "post", "sync"] }) } }).deps);
   assert.equal(isDone(vercel!), true);
 });
 
@@ -361,10 +366,16 @@ test("Slack's app in its channel, by name, is done", async () => {
   assert.equal(isDone(slack!), true);
 });
 
+test("what the deployment writes under a profile isn't the agent's reply: its watcher's, or what its sync brought in", async () => {
+  const by = (profile: string) => ({ id: "13", re: "12", by: { principal: DEPLOYMENT, profile, actor: "a" } }) as never;
+  const steps = await shown(fake({ deps: { messages: async () => [message("12", "ada"), by("wake"), by("github:octocat")] } }).deps);
+  assert.deepEqual(labels(todo(steps.try!)), ["Get a reply from the agent"]);
+});
+
 test("try isn't done until someone has posted and the agent has replied", async () => {
   const nothing = await shown(fake({ deps: { messages: async () => [] } }).deps);
   assert.deepEqual(labels(todo(nothing.try!)), ["Post on the board, or open an issue", "Get a reply from the agent"]);
-  const unanswered = await shown(fake({ deps: { messages: async () => [message("12", null)] } }).deps);
+  const unanswered = await shown(fake({ deps: { messages: async () => [message("12", "ada")] } }).deps);
   assert.deepEqual(labels(todo(unanswered.try!)), ["Get a reply from the agent"]);
 });
 
@@ -382,7 +393,7 @@ test("locally, nothing asks whether the deployment is protected, and signing in 
     deps: {
       oidc: async () => Promise.reject(new Error("no token")),
       credits: async () => Promise.reject(new Error("no token")),
-      access: async () => Promise.reject(new Error("no team to find a board for")),
+      me: async () => Promise.reject(new Error("no team to find a board for")),
       connect: async () => Promise.reject(new Error("The 'x-vercel-oidc-token' header is missing")),
     },
   });
@@ -475,7 +486,7 @@ test("as markdown, a factory that isn't set up says so first, and gives each com
     deps: {
       oidc: async () => Promise.reject(new Error("no token")),
       credits: async () => Promise.reject(new Error("no token")),
-      access: async () => Promise.reject(new Error("no team to find a board for")),
+      me: async () => Promise.reject(new Error("no team to find a board for")),
       connect: async () => Promise.reject(new Error("The 'x-vercel-oidc-token' header is missing")),
     },
   });

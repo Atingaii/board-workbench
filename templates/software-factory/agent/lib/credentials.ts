@@ -7,7 +7,6 @@ import { environment } from "../sandbox";
 import { connectors, factory, repoChannels } from "../../app/api/board/[[...path]]/factory.ts";
 import { NAME } from "./identity.ts";
 import { stale } from "./tokens";
-import { agentBoard } from "./vb-tool.ts";
 
 // Real credentials go in the sandbox's network policy, which adds them on the way out. Anything the
 // sandbox runs can use them, so each is the least the thread needs.
@@ -36,7 +35,7 @@ export function policy(tokens: { github: string | null }): NetworkPolicy {
  * code run from one repo's PR can't reach the others. Null without a repo.
  */
 async function githubToken(getToken: typeof import("@vercel/connect").getToken, thread: string) {
-  const root = await agentBoard(factory)
+  const root = await factory
     .thread(thread)
     .then((view) => view.message)
     .catch(() => null);

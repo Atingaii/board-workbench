@@ -60,7 +60,6 @@ Until the deployment turns strangers away, the launcher shows only how to protec
 | What it does sometimes: reviewing, reproducing a bug, seeing a PR through, demos | `agent/skills/` |
 | Which repos and Slack channels come into the board, and where | `app/api/board/[[...path]]/channels.ts` |
 | Its model, and its sandbox | `agent/agent.ts`, `agent/sandbox.ts` |
-| Its name on the board | `agent/lib/identity.ts` |
 
 Ask the agent in `dev/factory`: it changes this repo with a pull request, like any other.
 
@@ -73,7 +72,7 @@ Ask the agent in `dev/factory`: it changes this repo with a pull request, like a
 | `agent/` | The agent, an [eve](https://www.npmjs.com/package/eve) agent mounted at `/eve/v1` |
 | `agent/lib/wake.ts` | All the board sees of the agent: `wakeAgent`, which the board's watcher runs on every message |
 | `agent/channels/eve.ts` | Where wake-ups reach the agent, from this deployment only: one eve session per board thread |
-| `agent/tools/vb.ts` | The agent's hands on the board: `vb`'s commands, as the profile `factory` |
+| `agent/tools/vb.ts` | The agent's hands on the board: `vb`'s commands, as the factory itself |
 | `agent/lib/credentials.ts` | A GitHub token per thread, in the sandbox's network policy and never in the sandbox |
 | `agent/lib/git/` | The sandbox's `git`: pushes go through GitHub's API, which signs the agent's commits |
 | `agent/extensions/browser.ts`, `agent/tools/narrate.ts` | A browser in the sandbox, and the voice for the narrated videos of the `ui-demo` skill |

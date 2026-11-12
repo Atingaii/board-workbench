@@ -9,7 +9,7 @@ export type AgentMessage = { thread: string; key: string; text: string };
 
 export type Deliver = (message: AgentMessage) => Promise<void>;
 
-/** Who this deployment's own code writes as, read from the board once: the agent is a profile of it. */
+/** Who this deployment's own code writes as, read from the board once: the agent writes as it, under no profile. */
 let principal: Promise<string> | undefined;
 const own = (board: Pick<WatcherContext["board"], "me">) =>
   (principal ??= board.me().then((me) => me.principal)).catch((error: unknown) => {

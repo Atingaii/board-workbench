@@ -9,7 +9,8 @@ const DEPLOYMENT = "vercel:project:prj_factory:production";
 
 const by = (principal: string, profile: string | null) => ({ principal, profile, actor: profile ? `${principal}+${profile}` : principal });
 const ada = by("vercel:user:u_ada", null);
-const agent = by(DEPLOYMENT, "factory");
+// The agent is the deployment writing as itself: no profile.
+const agent = by(DEPLOYMENT, null);
 
 type Fields = { id?: string; re?: string | null; by?: ReturnType<typeof by>; schedule?: string };
 const posted = ({ id = "13", re = "12", by: author = ada, schedule }: Fields = {}) =>
@@ -40,8 +41,9 @@ test("the agent's own message doesn't wake it, but a check-in it scheduled does"
   assert.equal((await woken(posted({ by: agent, schedule: "s1" }))).got.length, 1);
 });
 
-test("someone else writing under the agent's profile name isn't the agent", async () => {
-  // Anyone may name a profile: only this deployment's is the agent's.
+test("what the deployment writes under a profile isn't the agent: a message its sync brought in wakes it", async () => {
+  assert.equal((await woken(posted({ by: by(DEPLOYMENT, "github:octocat") }))).got.length, 1);
+  // And a person who names a profile after the project is still a person.
   assert.equal((await woken(posted({ by: by("vercel:user:u_ada", "factory") }))).got.length, 1);
 });
 
