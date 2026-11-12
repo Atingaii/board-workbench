@@ -12,7 +12,10 @@ export type Link = { href: string; label: string };
 /** What helps do a task: one short line, a link that reads on after it, and the commands to run. */
 export type Help = { hint?: string; link?: Link; commands?: string[] };
 
-/** One task of a step, named for what to do ("Create a GitHub connector") whether it's done or not. */
+/**
+ * One task of a step, named for what to do ("Create a GitHub connector") whether it's done or not. A
+ * name in its label (a channel, a repo, a connector) goes in backticks, and stands out on the page.
+ */
 export type Task = { label: string; done: boolean } & Help;
 
 export type StepId = "vercel" | "github" | "slack" | "try";
@@ -82,6 +85,9 @@ const step = (id: StepId, tasks: Task[], optional = false): Step => ({ id, title
 const done = (label: string, help: Help = {}): Task => ({ label, done: true, ...help });
 const todo = (label: string, help: Help = {}): Task => ({ label, done: false, ...help });
 
+/** Names, as a label carries them. */
+const named = (...names: string[]) => names.map((name) => `\`${name}\``).join(", ");
+
 /** One command that creates a connector for this project and sends its webhooks to the board, from any directory. */
 const createConnector = (service: "github" | "slack", connector: string, project: Project) =>
   `vercel connect create ${service} --name ${connector.split("/")[1] ?? "factory"} --triggers --trigger-project ${project?.name ?? "<project>"} --trigger-path /api/board/webhooks/${service}${project ? ` --scope ${project.team}` : ""}`;
@@ -94,7 +100,7 @@ const createConnector = (service: "github" | "slack", connector: string, project
 const taken = (error: unknown) => (error as { code?: string } | null)?.code === "forbidden";
 
 function attach(deps: Deps, service: "github" | "slack", connector: string, project: Project): Task {
-  return todo(`Attach ${connector} to this project`, {
+  return todo(`Attach ${named(connector)} to this project`, {
     hint: "It's on this team for another project.",
     ...sourceLink(deps, FACTORY_FILE, "Use another name", (lines) => lines.findIndex((line) => line.startsWith("export const connectors"))),
     commands: [`vercel connect attach ${connector} --triggers --trigger-path /api/board/webhooks/${service}${project ? ` --project ${project.name} --scope ${project.team}` : ""}`],
@@ -223,7 +229,7 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
   const own = ownRepo(deps.env);
   const CONNECT = "Create a GitHub connector";
   const INSTALL = "Install its app on your repos";
-  const write = (repo: string) => `Let the app write to ${repo}`;
+  const write = (repo: string) => `Let the app write to ${named(repo)}`;
   const token = await deps.connect(connector).catch((error: unknown) => error);
   if (typeof token !== "string") {
     // Signed out on your machine: the Vercel step says how to sign in.
@@ -270,8 +276,8 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
   const WHY = "So the agent can change its own code.";
   const repo = repositories.find((candidate) => candidate.full_name.toLowerCase() === own.toLowerCase());
   // GitHub listed a first page only, and this repo isn't on it.
-  if (!repo && total_count > repositories.length) return step("github", [...tasks, todo(`Check that the app is on ${own}`, { hint: WHY, ...install })]);
-  if (!repo) return step("github", [...tasks, todo(`Install the app on ${own}`, { hint: WHY, ...install })]);
+  if (!repo && total_count > repositories.length) return step("github", [...tasks, todo(`Check that the app is on ${named(own)}`, { hint: WHY, ...install })]);
+  if (!repo) return step("github", [...tasks, todo(`Install the app on ${named(own)}`, { hint: WHY, ...install })]);
   // GitHub lists an app's repos with every permission false, so ask for what the agent's turns ask
   // for (agent/lib/credentials.ts): a token for this repo alone, here one that can write to it, which
   // GitHub only issues when the app may.
@@ -283,7 +289,6 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
 async function slackStep(deps: Deps, project: Project): Promise<Step> {
   const connector = deps.synced.connectors.slack;
   const wanted = Object.keys(deps.synced.slackChannels);
-  const channel = wanted.join(", ");
   const CONNECT = "Create a Slack connector";
   // What the channel is for, and the line that names it, to name another: the entry that starts with
   // its name in quotes, or the map's first entry, whose name is put together from the project's.
@@ -294,14 +299,15 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
     const first = map === -1 ? -1 : lines.findIndex((line, i) => i > map && line.trim() !== "" && !line.trimStart().startsWith("//"));
     return first !== -1 && !lines[first]!.startsWith("}") ? first : -1;
   };
-  const invite = (channels: string, command?: string): Task =>
-    todo(`Invite the app to ${channels}`, { hint: "Where the factory updates itself.", ...sourceLink(deps, CHANNELS_FILE, "Change the channel", names), ...(command ? { commands: [command] } : {}) });
+  const INVITE = (channels: string[]) => `Invite the app to ${named(...channels)}`;
+  const invite = (channels: string[], command?: string): Task =>
+    todo(INVITE(channels), { hint: "Where the factory updates itself.", ...sourceLink(deps, CHANNELS_FILE, "Change the channel", names), ...(command ? { commands: [command] } : {}) });
   const token = await deps.connect(connector).catch((error: unknown) => error);
   if (typeof token !== "string") {
-    if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("slack", [todo(CONNECT), invite(channel)], true);
+    if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("slack", [todo(CONNECT), invite(wanted)], true);
     // The board already syncs through this connector, and picks it up within a minute of its attach: no redeploy.
-    if (taken(token)) return step("slack", [attach(deps, "slack", connector, project), invite(channel)], true);
-    return step("slack", [todo(CONNECT, { commands: [createConnector("slack", connector, project)] }), invite(channel)], true);
+    if (taken(token)) return step("slack", [attach(deps, "slack", connector, project), invite(wanted)], true);
+    return step("slack", [todo(CONNECT, { commands: [createConnector("slack", connector, project)] }), invite(wanted)], true);
   }
   const slack = async <T>(method: string, query = "") => {
     const response = await deps.fetch(`https://slack.com/api/${method}${query}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
@@ -318,8 +324,8 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   if (checked instanceof Error) return step("slack", [done(CONNECT), todo("Couldn't ask Slack which channels the app is in", { hint: message(checked) })], true);
   const [who, mine] = checked;
   const missing = wanted.filter((name) => !mine.channels.some((candidate) => candidate.id === name || candidate.name === name.replace(/^#/, "")));
-  if (missing.length) return step("slack", [done(CONNECT), invite(missing.join(", "), `/invite @${who.user}`)], true);
-  return step("slack", [done(CONNECT), done(`Invite the app to ${channel}`)], true);
+  if (missing.length) return step("slack", [done(CONNECT), invite(missing, `/invite @${who.user}`)], true);
+  return step("slack", [done(CONNECT), done(INVITE(wanted))], true);
 }
 
 async function tryStep(deps: Deps, project: Project, board: boolean): Promise<Step> {

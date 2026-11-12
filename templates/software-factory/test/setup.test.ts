@@ -139,7 +139,7 @@ test("GitHub isn't done until the app can write to the factory's own repo", asyn
   const { github } = await shown(
     fake({ deps: { connect: async (connector, scope) => (scope ? Promise.reject(new Error("GitHub installation token failed")) : connector.startsWith("slack/") ? notFound(connector) : "app-token") } }).deps,
   );
-  assert.deepEqual(todo(github!).map((task) => [task.label, task.hint]), [["Let the app write to acme/factory", "So the agent can change its own code."]]);
+  assert.deepEqual(todo(github!).map((task) => [task.label, task.hint]), [["Let the app write to `acme/factory`", "So the agent can change its own code."]]);
   assert.deepEqual(links(github!), ["https://github.com/apps/acme-factory/installations/new"]);
 });
 
@@ -225,12 +225,12 @@ const notLinked = () => Promise.reject(Object.assign(new Error("Connector is not
 test("a connector another project on the team has is attached, not created again, with where to name another", async () => {
   // A team has one connector per name: creating github/factory again answers 409.
   const { github, slack } = await shown(fake({ deps: { connect: notLinked } }).deps);
-  assert.deepEqual(labels(todo(github!)), ["Attach github/factory to this project", "Install its app on your repos"]);
+  assert.deepEqual(labels(todo(github!)), ["Attach `github/factory` to this project", "Install its app on your repos"]);
   assert.deepEqual(commands(github!), ["vercel connect attach github/factory --triggers --trigger-path /api/board/webhooks/github --project factory --scope acme"]);
   assert.equal(todo(github!)[0]!.hint, "It's on this team for another project.");
   // The link opens where this factory's connectors are named.
   assert.match(linked(links(github!)[0]!, FACTORY, `${REPO_URL}/factory.ts`), /^export const connectors\b/);
-  assert.deepEqual(labels(todo(slack!)), ["Attach slack/factory to this project", "Invite the app to #factory-rsi"]);
+  assert.deepEqual(labels(todo(slack!)), ["Attach `slack/factory` to this project", "Invite the app to `#factory-rsi`"]);
   assert.deepEqual(commands(slack!), ["vercel connect attach slack/factory --triggers --trigger-path /api/board/webhooks/slack --project factory --scope acme"]);
 });
 
@@ -240,7 +240,7 @@ test("GitHub isn't done until the app is on the factory's own repo", async () =>
       routes: { "https://api.github.com/installation/repositories": () => json({ total_count: 1, repositories: [{ full_name: "acme/web" }] }) },
     }).deps,
   );
-  assert.deepEqual(labels(todo(github!)), ["Install the app on acme/factory"]);
+  assert.deepEqual(labels(todo(github!)), ["Install the app on `acme/factory`"]);
   assert.deepEqual(links(github!), ["https://github.com/apps/acme-factory/installations/new"]);
 });
 
@@ -259,7 +259,7 @@ test("an app GitHub lists with every permission false is done once it can write"
 
 test("Slack without its connector shows how to create it, then to invite its app", async () => {
   const { slack } = await shown(fake().deps);
-  assert.deepEqual(labels(todo(slack!)), ["Create a Slack connector", "Invite the app to #factory-rsi"]);
+  assert.deepEqual(labels(todo(slack!)), ["Create a Slack connector", "Invite the app to `#factory-rsi`"]);
   assert.deepEqual(commands(slack!), [
     "vercel connect create slack --name factory --triggers --trigger-project factory --trigger-path /api/board/webhooks/slack --scope acme",
   ]);
@@ -278,7 +278,7 @@ test("Slack set up without its app in the channel says to invite it, and holds u
     },
   });
   const steps = await shown(deps);
-  assert.deepEqual(labels(todo(steps.slack!)), ["Invite the app to #factory-rsi"]);
+  assert.deepEqual(labels(todo(steps.slack!)), ["Invite the app to `#factory-rsi`"]);
   assert.deepEqual(commands(steps.slack!), ["/invite @factory"]);
   // It says what the channel is for, in a line, and links to the line that names it, in this factory's own repo.
   assert.equal(todo(steps.slack!)[0]!.hint, "Where the factory updates itself.");
@@ -443,12 +443,12 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
 - [x] Create a GitHub connector
 - [x] Install its app on your repos
   acme/web isn't on the board yet. [Add it](${CHANNELS_URL})
-- [x] Let the app write to acme/factory
+- [x] Let the app write to \`acme/factory\`
 
 ## 3. Slack (optional)
 
 - [x] Create a Slack connector
-- [ ] Invite the app to #factory-rsi
+- [ ] Invite the app to \`#factory-rsi\`
   Where the factory updates itself. [Change the channel](${CHANNELS_URL})
 
   \`\`\`
