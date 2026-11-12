@@ -2,6 +2,7 @@ import type { ActorView, BlockView, BoardEventView, ChannelView, Discovery, Gran
 // `@vercel/board/schemas`, in an app of yours.
 import { findBlocks } from '../../contract/blocks.ts'
 import { canonicalEmoji } from '../../contract/emoji.ts'
+import type { ScheduleTiming } from '../../server/index.default.ts'
 import { shownName } from './words.ts'
 
 // The board, as this page knows it. Pure functions over plain state: the page
@@ -25,6 +26,8 @@ export type Pending = {
   labels: Record<string, string>
   /** Files going with it, shown while it's on its way. */
   files?: { name: string; size: number }[]
+  /** Set for one to send later: when, and how often. It's kept until the board has its schedule. */
+  later?: ScheduleTiming
   createdAt: string
   error: string | null
 }
@@ -168,7 +171,8 @@ export function landed<Post extends { channel: string; re: string | null; text: 
 export function applyEvent(state: State, event: BoardEventView): State {
   let next = event.message ? merge(state, [event.message]) : state
   if (event.type === 'message.posted' && event.message) {
-    const post = landed(next.pending, event.message, next.me?.actor ?? '')
+    // One to send later isn't on its way as a message: nothing that lands now stands for it.
+    const post = landed(next.pending.filter((pending) => pending.later === undefined), event.message, next.me?.actor ?? '')
     if (post) next = { ...next, pending: next.pending.filter((p) => p !== post) }
     const { channel, re } = event.message
     const known = next.channels[channel]
@@ -401,12 +405,39 @@ export const schemaOf = (state: Pick<State, 'schemas'>, name: string, version: n
 
 /** A block's fields, in the order its schema lists them, then any it doesn't: each with what the schema says of it. */
 export function blockFields(block: BlockView, schema: SchemaView | undefined): { name: string; value: unknown; description?: string }[] {
-  const properties = (schema?.schema.properties ?? {}) as Record<string, { description?: unknown } | undefined>
+  const defined = schema?.schema.properties
+  // A property's definition may be `true` or `false`, which says nothing of it.
+  const properties = (isRecord(defined) ? defined : {}) as Record<string, unknown>
   const names = [...Object.keys(properties).filter((name) => name in block.data), ...Object.keys(block.data).filter((name) => !(name in properties))]
   return names.map((name) => {
-    const description = properties[name]?.description
+    const property = properties[name]
+    const description = isRecord(property) ? property.description : undefined
     return { name, value: block.data[name], ...(typeof description === 'string' ? { description } : {}) }
   })
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/**
+ * A property's type in a word. A JSON Schema property is an object, or `true` for anything and
+ * `false` for nothing, and an object may name no type at all.
+ */
+export function propertyType(property: unknown): string {
+  if (property === false) return 'never'
+  if (!isRecord(property)) return 'any'
+  const type = Array.isArray(property.type) ? property.type.join(' | ') : typeof property.type === 'string' ? property.type : Array.isArray(property.enum) ? 'enum' : 'const' in property ? 'const' : 'any'
+  return typeof property.format === 'string' ? `${type} (${property.format})` : type
+}
+
+/** A schema's properties as rows: each one's name, its type in a word, whether it's required, and what the schema says of it. */
+export function schemaFields(schema: Record<string, unknown>): { name: string; type: string; required: boolean; description: string }[] {
+  const required = new Set(Array.isArray(schema.required) ? schema.required : [])
+  return Object.entries(isRecord(schema.properties) ? schema.properties : {}).map(([name, property]) => ({
+    name,
+    type: propertyType(property),
+    required: required.has(name),
+    description: isRecord(property) && typeof property.description === 'string' ? property.description : '',
+  }))
 }
 
 /** The registry by name: each schema's versions, oldest first, built-ins before the board's own. */

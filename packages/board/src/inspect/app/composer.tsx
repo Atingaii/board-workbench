@@ -4,7 +4,7 @@ import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX } from '../../contrac
 import type { ScheduleTiming } from '../../server/index.default.ts'
 import { toast } from './chrome.ts'
 import { fieldMenu, LabelEditor, Panel, Suggest, type KnownLabels } from './ui.tsx'
-import { fileSize } from './words.ts'
+import { fileSize, laterFields, timingWords } from './words.ts'
 
 // Just Chat's composer: one outlined box, the textarea, a quiet toolbar.
 // Enter sends, Shift+Enter breaks a line, ⌘B / ⌘I / ⌘E format, lists continue,
@@ -287,7 +287,7 @@ export function Composer(props: {
             trigger={
               <>
                 <Clock size={14} />
-                {later && <span className="tool-label">{timing(later)}</span>}
+                {later && <span className="tool-label">{timingWords(later)}</span>}
               </>
             }
             triggerClass={`tool${later ? ' on' : ''}`}
@@ -314,18 +314,13 @@ export function Composer(props: {
   )
 }
 
-/** A timing in a few words: `in 2h`, `at 9:00, every 1d`. */
-const timing = (later: ScheduleTiming): string =>
-  [later.in ? `in ${later.in}` : later.at ? `at ${new Date(later.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '', later.every ? `every ${later.every}` : '']
-    .filter(Boolean)
-    .join(', ')
-
 /** When a message goes out: in a while or at a time, and again every so often. The board checks it. */
 function Later({ value, onSet }: { value: ScheduleTiming | null; onSet: (timing: ScheduleTiming | null) => void }) {
-  const [after, setAfter] = useState(value?.in ?? '')
-  const [at, setAt] = useState('')
-  const [every, setEvery] = useState(value?.every ?? '')
-  const [times, setTimes] = useState(value?.times ? String(value.times) : '')
+  const start = laterFields(value)
+  const [after, setAfter] = useState(start.after)
+  const [at, setAt] = useState(start.at)
+  const [every, setEvery] = useState(start.every)
+  const [times, setTimes] = useState(start.times)
   const set = () =>
     onSet({
       ...(after.trim() ? { in: after.trim() } : at ? { at: new Date(at).toISOString() } : {}),

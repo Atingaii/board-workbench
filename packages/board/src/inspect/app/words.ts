@@ -1,4 +1,5 @@
 import type { MessageView, PrincipalView, ScheduleView } from '../../api/routes.ts'
+import type { ScheduleTiming } from '../../server/index.default.ts'
 
 // How the page says things: names, times, and sizes. Each is a few lines any UI on a board writes
 // for itself, so the page keeps its own rather than reaching into the package for the CLI's.
@@ -90,3 +91,27 @@ export function cadence(schedule: Pick<ScheduleView, 'every' | 'times' | 'sent' 
   if (schedule.until !== null) parts.push(`until ${new Date(schedule.until).toLocaleDateString()}`)
   return parts.join(' · ')
 }
+
+/** A time as `<input type="datetime-local">` takes one: local, to the minute. Nothing, for what isn't a time. */
+export function localInput(at: string | Date): string {
+  const date = new Date(at)
+  if (Number.isNaN(date.getTime())) return ''
+  const two = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}`
+}
+
+/** A timing as the send-later form's fields start out, so reopening it to change one keeps the rest. */
+export function laterFields(timing: ScheduleTiming | null): { after: string; at: string; every: string; times: string } {
+  return {
+    after: timing?.in ?? '',
+    at: timing?.at !== undefined && timing.in === undefined ? localInput(timing.at) : '',
+    every: timing?.every ?? '',
+    times: timing?.times ? String(timing.times) : '',
+  }
+}
+
+/** A timing in a few words: `in 2h`, `at Nov 12, 9:00 AM, every 1d`. */
+export const timingWords = (later: ScheduleTiming): string =>
+  [later.in ? `in ${later.in}` : later.at ? `at ${new Date(later.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '', later.every ? `every ${later.every}` : '']
+    .filter(Boolean)
+    .join(', ')

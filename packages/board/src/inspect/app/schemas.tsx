@@ -5,7 +5,7 @@ import * as board from './board.ts'
 import { toast } from './chrome.ts'
 import { Ago, Link, navigate } from './nav.tsx'
 import { Actions } from './settings.tsx'
-import { nameOf, schemasByName, type State, type Viewer } from './store.ts'
+import { nameOf, schemaFields, schemasByName, type State, type Viewer } from './store.ts'
 import { fieldMenu, nativeMenu, Panel, Suggest } from './ui.tsx'
 
 // The board's schema registry: what a message's blocks can hold. A version never changes, so a
@@ -13,6 +13,10 @@ import { fieldMenu, nativeMenu, Panel, Suggest } from './ui.tsx'
 
 export function Schemas(props: { state: State; viewer: Viewer; selected: string | null }) {
   const { state } = props
+  // Nothing in the feed says when a version is registered, so the tab asks each time it opens, like the other lists.
+  useEffect(() => {
+    void board.loadSchemas()
+  }, [])
   const schemas = state.schemas
   const groups = schemasByName(schemas ?? [])
   if (state.schemasRefused !== null && schemas === null) return <p className="empty error">{state.schemasRefused}</p>
@@ -52,15 +56,9 @@ export function Schemas(props: { state: State; viewer: Viewer; selected: string 
   )
 }
 
-const typeOf = (property: Record<string, unknown>): string => {
-  const type = Array.isArray(property.type) ? property.type.join(' | ') : typeof property.type === 'string' ? property.type : Array.isArray(property.enum) ? 'enum' : 'const' in property ? 'const' : 'any'
-  return typeof property.format === 'string' ? `${type} (${property.format})` : type
-}
-
 /** One version: who registered it, its fields at a glance, and its JSON Schema as the board keeps it. */
 function SchemaDetail({ schema, state }: { schema: SchemaView; state: State }) {
-  const properties = Object.entries((schema.schema.properties ?? {}) as Record<string, Record<string, unknown>>)
-  const required = new Set(Array.isArray(schema.schema.required) ? (schema.schema.required as string[]) : [])
+  const fields = schemaFields(schema.schema)
   const json = JSON.stringify(schema.schema, null, 2)
   const fence = `\`\`\`json#${schema.id}`
   return (
@@ -74,16 +72,16 @@ function SchemaDetail({ schema, state }: { schema: SchemaView; state: State }) {
         {' · '}
         <code>{fence}</code>
       </p>
-      {properties.length > 0 && (
+      {fields.length > 0 && (
         <div className="schema-fields" {...nativeMenu}>
-          {properties.map(([name, property]) => (
-            <div key={name} className="schema-field">
+          {fields.map((field) => (
+            <div key={field.name} className="schema-field">
               <span className="field-name">
-                {name}
-                {required.has(name) && <span className="faint" title="required"> *</span>}
+                {field.name}
+                {field.required && <span className="faint" title="required"> *</span>}
               </span>
-              <span className="faint">{typeOf(property)}</span>
-              <span>{typeof property.description === 'string' ? property.description : ''}</span>
+              <span className="faint">{field.type}</span>
+              <span>{field.description}</span>
             </div>
           ))}
         </div>

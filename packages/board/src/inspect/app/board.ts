@@ -271,12 +271,15 @@ const setLabels = (id: string, set: Record<string, string>, unset: string[]) => 
 /** A post's files, kept until it lands so a retry can send them again. */
 const outgoing = new Map<string, File[]>()
 
-/** Shows a post at once; the board's answer replaces it. Files upload first. */
+/**
+ * Shows a post at once; the board's answer replaces it. Files upload first. One to send later is
+ * kept the same way until the board has its schedule: a refusal stays as the post with why, and
+ * retry schedules it again, so nothing typed is lost.
+ */
 export async function send(
   post: { channel: string; re: string | null; text: string; noSync: boolean; labels: Record<string, string>; files?: File[]; later?: ScheduleTiming },
   key: string = crypto.randomUUID(),
 ) {
-  if (post.later) return sendLater(post, post.later)
   const files = post.files ?? outgoing.get(key) ?? []
   outgoing.set(key, files)
   const pending: store.Pending = {
@@ -286,6 +289,7 @@ export async function send(
     noSync: post.noSync,
     labels: post.labels,
     ...(files.length ? { files: files.map((f) => ({ name: f.name, size: f.size })) } : {}),
+    ...(post.later ? { later: post.later } : {}),
     key,
     createdAt: new Date().toISOString(),
     error: null,
@@ -293,14 +297,23 @@ export async function send(
   set((s) => ({ ...s, pending: [...s.pending.filter((p) => p.key !== key), pending] }))
   try {
     const attachments = await Promise.all(files.map((file) => team.upload({ data: file, name: file.name })))
-    const options = {
+    const content = {
       text: post.text,
-      // The same `id` never posts twice, so a retry is safe.
-      id: key,
       ...(attachments.length ? { attachments } : {}),
       ...(post.noSync ? { noSync: true } : {}),
       ...(Object.keys(post.labels).length > 0 ? { labels: post.labels } : {}),
     }
+    if (post.later) {
+      // Posts later, as you: a new thread in a channel, or a reply in a thread. Its files go with every send.
+      const scheduled = await team.schedule(post.re === null ? post.channel : { re: post.re }, { ...content, ...post.later })
+      outgoing.delete(key)
+      set((s) => ({ ...s, pending: s.pending.filter((p) => p.key !== key) }))
+      toast(`scheduled for ${new Date(scheduled.next ?? scheduled.first).toLocaleString()}`)
+      void loadSchedules()
+      return
+    }
+    // The same `id` never posts twice, so a retry is safe.
+    const options = { ...content, id: key }
     const sent = await write(post.re === null ? { channel: post.channel } : { re: post.re }, options)
     outgoing.delete(key)
     set((s) => store.merge({ ...s, pending: s.pending.filter((p) => p.key !== key) }, [sent]))
@@ -443,24 +456,6 @@ export async function loadSchedules(all = state.everySchedule) {
     set((s) => ({ ...s, schedules: { is: 'here', items: schedules } }))
   } catch (error) {
     set((s) => ({ ...s, schedules: { is: 'failed', why: said(error) } }))
-  }
-}
-
-/** Posts later, as you: a new thread in a channel, or a reply in a thread. Files upload now, and go with every send. */
-async function sendLater(post: { channel: string; re: string | null; text: string; noSync: boolean; labels: Record<string, string>; files?: File[] }, timing: ScheduleTiming) {
-  try {
-    const attachments = await Promise.all((post.files ?? []).map((file) => team.upload({ data: file, name: file.name })))
-    const scheduled = await team.schedule(post.re === null ? post.channel : { re: post.re }, {
-        text: post.text,
-        ...timing,
-        ...(attachments.length ? { attachments } : {}),
-        ...(post.noSync ? { noSync: true } : {}),
-        ...(Object.keys(post.labels).length > 0 ? { labels: post.labels } : {}),
-      })
-    toast(`scheduled for ${new Date(scheduled.next ?? scheduled.first).toLocaleString()}`)
-    void loadSchedules()
-  } catch (error) {
-    toast(`couldn't schedule it: ${said(error)}`)
   }
 }
 

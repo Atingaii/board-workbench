@@ -3,7 +3,7 @@ import type { BoardEventView, MessageView, ScheduleView, SchemaView } from '../s
 import { block } from '../src/contract/blocks.ts'
 import * as store from '../src/inspect/app/store.ts'
 import { continues } from '../src/inspect/app/store.ts'
-import { cadence, principalName, span, until } from '../src/inspect/app/words.ts'
+import { cadence, laterFields, localInput, principalName, span, timingWords, until } from '../src/inspect/app/words.ts'
 
 const ME = 'vercel:user:u_julian'
 
@@ -297,5 +297,65 @@ describe('the inspector store', () => {
     expect(cadence({ every: null, times: null, sent: 0, until: null })).toBe('once')
     expect(cadence({ every: 7 * 86_400_000, times: 4, sent: 1, until: null })).toBe('every 7d · 1 of 4 sent')
     expect(cadence({ every: 3_600_000, times: null, sent: 12, until: null })).toBe('every 1h · 12 sent')
+  })
+
+  it("keeps a post to send later through a message that lands saying the same", () => {
+    const post: store.Pending = { key: 'k', channel: 'ops', re: null, text: 'standup', noSync: false, labels: {}, createdAt: '', error: null }
+    const later: store.Pending = { ...post, key: 'k2', later: { in: '2h' } }
+    // Yours, in the same place, saying the same: it stands for the post on its way, never for the one to send later.
+    const state = store.applyEvent({ ...start, pending: [later, post] }, postedEvent(message(17, { text: 'standup' })))
+    expect(state.pending.map((pending) => pending.key)).toEqual(['k2'])
+  })
+
+  it("starts the send-later form from the timing it has, the time as a datetime-local input takes it", () => {
+    // Local, to the minute: built in local time here, so it reads the same in any zone.
+    const nine = new Date(2026, 10, 12, 9, 5)
+    expect(localInput(nine)).toBe('2026-11-12T09:05')
+    expect(localInput(nine.toISOString())).toBe('2026-11-12T09:05')
+    expect(localInput('not a time')).toBe('')
+    // What the form sends back for it is the same instant.
+    expect(new Date(localInput(nine.toISOString())).toISOString()).toBe(nine.toISOString())
+
+    expect(laterFields({ at: nine.toISOString(), every: '1d', times: 3 })).toEqual({ after: '', at: '2026-11-12T09:05', every: '1d', times: '3' })
+    expect(laterFields({ in: '2h' })).toEqual({ after: '2h', at: '', every: '', times: '' })
+    expect(laterFields(null)).toEqual({ after: '', at: '', every: '', times: '' })
+    expect(timingWords({ in: '2h', every: '1d' })).toBe('in 2h, every 1d')
+    expect(timingWords({ every: '7d' })).toBe('every 7d')
+  })
+
+  it("reads every shape a schema's property takes, a bare true or false included", () => {
+    const definition = {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'What it is called' },
+        anything: true,
+        nothing: false,
+        when: { type: 'string', format: 'date-time' },
+        size: { type: ['integer', 'null'] },
+        kind: { enum: ['a', 'b'] },
+        fixed: { const: 1 },
+        untyped: {},
+      },
+    }
+    expect(store.schemaFields(definition)).toEqual([
+      { name: 'name', type: 'string', required: true, description: 'What it is called' },
+      { name: 'anything', type: 'any', required: false, description: '' },
+      { name: 'nothing', type: 'never', required: false, description: '' },
+      { name: 'when', type: 'string (date-time)', required: false, description: '' },
+      { name: 'size', type: 'integer | null', required: false, description: '' },
+      { name: 'kind', type: 'enum', required: false, description: '' },
+      { name: 'fixed', type: 'const', required: false, description: '' },
+      { name: 'untyped', type: 'any', required: false, description: '' },
+    ])
+    // A schema with no properties, or with something else in their place, has no rows.
+    expect(store.schemaFields({ type: 'object' })).toEqual([])
+    expect(store.schemaFields({ properties: true })).toEqual([])
+    // A block of such a schema shows its data all the same.
+    const registered = { id: 'thing@1', name: 'thing', version: 1, description: null, schema: definition, builtIn: false, by: null, at: null }
+    expect(store.blockFields({ schema: 'thing', version: 1, data: { anything: 1, name: 'x' } }, registered)).toEqual([
+      { name: 'name', value: 'x', description: 'What it is called' },
+      { name: 'anything', value: 1 },
+    ])
   })
 })

@@ -12,7 +12,7 @@ import * as board from './board.ts'
 import { setEditing, toast, useEditing } from './chrome.ts'
 import { Ago } from './nav.tsx'
 import { bodyParts, continues, schemaOf, sourcePlatform, type Groupable, type Pending } from './store.ts'
-import { authorName, fileSize, shownName } from './words.ts'
+import { authorName, fileSize, shownName, timingWords } from './words.ts'
 import { ContextMenuArea, EmojiPicker, fieldMenu, LabelEditor, Panel, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
 
 const MENU_EMOJI = ['thumbs_up', 'heart', 'laugh', 'party', 'eyes', 'check']
@@ -463,7 +463,8 @@ export function Pendings(props: { posts: Pending[]; me: Me; after?: MessageView;
     <>
       {props.posts.map((post, i) => {
         const previous = i === 0 ? props.after : seen(props.posts[i - 1]!)
-        const continued = continues(previous, seen(post), i === 0 ? (props.afterHasReplies ?? false) : false)
+        // One to send later says when under its own header, so it never runs on from the row above.
+        const continued = post.later === undefined && continues(previous, seen(post), i === 0 ? (props.afterHasReplies ?? false) : false)
         return <PendingRow key={post.key} post={post} me={props.me} continued={continued} />
       })}
     </>
@@ -472,7 +473,7 @@ export function Pendings(props: { posts: Pending[]; me: Me; after?: MessageView;
 
 /** A post on its way, or one that didn't make it. */
 export function PendingRow({ post, me, continued = false }: { post: Pending; me: Me; continued?: boolean }) {
-  const status = post.error ? "didn't send" : 'sending…'
+  const status = post.later ? (post.error ? "didn't schedule" : 'scheduling…') : post.error ? "didn't send" : 'sending…'
   return (
     <div className={`message pending${continued ? ' continued' : ''}${post.error ? ' failed' : ''}`}>
       <div className="gutter">
@@ -489,6 +490,11 @@ export function PendingRow({ post, me, continued = false }: { post: Pending; me:
           <div className="meta-line">
             <span className="author">{shownName(me)}</span>
             <span className="time">{status}</span>
+            {post.later && (
+              <span className="badge">
+                <Clock size={10} /> {timingWords(post.later)}
+              </span>
+            )}
           </div>
         )}
         {post.text && <Text text={post.text} />}
