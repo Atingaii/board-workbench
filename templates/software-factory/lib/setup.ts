@@ -55,6 +55,8 @@ export type Deps = {
   access(): Promise<Record<string, readonly string[]>>;
   /** The board's latest messages in a channel, newest last. */
   messages(query: { channel: string; limit: number }): Promise<MessageView[]>;
+  /** channels.ts as it was deployed, to link to its lines. Nothing when it can't be read. */
+  channels(): string | undefined;
 };
 
 const TITLES: Record<StepId, string> = { vercel: "Vercel", github: "GitHub", slack: "Slack", try: "Try it" };
@@ -109,15 +111,20 @@ const signIn = () => todo("Link this directory, then restart the dev server", { 
 /** Your machine: `vercel env pull` writes VERCEL_ENV=development, so that counts too. */
 export const isLocal = (env: Env) => !env.VERCEL_ENV || env.VERCEL_ENV === "development";
 
-/** The file that names the repos and Slack channels the board syncs, and the lines a person edits: a repo to add, the Slack channel. */
-const CHANNELS = { file: "app/api/board/[[...path]]/channels.ts", repo: 11, slack: 17 };
+/** The file that names the repos and Slack channels the board syncs, from the project's root. */
+export const CHANNELS_FILE = "app/api/board/[[...path]]/channels.ts";
 
-/** One of those lines in this factory's own repo on GitHub, on the branch it was deployed from. Nothing off a deployment from Git. */
-function channelsLink(env: Env, line: "repo" | "slack", label: string): { link?: Link } {
-  const own = ownRepo(env);
+/**
+ * That file in this factory's own repo on GitHub, on the branch it was deployed from, opened on the
+ * first line `find` picks. People edit the file, so the line is looked up in what was deployed, never
+ * remembered; when it isn't found, the link opens the file. Nothing off a deployment from Git.
+ */
+function channelsLink(deps: Deps, label: string, find: (line: string) => boolean): { link?: Link } {
+  const own = ownRepo(deps.env);
   if (!own) return {};
-  const path = CHANNELS.file.split("/").map(encodeURIComponent).join("/");
-  return { link: { href: `https://github.com/${own}/blob/${env.VERCEL_GIT_COMMIT_REF || "main"}/${path}#L${CHANNELS[line]}`, label } };
+  const line = (deps.channels()?.split("\n").findIndex(find) ?? -1) + 1;
+  const path = CHANNELS_FILE.split("/").map(encodeURIComponent).join("/");
+  return { link: { href: `https://github.com/${own}/blob/${deps.env.VERCEL_GIT_COMMIT_REF || "main"}/${path}${line ? `#L${line}` : ""}`, label } };
 }
 
 /** The command that opens the board in a browser, as whoever runs it: on `team`, when it's known, and by its name when it has one. */
@@ -232,7 +239,9 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
   const off = total_count > repositories.length ? [] : repositories.map((repo) => repo.full_name).filter((name) => !(name in mapped));
   const several = off.length > 1;
   const unmapped = `${off.slice(0, 2).join(", ")}${off.length > 2 ? `, +${off.length - 2}` : ""} ${several ? "aren't" : "isn't"} on the board yet.`;
-  tasks.push(done(INSTALL, off.length ? { hint: unmapped, ...channelsLink(deps.env, "repo", several ? "Add them" : "Add it") } : {}));
+  // The link opens where the map of repos starts.
+  const map = channelsLink(deps, several ? "Add them" : "Add it", (line) => line.startsWith("export const repoChannels"));
+  tasks.push(done(INSTALL, off.length ? { hint: unmapped, ...map } : {}));
   if (!own) return step("github", tasks);
 
   const WHY = "So the agent can change its own code.";
@@ -253,9 +262,10 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   const wanted = Object.keys(deps.synced.slackChannels);
   const channel = wanted.join(", ");
   const CONNECT = "Create a Slack connector";
-  // What the channel is for, and the line that names it, to name another.
+  // What the channel is for, and the line that names it (a key of the map, in either quote), to name another.
+  const names = (line: string) => wanted.some((name) => [`"${name}"`, `'${name}'`].some((key) => line.trimStart().startsWith(key)));
   const invite = (channels: string, command?: string): Task =>
-    todo(`Invite the app to ${channels}`, { hint: "Where the factory updates itself.", ...channelsLink(deps.env, "slack", "Change the channel"), ...(command ? { commands: [command] } : {}) });
+    todo(`Invite the app to ${channels}`, { hint: "Where the factory updates itself.", ...channelsLink(deps, "Change the channel", names), ...(command ? { commands: [command] } : {}) });
   const token = await deps.connect(connector).catch((error: unknown) => error);
   if (typeof token !== "string") {
     if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("slack", [todo(CONNECT), invite(channel)], true);
@@ -305,10 +315,12 @@ export const boardDeps = (board: Board): { access: Deps["access"]; messages: Dep
 
 /** The checks' real dependencies, loaded only when the launcher runs. */
 export async function liveDeps(board: { access: Deps["access"]; messages: Deps["messages"] }, synced: Synced): Promise<Deps> {
-  const [{ getVercelOidcToken }, { getToken }, { gateway }] = await Promise.all([
+  const [{ getVercelOidcToken }, { getToken }, { gateway }, { readFileSync }, { join }] = await Promise.all([
     import("@vercel/oidc"),
     import("@vercel/connect"),
     import("ai"),
+    import("node:fs"),
+    import("node:path"),
   ]);
   return {
     env: process.env,
@@ -319,5 +331,13 @@ export async function liveDeps(board: { access: Deps["access"]; messages: Deps["
     credits: async () => Number((await gateway.getCredits()).balance),
     access: board.access,
     messages: board.messages,
+    // next.config.ts keeps the file in every route's function.
+    channels: () => {
+      try {
+        return readFileSync(join(process.cwd(), CHANNELS_FILE), "utf8");
+      } catch {
+        return undefined;
+      }
+    },
   };
 }

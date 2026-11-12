@@ -62,6 +62,7 @@ function fake(options: { env?: Record<string, string | undefined>; routes?: Rout
     // What a new board gives every project on the team.
     access: async () => ({ "*": ["read", "post", "react", "label", "sync"] }),
     messages: async () => [message("12", null), message("13", "factory", "12")],
+    channels: () => CHANNELS,
     ...options.deps,
   };
   return { deps, requests };
@@ -85,12 +86,15 @@ const labels = (tasks: Task[]) => tasks.map((task) => task.label);
 const commands = (step: Step) => todo(step).flatMap((task) => task.commands ?? []);
 const links = (step: Step) => todo(step).flatMap((task) => (task.link ? [task.link.href] : []));
 
-/** The line of channels.ts a link opens on, as it is in this checkout: what the person lands on. */
-function linked(href: string): { before: string[]; line: string } {
-  const [, file, line] = /\/blob\/main\/(.+)#L(\d+)$/.exec(href) ?? [];
-  assert.ok(file && line, `${href} should name a line of a file on main`);
-  const lines = readFileSync(new URL(`../${decodeURIComponent(file)}`, import.meta.url), "utf8").split("\n");
-  return { before: lines.slice(0, Number(line) - 1), line: lines[Number(line) - 1] ?? "" };
+/** channels.ts as this checkout has it: what a fresh factory deploys. */
+const CHANNELS = readFileSync(new URL("../app/api/board/[[...path]]/channels.ts", import.meta.url), "utf8");
+const CHANNELS_URL = "https://github.com/acme/factory/blob/main/app/api/board/%5B%5B...path%5D%5D/channels.ts";
+
+/** The line of `source` a link to channels.ts opens on: what the person lands on. */
+function linked(href: string, source = CHANNELS): string {
+  const [, line] = /^(?:.+)#L(\d+)$/.exec(href) ?? [];
+  assert.ok(href.startsWith(`${CHANNELS_URL}#L`) && line, `${href} should name a line of channels.ts in the factory's repo`);
+  return source.split("\n")[Number(line) - 1] ?? "";
 }
 
 test("a factory that's set up passes every step but Slack, which stays optional", async () => {
@@ -114,11 +118,8 @@ test("GitHub names the repos the app is on that come into no channel, and links 
   assert.equal(isDone(github!), true);
   const installed = github!.tasks.find((task) => task.hint);
   assert.equal(installed?.hint, "acme/web isn't on the board yet.");
-  // The link opens on a line inside the map of repos: after it opens, before it closes.
-  const { before } = linked(installed!.link!.href);
-  const opened = before.findLastIndex((line) => line.startsWith("export const "));
-  assert.match(before[opened] ?? "", /^export const repoChannels\b/);
-  assert.ok(!before.slice(opened).includes("};"), "the linked line should be inside repoChannels");
+  // The link opens where the map of repos starts.
+  assert.match(linked(installed!.link!.href), /^export const repoChannels\b/);
 });
 
 test("GitHub asks Connect for a token that writes to the factory's own repo alone, as the agent's turns do", async () => {
@@ -262,10 +263,34 @@ test("Slack set up without its app in the channel says to invite it, and holds u
   // It says what the channel is for, in a line, and links to the line that names it, in this factory's own repo.
   assert.equal(todo(steps.slack!)[0]!.hint, "Where the factory updates itself.");
   const [href] = links(steps.slack!);
-  assert.match(href!, /^https:\/\/github\.com\/acme\/factory\/blob\/main\/app\/api\/board\/%5B%5B\.\.\.path%5D%5D\/channels\.ts#L\d+$/);
-  assert.ok(linked(href!).line.includes(JSON.stringify(Object.keys(slackChannels)[0])), "the link should open on the line that names the Slack channel");
+  assert.ok(linked(href!).includes(JSON.stringify(Object.keys(slackChannels)[0])), "the link should open on the line that names the Slack channel");
   assert.ok(requests.includes("https://slack.com/api/auth.test"));
   assert.deepEqual(Object.values(steps).filter((step) => !step.optional && !isDone(step)), []);
+});
+
+/** Slack connected, its app in no channel yet: the step that links to the channel's line. */
+const uninvited = (channels: Deps["channels"]) =>
+  fake({
+    deps: { connect: async () => "app-token", channels },
+    routes: {
+      "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
+      "https://slack.com/api/users.conversations": conversations(),
+    },
+  }).deps;
+
+test("the link to the Slack channel follows its line after someone edits channels.ts", async () => {
+  // A factory that added two repos above the Slack channel, and wrote it in single quotes.
+  const edited = CHANNELS.replace('  // "acme/web": "dev",', '  "acme/web": "dev",\n  "acme/api": "dev",\n  "acme/docs": "dev",').replace('"#factory-rsi"', "'#factory-rsi'");
+  assert.notEqual(edited, CHANNELS);
+  const [href] = links((await shown(uninvited(() => edited))).slack!);
+  assert.match(linked(href!, edited), /^\s*'#factory-rsi': "dev\/factory"/);
+  // And not on the line it had before the edit.
+  assert.notEqual(href, links((await shown(uninvited(() => CHANNELS))).slack!)[0]);
+});
+
+test("a channels.ts that can't be read, or doesn't name the channel on a line, is linked as a file", async () => {
+  assert.deepEqual(links((await shown(uninvited(() => undefined))).slack!), [CHANNELS_URL]);
+  assert.deepEqual(links((await shown(uninvited(() => "export const slackChannels = channelsFromEnv();\n"))).slack!), [CHANNELS_URL]);
 });
 
 test("Slack's app in its channel, by name, is done", async () => {

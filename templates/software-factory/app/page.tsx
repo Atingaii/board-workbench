@@ -21,7 +21,7 @@ export default async function Launcher(): Promise<ReactNode> {
       <main className="launcher">
         <section className="hero">
           <h1>Protect this deployment first</h1>
-          <p className="lede">Anyone can open this page until you do.</p>
+          <p className="lede">The setup shows once only your team can open this page.</p>
           <div className="hero-links">
             <Refresh waiting={false} />
           </div>
