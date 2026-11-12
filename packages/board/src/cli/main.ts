@@ -161,8 +161,6 @@ export type CommandContext = {
   connection: typeof connection
   client: () => Board
   openBrowser: (url: string) => void
-  /** The app's copy of the inspector's page, when it hands one (`App`'s). */
-  inspectorPage?: () => Promise<string>
 }
 
 /**
@@ -193,11 +191,6 @@ export type App = {
    * its saved team), asked for only when a request needs it. Null is your login's default team.
    */
   team?: () => Promise<string | null>
-  /**
-   * The inspector's page, for an app that bundles board's CLI and so has no file of board's beside
-   * it: `INSPECTOR_PAGE`'s, as the app fetched and checked it. Asked for only when `inspect` runs.
-   */
-  inspectorPage?: () => Promise<string>
 }
 
 type Flags = ReturnType<typeof parseAll>['values']
@@ -1560,10 +1553,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'inspect':
-      // Loaded only now: the page comes with it, and it's most of what the CLI ships.
-      return (await import('./inspect.ts')).inspect(context())
-
     default: {
       const own = app.commands[command]
       if (own) return own.run(args, context())
@@ -1648,7 +1637,6 @@ const context = (): CommandContext => ({
   connection,
   client,
   openBrowser,
-  ...(app.inspectorPage ? { inspectorPage: app.inspectorPage } : {}),
 })
 
 /**
@@ -1686,6 +1674,9 @@ async function runOnce(argv: string[], options: App): Promise<number> {
       else out(VERSION)
       return 0
     }
+    // Only board's own CLI has it, its help included: this one has no page for it.
+    const elsewhere = standalone(canonical(positionals[0]))
+    if (elsewhere) throw elsewhere
     // --help is help, never the command it's on: that command's page.
     if (flags.help) {
       out(help(positionals))
@@ -1727,6 +1718,27 @@ function stopped(reason: unknown): Failed {
     reason: timedOut ? 'timeout' : 'canceled',
     message: `${timedOut ? 'Timed out' : 'Stopped'} before it could ${doing()}.`,
     ...(writes ? { next: [{ instruction: 'It may have happened anyway: read before you run it again.' }] } : {}),
+  })
+}
+
+/** The commands only board's own CLI has (`local.ts`), by name: an app that embeds board's points to it. */
+const STANDALONE = new Set(['inspect', 'serve'])
+
+/**
+ * A command only board's own CLI has, typed in an app that embeds board's: the same run there, as
+ * typed. The app's team never reaches these arguments (`vercel board` takes `--scope` itself), so
+ * `inspect`'s says where one goes, unless a URL names the board, and with it its team. `serve` runs
+ * a board of its own, and reads none.
+ */
+function standalone(command: string | undefined): Failed | undefined {
+  if (io.board || command === undefined || !STANDALONE.has(command) || Object.hasOwn(app.commands, command)) return undefined
+  const at = typed.indexOf('--')
+  const before = at === -1 ? typed : typed.slice(0, at)
+  const given = flags.url !== undefined || Boolean(process.env.BOARD_URL?.trim()) || (flags.scope ?? flags.team) !== undefined
+  const team = command === 'inspect' && !given ? ['--scope', '<TEAM>'] : []
+  return usage(`${named()} has no ${command}: board's own CLI runs it.`, {
+    reason: 'unknown_command',
+    next: [{ instruction: "Run board's own CLI", argv: ['npx', '@vercel/board@latest', ...before, ...team, ...(at === -1 ? [] : typed.slice(at))] }],
   })
 }
 
