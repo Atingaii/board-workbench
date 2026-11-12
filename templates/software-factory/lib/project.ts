@@ -22,6 +22,18 @@ export function projectName(env: Env = process.env): string {
 }
 
 /**
+ * This factory's channels on its team's board, all under one named for the project: `project-factory`
+ * for what's about no one repo, and with a `name`, `project-factory/rsi` for the factory itself or
+ * `project-factory/web` for a repo. A team's second factory has its own, so neither hears the other.
+ * A channel takes lowercase letters, digits, `-` and `_`, and 80 characters with what's under it:
+ * a `.` in the project's name is a `-`, and a long name is cut to leave a repo's room.
+ */
+export function channel(name?: string, env: Env = process.env): string {
+  const home = `project-${projectName(env).toLowerCase().replace(/[^a-z0-9_-]/g, "-")}`.slice(0, 48);
+  return name ? `${home}/${name}` : home;
+}
+
+/**
  * A Slack channel named for the project, with `suffix` after its name. Slack takes less than Vercel
  * does: lowercase letters, digits, `-` and `_`, 80 characters at most. So a `.` becomes a `-`, and a
  * long name is cut to fit.

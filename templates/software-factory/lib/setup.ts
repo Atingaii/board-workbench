@@ -55,6 +55,8 @@ export type Synced = {
   slackChannels: Record<string, string>;
   /** The board's name, or null for the team's default board. */
   board: string | null;
+  /** This factory's own channel on the board: it hears that one and the ones under it. */
+  home: string;
 };
 
 type Me = { principal: string; can: Record<string, readonly string[]> };
@@ -334,12 +336,9 @@ async function tryStep(deps: Deps, project: Project, me: Me | null): Promise<Ste
   const REPLY = "Get a reply from the agent";
   // The Vercel step says how to open the board: nothing to try until then.
   if (!me) return step("try", [todo(POST), todo(REPLY)]);
-  const read: MessageView[][] | Error = await Promise.all([
-    deps.messages({ channel: "dev", limit: 200 }),
-    deps.messages({ channel: "dev/factory", limit: 200 }),
-  ]).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
-  if (read instanceof Error) return step("try", [todo("Couldn't read the board", { hint: message(read) }), todo(REPLY)]);
-  const recent = read.flat();
+  // The factory's channels, in one read: its own and the ones under it.
+  const recent: MessageView[] | Error = await deps.messages({ channel: `${deps.synced.home}/`, limit: 200 }).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+  if (recent instanceof Error) return step("try", [todo("Couldn't read the board", { hint: message(recent) }), todo(REPLY)]);
   const heard = recent.some((m) => !byAgent(m.by, me.principal));
   const replied = recent.some((m) => byAgent(m.by, me.principal));
   return step("try", [heard ? done(POST) : todo(POST, { commands: [inspectCommand(project?.team, deps.synced.board)] }), replied ? done(REPLY) : todo(REPLY)]);
