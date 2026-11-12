@@ -842,7 +842,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         for (const task of body.tasks) ownLabels(task.labels)
         // A batch under an `id` that landed stands: the same request again gets its tasks, whatever the middleware would
         // make of it now, and another request under the `id` is refused. Neither is screened: each write is, once.
-        const request = body.id !== undefined ? await batchRequest(body) : undefined
+        // What it asks for is a digest of the request as given: this board's, or the one a board in front of it made
+        // of what it was given, before its middleware. Both then know a repeat by the same thing.
+        const request = body.id !== undefined ? (body.request ?? (await batchRequest(body))) : undefined
         if (body.id !== undefined) {
           try {
             return await backend.createdTasks(caller, { id: body.id, request }, signal)
@@ -854,7 +856,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         for (const task of body.tasks) await checkWrite(caller, task.text, { channel: body.channel }, signal)
         return screenTasks(caller, body, signal, async (tasks) => {
           for (const [at, task] of tasks.entries()) if (task.text !== body.tasks[at]!.text) await checkBlocks(task.text)
-          // What it asked for is what it was given, which the backend keeps with the batch: never a body's own word for it.
+          // What it asked for goes with it: a backend keeps it with the batch, and a board behind this one goes by it.
           return backend.createTasks(caller, { ...body, tasks, request }, signal)
         })
       }

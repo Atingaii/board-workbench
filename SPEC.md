@@ -3676,7 +3676,9 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   makes none. Anything else under it is 409 `duplicate_id`. The request is
   told as it was given: board() digests it before the middleware, looks
   for the batch first (`GET /tasks/batch/:id`), and answers a retry there,
-  so the middleware sees each write once, as with a post. `local()` keeps
+  so the middleware sees each write once, as with a post. A board in front
+  of another sends its digest on with the batch (`request`), so both tell
+  a repeat by what the first was given. `local()` keeps
   no field for it: a batch's events carry IDs derived from its `id`, as a
   post's carries its own, each root's post in turn and, on the event after
   the first root, the `id` with that digest. Vercel's API keeps a digest of

@@ -21,9 +21,10 @@ async function setup(options: Parameters<typeof testBoard>[0] = {}) {
 }
 
 const code = (answer: { status: number; body: any }) => [answer.status, answer.body?.error?.code]
-/** A handle on `board` as a person, to upload as the CLI and agents do. */
-const handleAs = (board: ReturnType<typeof testBoard>, user: string) =>
+/** A handle on `board` as a person, to upload as the CLI and agents do: a board of its own in front of it, with `middleware` when it has any. */
+const handleAs = (board: ReturnType<typeof testBoard>, user: string, middleware: Middleware[] = []) =>
   projectBoard({
+    middleware,
     backend: http(BOARD_URL, {
       fetch: async (input, init) => {
         const request = new Request(input, init)
@@ -373,6 +374,40 @@ describe('several tasks made at once', () => {
     expect(code(await batch(stamped.ada, [{ text: 'stamp me' }]))).toEqual([400, 'reserved_label'])
     expect(code(await batch(stamped.ada, [{ text: 'revert this' }]))).toEqual([400, 'invalid_block'])
     expect(await listed(stamped.ada)).toEqual([])
+  })
+
+  it('answer a retry through a board in front that screens them too: both boards know the request as the first was given it', async () => {
+    const { board, ada } = await setup()
+    const saw: string[] = []
+    // A board of ada's in front of the one that keeps the log, with a middleware of its own.
+    const loud: Middleware = async ({ write, next }) => void (saw.push(write.text), await next({ text: write.text.toUpperCase() }))
+    const front = handleAs(board, 'u_ada', [loud])
+    const plan = [{ text: 'one' }, { text: 'two' }]
+    const first = await front.tasks.createMany('work', plan, { id: 'plan-1' })
+    expect(first.map((root) => root.text)).toEqual(['ONE', 'TWO'])
+    // The same request again: the board behind kept what the front one was given, not what it sent on, so it finds the batch.
+    const again = await front.tasks.createMany('work', plan, { id: 'plan-1' })
+    expect(again.map((root) => [root.id, root.text])).toEqual(first.map((root) => [root.id, root.text]))
+    expect(saw).toEqual(['one', 'two'])
+    // Another request under the id is refused as the front one was given it, though its middleware makes the same of both.
+    await expect(front.tasks.createMany('work', [{ text: 'ONE' }, { text: 'two' }], { id: 'plan-1' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    await expect(front.tasks.createMany('work', [{ text: 'one' }], { id: 'plan-1' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    expect(saw).toHaveLength(2)
+    // A middleware that is never the same twice: the batch landed, so its retry still gets its tasks, as they landed.
+    const stamp: Middleware = async ({ write, next }) => void (saw.push(write.text), await next({ text: `${write.text} (${saw.length})` }))
+    const stamping = handleAs(board, 'u_ada', [stamp])
+    saw.length = 0
+    const stamped = await stamping.tasks.createMany('work', plan, { id: 'plan-2' })
+    expect(stamped.map((root) => root.text)).toEqual(['one (1)', 'two (2)'])
+    expect((await stamping.tasks.createMany('work', plan, { id: 'plan-2' })).map((root) => [root.id, root.text])).toEqual(stamped.map((root) => [root.id, root.text]))
+    expect(saw).toHaveLength(2)
+    expect(await listed(ada)).toHaveLength(4)
+    // A request that says its own digest changes only what its own id answers: the same one again is its batch.
+    const own = await batch(ada, plan, { id: 'plan-3', request: 'my own word for it' })
+    expect(own.status).toBe(201)
+    expect((await batch(ada, [{ text: 'anything' }], { id: 'plan-3', request: 'my own word for it' })).body.tasks.map((root: MessageView) => root.id)).toEqual(own.body.tasks.map((root: MessageView) => root.id))
+    expect(code(await batch(ada, plan, { id: 'plan-3' }))).toEqual([409, 'duplicate_id'])
+    expect(await listed(ada)).toHaveLength(6)
   })
 
   it("are a handle's own by their id, which no request takes first, and are made once for a watcher that is run again", async () => {

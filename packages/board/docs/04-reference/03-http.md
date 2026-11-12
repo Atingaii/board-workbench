@@ -436,7 +436,9 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   the same fields), answers the tasks the first request made, as they are
   now, and makes none. Anything else under it is 409 `duplicate_id`. The
   request is told as it was sent, before the
-  [middleware](../01-board/08-middleware.md), which a retry never reaches. More
+  [middleware](../01-board/08-middleware.md), which a retry never reaches. A
+  board in front of this one sends `request`, its digest of what it was given,
+  so both tell a repeat by the same thing; leave it out otherwise. More
   than 100 tasks, or more than a board holds in one write, is 400
   `batch_too_large`: send it in parts.
 - **A claim is a lease.** `lease` is seconds, 30 to 3600, and 900 when left

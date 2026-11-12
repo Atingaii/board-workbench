@@ -230,6 +230,9 @@ export const CreateTaskBody = z
   })
   .refine((body) => body.lease === undefined || body.claim === true, { message: '`lease` goes with `claim`', path: ['lease'] })
 
+/** A digest of what a batch asks for: what tells the same request under an `id` from another. */
+const BatchRequest = z.string().min(1).max(64)
+
 /** A task another task of the same batch waits for, by the `key` it goes by there. */
 const TaskKey = z.string().min(1).max(TASK_KEY_MAX).refine(storable, 'key has a NUL character or a lone surrogate')
 
@@ -262,13 +265,20 @@ export const CreateTasksBody = z.object({
     .min(1)
     .max(TASK_BATCH_MAX),
   id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
+  /**
+   * From a board in front of this one: its digest of what the batch asked for as it was given, before
+   * its own middleware changed anything, so both boards tell a repeat by the same request. A board
+   * with none in front makes its own. It says nothing of who writes or what: a caller that sends one
+   * changes only which of its own requests its own `id` answers.
+   */
+  request: BatchRequest.optional(),
 })
 
 /**
- * `request` is a board's own digest of what a batch asked for, as it was given: with it, the batch
+ * `request` is a board's digest of what a batch asked for, as it was given: with it, the batch
  * answers only that request, and any other under the `id` is 409 `duplicate_id`.
  */
-export const CreatedTasksQuery = z.object({ request: z.string().min(1).max(64).optional() })
+export const CreatedTasksQuery = z.object({ request: BatchRequest.optional() })
 
 /** Which tasks to list: open ones unless `state` says `all` or names one. A claim whose lease has run out counts as `ready`. */
 export const TasksQuery = z.object({

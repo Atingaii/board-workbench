@@ -76,13 +76,6 @@ import type {
 } from './routes.ts'
 
 type Input<S extends z.ZodType> = NonNullable<z.output<S>>
-
-/**
- * (server) A digest of what a batch asked for as its caller gave it, before the middleware: board()
- * makes it, never a request's body, and a backend keeps it with a batch made under an `id`, so that
- * `id` again answers the batch only for the same request.
- */
-type BatchRequest = { request?: string | undefined }
 type Id = { id: string }
 type Key = { key: string }
 type Nothing = Record<string, never>
@@ -121,7 +114,7 @@ export type Protocol = {
    * or tasks that wait for each other; 400 `batch_too_large` for more than a board holds in one write. Nothing is made
    * then, and a retry with the same `id` answers the tasks the first made.
    */
-  createTasks: { input: Input<typeof CreateTasksBody> & BatchRequest; output: { tasks: MessageView[] } }
+  createTasks: { input: Input<typeof CreateTasksBody>; output: { tasks: MessageView[] } }
   /**
    * The caller's own batch made under `id`, its tasks' roots as they are now, in order: 404 `batch_not_found` when
    * there's none. With `request`, 409 `duplicate_id` when the batch was made for another one.
