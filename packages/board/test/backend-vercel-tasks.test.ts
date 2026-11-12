@@ -16,7 +16,7 @@ type Sent = { method: string; version: number; path: string; query: Record<strin
  * A handle on the fake's board through vercel(), as `principal`, and every request it sent the API: its version, and
  * its path under the board. `can` narrows it with `x-board-can`, as a proxy that holds its credential does.
  */
-function handleOn(api: Api, principal = 'user:u_jb', { answered: hook, can }: { can?: string | (() => string | undefined); answered?: (request: Sent, response: Response) => Response } = {}) {
+function handleOn(api: Api, principal = 'user:u_jb', { answered: hook, can }: { can?: string | (() => string | undefined); answered?: (request: Sent, response: Response) => Response | Promise<Response> } = {}) {
   const sent: Sent[] = []
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = new Request(input, init)
@@ -773,6 +773,30 @@ describe("vercel()'s tasks", () => {
     expect(cut.wrote().body).toMatchObject({ claimToken: landed!.body!.claimToken, epoch: 2 })
     await vi.waitFor(async () => expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', claim: null, epoch: 2 }))
 
+    // One the API answered as its caller left is given back too: the answer came whole, and nobody was there for it.
+    const late = new AbortController()
+    let answered = false
+    const leaver = handleOn(api, 'user:u_jb', {
+      answered: async (request, response) => {
+        if (request.path !== '/tasks/claim' || answered) return response
+        answered = true
+        // Its caller goes just as the answer has been read whole: nothing is cut off, and nobody is there for it.
+        const whole = new Response(await response.text(), { status: response.status, headers: response.headers })
+        const read = whole.text.bind(whole)
+        whole.text = async () => {
+          const text = await read()
+          late.abort()
+          return text
+        }
+        return whole
+      },
+    })
+    expect(await leaver.tasks.claim({ channel: 'work', wait: 5 }, { signal: late.signal }).catch(() => null)).toBeNull()
+    await vi.waitFor(() => expect(leaver.wrote()).toMatchObject({ path: `/tasks/${threadOf(task.id)}/release`, body: { epoch: 3 } }))
+    // It was answered, so it isn't asked again.
+    expect(asks(leaver)).toHaveLength(1)
+    await vi.waitFor(async () => expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', claim: null, epoch: 3 }))
+
     // One that landed for a caller that may no longer claim there isn't answered to it: nothing comes back to release,
     // and the claim runs out with its lease.
     const left = new AbortController()
@@ -790,7 +814,7 @@ describe("vercel()'s tasks", () => {
     await vi.waitFor(() => expect(asks(held)).toHaveLength(2))
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(held.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/claim', '/tasks/claim'])
-    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'claimed', epoch: 3 })
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'claimed', epoch: 4 })
   })
 
   it("shows each task change in the feed as the board's event, built from the task right after it, a renewal only to a read of everything", async () => {
@@ -881,6 +905,11 @@ describe("vercel()'s tasks", () => {
       ['task.claimed', first.id],
       ['task.ready', second.id],
     ])
+    // Deleting a ready task's root cancels it: a feed on what it wore before the delete gets the cancel, as on any board.
+    const { task: dropped } = await julian.tasks.create('work', { text: 'drop me', labels: { step: 'fix' } })
+    const before = (await julian.poll({ channel: 'work', label: ['step=fix', 'board.task=ready'] })).cursor
+    await julian.delete(dropped.id)
+    expect((await julian.poll({ channel: 'work', label: ['step=fix', 'board.task=ready'], after: before })).events.map((event) => [event.type, event.message?.id])).toEqual([['task.canceled', dropped.id]])
     // A held task that needs others waits again once its hold is lifted: its task.ready is what shows it ready, as on any board.
     await julian.tasks.block(second.id, 'approve?')
     const held = (await julian.poll({ channel: 'work', label: ['board.task=ready'] })).cursor
