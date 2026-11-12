@@ -201,7 +201,8 @@ describe('vb()', () => {
 
   it('works a task over several calls on one handle, which keeps its claim, and runs no command', async () => {
     const served = testBoard()
-    const team = await handle(undefined, served)
+    const stall: Stall = { on: false, seen: [] }
+    const team = await handle(stall, served)
     const id = (await vb(team, ['tasks', 'create', 'work', 'fix CVE-123 in acme/web', '--label', 'step=fix', '--no-sync'])).stdout.trim()
     expect(await vb(team, ['tasks', 'work'])).toEqual({ code: 0, stdout: `#${id}  ready      fix CVE-123 in acme/web         step=fix\n`, stderr: '' })
     const claimed = await vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=fix', '--json'])
@@ -234,5 +235,22 @@ describe('vb()', () => {
     const waiting = vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=never', '--wait', '1m'], { signal: controller.signal })
     controller.abort()
     expect(await waiting).toEqual({ code: 0, stdout: '', stderr: '' })
+
+    // Any other task command its signal stops says so, and one that writes says it may have landed: a list doesn't.
+    stall.on = true
+    const stoppedWhile = async (argv: string[]) => {
+      const stopping = new AbortController()
+      const running = vb(team, [...argv, '--json'], { signal: stopping.signal })
+      setTimeout(() => stopping.abort(), 20)
+      const ran = await running
+      return { code: ran.code, ...(JSON.parse(ran.stderr) as { reason: string; message: string; hint?: string }) }
+    }
+    expect(await stoppedWhile(['tasks', 'claim', next])).toMatchObject({ code: 130, reason: 'canceled', message: `Stopped before it could claim task #${next}.`, hint: expect.stringMatching(/may have happened/) })
+    expect(await stoppedWhile(['tasks', 'unblock', next])).toMatchObject({ code: 130, reason: 'canceled', hint: expect.stringMatching(/may have happened/) })
+    const listing = await stoppedWhile(['tasks', 'work'])
+    expect(listing).toMatchObject({ code: 130, reason: 'canceled', message: 'Stopped before it could list tasks in work.' })
+    expect(listing.hint).toBeUndefined()
+    stall.on = false
+    expect(JSON.parse((await vb(team, ['read', next, '--json'])).stdout).message.task.state).toBe('ready')
   })
 })
