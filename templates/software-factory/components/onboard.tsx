@@ -8,9 +8,10 @@ type Answer = { started: true; repo: string } | { started: false; repo: string; 
 /**
  * A repo to onboard, typed or pasted, and the button that asks the factory for it: a POST to the
  * page's own route. What it says after is what came back. `where` is where the factory was asked,
- * as people know it.
+ * as people know it, and `suggest` the repos the field offers while someone types: the browser's
+ * own list, so it works as every other field of theirs does.
  */
-export function Onboard({ path, where }: { path: string; where: string }): ReactNode {
+export function Onboard({ path, where, suggest }: { path: string; where: string; suggest: string[] }): ReactNode {
   const [repo, setRepo] = useState("");
   const [said, setSaid] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -37,8 +38,10 @@ export function Onboard({ path, where }: { path: string; where: string }): React
           value={repo}
           onChange={(event) => setRepo(event.target.value)}
           placeholder="owner/repo"
+          list={suggest.length ? "onboard-repos" : undefined}
+          // A browser that's told not to complete a field may not offer its list either.
+          autoComplete={suggest.length ? undefined : "off"}
           aria-label="A repo to onboard"
-          autoComplete="off"
           autoCapitalize="none"
           spellCheck={false}
         />
@@ -46,6 +49,13 @@ export function Onboard({ path, where }: { path: string; where: string }): React
           {pending ? "Asking" : "Onboard"}
         </button>
       </div>
+      {suggest.length ? (
+        <datalist id="onboard-repos">
+          {suggest.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      ) : null}
       {said ? (
         <p className="note" role="status">
           {said}
