@@ -279,9 +279,12 @@ const uninvited = (channels: Deps["channels"]) =>
   }).deps;
 
 test("the link to the Slack channel follows its line after someone edits channels.ts", async () => {
-  // A factory that added two repos above the Slack channel, and wrote it in single quotes.
-  const edited = CHANNELS.replace('  // "acme/web": "dev",', '  "acme/web": "dev",\n  "acme/api": "dev",\n  "acme/docs": "dev",').replace('"#factory-rsi"', "'#factory-rsi'");
-  assert.notEqual(edited, CHANNELS);
+  // A factory that added repos above the Slack channel, wrote it in single quotes, and names it in a comment first.
+  const edited = CHANNELS.replace('  // "acme/web": "dev",', '  "acme/web": "dev",\n  "acme/api": "dev",\n  "acme/docs": "dev",').replace(
+    '  "#factory-rsi"',
+    "  // '#factory-rsi' is where the factory updates itself.\n  '#factory-rsi'",
+  );
+  assert.equal(edited.split("\n").length, CHANNELS.split("\n").length + 3);
   const [href] = links((await shown(uninvited(() => edited))).slack!);
   assert.match(linked(href!, edited), /^\s*'#factory-rsi': "dev\/factory"/);
   // And not on the line it had before the edit.
