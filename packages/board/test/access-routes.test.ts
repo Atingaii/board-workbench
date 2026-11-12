@@ -108,6 +108,12 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: '/tasks', body: { re: secret.root }, status: 404 },
     { method: 'POST', path: '/tasks', body: { re: open.root }, status: 403 },
   ],
+  createTasks: ({ secret }) => [
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'secret', tasks: [{ text: 'hi' }] }, status: 403 },
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'open', tasks: [{ text: 'hi' }, { text: 'and this' }] }, status: 403 },
+    // What it would wait for is checked only once it may post there: a task it can't read stays out of sight.
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'open', tasks: [{ text: 'hi', needs: [String(secret.task)] }] }, status: 403 },
+  ],
   claimReadyTask: () => [
     { method: 'POST', path: '/tasks/claim', body: { channel: 'secret' }, status: 403 },
     { method: 'POST', path: '/tasks/claim', body: { channel: 'secret/' }, status: 403 },

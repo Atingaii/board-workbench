@@ -31,9 +31,9 @@ import { compileWatcher, createWatchers, ID, registrantSession } from './watch.t
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
-import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
+import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, writeRoots, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
 import { SYNC_ACTOR, type WriteOrigin } from './origin.ts'
-import { isKeyIdOf } from '../client/ids.ts'
+import { derivedId, isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
 import { VERSION } from '../version.ts'
 
@@ -607,6 +607,21 @@ function build(options: A2Options, binding: BoardBinding) {
       if (!task.task) throw duplicateId()
       const claim = await made.claimed(messageAt(task.id))
       return { task, ...(claim ? { claim } : {}) }
+    },
+    async createTasks(caller, body) {
+      const identity = await identityOf(caller)
+      const { principal } = identity
+      // New threads, posted as any are: `post` where they land, and `label` when any carries labels.
+      const proofs = await authorizePost(writes, principal.access, { channel: body.channel, labels: body.tasks.find((task) => Object.keys(task.labels ?? {}).length > 0)?.labels })
+      ownId(caller, principal, body.id)
+      const made = tasks.startingMany(identity, body.tasks)
+      // A batch's `id` names its roots in order, so a retry finds the ones that landed. They're the board's own IDs, which no request posts with.
+      const rootId = (at: number) => (body.id !== undefined ? derivedId('board-batch', body.id, String(at)) : Promise.resolve(crypto.randomUUID()))
+      const roots = await Promise.all(
+        body.tasks.map(async (task, at) => ({ id: await rootId(at), text: task.text, labels: task.labels, noSync: task.noSync, attachments: await attachmentsFor(principal, task.attachments) })),
+      )
+      const landed = body.id !== undefined ? { past: await rootId(body.tasks.length) } : undefined
+      return { tasks: await writeRoots(writes, { identity, proofs, channel: body.channel, roots, with: made, landed }) }
     },
     claimReadyTask: async (caller, body, signal) => tasks.claimReady(await identityOf(caller), body, signal),
     claimTask: async (caller, { id, lease }) => tasks.claim(await identityOf(caller), messageAt(id), lease),

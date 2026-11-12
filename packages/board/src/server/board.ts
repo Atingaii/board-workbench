@@ -366,6 +366,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
           ...client.tasks,
           create: (async (target: string | { re: string }, input?: string | NewTaskOptions | TaskOptions) =>
             typeof target === 'string' ? client.tasks.create(target, await owned(input as string | NewTaskOptions)) : client.tasks.create(target, input as TaskOptions | undefined)) as BoardClient['tasks']['create'],
+          createMany: async (channel, tasks, opts = {}) => client.tasks.createMany(channel, tasks, opts.id !== undefined ? { id: await id(opts.id) } : opts),
         },
         // In-process, a request is this caller's whatever its headers say: another profile is another handle's.
         request: (path, init = {}) => {

@@ -7,11 +7,12 @@ import type { BoardEvent } from '../contract/events.ts'
 import { foldMessages, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { OPEN_TASK_STATES, TASK_LABEL, type TaskState } from '../contract/schemas.ts'
+import { batchPlan, type BatchNeed } from '../contract/task-batch.ts'
 import { authorize, type Access, type Permission } from './access.ts'
 import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
 import { indexOf, ref, toMessageFilter, view, whoIs } from './feed.ts'
 import type { MessageFilter, ThreadSummary } from '../store/types.ts'
-import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type Events, type Identity, type WriteContext } from './writes.ts'
+import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type AlongEach, type Events, type Identity, type WriteContext } from './writes.ts'
 
 /** The longest lease this board gives, in seconds: what a claim asks for past it comes back as this. */
 export const LEASE_CAP_S = 3600
@@ -271,21 +272,32 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
    * maker hears now. A failed one may yet be reopened, so it's still something to wait for.
    */
   async function needsAt(access: Access, refs: readonly string[] | undefined, position: number, self: number | null): Promise<{ ids: number[]; completed: boolean }> {
-    const invalid = (value: string, why: string) => badRequest(`needs: #${value} ${why}`, 'invalid_needs')
+    const named = namedNeeds(refs, self)
+    return needsAmong(access, named, named.size === 0 ? new Map<number, Message>() : await writes().reads.tables.messagesAt([...named.keys()], position))
+  }
+
+  const invalidNeed = (value: string, why: string) => badRequest(`needs: #${value} ${why}`, 'invalid_needs')
+
+  /** The messages `refs` name, each by the ref that named it: one that names none, or `self`, is refused. */
+  function namedNeeds(refs: readonly string[] | undefined, self: number | null): Map<number, string> {
     const named = new Map<number, string>()
     for (const value of refs ?? []) {
       const id = indexOf(value)
-      if (id === null || id === 0) throw invalid(value, "isn't a task")
-      if (id === self) throw invalid(value, "is the task itself: it can't wait for itself")
+      if (id === null || id === 0) throw invalidNeed(value, "isn't a task")
+      if (id === self) throw invalidNeed(value, "is the task itself: it can't wait for itself")
       named.set(id, value)
     }
-    const ids = [...named.keys()]
-    const found = ids.length === 0 ? new Map<number, Message>() : await writes().reads.tables.messagesAt(ids, position)
+    return named
+  }
+
+  /** The tasks `named` names among `found`, the messages read for them, and whether they've all completed. */
+  function needsAmong(access: Access, named: ReadonlyMap<number, string>, found: ReadonlyMap<number, Message>): { ids: number[]; completed: boolean } {
     for (const [id, value] of named) {
       const need = found.get(id)
-      if (!need?.task || !access.readable(need.channel)) throw invalid(value, "isn't a task")
-      if (need.task.state === 'canceled') throw invalid(value, 'was canceled: it can never complete')
+      if (!need?.task || !access.readable(need.channel)) throw invalidNeed(value, "isn't a task")
+      if (need.task.state === 'canceled') throw invalidNeed(value, 'was canceled: it can never complete')
     }
+    const ids = [...named.keys()]
     return { ids, completed: ids.every((id) => found.get(id)!.task!.state === 'completed') }
   }
 
@@ -471,6 +483,40 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
         return { epoch: held.epoch, token, until: held.claim.until }
       }
       return { along, claimed }
+    },
+
+    /**
+     * What makes several new threads tasks, to append with their roots, all in one write: for each,
+     * `task.created`, and `task.ready` when it waits only for tasks that were there and have all
+     * completed. A task waits for the batch's others by their `ref`, wherever they come in it, and
+     * those are new, so it waits. Refused before anything is read: an assignee that isn't its
+     * owner's, a `ref` two tasks go by or none has, and tasks that wait for each other.
+     */
+    startingMany(identity: Identity, tasks: readonly { ref?: string | undefined; needs?: readonly BatchNeed[] | undefined; for?: string | null | undefined }[]): AlongEach {
+      const { principal, author } = identity
+      const assigned = tasks.map((task) => ownActor(principal.id, task.for))
+      const plan = batchPlan(tasks)
+      if ('problem' in plan) throw badRequest(`needs: ${plan.problem}`, 'invalid_needs')
+      const { inside } = plan
+      const named = tasks.map((task) => namedNeeds((task.needs ?? []).filter((need) => typeof need === 'string'), null))
+      const outside = [...new Set(named.flatMap((needs) => [...needs.keys()]))]
+      return async () => {
+        const position = await writes().reads.tables.position()
+        // What the batch waits for that was there, read once for all its tasks.
+        const found = outside.length === 0 ? new Map<number, Message>() : await writes().reads.tables.messagesAt(outside, position)
+        const needs = named.map((refs) => needsAmong(principal.access, refs, found))
+        const readied = needs.map(({ ids, completed }, at) => ids.length > 0 && completed && inside[at]!.length === 0)
+        return {
+          position,
+          counts: readied.map((ready) => (ready ? 2 : 1)),
+          events: (roots) =>
+            roots.map((root, at): Events => {
+              const about = { id: root.id, thread: root.thread }
+              const waitsFor = [...needs[at]!.ids, ...inside[at]!.map((other) => roots[other]!.id)]
+              return [{ type: 'task.created', payload: { ...about, needs: waitsFor, for: assigned[at]!, by: author } }, ...(readied[at] ? [{ type: 'task.ready' as const, payload: about }] : [])]
+            }),
+        }
+      }
     },
 
     /**

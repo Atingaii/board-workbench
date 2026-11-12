@@ -26,6 +26,7 @@ export {
   type ReplyOptions,
   type ScheduleOptions,
   type ScheduleTiming,
+  type TaskInBatch,
   type TaskOptions,
   type UploadInput,
   type WaitOptions,

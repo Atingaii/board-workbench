@@ -13,6 +13,7 @@ import type {
   ClaimTaskBody,
   CompleteTaskBody,
   CreateTaskBody,
+  CreateTasksBody,
   FailTaskBody,
   ReleaseTaskBody,
   RenewTaskBody,
@@ -107,6 +108,12 @@ export type Protocol = {
   tasks: { input: Input<typeof TasksQuery>; output: TasksPage }
   /** `task` is the task's root. `claim` comes with a task made with `claim`; a retry of one that landed gets the task without it. */
   createTask: { input: Input<typeof CreateTaskBody>; output: { task: MessageView; claim?: TaskClaim } }
+  /**
+   * `tasks` are the tasks' roots, in the body's order. 400 `invalid_needs` for a `ref` two tasks go by, one no task has,
+   * or tasks that wait for each other; 400 `batch_too_large` for more than a board holds in one write. Nothing is made
+   * then, and a retry with the same `id` answers the tasks the first made.
+   */
+  createTasks: { input: Input<typeof CreateTasksBody>; output: { tasks: MessageView[] } }
   /** The oldest ready task there, claimed, or `{ task: null }` when there's none, after waiting up to `wait` seconds. */
   claimReadyTask: { input: Input<typeof ClaimReadyTaskBody>; output: { task: MessageView; claim: TaskClaim } | { task: null } }
   /** 409 `task_claimed` while someone holds it, and of claims that race, for all but one. */

@@ -168,6 +168,18 @@ export type TaskOptions = {
 export type NewTaskOptions = TaskOptions & Pick<PostOptions, 'text' | 'labels' | 'noSync' | 'attachments' | 'id'>
 
 /**
+ * One task of several made together: its root's text, labels, `noSync`, and `attachments`, as a
+ * post takes them. `ref` is a name for it among the others, and `needs` takes a task's ID, or
+ * `{ ref }` for one made with it, before or after it. `for` is the one actor of yours that claims it.
+ */
+export type TaskInBatch = Required<Pick<PostOptions, 'text'>> &
+  Pick<PostOptions, 'labels' | 'noSync' | 'attachments'> & {
+    ref?: string
+    needs?: (string | { ref: string })[]
+    for?: string | null
+  }
+
+/**
  * What a claim does, each fenced by the claim: once it's over (released, settled, held, taken over,
  * or past its lease), they throw a 409 `claim_lost` and change nothing.
  */
@@ -377,6 +389,18 @@ export function createBoardClient(options: ClientOptions) {
   }
 
   /**
+   * Starts a thread in `channel` for each of `tasks`, as tasks, in one write: all of them or none,
+   * and none shows before all have landed. It answers their roots in the order given. A task waits
+   * for the ones made with it by their `ref`. With `id`, a retry answers the tasks the first call
+   * made. A board makes 100 at most, and throws a 400 `batch_too_large` for more, or for more than it
+   * holds in one write: `createTasksInChunks` makes a longer plan, in several.
+   */
+  async function createTasks(channel: string, tasks: TaskInBatch[], opts: { id?: string } = {}): Promise<MessageView[]> {
+    const sent = tasks.map((task) => (task.attachments?.length ? { ...task, attachments: task.attachments.map((file) => (typeof file === 'string' ? file : file.id)) } : task))
+    return (await call<{ tasks: MessageView[] }>('POST', '/tasks/batch', { body: { channel, tasks: sent, ...(opts.id !== undefined ? { id: opts.id } : {}) } })).tasks
+  }
+
+  /**
    * Claims task `target`, or with `{ channel }` the oldest ready task in that channel (`work`) or
    * subtree (`work/`) that has every label in `label`: one assigned to you first, then an
    * unassigned one you own, or whose owner `from` names by ID (400 `invalid_from` for a handle,
@@ -558,6 +582,7 @@ export function createBoardClient(options: ClientOptions) {
        */
       list: (query: Omit<TasksQueryInput, 'label'> & { label?: Record<string, string> | string[] } = {}) => call<TasksPage>('GET', `/tasks${queryString(query)}`),
       create: createTask,
+      createMany: createTasks,
       claim: claimTask,
       /** What a claim you hold does, from the `epoch` and `token` it answered: for a process that kept them, as `vb` does between commands. */
       held,

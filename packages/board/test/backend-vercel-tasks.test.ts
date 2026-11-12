@@ -81,6 +81,8 @@ describe("vercel()'s tasks", () => {
       'changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none': 'passed',
       'refuses a change of needs that would make a task wait for itself, straight back or through others': 'passed',
       'changes what a task needs only while no one holds it and it has not finished': 'passed',
+      'makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once': 'passed',
+      'makes none of a batch when one of its tasks can not be made, wherever it comes in it': 'passed',
       'holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'passed',
       'keeps a task assigned to a profile for that actor alone': 'passed',
       // This run sends no headers of its own: the kit's run with them, in backend-vercel.test.ts, checks it.
@@ -228,6 +230,246 @@ describe("vercel()'s tasks", () => {
     // The API's list answers each task with its root: only a latest reply is read apart.
     expect(julian.sent.filter((request) => request.path.startsWith('/messages/')).map((request) => request.path)).toEqual([`/messages/${reply.id}`])
     expect((await julian.messages({ channel: 'work', label: { 'board.task': 'waiting' } })).messages.map((message) => message.id)).toEqual([review.id])
+  })
+
+  it("makes several tasks in one call to the API's batch route, which resolves their refs: in the order given, each as the board shows a task", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const done = await julian.tasks.create('work', { text: 'cut the release branch', claim: true })
+    await done.claim!.complete('cut')
+    const { task: frozen } = await julian.tasks.create('work', { text: 'freeze the schema' })
+    julian.sent.length = 0
+    const { cursor } = await julian.poll({ channel: 'work', wait: 0 })
+    const made = await julian.tasks.createMany('work', [
+      { ref: 'review', text: 'review the fix', needs: [{ ref: 'fix' }] },
+      { ref: 'fix', text: 'fix the export', labels: { step: 'fix' }, noSync: true },
+      { text: 'announce the release', needs: [done.task.id] },
+      // A need named twice is one need, as on any board.
+      { text: 'ship it', needs: [done.task.id, { ref: 'review' }, { ref: 'fix' }, { ref: 'review' }, done.task.id], for: `${JULIAN}+shipper` },
+      { text: 'migrate the data', needs: [done.task.id, frozen.id] },
+    ])
+    const [review, fix, announce, ship, migrate] = made
+    expect(made.map((root) => [root.text, root.task?.state, root.task?.needs, root.task?.for, root.channel, root.labels])).toEqual([
+      ['review the fix', 'waiting', [fix!.id], null, 'work', { 'board.task': 'waiting' }],
+      ['fix the export', 'ready', [], null, 'work', { step: 'fix', 'board.task': 'ready' }],
+      ['announce the release', 'ready', [done.task.id], null, 'work', { 'board.task': 'ready' }],
+      ['ship it', 'waiting', [done.task.id, review!.id, fix!.id], `${JULIAN}+shipper`, 'work', { 'board.task': 'waiting' }],
+      ['migrate the data', 'waiting', [done.task.id, frozen.id], null, 'work', { 'board.task': 'waiting' }],
+    ])
+    expect(made.every((root) => /^msg_[0-9a-f-]{36}_1$/.test(root.id) && root.re === null && root.task?.owner === JULIAN)).toBe(true)
+    expect([fix!.noSync, review!.noSync]).toEqual([true, false])
+    // One write, to version 2's batch route: the tasks that were there by their threads, the batch's own by their refs.
+    const writes = julian.sent.filter((request) => request.method === 'POST')
+    expect(writes.map((request) => `v${request.version} ${request.path}`)).toEqual(['v2 /tasks/batch'])
+    expect(writes[0]!.body).toEqual({
+      operationId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+      channel: 'work',
+      tasks: [
+        { ref: 'review', text: 'review the fix', needs: [{ ref: 'fix' }] },
+        { ref: 'fix', text: 'fix the export', labels: { step: 'fix' }, noSync: true },
+        { text: 'announce the release', needs: [threadOf(done.task.id)] },
+        { text: 'ship it', needs: [threadOf(done.task.id), { ref: 'review' }, { ref: 'fix' }], for: `${JULIAN}+shipper` },
+        { text: 'migrate the data', needs: [threadOf(done.task.id), threadOf(frozen.id)] },
+      ],
+    })
+    // They list in the order given, and the feed has each task's events in it: its post, what made it a task, its ready.
+    expect((await julian.tasks.list({ channel: 'work' })).tasks.map((task) => task.message.id)).toEqual([frozen.id, review!.id, fix!.id, announce!.id, ship!.id, migrate!.id])
+    expect((await julian.poll({ channel: 'work', after: cursor })).events.map((event) => [event.type, event.message?.id])).toEqual([
+      ['message.posted', review!.id],
+      ['task.created', review!.id],
+      ['message.posted', fix!.id],
+      ['task.created', fix!.id],
+      ['message.posted', announce!.id],
+      ['task.created', announce!.id],
+      ['task.ready', announce!.id],
+      ['message.posted', ship!.id],
+      ['task.created', ship!.id],
+      ['message.posted', migrate!.id],
+      ['task.created', migrate!.id],
+    ])
+    // One of them that completes readies what waited only for it.
+    await (await julian.tasks.claim(fix!.id, { lease: 60 })).complete('fixed')
+    expect((await julian.thread(review!.id)).message.task?.state).toBe('ready')
+    expect((await julian.thread(ship!.id)).message.task?.state).toBe('waiting')
+  })
+
+  it("names a batch's operation by its id, so the API answers a retry with the tasks it made, and another batch under that id is another write's", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const plan = [{ ref: 'fix', text: 'fix the export' }, { text: 'review the fix', needs: [{ ref: 'fix' }] }]
+    const first = await julian.tasks.createMany('work', plan, { id: 'release-42' })
+    const again = await julian.tasks.createMany('work', plan, { id: 'release-42' })
+    expect(again.map((root) => root.id)).toEqual(first.map((root) => root.id))
+    expect((await julian.tasks.list({ state: 'all' })).tasks).toHaveLength(2)
+    // The same operation both times, a UUIDv7 in shape as the API takes one, and another for another id or for none.
+    const operations = () => julian.sent.filter((request) => request.path === '/tasks/batch').map((request) => request.body!.operationId as string)
+    expect(operations()[1]).toBe(operations()[0])
+    await julian.tasks.createMany('work', plan, { id: 'release-43' })
+    await julian.tasks.createMany('work', plan)
+    await julian.tasks.createMany('work', plan)
+    expect(new Set(operations()).size).toBe(4)
+    expect(operations().every((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))).toBe(true)
+    expect((await julian.tasks.list({ state: 'all' })).tasks).toHaveLength(8)
+    // The API's own word for an operation sent again with another body is a board's for an id used twice.
+    await expect(julian.tasks.createMany('work', [...plan, { text: 'and one more' }], { id: 'release-42' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    await expect(julian.tasks.createMany('elsewhere', plan, { id: 'release-42' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    expect((await julian.tasks.list({ state: 'all' })).tasks).toHaveLength(8)
+  })
+
+  it("makes none of a batch the API refuses, and says why in a board's codes: how its tasks wait, what it would wait for, and more than one write holds", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task: canceled } = await julian.tasks.create('work', { text: 'an idea we dropped' })
+    await julian.tasks.cancel(canceled.id, 'dropped')
+    const note = await julian.post('work', 'just a note')
+    const reply = await julian.reply(note.id, 'a reply')
+    const fine = [{ ref: 'a', text: 'first, and fine' }, { text: 'second, and fine', needs: [{ ref: 'a' }] }]
+    const refused = (last: Parameters<typeof julian.tasks.createMany>[1], status: number, code: string) =>
+      expect(julian.tasks.createMany('plans', [...fine, ...last]), JSON.stringify(last)).rejects.toMatchObject({ status, code })
+    await refused([{ text: 'waits for no one here', needs: [{ ref: 'nobody' }] }], 400, 'invalid_needs')
+    await refused([{ ref: 'a', text: 'a second a' }], 400, 'invalid_needs')
+    await refused([{ ref: 'self', text: 'waits for itself', needs: [{ ref: 'self' }] }], 400, 'invalid_needs')
+    await refused([{ ref: 'x', text: 'x', needs: [{ ref: 'y' }] }, { ref: 'y', text: 'y', needs: [{ ref: 'x' }] }], 400, 'invalid_needs')
+    await refused([{ text: 'waits for a canceled one', needs: [canceled.id] }], 400, 'invalid_needs')
+    await refused([{ text: 'waits for a note', needs: [note.id] }], 400, 'invalid_needs')
+    await refused([{ text: 'for someone else', for: `${ADA}+fixer` }], 400, 'invalid_request')
+    // A reply names no task: it's refused here, and the API isn't asked.
+    const asked = julian.sent.filter((request) => request.path === '/tasks/batch').length
+    await refused([{ text: 'waits for a reply', needs: [reply.id] }], 400, 'invalid_needs')
+    expect(julian.sent.filter((request) => request.path === '/tasks/batch')).toHaveLength(asked)
+    // What one of the API's writes holds, counted from the batch alone: 15 plain tasks, and fewer with labels, files, or needs.
+    const { task: there } = await julian.tasks.create('work', { text: 'a task that was there' })
+    const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
+    const chain = (count: number) => Array.from({ length: count }, (_, n) => ({ ref: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ ref: `step-${n - 1}` }] } : {}) }))
+    const labeled = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}`, labels: { step: 'fix' } }))
+    const waiting = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}`, needs: [there.id] }))
+    const file = await julian.upload({ data: new TextEncoder().encode('the plan'), name: 'plan.txt', type: 'text/plain' })
+    const over = {
+      '16 plain tasks': plain(16),
+      'a chain of 14': chain(14),
+      '12 with a label each': labeled(12),
+      '15, one with a file': [...plain(14), { text: 'with a file', attachments: [file.id] }],
+      '11 that wait for one that was there, one with a label': [...waiting(10), { text: 'and a label', needs: [there.id], labels: { step: 'fix' } }],
+    }
+    for (const [what, tasks] of Object.entries(over))
+      await expect(julian.tasks.createMany('plans', tasks), what).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringMatching(/\d+ items/) })
+    // Nothing of any of them, and not the channel they named.
+    expect((await julian.tasks.list({ channel: 'plans', state: 'all' })).tasks).toEqual([])
+    expect((await julian.channels()).map((channel) => channel.path)).not.toContain('plans')
+    const fits = {
+      '15 plain tasks': plain(15),
+      'a chain of 13': chain(13),
+      '11 with a label each': labeled(11),
+      '11 that wait for one that was there': waiting(11),
+      // A task that waits for one of the batch too takes nothing for being readied with it.
+      '10 that wait for it and for one of the batch': [{ ref: 'a', text: 'a' }, ...Array.from({ length: 10 }, (_, n) => ({ text: `step ${n}`, needs: [there.id, { ref: 'a' }] }))],
+    }
+    for (const [what, tasks] of Object.entries(fits)) expect(await julian.tasks.createMany('plans', tasks), what).toHaveLength(tasks.length)
+    // A task's file rides on its root, as a post's does.
+    const [withFile] = await julian.tasks.createMany('plans', [{ text: 'read the plan', attachments: [file] }])
+    expect([julian.wrote().body!.tasks, withFile!.attachments.map((attached) => attached.name)]).toEqual([[{ text: 'read the plan', attachments: [file.id] }], ['plan.txt']])
+    // More bytes than one of the API's requests holds, which long texts reach first, is the same to whoever sent it: none
+    // was made, and it sends less. Six tasks of 10,000 characters fit, and seven don't.
+    const long = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `${n}${'x'.repeat(9999)}` }))
+    julian.sent.length = 0
+    await expect(julian.tasks.createMany('long', long(7))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('bytes') })
+    expect(julian.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/batch'])
+    expect((await julian.channels()).map((channel) => channel.path)).not.toContain('long')
+    expect(await julian.tasks.createMany('long', long(6))).toHaveLength(6)
+    // More than any batch makes is board()'s own to say: the API is never asked.
+    julian.sent.length = 0
+    await expect(julian.tasks.createMany('plans', plain(101))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('100 tasks at most') })
+    expect(julian.sent.filter((request) => request.method === 'POST')).toEqual([])
+  })
+
+  it("leaves to the API what it never sends it: a batch of the wrong shape, an operation ID that is no UUIDv7, and the order the API refuses in", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task: there } = await julian.tasks.create('work', { text: 'a task that was there' })
+    const file = await julian.upload({ data: new TextEncoder().encode('the plan'), name: 'plan.txt', type: 'text/plain' })
+    const operation = () => `0190a5dc-${crypto.randomUUID().slice(9, 13)}-7${crypto.randomUUID().slice(15, 18)}-a${crypto.randomUUID().slice(20)}`
+    const ask = async (body: Record<string, unknown>, can?: string) => {
+      const response = await as(api, 'user:u_jb')(`${API}/v2/messageboard/boards/brd_test/tasks/batch?teamId=team_test`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(can !== undefined ? { 'x-board-can': can } : {}) },
+        body: JSON.stringify({ operationId: operation(), channel: 'plans', ...body }),
+      })
+      const answer = (await response.json()) as { error?: { code: string; items?: number; limit?: number } }
+      return [response.status, answer.error?.code ?? null, ...(answer.error?.items !== undefined ? [answer.error.items, answer.error.limit] : [])]
+    }
+    const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
+    const thread = threadOf(there.id)
+    expect(await ask({ operationId: 'release-42', tasks: plain(1) })).toEqual([400, 'invalid_operation_id'])
+    // A body of more than 64 KB is refused for that, whatever else it is, and says nothing of items.
+    expect(await ask({ operationId: 'release-42', tasks: Array.from({ length: 101 }, () => ({ text: 'x'.repeat(700) })) })).toEqual([413, 'entity_too_large'])
+    // The body's shape, before anything else.
+    for (const tasks of [
+      [],
+      plain(101),
+      [{ text: 'x', ref: '' }],
+      [{ text: 'x', ref: 'r'.repeat(65) }],
+      [{ text: 'x', clientId: 'c1' }],
+      [{ text: 'x', claim: { claimToken: 'a'.repeat(43) } }],
+      [{ text: 'x', needs: [thread, thread] }],
+      [{ ref: 'a', text: 'a' }, { text: 'x', needs: [{ ref: 'a' }, { ref: 'a' }] }],
+      [{ text: 'x', needs: Array.from({ length: 21 }, () => `thr_${crypto.randomUUID()}`) }],
+    ])
+      expect(await ask({ tasks }), JSON.stringify(tasks).slice(0, 80)).toEqual([400, 'bad_request'])
+    expect(await ask({ channelId: 'general', tasks: plain(1) })).toEqual([400, 'bad_request'])
+    // Then what the caller may, each task's own fields, how they wait for each other, the count, and only then what takes a read.
+    expect(await ask({ tasks: [{ text: 'x', needs: [{ ref: 'nobody' }] }] }, 'plans=read')).toEqual([403, 'forbidden'])
+    expect(await ask({ tasks: [{ text: 'labeled', labels: { step: 'fix' } }] }, 'plans=read,post')).toEqual([403, 'forbidden'])
+    expect(await ask({ tasks: [{ text: '   ' }, { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_message'])
+    expect(await ask({ tasks: [{ text: 'x', labels: { 'board.task': 'ready' } }] })).toEqual([400, 'reserved_label'])
+    expect(await ask({ tasks: [{ text: 'x', for: `${ADA}+fixer` }] })).toEqual([400, 'invalid_for'])
+    expect(await ask({ tasks: [{ text: 'one', attachments: [file.id] }, { text: 'two', attachments: [file.id] }, { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_attachments'])
+    expect(await ask({ tasks: [...plain(16), { text: 'x', needs: [{ ref: 'nobody' }] }] })).toEqual([400, 'invalid_needs'])
+    const wrong = `revert this\n\n${block('git-commit@1', { sha: 'a'.repeat(40) })}`
+    expect(await ask({ tasks: [...plain(15), { text: wrong }] })).toEqual([400, 'batch_too_large', 106, 100])
+    expect(await ask({ tasks: [{ text: wrong }, { text: 'x', needs: [`thr_${crypto.randomUUID()}`] }] })).toEqual([400, 'invalid_block'])
+    expect(await ask({ tasks: [{ text: 'x', needs: [`thr_${crypto.randomUUID()}`] }, { text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([400, 'invalid_needs'])
+    expect(await ask({ tasks: [{ text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([404, 'attachment_not_found'])
+    // None of it left a task, or the channel it named.
+    expect((await julian.channels()).map((channel) => channel.path)).not.toContain('plans')
+    expect(await ask({ tasks: plain(15) })).toEqual([200, null])
+  })
+
+  it("gives a caller that may post but not read its batch back as what it asked for, when a retry answers each task's ID alone", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    // It waits only for what it reads, as anyone: a task that was there, in a channel it does.
+    const { task: there } = await pong.tasks.create('work', { text: 'a task that was there' })
+    const answers: Promise<{ tasks: Record<string, unknown>[] }>[] = []
+    const blind = handleOn(api, 'project:prj_pong:production', {
+      can: 'intake=post;work=read',
+      answered: (request, response) => {
+        if (request.path === '/tasks/batch') answers.push(response.clone().json())
+        return response
+      },
+    })
+    const plan = [
+      { text: 'write it up', needs: [{ ref: 'triage' }, there.id], noSync: true },
+      { ref: 'triage', text: 'triage the outage', for: 'vercel:project:prj_pong:production+triager' },
+    ]
+    const first = await blind.tasks.createMany('intake', plan, { id: 'outage-1' })
+    const [writeUp, triage] = first
+    expect(first.map((root) => [root.text, root.task?.state, root.task?.needs])).toEqual([
+      ['write it up', 'waiting', [there.id, triage!.id]],
+      ['triage the outage', 'ready', []],
+    ])
+    // Someone claims one of them: the retry isn't told, and gets its tasks as it made them.
+    await pong.as('triager').tasks.claim(triage!.id, { lease: 60 })
+    const again = await blind.tasks.createMany('intake', plan, { id: 'outage-1' })
+    expect(again.map((root) => [root.id, root.channel, root.text, root.labels, root.task])).toEqual([
+      [writeUp!.id, 'intake', 'write it up', { 'board.task': 'waiting' }, expect.objectContaining({ state: 'waiting', needs: [there.id, triage!.id], for: null, owner: 'vercel:project:prj_pong:production', claim: null })],
+      [triage!.id, 'intake', 'triage the outage', { 'board.task': 'ready' }, expect.objectContaining({ state: 'ready', needs: [], for: 'vercel:project:prj_pong:production+triager', claim: null })],
+    ])
+    expect(again.map((root) => root.noSync)).toEqual([true, false])
+    // What the API answered: the tasks whole to the call that made them, and their IDs alone to the retry.
+    const [whole, alone] = await Promise.all(answers)
+    expect(whole!.tasks.map((task) => [task.id, typeof task.message])).toEqual([[threadOf(writeUp!.id), 'object'], [threadOf(triage!.id), 'object']])
+    expect(alone).toEqual({ tasks: [{ id: threadOf(writeUp!.id) }, { id: threadOf(triage!.id) }] })
+    expect((await pong.tasks.list({ channel: 'intake', state: 'all' })).tasks).toHaveLength(2)
   })
 
   it("has a new task's blocks checked before Vercel's API is asked, which checks them itself: a task refused for one makes no channel", async () => {

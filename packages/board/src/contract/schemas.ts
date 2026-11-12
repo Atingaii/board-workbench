@@ -12,6 +12,10 @@ export const RESERVED_LABEL_PREFIX = 'board.'
 export const TASK_LABEL = 'board.task'
 /** How many tasks one task may wait for. */
 export const TASK_NEEDS_MAX = 20
+/** How many tasks one batch makes at most, on any board: one that holds fewer in a write says so. */
+export const TASK_BATCH_MAX = 100
+/** The longest name a batch's task goes by among the batch's others. */
+export const TASK_REF_MAX = 64
 /** The longest result or reason a task keeps: a line or two, with the detail in its thread. */
 export const TASK_NOTE_MAX = 1000
 

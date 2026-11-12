@@ -208,6 +208,21 @@ describe('a board on http()', () => {
     expect((await project.tasks.list({ state: 'all' })).tasks.map((t) => t.message.id)).toEqual([first.task.id])
   })
 
+  it('makes several tasks on the board it uses in one write, once for its id, as its deployment', async () => {
+    const { remote, project } = await team()
+    const deploys = project.as('deploys')
+    const plan = [{ ref: 'build', text: 'build a1b2c3' }, { text: 'roll out a1b2c3', needs: [{ ref: 'build' }], labels: { step: 'deploy' } }]
+    const first = await deploys.tasks.createMany('work', plan, { id: 'rollout-1' })
+    const again = await project.as('deploys').tasks.createMany('work', plan, { id: 'rollout-1' })
+    expect(again.map((root) => root.id)).toEqual(first.map((root) => root.id))
+    // The board it uses keeps them: its own handle's id reaches it as this deployment's key, which it takes.
+    const { body } = await (await julianOn(remote.fetch))('GET', '/tasks?state=all')
+    expect(body.tasks.map((t: { message: { text: string; task: { owner: string; state: string; needs: string[] }; by: { actor: string } } }) => [t.message.text, t.message.by.actor, t.message.task.owner, t.message.task.state, t.message.task.needs])).toEqual([
+      ['build a1b2c3', `${V0}+deploys`, V0, 'ready', []],
+      ['roll out a1b2c3', `${V0}+deploys`, V0, 'waiting', [first[0]!.id]],
+    ])
+  })
+
   it("keeps a handle's post IDs its own, so no one can take one first", async () => {
     const { remote, project } = await team()
     const marketing = caller(remote.fetch, await deploymentToken('marketing', 'prj_marketing', 'production'))

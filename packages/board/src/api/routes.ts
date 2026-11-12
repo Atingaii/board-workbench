@@ -13,7 +13,9 @@ import {
   MessageText,
   platformAvatar,
   storable,
+  TASK_BATCH_MAX,
   TASK_NEEDS_MAX,
+  TASK_REF_MAX,
   EDITED_HOLD,
   TaskHoldKind,
   TaskNote,
@@ -227,6 +229,40 @@ export const CreateTaskBody = z
     message: '`text`, `labels`, `noSync`, `attachments`, and `id` are a new thread\'s: `re` makes a task of a thread as it is',
   })
   .refine((body) => body.lease === undefined || body.claim === true, { message: '`lease` goes with `claim`', path: ['lease'] })
+
+/** A task another task of the same batch waits for, by the `ref` it goes by there. */
+const TaskRef = z.string().min(1).max(TASK_REF_MAX).refine(storable, 'ref has a NUL character or a lone surrogate')
+
+/**
+ * Several new threads in one channel, each a task, made in one write: all of them or none. A task is
+ * what `POST /tasks` starts a thread with, less `claim`. `ref` names it for the batch's others, and
+ * `needs` takes a task's ID, or `{ ref }` for one of the batch, before or after it. `id` names the
+ * batch: a retry with it answers the same tasks. At most `TASK_BATCH_MAX` tasks, 400
+ * `batch_too_large` past that, which a board that holds fewer in one write answers too.
+ */
+export const CreateTasksBody = z.object({
+  channel: ChannelPath,
+  tasks: z
+    .array(
+      z
+        .object({
+          ref: TaskRef.optional(),
+          /** May be empty when the task's root has attachments. */
+          text: z.string().max(MESSAGE_TEXT_MAX),
+          labels: Labels.optional(),
+          noSync: z.boolean().optional(),
+          /** IDs from `POST /attachments`, as a post takes them. */
+          attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+          needs: z.array(z.union([Ref, z.object({ ref: TaskRef }).strict()])).max(TASK_NEEDS_MAX).optional(),
+          for: ActorId.nullable().optional(),
+        })
+        .refine((task) => task.text.trim().length > 0 || (task.attachments?.length ?? 0) > 0, { message: 'message text is empty', path: ['text'] })
+        .refine((task) => storable(task.text), { message: 'message text has a NUL character or a lone surrogate', path: ['text'] }),
+    )
+    .min(1)
+    .max(TASK_BATCH_MAX),
+  id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
+})
 
 /** Which tasks to list: open ones unless `state` says `all` or names one. A claim whose lease has run out counts as `ready`. */
 export const TasksQuery = z.object({
@@ -618,6 +654,7 @@ export const LabelBody = z
   })
 
 export type CreateTaskInput = z.input<typeof CreateTaskBody>
+export type CreateTasksInput = z.input<typeof CreateTasksBody>
 export type TasksQueryInput = z.input<typeof TasksQuery>
 export type ClaimReadyTaskInput = z.input<typeof ClaimReadyTaskBody>
 export type FiltersInput = z.input<typeof Filters>
@@ -1052,6 +1089,8 @@ export const routes = {
   tasks: { method: 'GET', path: '/tasks', query: TasksQuery },
   /** Starts a thread as a task (`post` there, and `label` for its labels), or makes the thread `re` roots one (`label` there). */
   createTask: { method: 'POST', path: '/tasks', body: CreateTaskBody },
+  /** Starts several threads in one channel as tasks, in one write: all of them or none, and nothing shows before all have landed. */
+  createTasks: { method: 'POST', path: '/tasks/batch', body: CreateTasksBody },
   /** Claims the oldest ready task in a channel or subtree: `label` where it is. Answers `{ task: null }` when none is. */
   claimReadyTask: { method: 'POST', path: '/tasks/claim', body: ClaimReadyTaskBody },
   /** Claims a task: `label` in its channel. Its answer's `claim` goes on what the claim does next. */

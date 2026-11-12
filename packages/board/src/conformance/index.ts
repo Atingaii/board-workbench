@@ -1,5 +1,5 @@
 import { INBOX_EVENT_ID_MAX, type Explanation, type GrantView, type Me, type MessageView, type RegistrationView } from '../api/routes.ts'
-import { BoardError, type ExplainPrincipal, type TaskOptions } from '../client/client.ts'
+import { BoardError, type ExplainPrincipal, type TaskInBatch, type TaskOptions } from '../client/client.ts'
 import { block } from '../contract/blocks.ts'
 import { canonical } from '../contract/data-schemas.ts'
 import { canText, compileAccess, type Permission } from '../server/access.ts'
@@ -386,6 +386,13 @@ async function task(ctx: Context, text: string, options: TaskOptions & { labels?
   const { labels, ...rest } = options
   const made = await ctx.board.tasks.create(ctx.channel, { text, labels: { ...ctx.labels, ...labels }, noSync: true, ...rest })
   ctx.posted.push(made.task.id)
+  return made
+}
+
+/** Several tasks of this run's, made in one write: the run deletes their roots at the end, as it does a task's. */
+async function taskBatch(ctx: Context, tasks: TaskInBatch[], opts: { id?: string } = {}) {
+  const made = await ctx.board.tasks.createMany(ctx.channel, tasks.map((one) => ({ ...one, labels: ctx.labels, noSync: true })), opts)
+  ctx.posted.push(...made.map((root) => root.id))
   return made
 }
 
@@ -1212,6 +1219,77 @@ const CHECKS: Check[] = [
       const { task: dropped } = await task(ctx, 'conformance: a task that is canceled, whose needs stay')
       await ctx.board.tasks.cancel(dropped.id, 'conformance: not wanted')
       await rejects(ctx.board.tasks.needs(dropped.id, [other.id]), 409, 'task_finished', 'changing what a canceled task needs')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once',
+    run: async (ctx) => {
+      const { task: done } = await task(ctx, 'conformance: a prerequisite that has completed')
+      await (await ctx.board.tasks.claim(done.id, { lease: 60 })).complete()
+      const { task: open } = await task(ctx, 'conformance: a prerequisite that has not')
+      const id = `conformance-batch-${ctx.labels.conformance}`
+      const plan: TaskInBatch[] = [
+        { ref: 'review', text: 'conformance: batched, waits for the one after it', needs: [{ ref: 'fix' }] },
+        { ref: 'fix', text: 'conformance: batched, waits for nothing' },
+        { text: 'conformance: batched, waits for one that has completed', needs: [done.id] },
+        { text: 'conformance: batched, waits for one that has not, and for one of the batch', needs: [open.id, { ref: 'fix' }] },
+      ]
+      const made = await taskBatch(ctx, plan, { id })
+      alike(made.map((root) => root.text), plan.map((one) => one.text), "a batch's tasks, in the order it gave them")
+      const [review, fix, after, both] = made as [MessageView, MessageView, MessageView, MessageView]
+      for (const root of made) isRef(root.id, "a batched task's id")
+      same(new Set(made.map((root) => root.id)).size, made.length, "the batch's different IDs")
+      same(fix.task?.state, 'ready', 'a batched task that needs nothing')
+      same(fix.task?.owner, ctx.me.principal, "a batched task's owner")
+      same(fix.labels['board.task'], 'ready', "its root's board.task")
+      same(review.task?.state, 'waiting', 'a batched task that needs a later one of the batch')
+      alike(review.task?.needs, [fix.id], 'what it needs, by the ID the batch gave that task')
+      same(after.task?.state, 'ready', 'a batched task whose needs were all there and have completed')
+      alike(after.task?.needs, [done.id], 'what it needs')
+      same(both.task?.state, 'waiting', 'a batched task that needs one of the batch and one that has not completed')
+      alike(both.task?.needs?.slice().sort(), [open.id, fix.id].sort(), 'what it needs')
+      // Each is the thread it reads as, and they list in the order given.
+      same((await ctx.board.thread(review.id)).message.task?.state, 'waiting', 'a batched task, read as its thread')
+      const mine = async () => (await ctx.board.tasks.list({ channel: ctx.channel, label: ctx.labels, state: 'all', limit: 500 })).tasks.map((listed) => listed.message).filter((root) => root.text.startsWith('conformance: batched,'))
+      alike((await mine()).map((root) => root.id), made.map((root) => root.id), 'the batch, listed')
+      // The same id again answers the tasks it made, and makes none. With other tasks, it's another write's.
+      const again = await ctx.board.tasks.createMany(ctx.channel, plan.map((one) => ({ ...one, labels: ctx.labels, noSync: true })), { id })
+      alike(again.map((root) => root.id), made.map((root) => root.id), 'the tasks a retry with the same id answers')
+      await rejects(taskBatch(ctx, [...plan, { text: 'conformance: batched, one more under the same id' }], { id }), 409, 'duplicate_id', 'another batch under the same id')
+      same((await mine()).length, made.length, 'the tasks made under that id')
+      // One of the batch that completes readies what waited only for it, as any task does.
+      await (await ctx.board.tasks.claim(fix.id, { lease: 60 })).complete()
+      await soon(async () => (await taskState(ctx, review.id)) === 'ready', 'a batched task should be ready once the one it waited for completed')
+      same(await taskState(ctx, both.id), 'waiting', 'the batched task that still waits for one that has not completed')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'makes none of a batch when one of its tasks can not be made, wherever it comes in it',
+    run: async (ctx) => {
+      const { task: gone } = await task(ctx, 'conformance: a prerequisite that was canceled')
+      await ctx.board.tasks.cancel(gone.id, 'conformance: not wanted')
+      const fine: TaskInBatch[] = [
+        { ref: 'a', text: 'conformance: never made, first of a refused batch' },
+        { text: 'conformance: never made, second of a refused batch', needs: [{ ref: 'a' }] },
+      ]
+      const refused = (last: TaskInBatch[], what: string) => rejects(taskBatch(ctx, [...fine, ...last]), 400, 'invalid_needs', what)
+      await refused([{ text: 'conformance: never made, waits for no one', needs: [{ ref: 'nobody' }] }], 'a batch with a task that needs a ref no task of it has')
+      await refused([{ ref: 'a', text: 'conformance: never made, a second a' }], 'a batch with a ref two of its tasks go by')
+      await refused([{ ref: 'itself', text: 'conformance: never made, waits for itself', needs: [{ ref: 'itself' }] }], 'a batch with a task that needs itself')
+      await refused(
+        [
+          { ref: 'x', text: 'conformance: never made, waits for y', needs: [{ ref: 'y' }] },
+          { ref: 'y', text: 'conformance: never made, waits for x', needs: [{ ref: 'x' }] },
+        ],
+        'a batch with tasks that wait for each other',
+      )
+      await refused([{ text: 'conformance: never made, waits for a canceled one', needs: [gone.id] }], 'a batch whose last task needs one that was canceled')
+      // More than a batch makes is refused by the handle this runs through, before the board is asked: its own tests check that.
+      const { tasks } = await ctx.board.tasks.list({ channel: ctx.channel, label: ctx.labels, state: 'all', limit: 500 })
+      const left = tasks.filter((listed) => listed.message.text.startsWith('conformance: never made'))
+      check(left.length === 0, `a refused batch should make none of its tasks, and these are there: ${show(left.map((listed) => listed.message.text))}`)
     },
   },
   {

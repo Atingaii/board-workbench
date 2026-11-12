@@ -222,10 +222,14 @@ describe("sandboxPolicy() on Vercel's board", () => {
     const note = await agent.post('work', 'a thread to make a task')
     await agent.tasks.create({ re: note.id })
     await agent.tasks.cancel(note.id, 'not needed')
+    // And several at once, which is one call.
+    const [build, deploy] = await agent.tasks.createMany('work', [{ ref: 'build', text: 'build the fix' }, { text: 'deploy it', needs: [{ ref: 'build' }] }])
     expect((await agent.tasks.list({ channel: 'work', state: 'all' })).tasks.map((task) => [task.message.id, task.message.task?.state, task.message.task?.for])).toEqual([
       [fix.id, 'completed', null],
       [review.id, 'ready', fixer],
       [note.id, 'canceled', null],
+      [build!.id, 'ready', null],
+      [deploy!.id, 'waiting', null],
     ])
     // Its deployment's own aren't: the call is the sandbox's to make, and the API refuses it, so it gives itself none.
     const { task: theirs } = await pong.tasks.create('work', { text: "the deployment's own" })
@@ -239,7 +243,7 @@ describe("sandboxPolicy() on Vercel's board", () => {
       return [method, path, response.status, (await response.json()).error?.message]
     }
     const task = `/boards/brd_test/tasks/thr_${/^msg_(.+)_1$/.exec(fix.id)![1]}`
-    for (const [method, path] of [['GET', task], ['DELETE', task], ['POST', `${task}/transfer`], ['GET', `${task}/claim`], ['PUT', '/boards/brd_test/tasks'], ['GET', '/boards/brd_test/tasks/claim'], ['GET', '/boards/brd_test'], ['GET', '/boards/brd_test/threads'], ['GET', '/boards/brd_other/tasks'], ['GET', '/me']])
+    for (const [method, path] of [['GET', task], ['DELETE', task], ['POST', `${task}/transfer`], ['GET', `${task}/claim`], ['PUT', '/boards/brd_test/tasks'], ['GET', '/boards/brd_test/tasks/claim'], ['GET', '/boards/brd_test/tasks/batch'], ['POST', '/boards/brd_test/tasks/batch/undo'], ['GET', '/boards/brd_test'], ['GET', '/boards/brd_test/threads'], ['GET', '/boards/brd_other/tasks'], ['GET', '/me']])
       expect(await asked(method!, path!)).toEqual([method, path, 403, "not this board's"])
     expect(await asked('GET', '/boards/brd_test/tasks', 'team_other')).toEqual(['GET', '/boards/brd_test/tasks', 403, "not this board's"])
     expect((await network.fetch(`${API}/v2/messageboard/boards/brd_test/tasks?teamId=team_test`)).status).toBe(200)

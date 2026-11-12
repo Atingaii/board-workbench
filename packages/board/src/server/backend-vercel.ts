@@ -295,6 +295,7 @@ const SANDBOX_ROUTES: readonly SandboxRoute[] = [
 const SANDBOX_TASK_ROUTES: readonly SandboxRoute[] = [
   { method: 'GET', path: '/tasks' },
   { method: 'POST', path: '/tasks' },
+  { method: 'POST', path: '/tasks/batch' },
   { method: 'POST', path: '/tasks/claim' },
   ...['claim', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'needs', 'cancel'].map((change) => ({ method: 'POST', path: `/tasks/:task/${change}` })),
 ]
@@ -410,6 +411,17 @@ const RETRY_MS = 1000
 function retryWait(attempt: number, retryAfter: string | null): number {
   const asked = retryAfter !== null && /^\d+$/.test(retryAfter) && Number(retryAfter) > 0 ? Number(retryAfter) * 1000 : Infinity
   return Math.min(asked, RETRY_MS * 2 ** attempt * (1 + Math.random()))
+}
+
+/**
+ * An operation ID for a write its caller named with `id`, in a UUIDv7's shape, as the API takes one:
+ * the same for the same `id`, so the API answers a retry with what the first call did. Every bit of
+ * it is a hash of the `id`, the ones a UUIDv7 keeps its time in among them.
+ */
+async function operationIdFor(id: string): Promise<string> {
+  const hash = await sha256(`board-batch\u001f${id}`)
+  const hex = `${hash.slice(0, 12)}7${hash.slice(13, 16)}${'89ab'[Number.parseInt(hash[16]!, 16) & 3]}${hash.slice(17, 32)}`
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 /** `ms` passing, or `signal` stopping it first. */
@@ -2754,6 +2766,51 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // another, so it gets the task as it is now and no claim: that one was answered once, to the first request.
       if (!token || made.claimed !== true || !task.claim) return { task: root }
       return { task: root, claim: { epoch: task.epoch, token, until: iso(task.claim.until) } }
+    },
+    async createTasks(caller, input, signal) {
+      const who = await tasksAs(caller)
+      // A task waits for one that's there by its thread, and for another of the batch by its ref, which the API resolves.
+      const waits = input.tasks.map((task) => {
+        const refs = [...new Set((task.needs ?? []).flatMap((need) => (typeof need === 'string' ? [] : [need.ref])))]
+        return { threads: needsOf((task.needs ?? []).filter((need) => typeof need === 'string')), refs }
+      })
+      const tasks = input.tasks.map((task, at) => {
+        const needs = [...waits[at]!.threads, ...waits[at]!.refs.map((ref) => ({ ref }))]
+        return {
+          ...(task.ref !== undefined ? { ref: task.ref } : {}),
+          text: task.text,
+          ...(task.labels && Object.keys(task.labels).length ? { labels: task.labels } : {}),
+          ...(task.noSync ? { noSync: true } : {}),
+          ...(task.attachments?.length ? { attachments: task.attachments } : {}),
+          ...(needs.length ? { needs } : {}),
+          ...(task.for ? { for: task.for } : {}),
+        }
+      })
+      // The batch's `id` names the operation: a repeat of it answers the tasks the first one made.
+      const body = { operationId: input.id !== undefined ? await operationIdFor(input.id) : operationId(), channel: input.channel, tasks }
+      const made = await api<{ tasks: (ApiTaskOf | { id: string })[] }>(who, 'POST', await onBoard(who, '/tasks/batch'), { version: 2, body, signal }).catch((error: unknown) => {
+        // An `id` sent again with other tasks is another write's, as on any board.
+        if (error instanceof HttpError && error.code === 'operation_conflict') throw duplicateId()
+        // More bytes than one of the API's requests holds: none was made and less of it fits, as with more than it counts for one write.
+        if (error instanceof HttpError && error.code === 'entity_too_large') throw new HttpError(400, 'batch_too_large', error.message)
+        throw taskRefusal(error)
+      })
+      const threads = made.tasks.map((task) => task.id)
+      const places = new Map(input.tasks.flatMap((task, at) => (task.ref !== undefined ? [[task.ref, at] as const] : [])))
+      return {
+        tasks: await Promise.all(
+          made.tasks.map(async (task, at) => {
+            if ('message' in task) return view(who, firstOf(task), await landedIn(who, task.channelId, input.channel, undefined))
+            // To a caller that may post but not read, a retry answers each task's ID alone: the task is what it asked for, as far as it can say.
+            const asked = input.tasks[at]!
+            const needs = [...waits[at]!.threads, ...waits[at]!.refs.map((ref) => threads[places.get(ref)!]!)]
+            const { actor } = await self(who)
+            const stood: ApiTask = { state: needs.length ? 'waiting' : 'ready', owner: principalId(actor.principal), by: await actorOf(who), for: asked.for ?? null, needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
+            const first = { id: idAt(task.id, 1), threadId: task.id, sequence: 1 }
+            return view(who, { ...(await sent(who, first, { text: asked.text, labels: { ...asked.labels, [TASK_LABEL]: stood.state }, attachments: asked.attachments, noSync: asked.noSync })), task: stood }, input.channel)
+          }),
+        ),
+      }
     },
     async claimTask(caller, { id, lease }, signal) {
       const who = await tasksAs(caller)
