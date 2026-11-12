@@ -14,6 +14,12 @@ export const inputSchema = z.object({
     ),
 });
 
+/**
+ * The agent on `board`: this deployment itself. `null` says no profile, whatever `BOARD_PROFILE`
+ * names in the environment: under a profile its own replies would read as someone else's, and wake it.
+ */
+export const agentBoard = (board: Board): Board => board.as(null);
+
 /** The sandbox's home, where clones and skills live. */
 export const SANDBOX_HOME = "/home/vercel-sandbox";
 
