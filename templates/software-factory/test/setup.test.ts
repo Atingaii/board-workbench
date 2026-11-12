@@ -63,7 +63,7 @@ function fake(options: { env?: Record<string, string | undefined>; routes?: Rout
     // What a new board gives every project on the team.
     access: async () => ({ "*": ["read", "post", "react", "label", "sync"] }),
     messages: async () => [message("12", null), message("13", "factory", "12")],
-    channels: () => CHANNELS,
+    source: sources(() => CHANNELS),
     ...options.deps,
   };
   return { deps, requests };
@@ -87,14 +87,18 @@ const labels = (tasks: Task[]) => tasks.map((task) => task.label);
 const commands = (step: Step) => todo(step).flatMap((task) => task.commands ?? []);
 const links = (step: Step) => todo(step).flatMap((task) => (task.link ? [task.link.href] : []));
 
-/** channels.ts as this checkout has it: what a fresh factory deploys. */
+/** The files the launcher links to, as this checkout has them: what a fresh factory deploys. */
 const CHANNELS = readFileSync(new URL("../app/api/board/[[...path]]/channels.ts", import.meta.url), "utf8");
-const CHANNELS_URL = "https://github.com/acme/factory/blob/main/app/api/board/%5B%5B...path%5D%5D/channels.ts";
+const FACTORY = readFileSync(new URL("../app/api/board/[[...path]]/factory.ts", import.meta.url), "utf8");
+const REPO_URL = "https://github.com/acme/factory/blob/main/app/api/board/%5B%5B...path%5D%5D";
+const CHANNELS_URL = `${REPO_URL}/channels.ts`;
+/** What the launcher reads when it's given another channels.ts. */
+const sources = (channels: () => string | undefined): Deps["source"] => (file) => (file.endsWith("/channels.ts") ? channels() : file.endsWith("/factory.ts") ? FACTORY : undefined);
 
-/** The line of `source` a link to channels.ts opens on: what the person lands on. */
-function linked(href: string, source = CHANNELS): string {
+/** The line of `source` a link opens on, in `url`'s file in the factory's repo: what the person lands on. */
+function linked(href: string, source = CHANNELS, url = CHANNELS_URL): string {
   const [, line] = /^(?:.+)#L(\d+)$/.exec(href) ?? [];
-  assert.ok(href.startsWith(`${CHANNELS_URL}#L`) && line, `${href} should name a line of channels.ts in the factory's repo`);
+  assert.ok(href.startsWith(`${url}#L`) && line, `${href} should name a line of ${url}`);
   return source.split("\n")[Number(line) - 1] ?? "";
 }
 
@@ -215,6 +219,21 @@ test("a GitHub connector that isn't attached says how to create and attach it, a
   ]);
 });
 
+/** What Connect throws this project for a connector that's on its team for another project. */
+const notLinked = () => Promise.reject(Object.assign(new Error("Connector is not linked to this project"), { name: "ConnectError", status: 403, code: "forbidden" }));
+
+test("a connector another project on the team has is attached, not created again, with where to name another", async () => {
+  // A team has one connector per name: creating github/factory again answers 409.
+  const { github, slack } = await shown(fake({ deps: { connect: notLinked } }).deps);
+  assert.deepEqual(labels(todo(github!)), ["Attach github/factory to this project", "Install its app on your repos"]);
+  assert.deepEqual(commands(github!), ["vercel connect attach github/factory --triggers --trigger-path /api/board/webhooks/github --project factory --scope acme"]);
+  assert.equal(todo(github!)[0]!.hint, "It's on this team for another project.");
+  // The link opens where this factory's connectors are named.
+  assert.match(linked(links(github!)[0]!, FACTORY, `${REPO_URL}/factory.ts`), /^export const connectors\b/);
+  assert.deepEqual(labels(todo(slack!)), ["Attach slack/factory to this project", "Invite the app to #factory-rsi"]);
+  assert.deepEqual(commands(slack!), ["vercel connect attach slack/factory --triggers --trigger-path /api/board/webhooks/slack --project factory --scope acme"]);
+});
+
 test("GitHub isn't done until the app is on the factory's own repo", async () => {
   const { github } = await shown(
     fake({
@@ -271,9 +290,9 @@ test("Slack set up without its app in the channel says to invite it, and holds u
 });
 
 /** Slack connected, its app in no channel yet: the step that links to the channel's line. */
-const uninvited = (channels: Deps["channels"]) =>
+const uninvited = (channels: () => string | undefined) =>
   fake({
-    deps: { connect: async () => "app-token", channels },
+    deps: { connect: async () => "app-token", source: sources(channels) },
     routes: {
       "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
       "https://slack.com/api/users.conversations": conversations(),
