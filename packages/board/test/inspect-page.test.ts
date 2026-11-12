@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import type { ScheduleView } from '../src/api/routes.ts'
+import type { MessageView, ScheduleView } from '../src/api/routes.ts'
 
 // The page's data module, as the page runs it: one handle on the inspector's proxy, which is
 // faked here. What the page asks the board, and what it keeps, are what a person at it sees.
@@ -13,7 +13,38 @@ const refuse = (status: number, code: string, message: string) => () => Response
 const schedule = (text: string): ScheduleView =>
   ({ id: 's1', channel: 'dev', re: null, text, labels: {}, noSync: false, attachments: [], first: '2026-10-01T12:00:00.000Z', every: null, until: null, times: null, sent: 0, next: '2026-10-01T12:00:00.000Z', last: null, state: 'pending', canceled: null, createdAt: '2026-10-01T10:00:00.000Z' }) as unknown as ScheduleView
 
+/** A new task's root, as the board answers it. */
+const taskRoot = (body: { channel: string; text: string; needs?: string[] }): MessageView =>
+  ({
+    id: '50',
+    version: 50,
+    revision: 50,
+    channel: body.channel,
+    text: body.text,
+    re: null,
+    replyTo: null,
+    thread: 't50',
+    labels: { 'board.task': 'waiting' },
+    reactions: {},
+    by: { actor: 'local:user:julian', principal: 'local:user:julian', profile: null },
+    noSync: false,
+    origin: null,
+    from: null,
+    blocks: [],
+    createdAt: '2026-10-01T10:00:00.000Z',
+    editedAt: null,
+    deleted: false,
+    undelivered: {},
+    attachments: [],
+    links: [],
+    author: null,
+    task: { state: 'waiting', owner: 'local:user:julian', by: 'local:user:julian', for: null, needs: body.needs ?? [], epoch: 0, claim: null, blocked: null, result: null, reason: null },
+  }) as MessageView
+
 const usual: Record<string, (body: unknown) => Response> = {
+  // Who the page is, which the handle asks before it makes a task.
+  'GET /me': () => Response.json({ actor: 'local:user:julian', principal: 'local:user:julian', kind: 'person', handle: 'julian', name: 'julian', avatar: null, profile: null, expiresAt: null, can: { '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] } }),
+  'POST /tasks': (body) => Response.json({ task: taskRoot(body as Parameters<typeof taskRoot>[0]) }, { status: 201 }),
   'POST /attachments': () => Response.json({ attachment: { id: 'a'.repeat(22), name: 'trace.log', type: 'text/plain', size: 5 } }, { status: 201 }),
   'POST /schedules': (body) => Response.json({ schedule: schedule((body as { text: string }).text) }, { status: 201 }),
   'GET /schedules': () => Response.json({ schedules: [] }),
@@ -88,5 +119,25 @@ describe("the inspector's page, sending later", () => {
     expect(kept).toMatchObject({ text: 'Typo', error: 'durations look like 30s, 30m, 12h, or 1d' })
     page.discard(kept!.key)
     expect(page.getState().pending).toEqual([])
+  })
+})
+
+describe("the inspector's page, starting a task", () => {
+  it('keeps a task the board refused, with what it needs, and starts it again on retry', async () => {
+    next.set('POST /tasks', [refuse(400, 'invalid_needs', "needs: #9999 isn't a task")])
+    const file = new File(['trace'], 'trace.log', { type: 'text/plain' })
+    await page.send({ channel: 'work', re: null, text: 'publish the release', noSync: false, labels: { step: 'ship' }, files: [file], task: { needs: ['9999'], for: null } })
+
+    // As a refused send: the post stays, with why, and with what made it a task.
+    const [kept] = page.getState().pending
+    expect(kept).toMatchObject({ channel: 'work', text: 'publish the release', labels: { step: 'ship' }, files: [{ name: 'trace.log', size: 5 }], task: { needs: ['9999'], for: null }, error: "needs: #9999 isn't a task" })
+
+    await page.retry(kept!)
+    expect(page.getState().pending).toEqual([])
+    // Its file goes with it, in the one write that makes the task.
+    const wanted = { channel: 'work', text: 'publish the release', labels: { step: 'ship' }, attachments: ['a'.repeat(22)], needs: ['9999'], for: null }
+    expect(posts('/tasks')).toMatchObject([wanted, wanted])
+    // The task the board answered is the page's now.
+    expect(page.getState().messages['50']).toMatchObject({ text: 'publish the release', task: { state: 'waiting', needs: ['9999'] } })
   })
 })

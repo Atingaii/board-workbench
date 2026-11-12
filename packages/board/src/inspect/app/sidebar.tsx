@@ -5,7 +5,7 @@ import * as board from './board.ts'
 import { toast } from './chrome.ts'
 import { Avatar } from './message.tsx'
 import { Link, navigate, type Route } from './nav.tsx'
-import type { State } from './store.ts'
+import { openTasks, type State } from './store.ts'
 import { ContextMenuArea, Menu, MenuItem, MenuSeparator } from './ui.tsx'
 import { shownName } from './words.ts'
 
@@ -51,6 +51,7 @@ export function Sidebar({ state, current, onCollapse }: { state: State; current:
     }
     return [...out]
   }, [state.channels])
+  const open = openTasks(state)
   const [adding, setAdding] = useState(false)
   const copy = (text: string) => void navigator.clipboard.writeText(text).then(() => toast(`copied ${text}`))
   return (
@@ -64,6 +65,10 @@ export function Sidebar({ state, current, onCollapse }: { state: State; current:
       <div className="sidebar-scroll">
         <Link to="/" className="item" current={current.view === 'activity'}>
           <span>activity</span>
+        </Link>
+        <Link to="/tasks" className="item" current={current.view === 'tasks'}>
+          <span className="name">tasks</span>
+          {open !== null && open > 0 && <span className="count">{open}</span>}
         </Link>
         <h2>
           channels

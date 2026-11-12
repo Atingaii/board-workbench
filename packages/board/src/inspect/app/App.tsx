@@ -1,4 +1,4 @@
-import { PanelLeftOpen, X } from 'lucide-react'
+import { ListTodo, PanelLeftOpen, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { MessageView, SyncedView } from '../../api/routes.ts'
 import * as board from './board.ts'
@@ -9,9 +9,11 @@ import { Messages, Pendings, type RowOptions } from './message.tsx'
 import { here, Link, navigate, route, useLocation, useNow, useTypeToFocus } from './nav.tsx'
 import { Settings } from './settings.tsx'
 import { Sidebar } from './sidebar.tsx'
+import { actorFor, TaskCard, taskIds } from './task.tsx'
+import { Tasks } from './tasks.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
-import { byWritten, channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
-import { Header, nativeMenu, ResizeHandle, type KnownLabels } from './ui.tsx'
+import { byWritten, channelThreads, filtering, isTask, knownLabels, matches, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
+import { Ask, Header, nativeMenu, ResizeHandle, type KnownLabels } from './ui.tsx'
 import { cadence, firstLine, until } from './words.ts'
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
@@ -150,7 +152,7 @@ export function App() {
   if (!state.me || !viewer) return <div className="boot">connecting…</div>
 
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
-  const options: RowOptions = { me: state.me.actor, now, known, platforms, schemas: state.schemas, openThread: (id) => navigate(here({ thread: id })) }
+  const options: RowOptions = { me: state.me.actor, now, known, platforms, board: state, schemas: state.schemas, openThread: (id) => navigate(here({ thread: id })) }
   const filter = where.filter
   const setFilter = (next: Filter) => navigate(here({ filter: next }), true)
   const sources = (state.discovery?.sync ?? []).map((entry) => entry.key)
@@ -188,6 +190,7 @@ export function App() {
         {current.view === 'channel' && (
           <Channel key={current.channel} channel={current.channel} state={state} options={options} known={known} lead={expand} filters={filters} />
         )}
+        {current.view === 'tasks' && <Tasks state={state} now={now} lead={expand} where={where} known={known} />}
         {current.view === 'settings' && <Settings state={state} viewer={viewer} now={now} lead={expand} where={where} section={current.section} open={current.open} />}
         {current.view === 'missing' && (
           <>
@@ -262,7 +265,8 @@ function Activity(props: { state: State; options: RowOptions; known: KnownLabels
         placeholder="start a thread…"
         known={known}
         channels={Object.keys(state.channels).sort()}
-        onSend={({ text, noSync, channel, labels, files, later }) => void board.send({ channel, re: null, text, noSync, labels, files, ...(later ? { later } : {}) })}
+        tasks={{ state }}
+        onSend={({ text, noSync, channel, labels, files, task, later }) => void board.send({ channel, re: null, text, noSync, labels, files, ...(task ? { task } : {}), ...(later ? { later } : {}) })}
         onEditLast={() => {
           const mine = lastOwn(messages, state.me!.actor)
           if (mine) setEditing(mine.id)
@@ -315,7 +319,8 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
         role="main"
         placeholder={`message #${channel}…`}
         known={props.known}
-        onSend={({ text, noSync, labels, files, later }) => void board.send({ channel, re: null, text, noSync, labels, files, ...(later ? { later } : {}) })}
+        tasks={{ state }}
+        onSend={({ text, noSync, labels, files, task, later }) => void board.send({ channel, re: null, text, noSync, labels, files, ...(task ? { task } : {}), ...(later ? { later } : {}) })}
         onEditLast={() => {
           const mine = lastOwn(roots, state.me!.actor)
           if (mine) setEditing(mine.id)
@@ -342,11 +347,26 @@ function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: numb
   const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas }
   return (
     <>
-      <Header title="thread" meta={t ? `in #${t.root.channel}` : undefined}>
+      <Header title={isTask(t?.root) ? 'task' : 'thread'} meta={t ? `in #${t.root.channel}` : undefined}>
+        {t && !isTask(t.root) && !t.root.deleted && viewer.may('label', t.root.channel) && (
+          <Ask
+            label={<ListTodo size={15} strokeWidth={1.75} />}
+            className="tool"
+            title="make this thread a task"
+            submit="make it a task"
+            note="You own it, and agents claim it."
+            fields={[
+              { name: 'needs', placeholder: 'needs: #812 #813 (optional)' },
+              { name: 'for', placeholder: 'for one of your profiles (optional)', items: ['claude', 'codex'] },
+            ]}
+            onSubmit={(values) => void board.makeTask(id, { needs: taskIds(values.needs ?? ''), for: values.for ? actorFor(viewer.principal, values.for) : null })}
+          />
+        )}
         <button className="tool" title="close (esc)" onClick={() => navigate(here({ thread: null }))}>
           <X size={15} strokeWidth={1.75} />
         </button>
       </Header>
+      {t && isTask(t.root) && <TaskCard root={t.root} state={state} viewer={viewer} />}
       {(synced.length > 0 || scheduled.length > 0) && (
         <dl className="facts thread-facts" {...nativeMenu}>
           {synced.length > 0 && (

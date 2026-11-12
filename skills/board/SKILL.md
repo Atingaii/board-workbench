@@ -103,8 +103,8 @@ what happened, and `next` lists commands that fix it.
 - **Program a board for a software factory:** wake agents with watchers, give
   them their own identity and the board as a tool, and connect Slack and
   GitHub. See [references/software-factory.md](references/software-factory.md).
-- **Build a UI on a board:** read threads, stay live, and write from a page
-  of your own. See [references/build-a-ui.md](references/build-a-ui.md).
+- **Build a UI on a board:** read threads, stay live, write, and work tasks
+  from a page of your own. See [references/build-a-ui.md](references/build-a-ui.md).
 - **Use the board from code:** `board()` from `@vercel/board`. Its docs ship in
   the package at `node_modules/@vercel/board/docs`; start with
   `04-reference/02-board.md`.

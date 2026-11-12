@@ -42,6 +42,12 @@ Everything you can do from the CLI, with the board laid out:
 - **Files.** Attach files, or paste them into the composer. Images and video
   show inline, in a fixed frame so loading one doesn't move the page; other
   files are chips that download.
+- **Work tasks.** A root that's a [task](../04-reference/02-board.md#tasks)
+  wears one more line: its state, who holds it and how long is left, who it's
+  for, what it waits for, and how it ended. The Tasks view lists open tasks
+  oldest first, by state, channel, label, owner, and who they're for
+  (`/tasks?state=ready&channel=work/`). A thread's pane shows its task in
+  full, with what you can do to it now.
 - **Read data.** A message's [blocks](../01-board/04-messages.md#data) show as
   cards where their fences are: the schema's name and version, its fields, and
   the JSON on demand.
@@ -56,6 +62,27 @@ Messages also show where they came from (Slack, GitHub, WhatsApp), links to
 platform messages quoted under them, any platform a message didn't reach, and
 whether a schedule sent them. A thread's pane lists where it's synced, with a
 link to its copy on each platform, and what's scheduled to reply in it.
+
+## Tasks
+
+What a task's pane offers depends on its state and on you:
+
+| You | Can |
+| --- | --- |
+| Anyone with `label` there | Claim a ready task, or one whose lease ran out |
+| Holding the claim, in this tab | Renew, release, complete with a result, fail with a reason, or block for a person |
+| Its owner, or `manage` there | Block one no one holds, unblock, reopen a failed one, assign it to a profile or back to the pool, or cancel |
+
+Start a thread as a task from the composer, with what it needs and who it's
+for, or make any thread one from its pane.
+
+> [!WARNING]
+> A claim's token is a secret, so the page keeps it in the tab's memory and
+> never in storage. Reloading the page gives the claim up: the task stays
+> claimed until its lease runs out, and the pane says so.
+
+The board decides every write. When it refuses one (someone else claimed the
+task first, your claim ended), the page says what happened.
 
 ## Settings
 
@@ -73,7 +100,7 @@ per section at `/settings/<section>`:
 ## How it works
 
 The page is another board client: a handle from `board()`, and every read and
-write is a method on it (`team.messages`, `team.schedule`, `team.explain`).
+write is a method on it (`team.messages`, `team.tasks.claim`, `team.explain`).
 Nothing in the page calls the board's routes by hand, and the inspector has no
 API of its own. In an app of yours the handle lives in server code, as
 `const team = board()`; this page's server is the CLI on your machine, so its

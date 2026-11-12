@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { BoardEventView, MessageView, ScheduleView, SchemaView } from '../src/api/routes.ts'
+import type { BoardEventView, MessageView, ScheduleView, SchemaView, TaskView } from '../src/api/routes.ts'
 import { block } from '../src/contract/blocks.ts'
 import * as store from '../src/inspect/app/store.ts'
 import { continues } from '../src/inspect/app/store.ts'
-import { cadence, laterFields, localInput, principalName, span, timingWords, until } from '../src/inspect/app/words.ts'
+import { cadence, clock, laterFields, localInput, principalName, refusal, span, timingWords, until } from '../src/inspect/app/words.ts'
 
 const ME = 'vercel:user:u_julian'
 
@@ -189,6 +189,164 @@ describe('the inspector store', () => {
   const NOW = Date.parse('2026-10-01T12:00:00.000Z')
   const at = (minutes: number) => new Date(NOW + minutes * 60_000).toISOString()
   const PRINCIPAL = 'vercel:user:u_julian'
+
+  // --- tasks ---
+
+
+  /** A root that's a task, as the board shows one. */
+  const task = (id: number, overrides: Partial<TaskView> = {}, root: Partial<MessageView> = {}) =>
+    message(id, {
+      channel: 'work',
+      labels: { 'board.task': overrides.state ?? 'ready' },
+      task: { state: 'ready', owner: PRINCIPAL, by: ME, for: null, needs: [], epoch: 0, claim: null, blocked: null, result: null, reason: null, ...overrides },
+      ...root,
+    }) as store.TaskRoot
+  const claimedBy = (actor: string, until: string, epoch = 1): Partial<TaskView> => ({ state: 'claimed', epoch, claim: { actor, until } })
+
+  /** A viewer with what `can` lists in every channel. */
+  const viewer = (can: string[], who: Partial<store.Viewer> = {}): store.Viewer => ({ actor: ME, principal: PRINCIPAL, profile: null, may: (permission) => can.includes(permission), manages: false, ...who })
+
+  it('reads a claim past its lease as over: the task is ready, whatever the board last wrote', () => {
+    const held = task(1, claimedBy('vercel:user:u_ada', at(5)))
+    expect(store.stateNow(held.task, NOW)).toBe('claimed')
+    expect(store.stateNow(held.task, NOW + 5 * 60_000)).toBe('ready')
+    expect(store.stateNow(task(2, { state: 'blocked' }).task, NOW)).toBe('blocked')
+  })
+
+  it("keeps this tab's claim while the board shows it, and drops it once the task moves on", () => {
+    const claim = { epoch: 1 }
+    const mine = task(1, claimedBy(ME, at(15)), { version: 10 })
+    let state = store.claimed(start, mine, claim)
+    expect(store.holding(state, mine, NOW)).toEqual(claim)
+    // A renewal is the same claim, later.
+    const renewed = task(1, claimedBy(ME, at(30)), { version: 11 })
+    state = store.merge(state, [renewed])
+    expect(store.holding(state, renewed, NOW + 20 * 60_000)).toEqual(claim)
+    // Past its lease it holds nothing, though the board hasn't said so yet.
+    expect(store.holding(state, renewed, NOW + 31 * 60_000)).toBeUndefined()
+    // An older view of the task, from before the claim, changes nothing.
+    state = store.merge(state, [task(1, {}, { version: 5 })])
+    expect(state.claims['1']).toEqual(claim)
+    // Someone else claimed it since: the same state at another epoch isn't this tab's.
+    const taken = task(1, claimedBy('vercel:user:u_ada', at(40), 2), { version: 12 })
+    state = store.merge(state, [taken])
+    expect(state.claims['1']).toBeUndefined()
+    expect(store.holding(state, taken, NOW)).toBeUndefined()
+
+    // Released, completed, held, or canceled: each ends it.
+    for (const next of ['ready', 'completed', 'blocked', 'canceled'] as const) {
+      const after = store.merge(store.claimed(start, mine, claim), [task(1, { state: next, epoch: 1 }, { version: 11 })])
+      expect(after.claims['1'], next).toBeUndefined()
+    }
+    // A claim whose answer arrives after the board moved on is dropped as it lands.
+    const late = store.claimed(store.merge(start, [taken]), mine, claim)
+    expect(late.claims['1']).toBeUndefined()
+    expect(store.unclaimed(store.claimed(start, mine, claim), '1').claims).toEqual({})
+  })
+
+  it('offers what the viewer can do to a task now, and nothing else', () => {
+    const can = (root: store.TaskRoot, who: store.Viewer, state: store.State = start) =>
+      Object.entries(store.moves(state, root, who, NOW))
+        .filter(([, yes]) => yes)
+        .map(([move]) => move)
+    const owner = viewer(['post', 'label'])
+    const teammate = viewer(['post', 'label'], { actor: 'vercel:user:u_ada', principal: 'vercel:user:u_ada' })
+    const manager = viewer(['post', 'label', 'manage'], { actor: 'vercel:user:u_ada', principal: 'vercel:user:u_ada' })
+    const reader = viewer([], { actor: 'vercel:user:u_ada', principal: 'vercel:user:u_ada' })
+
+    // Ready: anyone with label claims it; its owner, or manage there, changes it.
+    expect(can(task(1), owner)).toEqual(['claim', 'hold', 'assign', 'cancel'])
+    expect(can(task(1), teammate)).toEqual(['claim'])
+    expect(can(task(1), manager)).toEqual(['claim', 'hold', 'assign', 'cancel'])
+    expect(can(task(1), reader)).toEqual([])
+    // An owner narrowed to reading doesn't change its principal's tasks.
+    expect(can(task(1), viewer([]))).toEqual([])
+
+    // Of its owner's actors, the one that made it a task changes it, and the owner itself, as no profile, changes any.
+    const made = task(1, { by: `${PRINCIPAL}+fixer` })
+    expect(can(made, viewer(['post', 'label'], { actor: `${PRINCIPAL}+fixer`, profile: 'fixer' }))).toEqual(['claim', 'hold', 'assign', 'cancel'])
+    expect(can(made, viewer(['post', 'label'], { actor: `${PRINCIPAL}+other`, profile: 'other' }))).toEqual(['claim'])
+    expect(can(made, owner)).toEqual(['claim', 'hold', 'assign', 'cancel'])
+    // Another principal whose own ID reads the same as `by` isn't its owner.
+    expect(can(made, viewer(['post', 'label'], { actor: `${PRINCIPAL}+fixer`, principal: `${PRINCIPAL}+fixer` }))).toEqual(['claim'])
+
+    // Assigned: only that actor of its owner's claims it.
+    const assigned = task(1, { for: `${PRINCIPAL}+codex` })
+    expect(can(assigned, owner)).not.toContain('claim')
+    expect(can(assigned, viewer(['label'], { actor: `${PRINCIPAL}+codex` }))).toContain('claim')
+    // Another principal's actor can be the same string, and isn't who it's for.
+    expect(can(assigned, viewer(['label'], { actor: `${PRINCIPAL}+codex`, principal: 'vercel:user:u_ada' }))).not.toContain('claim')
+
+    // Claimed by someone else: no one claims or holds it; its owner still assigns and cancels.
+    const theirs = task(1, claimedBy('vercel:user:u_ada', at(10)))
+    expect(can(theirs, owner)).toEqual(['assign', 'cancel'])
+    expect(can(theirs, teammate)).toEqual(['elsewhere'])
+    // Once that lease runs out, it's claimable again, and its owner can hold it.
+    expect(can(task(1, claimedBy('vercel:user:u_ada', at(-1))), owner)).toEqual(['claim', 'hold', 'assign', 'cancel'])
+
+    // Claimed from this tab: the claim's own moves. Claimed as the viewer from elsewhere: none of them.
+    const mine = task(1, claimedBy(ME, at(10)))
+    expect(can(mine, owner, store.claimed(start, mine, { epoch: 1 }))).toEqual(['held', 'assign', 'cancel'])
+    expect(can(mine, owner)).toEqual(['elsewhere', 'assign', 'cancel'])
+
+    expect(can(task(1, { state: 'waiting', needs: ['9'] }), owner)).toEqual(['hold', 'assign', 'cancel'])
+    expect(can(task(1, { state: 'blocked', blocked: { kind: null, reason: 'why?' } }), owner)).toEqual(['unblock', 'assign', 'cancel'])
+    expect(can(task(1, { state: 'failed', reason: 'exited 1' }), owner)).toEqual(['reopen', 'cancel'])
+    expect(can(task(1, { state: 'completed' }), owner)).toEqual([])
+    expect(can(task(1, { state: 'canceled', reason: 'no' }), owner)).toEqual([])
+  })
+
+  it('takes in a task event it has never heard of, by the root it carries', () => {
+    let state = store.merge(start, [task(1, { state: 'waiting', needs: ['5'] }, { version: 3 })])
+    // What a task waits for can change: the event says so with the root as it is after.
+    const changed = { cursor: '9', type: 'task.needs_changed', createdAt: '', payload: { id: '1', needs: ['6', '7'] }, message: task(1, { state: 'waiting', needs: ['6', '7'] }, { version: 9 }) }
+    state = store.applyEvent(state, changed as unknown as BoardEventView)
+    expect((store.shown(state, '1') as store.TaskRoot).task.needs).toEqual(['6', '7'])
+    expect(store.tasks(state, { state: 'waiting', label: [] }, NOW).map((t) => t.task.needs)).toEqual([['6', '7']])
+    expect(state.cursor).toBe('9')
+  })
+
+  it('lists tasks like the board: oldest first, by state, place, labels, owner, and who they are for', () => {
+    const state = store.merge(start, [
+      task(1, {}, { createdAt: at(1), labels: { step: 'fix' } }),
+      task(2, { state: 'waiting', needs: ['1'] }, { createdAt: at(2), channel: 'work/security' }),
+      task(3, claimedBy(ME, at(-1)), { createdAt: at(3) }), // its lease ran out
+      task(4, { state: 'completed', result: 'done' }, { createdAt: at(4) }),
+      task(5, { owner: 'vercel:user:u_ada', for: 'vercel:user:u_ada+fixer' }, { createdAt: at(0), channel: 'workshop' }),
+      task(6, {}, { createdAt: at(5), deleted: true }),
+      message(7, { channel: 'work' }), // a thread that isn't a task
+    ])
+    const ids = (filter: Partial<store.TaskFilter>, through?: MessageView) => store.tasks(state, { state: 'open', label: [], ...filter }, NOW, through).map((t) => t.id)
+    expect(ids({})).toEqual(['5', '1', '2', '3'])
+    expect(ids({ state: 'all' })).toEqual(['5', '1', '2', '3', '4'])
+    // A lapsed claim lists as ready, and not as claimed.
+    expect(ids({ state: 'ready' })).toEqual(['5', '1', '3'])
+    expect(ids({ state: 'claimed' })).toEqual([])
+    expect(ids({ state: 'completed' })).toEqual(['4'])
+    // A channel is itself; with a trailing slash, itself and what's under it, and nothing that only starts like it.
+    expect(ids({ channel: 'work' })).toEqual(['1', '3'])
+    expect(ids({ channel: 'work/' })).toEqual(['1', '2', '3'])
+    expect(ids({ label: ['step=fix'] })).toEqual(['1'])
+    expect(ids({ owner: 'vercel:user:u_ada' })).toEqual(['5'])
+    expect(ids({ for: 'vercel:user:u_ada+fixer' })).toEqual(['5'])
+    // While the board has more, the list ends at the last task it listed.
+    expect(ids({}, state.messages['1'])).toEqual(['5', '1'])
+    // They're counted only once every open one is here.
+    expect(store.openTasks(state)).toBeNull()
+    expect(store.openTasks({ ...state, tasksCounted: true })).toBe(4)
+  })
+
+  it('says what is left of a lease, and what a refusal means', () => {
+    expect(clock(15 * 60_000)).toBe('15:00')
+    expect(clock(59_400)).toBe('1:00') // rounds up, so it reads 0:00 only once it's over
+    expect(clock(3_725_000)).toBe('1h 02m')
+    expect(clock(-5)).toBe('0:00')
+    const board = (code: string) => Object.assign(new Error('the board said so'), { code })
+    // A refusal the page knows is said in its words; any other in the board's.
+    expect(refusal(board('claim_lost'))).not.toContain('the board said so')
+    expect(refusal(board('claim_lost'))).toMatch(/claim/)
+    expect(refusal(board('invalid_needs'))).toBe('the board said so')
+  })
 
   // --- blocks and schemas ---
 
