@@ -3654,13 +3654,18 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   checked from the batch alone. A task that needs only tasks that were there
   and have all completed is ready in the same write, with its `task.ready`.
   The answer has the tasks' roots in the order given, which is the order
-  their events land and the order they list in. `id` names the batch: again,
-  it answers the tasks the first request made and makes none, and with other
-  tasks it's 409 `duplicate_id`. More than 100 tasks is 400
+  their events land and the order they list in. `id` names the request:
+  again, with the same channel and the same tasks (as many, in the same
+  order, each with the same text, labels, `noSync`, files, needs, and
+  `for`), it answers the tasks the first request made, as they are now, and
+  makes none. Anything else under it is 409 `duplicate_id`. `local()` tells
+  by the roots that landed, as their own append made them, so nothing but
+  what readers see is in the log; Vercel's API keeps a digest of the
+  request beside the batch's key. More than 100 tasks is 400
   `batch_too_large`, and so is a batch with more than a backend holds in one
   write: `local()` holds all 100, one append of at most 301 events, and
-  Vercel's board what fits one of the API's transactions, 15 plain tasks.
-  Nothing is made, and the sender splits it.
+  Vercel's board what fits one of the API's transactions, 15 plain tasks, or
+  14 with an `id`. Nothing is made, and the sender splits it.
 - **A plan longer than a batch is several batches.** `createTasksInChunks(
   team, channel, tasks, { id? })`, a plain function on `tasks.createMany`,
   makes each task after the ones it waits for, names a task an earlier batch

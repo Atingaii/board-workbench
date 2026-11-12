@@ -430,10 +430,12 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   of the batch is `waiting`. One that waits only for tasks that were there and
   have all completed is `ready`, and its `task.ready` follows in the write.
   A `ref` two tasks have, one no task has, and tasks that wait for each other
-  are 400 `invalid_needs`. `id` names the batch: the same `id` again answers
-  the tasks the first request made and makes none, and with other tasks it's
-  409 `duplicate_id`. More than 100 tasks, or more than a board holds in one
-  write, is 400 `batch_too_large`: send it in parts.
+  are 400 `invalid_needs`. `id` names the request: the same `id` again, with
+  the same channel and the same tasks (as many, in the same order, each with
+  the same fields), answers the tasks the first request made, as they are
+  now, and makes none. Anything else under it is 409 `duplicate_id`. More
+  than 100 tasks, or more than a board holds in one write, is 400
+  `batch_too_large`: send it in parts.
 - **A claim is a lease.** `lease` is seconds, 30 to 3600, and 900 when left
   out. The answer's `claim` is `{ epoch, token, until }`: `epoch` and `token` go
   on every write the claim makes, and `until` is when the lease ends. The token
@@ -813,7 +815,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 404 | `channel_not_found` | a source read of a channel the platform doesn't have |
 | 409 | `schema_immutable` | a schema version that's there with another definition: register the next version |
 | 409 | `reserved_schema` | a version of a built-in schema's name |
-| 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else; a batch's `id` already used for other tasks |
+| 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else; a batch's `id` already used for another channel or other tasks |
 | 409 | `label_conflict` | a label write whose `if` doesn't hold: the message names the label (`owner is set`, `state isn't open`), never its value |
 | 409 | `revision_conflict` | an edit or a delete whose `revision` isn't the message's: it's been edited or deleted since |
 | 409 | `newer_message` | a reply whose `after` isn't the thread's newest message: the message names one that came after it |

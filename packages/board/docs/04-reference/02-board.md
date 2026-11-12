@@ -453,9 +453,12 @@ const [fix, review, ship] = await team.tasks.createMany(
   labels, its files, its assignee, and the tasks it waits for. `post` in the
   channel, and `label` when any task has labels. There's no `claim`: claim
   one once it's made.
-- **`id` names the call.** The same `id` again answers the tasks the first
-  call made, as they are now, and makes none. With other tasks it's 409
-  `duplicate_id`.
+- **`id` names the request.** The same `id` again, with the same channel and
+  the same tasks, answers the tasks the first call made, as they are now, and
+  makes none. The tasks are the same when there are as many, in the same
+  order, each with the same text, labels, `noSync`, files, needs, and `for`.
+  Anything else under that `id` is 409 `duplicate_id`. A board keeps an `id`
+  for good.
 - **100 tasks at most.** More is 400 `batch_too_large`, and so is a batch
   with more than a board holds in one write. Nothing is made.
   [`local()`](../01-board/10-local.md) holds all 100, one append of at most
@@ -502,9 +505,10 @@ tasks' roots in the order given.
   own `code`, `status`, and `message`, and `created`: the task made for each
   of `tasks`, at its place, or `undefined`.
 - **With `id`, call it again.** Each chunk goes under an ID made from `id` and
-  the chunk's place, so the same call again answers the chunks that landed
-  and makes the rest. That holds while the board holds as much in one write
-  as it did: a plan that splits another way is other chunks.
+  the chunk's place, so the same call again, with the same tasks, answers the
+  chunks that landed and makes the rest. That holds while the board holds as
+  much in one write as it did: a plan that splits another way is other
+  chunks.
 
 A plan that must not start before all of it is there waits for a task of your
 own, in a channel no worker claims in. Nothing in `createTasksInChunks` does
@@ -552,10 +556,14 @@ it gives:
   board.** One held to a `can`, as a sandbox is, lists the board or a subtree
   only where it reads 50 channels or fewer. Past that it fails with 400
   `channel_tree_too_large`: name a channel, or a smaller subtree.
-- **A batch holds what fits one of the API's writes: 15 plain tasks.** A
-  task's labels, files, and needs count toward it, so a chain of 13 fits, and
-  11 tasks with a label each. More is 400 `batch_too_large`, with nothing
-  made, and its message says how many the batch counts for.
+- **A batch holds what fits one of the API's writes: 15 plain tasks, or 14
+  with an `id`.** A task's labels, files, and needs count toward it, so a
+  chain of 13 fits, or of 12 with an `id`, and 11 tasks with a label each
+  either way. More is 400 `batch_too_large`, with nothing made, and its
+  message says how many the batch counts for.
+- **A `ref` is part of the request there.** The same `id` with the same tasks
+  under other refs is 409 `duplicate_id`. `local()` goes by what was made,
+  and answers the batch.
 - **A batch's request is 64 KB at most,** which long texts reach first: six
   tasks of 10,000 characters fit, and seven don't. That's `batch_too_large`
   too, with nothing made, so one code says "send less". `createTasksInChunks`
