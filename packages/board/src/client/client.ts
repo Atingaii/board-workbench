@@ -163,19 +163,19 @@ const messageBody = (input: string | PostOptions | ReplyOptions) => {
   return attachments?.length ? { ...rest, attachments: attachments.map((a) => (typeof a === 'string' ? a : a.id)) } : rest
 }
 
-/** Whether live events are flowing: `live` while a request for them is out or answered, `retrying` once one failed and it's backing off. */
+/** Whether live events are flowing: `live` once the board has answered a request for them, `retrying` once one failed and it's backing off. */
 export type EventsState = 'live' | 'retrying'
 
-/** What following events takes: a `signal` that stops it, and `onState`, told each time the feed goes live or starts retrying. */
+/**
+ * What following events takes: a `signal` that stops it, and `onState`, told each time the feed
+ * goes live or starts retrying. It hears nothing before the first answer or failure.
+ */
 export type EventsOptions = {
   signal?: AbortSignal
   onState?: (state: EventsState) => void
 }
 
-/**
- * Tells `onState` each change, once. A request going out is `live`, unless the one before it
- * failed: then it's `retrying` until one is answered.
- */
+/** Tells `onState` each change, once: `live` when the board answers, `retrying` when a request fails. It never guesses. */
 export function eventsState(onState: EventsOptions['onState']) {
   let current: EventsState | null = null
   const tell = (next: EventsState) => {
@@ -183,11 +183,7 @@ export function eventsState(onState: EventsOptions['onState']) {
     current = next
     onState?.(next)
   }
-  return {
-    out: () => (current === 'retrying' ? undefined : tell('live')),
-    answered: () => tell('live'),
-    failed: () => tell('retrying'),
-  }
+  return { answered: () => tell('live'), failed: () => tell('retrying') }
 }
 
 export type WaitOptions = {
@@ -633,7 +629,6 @@ export function createBoardClient(options: ClientOptions) {
       while (!opts.signal?.aborted) {
         let response: Response
         try {
-          state.out()
           response = await raw('GET', `/events${queryString({ ...filtersQuery(query), after })}`, {
             headers: { accept: 'text/event-stream' },
             ...(opts.signal ? { signal: opts.signal } : {}),

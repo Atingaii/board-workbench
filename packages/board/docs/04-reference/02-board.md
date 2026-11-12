@@ -613,9 +613,11 @@ for await (const event of team.events({ channel: 'errors-www' }, { signal: contr
 ```
 
 `onState` says whether the feed is connected, for a page that shows it. It's
-called with `'live'` when a request for events goes out or is answered, and
-with `'retrying'` when one fails and the handle backs off. Each change is told
-once, and a retry isn't `'live'` until the board answers it.
+called with `'live'` when the board answers a request for events, and with
+`'retrying'` when one fails and the handle backs off. Each change is told
+once, and it hears nothing before the first answer or failure. The first
+request, and the first after a failure, ask without waiting, so `'live'` comes
+as soon as the board answers.
 
 ```ts
 import { board, type EventsState } from '@vercel/board'
