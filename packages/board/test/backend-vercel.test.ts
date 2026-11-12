@@ -693,6 +693,20 @@ describe('vercel()', () => {
     expect(await team.discovery()).toMatchObject({ team_id: 'team_test' })
   })
 
+  it("says the board's name in its discovery, and none to a caller who may not read the board", async () => {
+    const api = fakeMessageboard({ boards: [{ name: 'Security', id: 'brd_sec' }] })
+    expect(await handleOn(api).discovery()).toMatchObject({ name: 'General' })
+    const security = board({ name: 'security', backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'user:u_jb') }) })
+    expect(await security.discovery()).toMatchObject({ name: 'Security' })
+    // Found as the team's default, by a caller who only posts: where it is, and no name.
+    const poster = await withHeadersOn(api)({ 'x-board-can': 'dev/=post' }).discovery()
+    expect(poster).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_test?teamId=team_test` })
+    expect(poster).not.toHaveProperty('name')
+    // Named by its ID, it's read either way, so the same caller is told it can't.
+    const byId = board({ backend: vercel({ team: 'team_test', board: 'brd_sec', api: API, fetch: (input, init = {}) => as(api, 'user:u_jb')(input, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), 'x-board-can': 'dev/=post' } }) }) })
+    await expect(byId.discovery()).rejects.toMatchObject({ status: 403 })
+  })
+
   it("reads past the API's page of 100 after a cursor, as many as a read asks for", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
