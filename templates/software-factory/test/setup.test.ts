@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { agentPrompt, joinPrompt, markdown } from "../lib/markdown.ts";
 import { channel } from "../lib/project.ts";
-import { boardDeps, isDone, setup, type Deps, type Step, type Task } from "../lib/setup.ts";
+import { boardDeps, hasApp, isDone, setup, stepsView, type Deps, type Step, type Task } from "../lib/setup.ts";
 
 // The launcher's steps, driven as the page drives them, against a fake network: what a person sees is
 // each step's tasks, done or with what helps do them, and what the outside world sees is the requests it sends.
@@ -214,6 +214,50 @@ test("a later page of the app's repos that fails costs what came after it, not t
   // The first page failing is still the step's to say.
   const none = await setup(fake({ routes: { "https://api.github.com/installation/repositories": () => json({ message: "Server Error" }, 502) } }).deps);
   assert.deepEqual(none.open ? [] : none.steps[1]!.tasks.filter((task) => !task.done).map((task) => task.label), ["Couldn't list the app's repos"]);
+});
+
+test("whether the GitHub app is on a repo is told from every repo it's on, however the repo was typed, and not told from fewer", async () => {
+  const some = await setup(fake({ routes: { "https://api.github.com/installation/repositories": pages(150) } }).deps);
+  assert.equal(some.open, false);
+  if (some.open) return;
+  // On it, as GitHub writes its name.
+  assert.equal(hasApp("ACME/Repo-0007", some.found), "acme/repo-0007");
+  // Every repo was read, and it isn't one of them.
+  assert.equal(hasApp("acme/elsewhere", some.found), false);
+  assert.equal(hasApp("acme/repo-000", some.found), false);
+  // More repos than one check reads: a repo past them may well have the app.
+  const capped = await setup(fake({ routes: { "https://api.github.com/installation/repositories": pages(1500) } }).deps);
+  assert.equal(capped.open ? undefined : hasApp("acme/repo-1400", capped.found), null);
+  assert.equal(capped.open ? undefined : hasApp("acme/repo-0007", capped.found), "acme/repo-0007");
+  // No connector, so nobody was asked.
+  const none = await setup(fake({ deps: { connect: (connector) => notFound(connector) } }).deps);
+  assert.equal(none.open ? undefined : hasApp("acme/web", none.found), null);
+});
+
+test("the agent's tool reads the page's steps, and the factory's repos as the deployment sees them", async () => {
+  const { deps } = fake({
+    routes: {
+      "https://api.github.com/installation/repositories": () =>
+        json({ total_count: 3, repositories: ["factory", "web", "api"].map((name) => ({ full_name: `acme/${name}` })) }),
+    },
+  });
+  const result = await setup(deps);
+  assert.equal(result.open, false);
+  if (result.open) return;
+  const view = stepsView(result, deps.synced);
+  assert.deepEqual(view.steps.map((step) => [step.title, step.done, step.optional]), [["Vercel", true, false], ["GitHub", true, false], ["Slack", false, true], ["Try it", true, false]]);
+  // A task keeps what helps do it: the agent quotes the command.
+  assert.deepEqual(view.steps[2]!.tasks[0], result.steps[2]!.tasks[0]);
+  assert.match(view.steps[2]!.tasks[0]!.commands![0]!, /^vercel connect create slack /);
+  // What its own GitHub access can't show it: the repos with the app that aren't onboarded.
+  assert.deepEqual(view.repos, {
+    onboarded: [{ repo: "acme/factory", channel: "project-factory/rsi", slack: "#factory-rsi" }],
+    waiting: ["acme/api", "acme/web"],
+    waitingComplete: true,
+  });
+  // And when it couldn't read them all, it says so, so nothing is concluded from a repo's absence.
+  const capped = await setup(fake({ routes: { "https://api.github.com/installation/repositories": pages(1500) } }).deps);
+  assert.equal(capped.open ? undefined : stepsView(capped, deps.synced).repos.waitingComplete, false);
 });
 
 test("the checks find where the GitHub app is added to more repos, by the app's own name, and nowhere when GitHub doesn't say it", async () => {

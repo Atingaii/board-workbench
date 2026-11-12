@@ -5,7 +5,7 @@ import { shows } from "@/lib/markdown";
 import { onboarded, repoName, startOnboarding } from "@/lib/onboard";
 import { pageBoard } from "@/lib/page-board";
 import { channel } from "@/lib/project";
-import { reposOf } from "@/lib/setup";
+import { hasApp, reposOf } from "@/lib/setup";
 
 // Asks the factory to onboard a repo, with `{ "repo": "<owner>/<repo>" }`: the page's Onboard
 // button posts here, and so can an agent. The page opens a thread where the factory changes itself,
@@ -27,6 +27,11 @@ export async function POST(request: Request): Promise<Response> {
   // Already in: say where, as its row on the page says it.
   const listed = onboarded(repo, reposOf({ repoChannels, slackChannels }));
   if (listed) return Response.json({ started: false, repo: listed.repo, where: shows(listed) });
-  const root = await startOnboarding(pageBoard(factory), channel("rsi"), repo);
-  return Response.json({ started: true, repo, thread: root.id });
+  // The app isn't on it, as far as the checks read: nothing to ask the agent for yet.
+  const app = hasApp(repo, result.found);
+  if (app === false) return Response.json({ started: false, repo, missing: true });
+  // As GitHub writes it, when the checks came across it.
+  const name = app ?? repo;
+  const root = await startOnboarding(pageBoard(factory), channel("rsi"), name);
+  return Response.json({ started: true, repo: name, thread: root.id });
 }

@@ -404,6 +404,29 @@ export const reposOf = ({ repoChannels, slackChannels }: Pick<Synced, "repoChann
   Object.entries(repoChannels).map(([repo, channel]) => ({ repo, channel, slack: mirrorOf(slackChannels, channel) }));
 
 /**
+ * Whether the GitHub app is on a repo no channel brings in yet, as far as the checks read: its name
+ * as GitHub writes it, `false` when they read every repo the app is on and it isn't one, and `null`
+ * when they couldn't tell (no connector, GitHub didn't answer, or more repos than one check reads).
+ */
+export function hasApp(repo: string, { unmapped, waiting }: Pick<Found, "unmapped" | "waiting">): string | false | null {
+  const name = unmapped.find((candidate) => candidate.toLowerCase() === repo.toLowerCase());
+  return name ?? (waiting === null ? null : false);
+}
+
+/**
+ * What the agent's setup_steps tool reads: the page's steps with their tasks, and the factory's
+ * repos as this deployment sees them, which is more than the agent can from a thread, where its
+ * GitHub access covers only what's onboarded. `waiting` is the repos the GitHub app is on that no
+ * channel brings in, and `waitingComplete` whether that's all of them.
+ */
+export function stepsView({ steps, found }: Extract<Setup, { open: false }>, synced: Pick<Synced, "repoChannels" | "slackChannels">) {
+  return {
+    steps: steps.map((step) => ({ title: step.title, optional: step.optional ?? false, done: isDone(step), tasks: step.tasks })),
+    repos: { onboarded: reposOf(synced), waiting: found.unmapped, waitingComplete: found.waiting !== null },
+  };
+}
+
+/**
  * `github` and `slack` are those steps: the first task needs the first one done, since it's a pull
  * request in the factory's own repo, and once the second is, the factory is asked things there.
  */

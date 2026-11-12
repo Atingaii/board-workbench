@@ -4,7 +4,7 @@ import { ORIGIN, ownToken } from "../lib/identity.ts";
 
 export default defineTool({
   description:
-    "The factory's setup, checked now: each step the setup page shows (Vercel, GitHub, Slack, Try it) and its tasks, done or not, with the exact commands and links. Use it whenever someone asks about setting the factory up, and quote its commands as they are.",
+    "The factory's setup, checked now. `steps`: each step the setup page shows (Vercel, GitHub, Slack, Try it) and its tasks, done or not, with the exact commands and links. `repos`: the ones onboarded and where each shows (`onboarded`), and the ones the GitHub app is on that aren't onboarded yet (`waiting`, all of them when `waitingComplete`). Use it whenever someone asks about setting the factory up, and quote its commands as they are; and to tell whether the GitHub app is on a repo, which your own GitHub access can't.",
   inputSchema: z.object({}),
   async execute() {
     // This deployment's own setup page, which runs the checks. Its OIDC token gets the call through
