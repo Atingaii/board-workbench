@@ -236,6 +236,12 @@ describe('vb()', () => {
     controller.abort()
     expect(await waiting).toEqual({ code: 0, stdout: '', stderr: '' })
 
+    // A claim taken by a call with a signal is the handle's: later calls renew and settle it, with a signal or without.
+    const bounded = () => ({ signal: AbortSignal.timeout(30_000) })
+    expect(await vb(team, ['tasks', 'claim', next], bounded())).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'renew', next], bounded())).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'release', next])).toEqual({ code: 0, stdout: `released ${next}\n`, stderr: '' })
+
     // Any other task command its signal stops says so, and one that writes says it may have landed: a list doesn't.
     stall.on = true
     const stoppedWhile = async (argv: string[]) => {

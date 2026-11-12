@@ -348,6 +348,8 @@ export type Io = {
   signal?: AbortSignal
   /** The handle to run on, in place of the one the environment and `--url` find. */
   board?: Board
+  /** What `board`'s task claims are kept by, where `board` is made for one call: the handle its caller holds. */
+  claimsOf?: object
   /** Whether a person reads it at a terminal: JSON is indented there. */
   tty?: boolean
 }
@@ -1666,7 +1668,7 @@ const asTyped = () => (flags.as ? ['--as', flags.as] : [])
  */
 function tasksOn(): { board: Board; claims: Claims } {
   const profile = writesAs()
-  if (io.board) return { board: client(), claims: memoryClaims(io.board, profile) }
+  if (io.board) return { board: client(), claims: memoryClaims(io.claimsOf ?? io.board, profile) }
   const { board, url } = connection()
   return { board, claims: fileClaims(async () => url ?? (await board.discovery()).url, profile) }
 }
