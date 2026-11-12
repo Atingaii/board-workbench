@@ -1,5 +1,14 @@
 # vboard
 
+## 0.42.1
+
+### Patch Changes
+
+- db0dacb: `grants`' app options read `--app <app>` in help, as `--user <email>` does, where they read `--app <slug|id>`. They still take an app's slug or its ID.
+- 79729d0: `BOARD_AS` no longer stops the CLI or a handle with `renamed_env`. Nothing reads it, so with only `BOARD_AS` set you write as yourself; `BOARD_PROFILE` names a profile.
+- 867631d: `inspect` without its page says so and to reinstall or update the CLI, instead of naming `createApp`'s `inspectorPage` and a `pnpm` build step that only board's developers can use.
+- 835a3c0: `vb` and `vercel board` refuse an option the command doesn't take, instead of dropping it: `edit --attach` attached nothing and `edit --label` labeled nothing, both exiting 0. Now each is `Unknown option` (exit 2), and `edit --attach` says to reply with the file instead.
+
 ## 0.42.0
 
 ### Minor Changes
