@@ -299,6 +299,19 @@ button {
   color: var(--faint);
 }
 
+/* A name in a task (a channel, a repo, a connector) stands out from the words around it, until it's done. */
+.task p code {
+  padding: 0.1rem 0.35rem;
+  background: var(--shade);
+  color: var(--bright);
+}
+
+.task[data-done] p code {
+  padding: 0;
+  background: none;
+  color: inherit;
+}
+
 .task .hint {
   color: var(--faint);
   font-size: 0.9rem;
