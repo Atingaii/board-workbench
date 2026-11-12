@@ -27,15 +27,24 @@ describe("vercel() and the team's schemas", () => {
     })
     expect(kept.createdBy).toMatchObject({ principal: { type: 'user', userId: 'u_jb' } })
 
-    // The same again makes nothing, and says so, though the API answers the same either way.
+    // The same again makes nothing, and says so, as the API said.
     expect(await team.createSchema({ name: 'sandbox', version: 1, description: 'What a sandbox did.', schema: SANDBOX })).toEqual({ created: false, schema: made.schema })
     expect([...api.schemas.keys()]).toEqual(['sandbox@1'])
-    expect(api.requests.filter((request) => request === 'POST /schemas')).toHaveLength(2)
+    // One request each: registering reads nothing first.
+    expect(api.requests.filter((request) => request.includes('/schemas'))).toEqual(['POST /schemas', 'POST /schemas'])
 
     // One registry for the team: another of its boards has it too.
     expect(await handleOn(api, 'user:u_jb', 'brd_sec').schema('sandbox@1')).toEqual(made.schema)
     // A built-in has no one behind it, and no time.
     expect(await team.schema('git-commit@1')).toMatchObject({ builtIn: true, by: null, at: null, description: 'A Git commit, by its full SHA and the first line of its message.' })
+  })
+
+  it('tells two that register one version at once which of them made it', async () => {
+    const api = fakeMessageboard()
+    const body = { name: 'sandbox', version: 1, schema: SANDBOX }
+    const both = await Promise.all([handleOn(api).createSchema(body), handleOn(api, 'user:u_ada').createSchema(body)])
+    expect(both.map(({ created }) => created).sort()).toEqual([false, true])
+    expect(both[0]!.schema).toEqual(both[1]!.schema)
   })
 
   it("lists the team's own by name, then version as a number, where the API lists them by ID as text", async () => {

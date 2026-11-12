@@ -1278,7 +1278,7 @@ const BUILT_IN_SCHEMAS: SchemaRow[] = [
 /**
  * The team's data schemas, as Vercel's API keeps them, one registry for every board on the team: its
  * built-ins first, then the team's own by their IDs as text. A version registers once: the same
- * definition again answers it, without saying it made nothing, and another is 409. People and apps
+ * definition again answers it with `created: false`, and another is 409. People and apps
  * register, but for a viewer, and read them on the team's routes, which answer a project's token 403.
  * Whoever a board lets in reads them through it (`/boards/:boardId/schemas…`), a project included.
  */
@@ -1317,11 +1317,11 @@ function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, 
       if (existing) {
         if (sortedJson(existing.schema) !== sortedJson(schema) || existing.description !== description)
           throw new Refused(409, 'schema_immutable', `${id} is already registered with a different definition. Register a new version instead.`)
-        return { schema: existing }
+        return { schema: existing, created: false }
       }
       const row: SchemaRow = { id, name, version, ...(description !== undefined ? { description } : {}), schema, builtIn: false, createdAt: now(), createdBy: actor }
       kept.set(id, row)
-      return { schema: row }
+      return { schema: row, created: true }
     },
   }
 }
