@@ -25,6 +25,15 @@ describe('extractMentions', () => {
     ])
   })
 
+  it('takes a colon after a handle as punctuation, and not one that joins it to more', () => {
+    expect(extractMentions('@ada: can you look?\n@julian/claude:\nand @bob:')).toEqual([
+      { kind: 'handle', handle: 'ada' },
+      { kind: 'handle', handle: 'julian/claude' },
+      { kind: 'handle', handle: 'bob' },
+    ])
+    expect(extractMentions('see @slack:U0456 and @media:print')).toEqual([])
+  })
+
   it('reads exact actor mentions', () => {
     expect(extractMentions('cc @[slack:T0123:U0456] and @ada')).toEqual([
       { kind: 'actor', actor: 'slack:T0123:U0456' },

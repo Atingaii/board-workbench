@@ -34,6 +34,8 @@ export type CliCommand = {
   /** Other names it runs by: `rm` for `delete`. */
   readonly aliases?: readonly string[]
   readonly description: string
+  /** The options most runs of it take, written after its usage in the list of commands: what a reader of that list alone would otherwise not know it has. */
+  readonly brief?: string
   readonly arguments: readonly CliArgument[]
   /** Its own options: the filters (with `filters`) and the global options apply too. */
   readonly options: readonly CliOption[]
@@ -61,8 +63,8 @@ export const options = {
   mentions: { type: 'string', value: '@handle', optionalValue: true, description: 'mentioning a handle or email, or you without one' },
   label: { type: 'string', multiple: true, value: 'k[=v|w]', description: "with a label on the message or its thread's root" },
   source: { type: 'string', value: 'source', description: 'from a source: a sync key such as slack, or board' },
-  text: { type: 'string', value: 'words', description: 'containing these words' },
-  after: { type: 'string', value: 'id', description: 'after a message or a cursor' },
+  text: { type: 'string', value: 'words', description: 'containing this text, as one phrase (a substring, not word search)' },
+  after: { type: 'string', value: 'id', description: 'only what came after a message or a cursor (read and wait print one)' },
   // Global: every command takes them.
   url: { type: 'string', value: 'url', description: "the board at this URL, not the one the environment points at" },
   scope: { type: 'string', value: 'team', description: "a team's board in Vercel's API, by its slug or ID" },
@@ -88,9 +90,9 @@ export const options = {
   channel: { type: 'string', value: 'c', description: 'in a channel' },
   remove: { type: 'boolean', description: 'take the reaction back' },
   all: { type: 'boolean', short: 'a', description: 'everything, not only what most want' },
-  timeout: { type: 'string', value: 'duration', description: 'how long to wait (default: 30m)' },
+  timeout: { type: 'string', value: 'duration', description: 'how long to wait: 30s, 10m, or a bare number of seconds (default: 30m)' },
   'no-open': { type: 'boolean', description: "don't open the browser" },
-  in: { type: 'string', value: 'duration', description: 'once, this long from now, e.g. 1d' },
+  in: { type: 'string', value: 'duration', description: 'once, this long from now, e.g. 90s, 5m, 1d' },
   at: { type: 'string', value: 'time', description: 'at a time: once, or with --every, the first' },
   every: { type: 'string', value: 'duration', description: 'repeating at this interval, e.g. 30m' },
   until: { type: 'string', short: 'u', value: 'time', description: 'repeating until a time' },
@@ -338,11 +340,14 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
       { name: "list a channel's latest threads", value: 'read dev' },
       { name: 'read one thread, every message', value: 'read 812' },
       { name: 'list the open bugs', value: 'read dev --label kind=bug --label state=open' },
+      { name: "only what's new since the cursor an earlier read printed", value: 'read dev --after 1042' },
+      { name: 'search every channel for a phrase', value: 'read --text "times out"' },
     ],
   },
   {
     group: 'messages',
     name: 'post',
+    brief: '[--label k=v]... [--attach file]...',
     description: 'a new thread in a channel, or with an ID, a reply in its thread',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
     options: [option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
@@ -367,6 +372,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'schedule',
+    brief: '(--in 5m | --at time | --every 30m)',
     description: 'post later, as you: once (--in or --at), or repeating (--every) until a stop or until canceled',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
     options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('no-sync')],
@@ -388,8 +394,9 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'schedules',
-    description: "pending schedules, or a thread's with an ID",
-    arguments: [{ name: 'id', required: false, description: 'a message in the thread' }],
+    brief: '[--by handle] [--all]',
+    description: "pending schedules, a thread's with a message ID, or one by its own ID",
+    arguments: [{ name: 'id', required: false, description: 'a message in the thread, or a schedule (s12): sent, canceled, or pending' }],
     options: [option('by', 'scheduled by a handle'), option('channel', 'posting in a channel'), option('all', 'done and canceled ones too')],
     examples: [{ name: 'list pending schedules', value: 'schedules' }],
   },
@@ -424,6 +431,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'label',
+    brief: '[--if-unset k] [--unset k]',
     description: 'set labels on a message, or remove them',
     arguments: [id(), { name: 'k=v', required: false, multiple: true, description: 'a label to set' }],
     options: [option('unset'), option('if'), option('if-unset')],
@@ -494,7 +502,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'download',
     description: "save an attachment (its name, here, by default; - for stdout)",
     arguments: [
-      { name: 'attachment', required: true, description: 'the ID read shows on a file line' },
+      { name: 'attachment-id', required: true, description: "the ID at the end of a file line when you read its thread, not the file's name" },
       { name: 'path', required: false, description: 'where to save it, or - for stdout' },
     ],
     options: [],
@@ -546,11 +554,15 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'live',
     name: 'wait',
+    brief: '[--after id] [--timeout 10m]',
     description: 'block for the next match and print it',
-    arguments: [{ name: 'channel', required: false, description: 'a channel, or a path prefix (dev/)' }],
+    arguments: [{ name: 'channel|id', required: false, description: "a channel, a path prefix (dev/), or a message's ID: what comes after it in its thread" }],
     options: [option('timeout')],
     filters: true,
-    examples: [{ name: 'wait for a mention', value: 'wait dev --mentions --timeout 10m' }],
+    examples: [
+      { name: 'wait for a mention: when none comes in time it says "Nothing matched" and exits 1', value: 'wait dev --mentions --timeout 10m' },
+      { name: "wait for a reply in a thread, from the last message you read so none is missed", value: 'wait --re 812 --after 815 --timeout 10m' },
+    ],
   },
   {
     group: 'live',

@@ -711,6 +711,8 @@ prs · 2 threads · cursor 1290
 #1204  github · 3d  [pr=vercel-labs/board#151 state=open]
       Retry Slack deliveries on 429
       4 replies · last #1288 pi via julian · 12m
+
+new since then: vb read prs --label state=open --after 1290
 ```
 
 To read one, `vb read 1204`.
@@ -720,10 +722,11 @@ See [Reading](../01-board/05-reading.md).
 ### download
 
 ```text
-vb download <attachment> [path]
+vb download <attachment-id> [path]
 ```
 
-Saves an attachment, by the ID `vb read` shows on a file line. It's saved under its
+Saves an attachment, by the ID `vb read <id>` shows at the end of its file
+line: a file's name isn't one, and is refused with that. It's saved under its
 own name in the current directory unless you give a path; `-` writes it to
 stdout. Prints the path.
 
@@ -734,7 +737,9 @@ vb schedules [id] [--by <handle>] [--channel <c>] [--all]
 ```
 
 Pending schedules, oldest first. With an `id` (any message in a thread), the
-schedules that reply in that thread. `--all` adds done and canceled ones.
+schedules that reply in that thread. With a schedule's own ID (`s12`), that
+schedule, whatever became of it: sent, canceled, or pending. `--all` adds done
+and canceled ones.
 
 ## Writing
 
@@ -747,7 +752,8 @@ vb post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--labe
 Starts a thread. The channel is created by its first post. Given a message ID
 instead (`vb post 812 "…"`), it replies in that message's thread, like
 [`vb reply`](#reply), with `--label` setting labels on the reply; `--sync` is
-for new threads only.
+for new threads only. The message is one text: anything after it (a second
+text, or a label written as `k=v` with no `--label`) is refused, not dropped.
 
 | Flag | Effect |
 | --- | --- |
@@ -837,7 +843,9 @@ vb label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...
 
 Sets and unsets labels. Each key holds one value. Keys match
 `[a-z0-9][a-z0-9_.-]*` (up to 64 characters), other than `constructor` and
-`prototype`; values are up to 256 characters. `--if k=v` changes them only
+`prototype`; values are up to 256 characters. `vb label` refuses `k=`, a label
+with no value, which would still count as set: `--unset k` removes a label.
+`--if k=v` changes them only
 while the message has that label, and `--if-unset k` only while it has none
 for that key; otherwise nothing changes and it fails with `label_conflict`.
 See [Only if they're as you read them](../01-board/04-messages.md#only-if-theyre-as-you-read-them).
@@ -1010,13 +1018,22 @@ $ vb tail errors-www
 ### wait
 
 ```text
-vb wait [channel] [filters] [--after <id>] [--timeout 30m]
+vb wait [channel|id] [filters] [--after <id>] [--timeout 30m]
 ```
 
-Blocks until the next matching event, prints it, and exits 0. On timeout it
-prints `error: Nothing matched within 30m.` on stderr and exits 1
-(`reason: "timeout"`). `--after` defaults to the current
-head; pass a message ID to catch anything that arrived since it.
+Blocks until the next matching event, prints it, and exits 0. After the event
+it prints the command that waits on from there (`next: vb wait dev --after
+1291`: the run as typed, its `--as`, `--url` and filters included), so a loop
+misses nothing between two waits. On timeout it prints
+`error: Nothing matched within 30m.` on stderr, with why a wait comes back
+empty and the `read` that shows what is there, and exits 1
+(`reason: "timeout"`). `--after` defaults to the current head; pass a message
+ID to catch anything that arrived since it. `--timeout` takes `30s`, `10m`,
+`1h`, or a bare number of seconds.
+
+A message's ID where the channel goes waits in its thread for what comes
+after that message, so an answer that is already there comes back at once:
+`vb wait 812` after posting #812 is the wait for its first reply.
 
 ```bash
 reply=$(vb reply 812 "rolled back; can you confirm?")

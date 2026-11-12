@@ -53,7 +53,7 @@ const RECEIPTS = new Set(['message.synced', 'message.files_synced', 'task.renewe
  */
 const SYNCED = new Set(['message.posted', 'message.edited', 'message.deleted', 'reaction.added', 'reaction.removed', 'labels.changed', 'thread.synced'])
 
-/** A watcher writes as `board:watch:<id>`, and its own writes never wake it. */
+/** A watcher writes as `board:watch:<id>`, and its own writes never wake it, but for a schedule's sends. */
 const actorOf = (id: string) => `board:watch:${id}`
 
 export { compileWatcher }
@@ -61,7 +61,7 @@ export { compileWatcher }
 /** A watcher to match an event against: one in config, or one registered here. */
 type Candidate = Compiled & {
   id: string
-  /** Who its writes are by: an event by it never wakes it. */
+  /** Who its writes are by: an event by it never wakes it, unless a schedule of its own posted it. */
   actor: string
   /** A registered one's registration, whose principal decides what it may see. Config ones see everything. */
   registration?: Registration
@@ -157,6 +157,8 @@ export function createWatchers(options: {
     ])
     const { id, before, after } = foldEvent(messages, actors, event)
     const by = (event.payload as { by?: { actor?: string } }).by?.actor
+    // A schedule's send is how a watcher asks to be woken later: its own still wakes it.
+    const scheduled = event.type === 'message.posted' && event.payload.schedule !== undefined
     const message = after ?? before
     const thread = (event.payload as { thread: string }).thread
     let view: BoardEventView | undefined
@@ -175,7 +177,7 @@ export function createWatchers(options: {
     }
     for (const watcher of targets) {
       if (event.type === 'thread.synced') break
-      if (by === watcher.actor) continue
+      if (by === watcher.actor && !scheduled) continue
       if (RECEIPTS.has(event.type) && !watcher.all) continue
       const { registration } = watcher
       let access: Access = FULL_ACCESS

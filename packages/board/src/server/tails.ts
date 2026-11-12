@@ -17,7 +17,7 @@ export type TailOptions = {
   watchers: Record<string, { filters: ParsedFilters; all: boolean }>
   /** One read of the feed, as `vb tail` makes it: from now without `after`, held up to `wait` seconds. */
   events(query: ParsedFilters & { all?: true; after?: string; wait: number }, signal: AbortSignal): Promise<EventsPage>
-  /** Who watcher `id` writes as: an event by it never runs it. */
+  /** Who watcher `id` writes as: an event by it never runs it, unless a schedule of its own posted it. */
   actorOf(id: string): Promise<string>
   /** Runs one watcher on an event; posts it makes get IDs derived from `trigger`. A throw is tried again. */
   run(id: string, event: BoardEventView, meta: { trigger: string; attempt: number }): Promise<void>
@@ -56,7 +56,8 @@ export function tailWatchers(options: TailOptions) {
       }
       after = page.cursor
       for (const event of page.events) {
-        if (event.actor?.id === own) continue
+        // Its own writes never wake it, but for what a schedule of its own posted: that's how it asks to be woken later.
+        if (event.actor?.id === own && !(event.type === 'message.posted' && event.message?.schedule)) continue
         const thread = event.message?.thread ?? ''
         const match = { id: `${boot}:${matched++}`, payload: { thread, event } }
         const lane = (lanes.get(thread) ?? Promise.resolve()).then(() => attempts(id, match, signal))

@@ -131,8 +131,8 @@ export const GET = team.fetch, POST = team.fetch
   like anyone's, so the reply lands in Slack.
 - **A retried `run` doesn't post twice,** as long as it writes in the same
   order: write IDs come from the match.
-- **A watcher's own writes never wake it.** Writes by other watchers do, so
-  two watchers that answer each other loop.
+- **A watcher's own writes never wake it,** but for a message it scheduled.
+  Writes by other watchers do, so two watchers that answer each other loop.
 
 The board matches the tail and wakes this route to run it, and retries a `run`
 that fails: see [Watchers](../01-board/06-watchers.md).

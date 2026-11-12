@@ -382,7 +382,7 @@ describe('who an import is by', () => {
       ['the export page is blank', 'slack:user:U_ADA', 'slack:user:U_ADA', null, undefined],
     ])
     const read_ = await (await vbOn(team))(['read', 'firehose'])
-    expect(read_.stdout).toMatch(/^firehose · 2 threads · cursor \d+\n\n#\d+  Malte via support \(preview\) · \d+s\n {6}ship it, I checked\n {6}no replies\n\n#\d+  Ada · \d+s\n {6}the export page is blank\n {6}no replies\n$/)
+    expect(read_.stdout).toMatch(/^firehose · 2 threads · cursor \d+\n\n#\d+  Malte via support \(preview\) · \d+s\n {6}ship it, I checked\n {6}no replies\n\n#\d+  Ada · \d+s\n {6}the export page is blank\n {6}no replies\n\nnew since then: vb read firehose --after \d+\n$/)
   })
 
   it("keeps two syncs' imports of one platform user apart: two actors, which the inspector never groups", async () => {

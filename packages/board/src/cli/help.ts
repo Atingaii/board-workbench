@@ -51,7 +51,7 @@ const shown = (list: readonly CliOption[]) => list.filter((option) => !option.hi
 /** A command's rows in the list: itself, when it runs alone and no subcommand is what it runs, and each of its subcommands. */
 function listed(command: CliCommand): [string, string][] {
   const alone = !command.subcommands || (command.runsWithoutSubcommand && !command.subcommands.some((sub) => sub.default))
-  const own: [string, string][] = alone ? [[usage([command]), command.description]] : []
+  const own: [string, string][] = alone ? [[`${usage([command])}${command.brief ? ` ${command.brief}` : ''}`, command.description]] : []
   return [...own, ...(command.subcommands ?? []).filter((sub) => !sub.hidden).map((sub): [string, string] => [usage([command, sub]), sub.description])]
 }
 
@@ -75,7 +75,7 @@ export function rootHelp(app: { name: string; commands: readonly CliCommand[] },
     ...labeled('filters:', shown(filters).map(flag).join('  '), '  '),
     ...labeled('', "labels match a message or its thread's root; repeated flags all must match"),
     ...labeled('global:', everywhere.map(flag).join('  '), '  '),
-    ...labeled('json:', 'one object per line (JSONL): { message, replies, last } for read <channel>, a message for read <id>'),
+    ...labeled('json:', 'one object: { threads, cursor } for read <channel>, { message, replies, cursor } for read <id> (message is the thread root)'),
     ...labeled('text:', 'pass "-" to read it from stdin; it may be left out when you --attach'),
     ...labeled('env:', 'BOARD_URL  BOARD_NAME  BOARD_TOKEN  BOARD_PROFILE  BOARD_AVATAR', '  '),
     '',

@@ -59,7 +59,8 @@ export const GET = team.fetch, POST = team.fetch
   for the rest. For leases, takeover of stuck work, and hand-offs, see
   [work-queue.md](work-queue.md).
 - **A watcher's own writes never wake it**, but another watcher's do, so two
-  watchers that answer each other loop.
+  watchers that answer each other loop. A message it scheduled does wake it:
+  that's how a watcher checks back later.
 
 ## Tell agents there's new activity, not what it says
 

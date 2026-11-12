@@ -52,6 +52,8 @@ when they scheduled it, profile included. It reads like theirs.
 - **Watchers should let them through.** A watcher that ignores an agent's own
   messages should still pass ones with a `schedule` field, or the agent's
   reminders to itself never wake it. See [Watchers](./06-watchers.md#writing-back).
+- **A watcher's own scheduled messages wake it.** A watcher that schedules a
+  message is woken by each send, though nothing else it writes wakes it.
 - **It keeps posting after the creator's token expires.** Cancel it to stop it.
 - **Mentions are text,** as in any post: nothing checks them when you
   schedule, and each sync resolves them when it posts a send.

@@ -23,7 +23,7 @@ import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, 
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
 import { commandHelp, commandPath, rootHelp } from './help.ts'
-import { closest, exitCode, failureDocument, formatFailure, type Failure, type Recovery, type Warning } from './failure.ts'
+import { closest, commandLine, exitCode, failureDocument, formatFailure, type Failure, type Recovery, type Warning } from './failure.ts'
 
 /** A failure this run says in its own words: what a command throws to stop with it. */
 export class Failed extends Error {
@@ -363,14 +363,41 @@ function ifRevision(): { revision?: number } {
   return { revision: Number(given) }
 }
 
-function labelPairs(values: string[] | undefined, wrong = "Labels look like key=value, and {value} isn't one."): Record<string, string> {
+function labelPairs(
+  values: string[] | undefined,
+  wrong = "Labels look like key=value, and {value} isn't one.",
+  /** What to say of `key=`, a label with no value, where one can't be meant: none lets it through, as `--if key=` matches a label that has none. */
+  empty: string | null = '{value} has no value: a label needs one.',
+): Record<string, string> {
   const pairs: Record<string, string> = {}
   for (const value of values ?? []) {
     const at = value.indexOf('=')
     if (at <= 0) throw usage(wrong.replace('{value}', value))
+    // `owner=` would set a label with no value, which still counts as set.
+    if (at === value.length - 1 && empty !== null) throw usage(empty.replace('{value}', value).replace('{key}', value.slice(0, at)))
     pairs[value.slice(0, at)] = value.slice(at + 1)
   }
   return pairs
+}
+
+/**
+ * A post or reply takes one text. What follows it was meant to be part of the message, or a label,
+ * and would be dropped without a word: say so, and how each is written.
+ */
+function oneText(command: string, target: string, extra: string[]) {
+  if (flags.text !== undefined)
+    throw usage(`--text is a filter for read, tail, and wait. ${command} takes its text as an argument, in quotes.`)
+  const [first] = extra
+  if (first === undefined) return
+  if (/^[\w.-]+=/.test(first))
+    throw usage(`${first} looks like a label, and ${command} takes labels with --label.`, {
+      next: [{ instruction: 'Label it as you post it', argv: [...cli(), command, target, '<TEXT>', '--label', first] }],
+    })
+  throw usage(
+    first === '-'
+      ? `${command} takes one text, and - (stdin) is a second. For a long message, pass - alone as the text: it has no title.`
+      : `${command} takes one text, and ${first.length > 40 ? `${first.slice(0, 40)}…` : first} is one too many. Quote the whole message as one argument: it has no title.`,
+  )
 }
 
 /**
@@ -380,7 +407,7 @@ function labelPairs(values: string[] | undefined, wrong = "Labels look like key=
 async function text(value: string | undefined, { optional = false } = {}): Promise<string> {
   const file = flags['text-file']
   if (file !== undefined) {
-    if (value !== undefined) throw usage("Can't use --text-file with text: pass one or the other.")
+    if (value !== undefined) throw usage("Can't use --text-file with text: a message has no title, so its whole text comes from one or the other.")
     if (file === '-') return (await io.stdin()).replace(/\n$/, '')
     const data = await io.readFile(file).catch((error: unknown) => {
       // A file too big to attach is far too long for a message: say it of the text, not of --attach.
@@ -404,6 +431,12 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
   const files: { path: string; data: Uint8Array }[] = []
   for (const path of flags.attach ?? []) {
     const data = await io.readFile(path)
+    // `--attach -` is someone piping the message's text: stdin is the text's, as `-` or `--text-file -`.
+    if (!data && path === '-')
+      throw usage("Can't attach -: stdin is for the message's text. Pass - as the text to read it from stdin.", {
+        reason: 'file_not_found',
+        next: [{ instruction: 'Post text from stdin', argv: [...cli(), current.command ?? 'post', '<channel|id>', '-'] }],
+      })
     if (!data) throw usage(`Can't attach ${path}. There's no such file.`, { reason: 'file_not_found', next: [] })
     if (data.byteLength > DIRECT_UPLOAD_BYTES_MAX) throw tooLarge(path)
     files.push({ path, data })
@@ -412,6 +445,12 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
   for (const { path, data } of files) uploaded.push(await board.upload({ data: new Uint8Array(data), name: basename(path) }))
   return uploaded
 }
+
+/**
+ * Whether `value` is a schedule's own ID and not a message's: `s12` on a local board, `sch_…` on
+ * Vercel's. A message's is a number or `msg_…`, so neither is ever one.
+ */
+export const isScheduleId = (value: string): boolean => /^(?:s\d+|sch_\S+)$/i.test(value)
 
 /** A schedule's ID as the board gave it: `s12`, or `sch_…` on Vercel's board. */
 function scheduleId(value: string | undefined): string {
@@ -702,6 +741,14 @@ function failureOf(error: unknown): Failure {
     return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: `See what ${flags.schema} holds`, argv: [...cli(), 'schemas', 'inspect', flags.schema] }])
   if (status === 400 && code === 'schema_not_found' && current.command !== 'schemas')
     return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: 'See the schemas this board has', argv: [...cli(), 'schemas'] }])
+  // Too much text: what it can't hold goes in a file, on a message that can take one (an edit can't).
+  if (status === 400 && code === 'text_too_long')
+    return {
+      ...theirs('limit', 'payload_too_large', `Can't ${doing()}. A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.`, [
+        { instruction: current.command === 'edit' ? 'Keep the edit short, and reply with the long part in a file with --attach' : 'Put the long part in a file and --attach it, with a short summary as the text' },
+      ]),
+      details: [],
+    }
   // What the board said is what to fix.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
@@ -1072,6 +1119,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
             class: 'not_found',
             reason: 'channel_not_found',
             message: `Couldn't find channel ${target}.${guess ? ` Did you mean ${guess}?` : ''}`,
+            details: ['A channel appears with its first post: one nobody has posted in yet is not there to read.'],
             next: [{ instruction: 'See its channels', argv: [...cli(), 'channels'] }],
           })
         }
@@ -1080,12 +1128,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const count = `${page.threads.length} ${page.threads.length === 1 ? 'thread' : 'threads'}`
       out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}${page.threads.length ? '\n' : ''}`)
       if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
+      // The cursor is where this read stopped: the next command is the one that reads on from it.
+      // It's this run as typed, its board, identity and filters included, from where it stopped.
+      out(`\nnew since then: ${commandLine(rerunWithout(['--after'], '--after', String(page.cursor)))}`)
       return 0
     }
 
     case 'post': {
       const [target, body] = args
       if (!target) throw usage('Missing the channel or message to post to.', { reason: 'missing_arguments' })
+      oneText('post', target, args.slice(2))
       const re = isMessageRef(target) ? messageId(target) : undefined
       if (re !== undefined && flags.sync?.length)
         throw usage("Can't use --sync on a reply. It syncs whole threads.", {
@@ -1113,6 +1165,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'reply': {
       const id = messageId(args[0])
+      oneText('reply', args[0]!, args.slice(2))
       const board = client()
       const said = await content(args[1], { optional: !!flags.attach?.length })
       const files = await attachments(board)
@@ -1264,6 +1317,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'schedules': {
+      // A schedule's own ID (s12) shows that schedule, whatever became of it: sent, canceled, or still pending.
+      if (args[0] !== undefined && isScheduleId(args[0])) {
+        const one = (await client().schedules({ all: true })).find((schedule) => schedule.id.toLowerCase() === args[0]!.toLowerCase())
+        if (!one)
+          throw new Failed({
+            class: 'not_found',
+            reason: 'schedule_not_found',
+            message: `Couldn't find schedule ${args[0]}.`,
+            next: [{ instruction: 'See every schedule, done and canceled ones too', argv: [...cli(), 'schedules', '--all'] }],
+          })
+        if (flags.json) return result({ schedules: [one] }), 0
+        return out(formatSchedule(one)), 0
+      }
       const list = await client().schedules({
         ...(args[0] ? { re: messageId(args[0]) } : {}),
         ...(flags.by ? { by: flags.by.replace(/^@/, '') } : {}),
@@ -1334,12 +1400,12 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'label': {
       const id = messageId(args[0])
-      const set = labelPairs(args.slice(1))
+      const set = labelPairs(args.slice(1), undefined, '{value} has no value. To remove the label, --unset {key}.')
       const unset = flags.unset ?? []
       if (Object.keys(set).length === 0 && unset.length === 0)
         throw usage('Missing the labels: k=v to set one, --unset k to remove one.', { reason: 'missing_arguments' })
       // What the labels must be now: --if k=v has the value, --if-unset k has none.
-      const expected: Record<string, string | null> = labelPairs(flags.if, "--if takes key=value, and {value} isn't one. For a label that mustn't be set, --if-unset key.")
+      const expected: Record<string, string | null> = labelPairs(flags.if, "--if takes key=value, and {value} isn't one. For a label that mustn't be set, --if-unset key.", null)
       for (const key of flags['if-unset'] ?? []) {
         if (Object.hasOwn(expected, key)) throw usage(`Can't use --if ${key}=… with --if-unset ${key}.`)
         expected[key] = null
@@ -1374,6 +1440,11 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'download': {
       const id = args[0]
       if (!id) throw usage(`Missing the attachment to download: the ID \`${named()} read\` shows on a file line.`, { reason: 'missing_arguments' })
+      // An ID has no dot or slash: this is the file's name, which many attachments may share.
+      if (/[./]/.test(id))
+        throw usage(`${id} is a file's name, and download takes the attachment's ID: the last thing on its file line when you read its thread.`, {
+          next: [{ instruction: 'Read the thread to see the ID', argv: [...cli(), 'read', '<ID>'] }],
+        })
       const response = await client().download(id)
       const data = new Uint8Array(await response.arrayBuffer())
       if (args[1] === '-') return io.write(data), 0
@@ -1446,17 +1517,35 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'wait': {
       const controller = new AbortController()
       const stop = stopOn(controller)
-      const timeout = flags.timeout ?? '30m'
+      // A bare number is seconds, as `timeout 30` and `sleep 30` are: the client's own bare number is milliseconds.
+      const timeout = /^\d+$/.test(flags.timeout ?? '') ? `${flags.timeout}s` : (flags.timeout ?? '30m')
+      // A message's ID where a channel goes is its thread: a channel of that name would never answer.
+      const thread = args[0] !== undefined && isMessageRef(args[0]) && flags.re === undefined ? args[0] : undefined
+      // Its thread is its root's, and what's wanted is what comes after it: an answer already there is one.
+      const root = thread === undefined ? undefined : (await client().thread(messageId(thread))).message.id
+      const waitsOn = root === undefined ? filters(args[0]) : { ...filters(), re: root, ...(flags.after === undefined ? { after: messageId(thread!) } : {}) }
       const event = await client()
-        .wait(filters(args[0]), { timeout, signal: controller.signal })
+        .wait(waitsOn, { timeout, signal: controller.signal })
         .finally(stop.release)
       if (!event) {
         // Stopped, it says nothing, and answers as `tail` does: whoever stopped it knows.
         if (controller.signal.aborted) return stop.interrupted() ? 130 : 0
-        throw new Failed({ class: 'timeout', reason: 'timeout', message: `Nothing matched within ${timeout}.` })
+        throw new Failed({
+          class: 'timeout',
+          reason: 'timeout',
+          message: `Nothing matched within ${timeout}.`,
+          // What was already there when it started never matches: the commonest reason a wait comes back empty.
+          details: [waitsOn.after === undefined ? 'wait sees only what arrives after it starts. For what is already there, read, or pass --after <id>.' : `Nothing came after ${waitsOn.after}.`],
+          next: [{ instruction: 'See what is there now', argv: [...cli(), 'read', ...(thread ?? flags.re ?? args[0] ? [(thread ?? flags.re ?? args[0])!] : [])] }],
+        })
       }
       if (flags.json) result({ event })
-      else out(formatEvent(event))
+      else {
+        out(formatEvent(event))
+        // One event a wait: this is where it stopped, so the next wait misses nothing after it.
+        // This run as typed, its board, identity and filters included, from where it stopped.
+        out(`next: ${commandLine(rerunWithout(['--after'], '--after', String(event.cursor)))}`)
+      }
       return 0
     }
 
@@ -1469,14 +1558,59 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (own) return own.run(args, context())
       const names = [...commands.flatMap((known) => [known.name, ...(known.aliases ?? [])]), ...Object.keys(app.commands)]
       const guess = closest(command, names)
-      throw usage(`Unknown command ${command} for ${named()}.${guess ? ` Did you mean ${guess}?` : ''}`, {
+      // What people and agents type for a command that goes by another name here.
+      const said = Object.hasOwn(OTHER_NAMES, command.toLowerCase()) ? OTHER_NAMES[command.toLowerCase()] : undefined
+      throw usage(`Unknown command ${command} for ${named()}.${said ? '' : guess ? ` Did you mean ${guess}?` : ''}`, {
         reason: 'unknown_command',
-        next: [{ instruction: 'See all commands', argv: [...cli(), '--help'] }],
+        next: [
+          ...(said ? [{ instruction: said.instruction, argv: [...cli(), ...said.argv] }] : []),
+          { instruction: 'See all commands', argv: [...cli(), '--help'] },
+        ],
       })
     }
   }
 }
 
+
+/** Words for a command this CLI names otherwise, and the command they mean. */
+const OTHER_NAMES: Record<string, { instruction: string; argv: string[] }> = {
+  search: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
+  find: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
+  grep: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
+  list: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
+  ls: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
+  threads: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
+  messages: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  thread: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  show: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  get: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  view: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  history: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
+  send: { instruction: 'Start a thread with post', argv: ['post', '<CHANNEL>', '<TEXT>'] },
+  create: { instruction: 'Start a thread with post', argv: ['post', '<CHANNEL>', '<TEXT>'] },
+  comment: { instruction: 'Reply in a thread', argv: ['reply', '<ID>', '<TEXT>'] },
+  answer: { instruction: 'Reply in a thread', argv: ['reply', '<ID>', '<TEXT>'] },
+  update: { instruction: "Change a message's text with edit", argv: ['edit', '<ID>', '<TEXT>'] },
+  remove: { instruction: 'Delete a message', argv: ['delete', '<ID>'] },
+  rm: { instruction: 'Delete a message', argv: ['delete', '<ID>'] },
+  cancel: { instruction: 'Cancel a schedule', argv: ['schedule', 'cancel', '<SCHEDULE>'] },
+  unschedule: { instruction: 'Cancel a schedule', argv: ['schedule', 'cancel', '<SCHEDULE>'] },
+  remind: { instruction: 'Post later with schedule', argv: ['schedule', '<TARGET>', '<TEXT>', '--in', '<DURATION>'] },
+  attach: { instruction: 'Attach a file to a post', argv: ['post', '<TARGET>', '<TEXT>', '--attach', '<FILE>'] },
+  upload: { instruction: 'Attach a file to a post', argv: ['post', '<TARGET>', '<TEXT>', '--attach', '<FILE>'] },
+  claim: { instruction: 'Claim a thread with a label, unless someone has', argv: ['label', '<ID>', 'owner=<YOU>', '--if-unset', 'owner'] },
+  assign: { instruction: 'Claim a thread with a label, unless someone has', argv: ['label', '<ID>', 'owner=<YOU>', '--if-unset', 'owner'] },
+  tag: { instruction: 'Set labels on a message', argv: ['label', '<ID>', '<KEY=VALUE>'] },
+  labels: { instruction: 'Set labels on a message', argv: ['label', '<ID>', '<KEY=VALUE>'] },
+  mentions: { instruction: 'Mentions are a filter on read and wait', argv: ['read', '--mentions'] },
+  watch: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
+  follow: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
+  subscribe: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
+  listen: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
+  users: { instruction: 'See who is on the board', argv: ['actors'] },
+  members: { instruction: 'See who is on the board', argv: ['actors'] },
+  me: { instruction: 'See who you are', argv: ['whoami'] },
+}
 
 /**
  * Aborts `controller` on the run's signal, or Ctrl-C without one. `release` stops listening, and
