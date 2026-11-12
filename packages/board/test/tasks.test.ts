@@ -93,7 +93,7 @@ describe('a task', () => {
     expect(made.status).toBe(201)
     const root = made.body.task as MessageView
     expect(root).toMatchObject({ channel: 'work', text: 'fix CVE-123 in acme/web', re: null, by: { actor: ADA }, labels: { step: 'fix', 'board.task': 'ready' } })
-    expect(root.task).toEqual({ state: 'ready', owner: ADA, for: null, needs: [], epoch: 0, claim: null, blocked: null, result: null, reason: null })
+    expect(root.task).toEqual({ state: 'ready', owner: ADA, by: ADA, for: null, needs: [], epoch: 0, claim: null, blocked: null, result: null, reason: null })
     expect(made.body.claim).toBeUndefined()
 
     // Anyone who reads the channel reads it, replies in it, and finds it by its state.
@@ -650,13 +650,16 @@ describe("a task's owner", () => {
         expect(code(await triage('POST', `/tasks/${made.id}/${verb}`, body)), verb).toEqual([403, 'task_not_owned'])
     expect(code(await triage('POST', `/tasks/${hers.id}/claim`, {}))).toEqual([409, 'task_assigned'])
     expect((await read(ada, hers.id)).task).toMatchObject({ state: 'ready', for: `${ADA}+fixer` })
-    // What it made is its own, and no view says which of Ada's actors made a task.
+    // What it made is its own, and every view of a task says which of Ada's actors made it: who changes it as its owner.
     const own = await task(triage, 'sort the queue')
-    expect(own.task).toMatchObject({ owner: ADA })
-    expect(own.task).not.toHaveProperty('maker')
+    expect(own.task).toMatchObject({ owner: ADA, by: `${ADA}+triage` })
+    expect([hers, fixers].map((made) => made.task?.by)).toEqual([ADA, `${ADA}+fixer`])
+    expect((await read(ada, own.id)).task?.by).toBe(`${ADA}+triage`)
+    expect((await ada('GET', '/tasks?channel=work')).body.tasks.map((listed: { message: MessageView }) => listed.message.task?.by)).toEqual([ADA, `${ADA}+fixer`, `${ADA}+triage`])
+    expect((await events(ada, 0)).filter((event) => event.type === 'task.created').map((event) => event.message?.task?.by)).toEqual([ADA, `${ADA}+fixer`, `${ADA}+triage`])
     expect((await triage('POST', `/tasks/${own.id}/assign`, { for: `${ADA}+fixer` })).body.task.task.for).toBe(`${ADA}+fixer`)
-    // Ada as herself, narrowed the same way, changes what any of her profiles made.
-    expect((await herself('POST', `/tasks/${own.id}/assign`, { for: null })).body.task.task.for).toBeNull()
+    // Ada as herself, narrowed the same way, changes what any of her profiles made: it stays the profile's.
+    expect((await herself('POST', `/tasks/${own.id}/assign`, { for: null })).body.task.task).toMatchObject({ for: null, by: `${ADA}+triage` })
     expect((await herself('POST', `/tasks/${fixers.id}/cancel`, { reason: 'superseded' })).body.task.task.state).toBe('canceled')
   })
 

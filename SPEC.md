@@ -3482,7 +3482,9 @@ if (claim) {
   `label` there, as it had to, to make it. And a principal's profiles share
   its credential, so, as with a message, a profile changes only the tasks it
   made, and the principal itself, as no profile, any of them: a sandboxed
-  agent can't assign itself what another profile was given.
+  agent can't assign itself what another profile was given. The task's `by`
+  says which actor made it, so a UI offers the owner's changes to who may
+  make them rather than learn from a 403.
 - **Anyone with `label` in its channel may claim it,** the owner's agents and
   a teammate's alike, so a team works one queue. A task's state is its root's
   `board.task` label, and working it changes that state, which is what `label`
@@ -3674,6 +3676,7 @@ A root that's a task carries `task` in every message view, so `read`,
 task: {
   state: 'waiting' | 'ready' | 'claimed' | 'blocked' | 'completed' | 'failed' | 'canceled'
   owner: PrincipalId
+  by: ActorId                                                                // the actor its owner made it a task as: who changes it as its owner
   for: ActorId | null                                                        // the profile it's assigned to
   needs: MessageId[]
   epoch: number

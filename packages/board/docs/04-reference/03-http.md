@@ -391,6 +391,7 @@ A task is a thread with a state. Its ID is its root's, and its root carries
 {
   "state": "claimed",
   "owner": "vercel:user:u_abc123",
+  "by": "vercel:user:u_abc123+triage",
   "for": null,
   "needs": ["810"],
   "epoch": 2,
@@ -405,6 +406,7 @@ A task is a thread with a state. Its ID is its root's, and its root carries
 | --- | --- |
 | `state` | `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`, or `canceled`. The root's `board.task` label has the same value, so any label filter finds tasks by state |
 | `owner` | the principal that made the thread a task |
+| `by` | the actor it did that as: the principal itself, or one of its profiles. That actor changes the task as its owner, and so does the principal as itself |
 | `for` | the one actor that claims it, or `null` |
 | `needs` | the tasks it waits for, by ID. It's `waiting` until each has completed |
 | `epoch` | how many times it's been claimed |

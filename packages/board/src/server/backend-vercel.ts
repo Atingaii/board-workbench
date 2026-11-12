@@ -47,6 +47,8 @@ type ApiChannel = { id: string; name: string }
 type ApiTask = {
   state: TaskState
   owner: string
+  /** The actor its owner made it a task as: itself, or one of its profiles. */
+  by: string
   for: string | null
   needs: string[]
   epoch: number
@@ -1027,6 +1029,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const taskView = (task: ApiTask): TaskView => ({
     state: task.state,
     owner: task.owner,
+    by: task.by,
     for: task.for,
     needs: task.needs.map((thread) => idAt(thread, 1)),
     epoch: task.epoch,
@@ -2111,9 +2114,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * is what was asked for. It waits when it names tasks to wait for, which the API checked, and no one holds it: a
    * claim takes `label`, which reads.
    */
-  const askedTask = (owner: string, input: { needs?: string[] | undefined; for?: string | null | undefined }): ApiTask => ({
+  const askedTask = (owner: string, by: string, input: { needs?: string[] | undefined; for?: string | null | undefined }): ApiTask => ({
     state: input.needs?.length ? 'waiting' : 'ready',
     owner,
+    by,
     for: input.for ?? null,
     needs: input.needs?.length ? needsOf(input.needs) : [],
     epoch: 0,
@@ -2735,7 +2739,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         } else {
           // The task is what it asked for, as far as it can say: it can't read the channel to see.
           const { actor } = await self(who)
-          task = askedTask(principalId(actor.principal), input)
+          task = askedTask(principalId(actor.principal), await actorOf(who), input)
           const first = { id: idAt(made.task.id, 1), threadId: made.task.id, sequence: 1 }
           root = await view(who, { ...(await sent(who, first, { text, labels: { ...input.labels, [TASK_LABEL]: task.state }, attachments: input.attachments, noSync: input.noSync })), task }, input.channel!)
         }

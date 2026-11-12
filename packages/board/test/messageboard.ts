@@ -73,8 +73,8 @@ type TaskState = 'waiting' | 'ready' | 'claimed' | 'blocked' | 'completed' | 'fa
 type Task = {
   state: TaskState
   owner: string
-  /** The actor its owner made it as: itself, or one of its profiles, which is held to the tasks it made. No answer shows it. */
-  maker: string
+  /** The actor its owner made it as: itself, or one of its profiles, which is held to the tasks it made. */
+  by: string
   for: string | null
   needs: string[]
   epoch: number
@@ -335,7 +335,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   }
 
   /** A task as every answer shows it: never its claim's token, or the hash kept of it. */
-  const showTask = ({ claim, completed: _completed, marked: _marked, maker: _maker, ...task }: Task) => ({
+  const showTask = ({ claim, completed: _completed, marked: _marked, ...task }: Task) => ({
     ...task,
     needs: [...task.needs],
     claim: claim ? { actor: claim.actor, until: claim.until } : null,
@@ -649,7 +649,7 @@ function fakeBoard(shared: Shared, boardId: string) {
    * as the profile it made it as. Another of its profiles isn't: they share a credential, so a sandbox pinned to one
    * would otherwise assign itself what another was given.
    */
-  const ownedBy = (task: Task, actor: Actor) => task.owner === principalId(actor.principal) && (actor.id === task.owner || actor.id === task.maker)
+  const ownedBy = (task: Task, actor: Actor) => task.owner === principalId(actor.principal) && (actor.id === task.owner || actor.id === task.by)
   /** The task's owner while it may still write there, or anyone with `manage`: what assigns, holds, unblocks, reopens, and cancels. */
   function ownerOrManage(actor: Actor, thread: Thread & { task: Task }) {
     if (may(actor, 'manage', thread.channelId)) return
@@ -773,7 +773,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   function makeTask(thread: Thread, actor: Actor, checked: ReturnType<typeof checkedTask>, operationId: unknown) {
     // One that needs others waits as it's made, always: when they have all completed already, its `task.ready` follows
     // in the same write, before its claim. One that needs none is ready as it's made, with no `task.ready`.
-    thread.task = { state: checked.needs.length > 0 ? 'waiting' : 'ready', owner: checked.owner, maker: actor.id, for: checked.for, needs: checked.needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
+    thread.task = { state: checked.needs.length > 0 ? 'waiting' : 'ready', owner: checked.owner, by: actor.id, for: checked.for, needs: checked.needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
     taskEvent(thread, 'task.made', actor, undefined, operationId)
     ready(thread, actor, operationId)
     if (checked.claim) hold(thread, actor, checked.claim, operationId)

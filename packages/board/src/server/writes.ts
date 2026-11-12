@@ -77,7 +77,7 @@ const authored = (message: Message, identity: Identity) =>
  * task, as itself, or as the profile it made it as. Another of its profiles isn't: they share a
  * credential, and nothing else keeps one's work from another.
  */
-export const ownedBy = (task: Pick<Task, 'owner' | 'maker'>, identity: Pick<Identity, 'principal' | 'actor'>) => wroteAs(identity, { principal: task.owner, actor: task.maker })
+export const ownedBy = (task: Pick<Task, 'owner' | 'by'>, identity: Pick<Identity, 'principal' | 'actor'>) => wroteAs(identity, { principal: task.owner, actor: task.by })
 
 const messageNotFound = (id: number) => () => notFound(`message not found: #${id}`, 'message_not_found')
 

@@ -159,11 +159,16 @@ describe("vercel()'s tasks", () => {
     }
     await expect(fixer.tasks.claim(given.id)).rejects.toMatchObject({ status: 409, code: 'task_assigned' })
     expect((await pong.thread(given.id)).message.task).toMatchObject({ state: 'ready', for: `${PONG}+reviewer`, owner: PONG })
+    // Every view of a task says which of its owner's actors made it: its create's answer, its thread, the list, and the feed.
+    expect([given.task?.by, principals.task?.by]).toEqual([`${PONG}+reviewer`, PONG])
+    expect((await fixer.thread(given.id)).message.task?.by).toBe(`${PONG}+reviewer`)
+    expect((await pong.tasks.list({ channel: 'work' })).tasks.map((listed) => listed.message.task?.by)).toEqual([`${PONG}+reviewer`, PONG])
+    expect((await pong.poll({ channel: 'work', after: '0' })).events.filter((event) => event.type === 'task.created').map((event) => event.message?.task?.by)).toEqual([`${PONG}+reviewer`, PONG])
 
     // The profile that made it changes it, and so does its principal, as itself.
     await reviewer.tasks.block(given.id, 'waiting on the fix')
     expect((await reviewer.tasks.unblock(given.id)).task?.state).toBe('ready')
-    expect((await pong.tasks.assign(given.id, null)).task?.for).toBeNull()
+    expect((await pong.tasks.assign(given.id, null)).task).toMatchObject({ for: null, by: `${PONG}+reviewer` })
     expect((await pong.tasks.cancel(given.id, 'not needed')).task?.state).toBe('canceled')
 
     // The same owner decides whose edit changes what a task says: a profile's own thread, made a task by another, is held when it edits it.
@@ -187,7 +192,7 @@ describe("vercel()'s tasks", () => {
     // A task is its root: its ID is the root message's, and it reads as its thread does.
     expect(fix.id).toMatch(/^msg_[0-9a-f-]{36}_1$/)
     expect(fix).toMatchObject({ channel: 'work', text: 'fix CVE-123 in acme/web', re: null, labels: { step: 'fix', 'board.task': 'ready' } })
-    expect(fix.task).toEqual({ state: 'ready', owner: JULIAN, for: null, needs: [], epoch: 0, claim: null, blocked: null, result: null, reason: null })
+    expect(fix.task).toEqual({ state: 'ready', owner: JULIAN, by: JULIAN, for: null, needs: [], epoch: 0, claim: null, blocked: null, result: null, reason: null })
     // What it waits for is named by its root's ID, as the board names a task, where the API names its thread.
     expect(review.task).toMatchObject({ state: 'waiting', needs: [fix.id], for: `${JULIAN}+reviewer` })
     expect(review.labels['board.task']).toBe('waiting')
@@ -818,7 +823,7 @@ describe("vercel()'s tasks", () => {
     // A retry answers the ID of the task that landed, which it can't read, and nothing else: the task is as it was made.
     const again = await blind.tasks.create('intake', { text: 'from a form', id: 'form-1', needs: [first.id] })
     expect(await answers[1]).toEqual({ task: { id: threadOf(made.task.id) } })
-    expect(again.task).toMatchObject({ id: made.task.id, channel: 'intake', text: 'from a form', labels: { 'board.task': 'waiting' }, task: { state: 'waiting', owner: 'vercel:project:prj_pong:production', needs: [first.id], epoch: 0, claim: null } })
+    expect(again.task).toMatchObject({ id: made.task.id, channel: 'intake', text: 'from a form', labels: { 'board.task': 'waiting' }, task: { state: 'waiting', owner: 'vercel:project:prj_pong:production', by: 'vercel:project:prj_pong:production', needs: [first.id], epoch: 0, claim: null } })
     expect((await pong.thread(made.task.id)).message.task).toMatchObject({ state: 'waiting', needs: [first.id] })
 
     // A retry of the operation itself answers the same way: the API put the create off once the task was made, the
