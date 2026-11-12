@@ -120,6 +120,22 @@ test("a session that ended since it was found is replaced, and the wake-up deliv
   assert.deepEqual(requests[3]!.body, DELIVERY);
 });
 
+test("a session that just started takes its first message a moment later: the wake-up waits, and starts nothing over", async () => {
+  // What eve answers a message sent right after the session was created.
+  const notReady: [number, object] = [409, { ok: false, code: "session_not_ready", error: "The session is not ready yet." }];
+  const { requests, fake } = eve([[202, { ok: true, sessionId: "wrun_a" }], notReady, notReady, [202, { ok: true, sessionId: "wrun_a" }]]);
+  await send(WAKE, fake, async () => null, [0, 0, 0]);
+  assert.deepEqual(requests.map((request) => request.path), ["/eve/v1/session", "/eve/v1/session/wrun_a", "/eve/v1/session/wrun_a", "/eve/v1/session/wrun_a"]);
+  assert.deepEqual(requests[3]!.body, DELIVERY);
+});
+
+test("a session that never gets ready fails the delivery, after waiting as long as it's told to", async () => {
+  const notReady: [number, object] = [409, { ok: false, code: "session_not_ready", error: "The session is not ready yet." }];
+  const { requests, fake } = eve([[202, { ok: true, sessionId: "wrun_a" }], notReady, notReady, notReady]);
+  await assert.rejects(send(WAKE, fake, async () => null, [0, 0]), /eve answered 409 to a wake-up \(session_not_ready\)/);
+  assert.equal(requests.length, 4);
+});
+
 test("a channel that refuses fails the delivery, with what it answered, and delivers nothing", async () => {
   const refused = eve([[401, { ok: false, error: "unauthorized" }]]);
   await assert.rejects(send(WAKE, refused.fake), /eve answered 401 to opening the thread's session: unauthorized/);
