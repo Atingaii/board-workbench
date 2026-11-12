@@ -183,16 +183,16 @@ describe('createTasksInChunks', () => {
     }
     await createTasksInChunks(team, 'work', plan)
     expect(taken).toEqual(['step 0'])
-    // A plan that must not start early waits for a task of its maker's: nothing of it is ready until that completes.
-    const { claim: gate } = await team.tasks.create('gated', { text: 'the plan is being made', claim: true })
+    // A plan that must not start early waits for a task of its maker's, where no worker claims: nothing of it is ready until that completes.
+    const { task: gate } = await team.tasks.create('plans', { text: 'the plan is being made' })
     front.fail = async (_request, nth) => {
       if (nth === 4) taken.push((await team.tasks.claim({ channel: 'gated' }))?.task.text ?? null)
       return null
     }
-    const gated = await createTasksInChunks(team, 'gated', plan.map((task) => ({ ...task, needs: [gate!.task.id] })))
+    const gated = await createTasksInChunks(team, 'gated', plan.map((task) => ({ ...task, needs: [gate.id] })))
     expect(taken).toEqual(['step 0', null])
     expect(gated.every((root) => root.task?.state === 'waiting')).toBe(true)
-    await gate!.complete('made')
+    await (await team.tasks.claim(gate.id)).complete('made')
     expect((await team.tasks.claim({ channel: 'gated' }))?.task.text).toBe('step 0')
   })
 })

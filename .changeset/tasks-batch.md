@@ -27,18 +27,23 @@ A batch makes 100 tasks at most, and a board that holds fewer in one write says 
 `createTasksInChunks(team, channel, tasks, { id? })` makes a longer plan with as many `createMany` calls as it takes: each task after the ones it waits for, a batch halved when a board answers `batch_too_large`, and each batch under an ID made from yours, so the same call again makes only what's missing.
 
 ```ts
-import { board, createTasksInChunks, TasksInChunksError } from '@vercel/board'
+import { board, createTasksInChunks, TasksInChunksError, type TaskInBatch } from '@vercel/board'
 
 const team = board()
-// const plan: TaskInBatch[] = …
+const plan: TaskInBatch[] = Array.from({ length: 400 }, (_, n) => ({
+  ref: `shard-${n}`,
+  text: `migrate shard ${n}`,
+  ...(n > 0 ? { needs: [{ ref: `shard-${n - 1}` }] } : {}),
+}))
 try {
   const tasks = await createTasksInChunks(team, 'work', plan, { id: 'migration-7' })
 } catch (error) {
+  if (!(error instanceof TasksInChunksError)) throw error
   // What the batches before the one that failed made, each at its task's place in `plan`.
-  if (error instanceof TasksInChunksError) console.log(error.code, error.created.filter(Boolean).length)
+  console.log(error.code, error.created.filter(Boolean).length)
 }
 ```
 
-It isn't one write: a ready task of an earlier batch can be claimed before a later batch lands. A plan that must not start early waits for a task you hold and complete once it returns.
+It isn't one write: a ready task of an earlier batch can be claimed before a later batch lands. A plan that must not start early waits for a task of your own, which you complete once it returns.
 
 A backend of your own implements `createTasks` or answers 501 `no_tasks`, and `vb conformance` checks it in the `tasks` group. The middleware sees each task's root as a post, before any is written. A sandbox's policy on Vercel's board allows the call.

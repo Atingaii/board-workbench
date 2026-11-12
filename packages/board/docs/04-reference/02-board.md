@@ -465,15 +465,23 @@ const [fix, review, ship] = await team.tasks.createMany(
   again.
 
 ```ts
-import { board, createTasksInChunks, TasksInChunksError } from '@vercel/board'
+import { board, createTasksInChunks, TasksInChunksError, type TaskInBatch } from '@vercel/board'
 
 const team = board()
 
-// const plan: TaskInBatch[] = …  // 400 tasks, say, that wait for each other by ref
+// 400 steps, each waiting for the one before it.
+const plan: TaskInBatch[] = Array.from({ length: 400 }, (_, n) => ({
+  ref: `shard-${n}`,
+  text: `migrate shard ${n}`,
+  ...(n > 0 ? { needs: [{ ref: `shard-${n - 1}` }] } : {}),
+}))
+
 try {
   const tasks = await createTasksInChunks(team, 'work', plan, { id: 'migration-7' })
+  console.log(tasks.length) // 400, in the order of plan
 } catch (error) {
-  if (error instanceof TasksInChunksError) console.log(error.code, error.created.filter(Boolean).length)
+  if (!(error instanceof TasksInChunksError)) throw error
+  console.log(error.code, error.created.filter(Boolean).length) // why it stopped, and how many were made
 }
 ```
 
@@ -499,24 +507,26 @@ tasks' roots in the order given.
   as it did: a plan that splits another way is other chunks.
 
 A plan that must not start before all of it is there waits for a task of your
-own. Nothing in `createTasksInChunks` does this: it's a task every task of
-the plan needs, which you hold and complete.
+own, in a channel no worker claims in. Nothing in `createTasksInChunks` does
+this: it's a task every task of the plan needs, which you complete once the
+plan is there.
 
 ```ts
-import { board, createTasksInChunks } from '@vercel/board'
+import { board, createTasksInChunks, type TaskInBatch } from '@vercel/board'
 
 const team = board()
 
-// A task only you hold: nothing that waits for it is ready until it completes.
-const { claim: gate } = await team.tasks.create('work', { text: 'migration-7 is being planned', claim: true })
-// const plan: TaskInBatch[] = …
-await createTasksInChunks(team, 'work', plan.map((task) => ({ ...task, needs: [...(task.needs ?? []), gate!.task.id] })), { id: 'migration-7' })
-await gate!.complete('planned') // now the plan's first tasks are ready
+const plan: TaskInBatch[] = Array.from({ length: 400 }, (_, n) => ({ text: `migrate shard ${n}` }))
+
+// A task where no worker claims: nothing that waits for it is ready until it completes.
+const { task: gate } = await team.tasks.create('plans', { text: 'migration-7 is being planned' })
+const gated = plan.map((task) => ({ ...task, needs: [...(task.needs ?? []), gate.id] }))
+await createTasksInChunks(team, 'work', gated, { id: 'migration-7' })
+await (await team.tasks.claim(gate.id)).complete('planned') // now the plan's tasks are ready
 ```
 
-A claim's lease can run out while a long plan lands: renew it, or ask for a
-longer one. If the plan fails, cancel the gate and what was made waits for
-good, or run it again.
+If the plan fails, run it again with the same `id`, or cancel the gate: what
+was made then waits for good.
 
 Vercel's board keeps tasks on its threads, and a claim there differs in what
 it gives:

@@ -3668,8 +3668,9 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   sends each under an ID made from the caller's. It isn't one write: a ready
   task of an earlier batch can be claimed before a later one lands, and a
   batch that fails stops it with what the batches before it made. A plan
-  that must not start early waits for a task its maker holds, and completes
-  when the plan is there: the caller composes that.
+  that must not start early waits for a task of its maker's, in a channel no
+  worker claims in, which its maker completes when the plan is there: the
+  caller composes that.
 - **A failed or canceled prerequisite never readies its dependents.** `vb
   tasks reopen <id>` retries a failed task in place, and its dependents keep
   waiting for it. One canceled after its dependents were made leaves them
