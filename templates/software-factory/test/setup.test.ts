@@ -208,9 +208,13 @@ test("a later page of the app's repos that fails costs what came after it, not t
   // What was read before the gap is named, in order, and nothing is concluded about the rest.
   assert.deepEqual([result.found.unmapped.length, result.found.unmapped.at(-1)], [199, "acme/repo-0199"]);
   assert.equal(result.found.waiting, null);
-  // A repo GitHub lists on two pages, as when one is added between two reads, is named once.
-  const twice = await setup(fake({ routes: { "https://api.github.com/installation/repositories": (init, url = "") => all(init, url.replace(/&page=\d+/, "&page=1")) } }).deps);
+  // A repo GitHub lists on two pages, as when one is added between two reads, is named once, and
+  // counted once: 150 repos whose second page repeats the first's are 100 read, so not all of them.
+  const repeats = pages(150);
+  const twice = await setup(fake({ routes: { "https://api.github.com/installation/repositories": (init, url = "") => repeats(init, url.replace(/&page=\d+/, "&page=1")) } }).deps);
   assert.equal(twice.open ? null : twice.found.unmapped.length, 99);
+  assert.equal(twice.open ? undefined : twice.found.waiting, null);
+  assert.ok(!JSON.stringify(twice.open ? [] : twice.steps).includes("with the app"), "the step counts no repos it didn't read");
   // The first page failing is still the step's to say.
   const none = await setup(fake({ routes: { "https://api.github.com/installation/repositories": () => json({ message: "Server Error" }, 502) } }).deps);
   assert.deepEqual(none.open ? [] : none.steps[1]!.tasks.filter((task) => !task.done).map((task) => task.label), ["Couldn't list the app's repos"]);
