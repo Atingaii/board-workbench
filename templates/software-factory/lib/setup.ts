@@ -256,18 +256,26 @@ type Installed = { total_count: number; repositories: Repo[] };
 /** How many pages of an app's repos one check reads, 100 to a page. Past that, it knows the first thousand. */
 const REPO_PAGES = 10;
 
-/** The repos an app is on, read a page at a time until GitHub has no more to give. */
+/**
+ * The repos an app is on. The first page says how many there are, and the rest are read together.
+ * A later page that fails costs only what came after it: the first page is all a small factory
+ * needs, and with fewer repos than GitHub counted, the checks know they didn't read them all.
+ */
 async function installed(api: (path: string) => Promise<Response>): Promise<Installed> {
-  const all: Installed = { total_count: 0, repositories: [] };
-  for (let page = 1; page <= REPO_PAGES; page++) {
-    const response = await api(`/installation/repositories?per_page=100&page=${page}`);
+  const page = async (number: number) => {
+    const response = await api(`/installation/repositories?per_page=100&page=${number}`);
     if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
-    const { total_count, repositories } = (await response.json()) as Installed;
-    all.total_count = total_count;
-    all.repositories.push(...repositories);
-    if (repositories.length < 100 || all.repositories.length >= total_count) break;
+    return (await response.json()) as Installed;
+  };
+  const first = await page(1);
+  const pages = Math.min(Math.ceil(first.total_count / 100), REPO_PAGES);
+  const rest = await Promise.allSettled(Array.from({ length: Math.max(pages - 1, 0) }, (_, i) => page(i + 2)));
+  const repositories = [...first.repositories];
+  for (const read of rest) {
+    if (read.status === "rejected") break;
+    repositories.push(...read.value.repositories);
   }
-  return all;
+  return { total_count: first.total_count, repositories };
 }
 
 /** The connector, the repos its app is on, and among them this factory's own, which the agent changes to improve itself. */
@@ -313,7 +321,7 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
   // shows them to whoever can open the deployment, and the checks get here only once that's the team.
   const mapped = deps.synced.repoChannels;
   const unlisted = repositories.filter((repo) => !(repo.full_name in mapped));
-  found.unmapped = unlisted.map((repo) => repo.full_name).sort((a, b) => a.localeCompare(b));
+  found.unmapped = [...new Set(unlisted.map((repo) => repo.full_name))].sort((a, b) => a.localeCompare(b));
   const off = total_count > repositories.length ? [] : unlisted;
   found.waiting = total_count > repositories.length ? null : off.length;
   const several = off.length > 1;

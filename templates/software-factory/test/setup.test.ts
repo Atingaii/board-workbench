@@ -179,19 +179,41 @@ test("the checks name the repos with the app that come into no channel, in order
 test("the app's repos are read past GitHub's first page, a hundred at a time, and no further than ten pages", async () => {
   const some = fake({ routes: { "https://api.github.com/installation/repositories": pages(150) } });
   const read = await setup(some.deps);
-  assert.deepEqual(repoPages(some.requests), ["1", "2"]);
+  assert.deepEqual(repoPages(some.requests).sort(), ["1", "2"]);
   assert.equal(read.open ? null : read.found.waiting, 149);
   assert.equal(read.open ? null : read.found.unmapped.at(-1), "acme/repo-0149");
   // A full last page isn't followed by an empty one.
   const exact = fake({ routes: { "https://api.github.com/installation/repositories": pages(200) } });
   await setup(exact.deps);
-  assert.deepEqual(repoPages(exact.requests), ["1", "2"]);
+  assert.deepEqual(repoPages(exact.requests).sort(), ["1", "2"]);
   // More than it reads: it names what it read, and doesn't say how many are left out.
   const many = fake({ routes: { "https://api.github.com/installation/repositories": pages(1500) } });
   const capped = await setup(many.deps);
   assert.equal(repoPages(many.requests).length, 10);
   assert.equal(capped.open ? null : capped.found.waiting, null);
   assert.equal(capped.open ? null : capped.found.unmapped.length, 999);
+});
+
+test("a later page of the app's repos that fails costs what came after it, not the step", async () => {
+  // 350 repos, and GitHub fails the third page of four.
+  const all = pages(350);
+  const { deps } = fake({
+    routes: { "https://api.github.com/installation/repositories": (init, url = "") => (new URL(url).searchParams.get("page") === "3" ? json({ message: "Server Error" }, 502) : all(init, url)) },
+  });
+  const result = await setup(deps);
+  assert.equal(result.open, false);
+  if (result.open) return;
+  // The step stands on the first page, as it did when that was all it read.
+  assert.equal(isDone(result.steps[1]!), true);
+  // What was read before the gap is named, in order, and nothing is concluded about the rest.
+  assert.deepEqual([result.found.unmapped.length, result.found.unmapped.at(-1)], [199, "acme/repo-0199"]);
+  assert.equal(result.found.waiting, null);
+  // A repo GitHub lists on two pages, as when one is added between two reads, is named once.
+  const twice = await setup(fake({ routes: { "https://api.github.com/installation/repositories": (init, url = "") => all(init, url.replace(/&page=\d+/, "&page=1")) } }).deps);
+  assert.equal(twice.open ? null : twice.found.unmapped.length, 99);
+  // The first page failing is still the step's to say.
+  const none = await setup(fake({ routes: { "https://api.github.com/installation/repositories": () => json({ message: "Server Error" }, 502) } }).deps);
+  assert.deepEqual(none.open ? [] : none.steps[1]!.tasks.filter((task) => !task.done).map((task) => task.label), ["Couldn't list the app's repos"]);
 });
 
 test("the checks find where the GitHub app is added to more repos, by the app's own name, and nowhere when GitHub doesn't say it", async () => {
