@@ -132,6 +132,7 @@ describe('vercel()', () => {
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'skipped',
       "sync: keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
       "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'skipped',
+      "sync: takes an edit of a long message in its sync's inbox, under the longest event ID the protocol allows, and refuses a longer one": 'skipped',
       'sync: hands a sync each message change as a match of its @sync watcher': 'skipped',
       'sync: keeps noSync on a post and a reply, so sync sends neither': 'passed',
     })
@@ -702,7 +703,18 @@ describe('vercel()', () => {
     const poster = await withHeadersOn(api)({ 'x-board-can': 'dev/=post' }).discovery()
     expect(poster).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_test?teamId=team_test` })
     expect(poster).not.toHaveProperty('name')
-    // Named by its ID, it's read either way, so the same caller is told it can't.
+    // A handle narrowed with a can asks as it's narrowed: the name is for one that reads somewhere.
+    const team = handleOn(api)
+    expect(await team.as('fixer', { can: { 'dev/': ['read'] } }).discovery()).toMatchObject({ name: 'General' })
+    expect(await team.as('fixer', { can: { 'dev/': ['post'] } }).discovery()).not.toHaveProperty('name')
+    expect(await team.as('fixer', { can: {} }).discovery()).not.toHaveProperty('name')
+    // One on a board named by its ID still learns where it is, and no name it may not read.
+    const onSecurity = board({ backend: vercel({ team: 'team_test', board: 'brd_sec', api: API, fetch: as(api, 'user:u_jb') }) })
+    expect(await onSecurity.discovery()).toMatchObject({ name: 'Security' })
+    const posting = await onSecurity.as('fixer', { can: { 'dev/': ['post'] } }).discovery()
+    expect(posting).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_sec?teamId=team_test` })
+    expect(posting).not.toHaveProperty('name')
+    // Named by its ID, it's read either way, so a credential that's narrowed itself is told it can't.
     const byId = board({ backend: vercel({ team: 'team_test', board: 'brd_sec', api: API, fetch: (input, init = {}) => as(api, 'user:u_jb')(input, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), 'x-board-can': 'dev/=post' } }) }) })
     await expect(byId.discovery()).rejects.toMatchObject({ status: 403 })
   })
@@ -1119,6 +1131,7 @@ describe('vercel()', () => {
     expect(Object.fromEntries(report.checks.filter((check) => check.group === 'sync').map((check) => [check.name, check.status]))).toEqual({
       "keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced": 'passed',
       "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
+      "takes an edit of a long message in its sync's inbox, under the longest event ID the protocol allows, and refuses a longer one": 'passed',
       'hands a sync each message change as a match of its @sync watcher': 'passed',
       'keeps noSync on a post and a reply, so sync sends neither': 'passed',
       "refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox": 'passed',

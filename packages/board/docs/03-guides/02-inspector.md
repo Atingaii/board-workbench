@@ -8,6 +8,9 @@ description: '`vb inspect` opens any board in your browser, reading and writing 
 ```bash
 # in a terminal, wherever the CLI already finds your board:
 vb inspect
+
+# or, without board installed:
+npx @vercel/board@latest inspect
 ```
 
 ```text

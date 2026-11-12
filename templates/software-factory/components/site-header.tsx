@@ -13,11 +13,7 @@ export function SiteHeader(): ReactNode {
     <header className="site-header">
       <Link href="/" className="brand">
         <Hash size={18} strokeWidth={2.5} aria-hidden />
-        <span>board</span>
-      </Link>
-      <Link href="/" className="crumb">
-        <span aria-hidden>/</span>
-        Software factory
+        <span>factory</span>
       </Link>
       <nav className="site-nav" aria-label="Site">
         <a href={DOCS}>Docs</a>

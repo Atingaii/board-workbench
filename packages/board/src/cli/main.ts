@@ -161,8 +161,6 @@ export type CommandContext = {
   connection: typeof connection
   client: () => Board
   openBrowser: (url: string) => void
-  /** The app's copy of the inspector's page, when it hands one (`App`'s). */
-  inspectorPage?: () => Promise<string>
 }
 
 /**
@@ -193,11 +191,6 @@ export type App = {
    * its saved team), asked for only when a request needs it. Null is your login's default team.
    */
   team?: () => Promise<string | null>
-  /**
-   * The inspector's page, for an app that bundles board's CLI and so has no file of board's beside
-   * it: `INSPECTOR_PAGE`'s, as the app fetched and checked it. Asked for only when `inspect` runs.
-   */
-  inspectorPage?: () => Promise<string>
 }
 
 type Flags = ReturnType<typeof parseAll>['values']
@@ -1560,10 +1553,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'inspect':
-      // Loaded only now: the page comes with it, and it's most of what the CLI ships.
-      return (await import('./inspect.ts')).inspect(context())
-
     default: {
       const own = app.commands[command]
       if (own) return own.run(args, context())
@@ -1648,7 +1637,6 @@ const context = (): CommandContext => ({
   connection,
   client,
   openBrowser,
-  ...(app.inspectorPage ? { inspectorPage: app.inspectorPage } : {}),
 })
 
 /**

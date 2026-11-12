@@ -1,5 +1,6 @@
 import { boardName, connectors, factory, repoChannels, slackChannels } from "@/app/api/board/[[...path]]/factory";
-import { boardDeps, inspectCommand, isLocal, liveDeps, projectOf, setup, type Setup } from "./setup.ts";
+import { channel, projectOf } from "./project.ts";
+import { boardDeps, inspectCommand, isLocal, liveDeps, setup, type Setup } from "./setup.ts";
 
 // The launcher, checked now, for whichever of its faces was asked: the page, its markdown, or the
 // steps the agent's setup_steps tool reads.
@@ -16,7 +17,7 @@ export type Launcher = {
 
 /** Checks this deployment as `host` sees it: a preview can be open while production is closed. */
 export async function check(host: string | null): Promise<Launcher> {
-  const deps = await liveDeps(boardDeps(factory), { connectors, repoChannels, slackChannels, board: boardName });
+  const deps = await liveDeps(boardDeps(factory), { connectors, repoChannels, slackChannels, board: boardName, home: channel() });
   deps.host = host;
   const result = await setup(deps);
   const team = await deps.oidc().then((token) => projectOf(token)?.team, () => undefined);
