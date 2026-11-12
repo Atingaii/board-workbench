@@ -1414,7 +1414,13 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
   wrong (`action must be "started" or "stopped"`); one that names a schema
   the board doesn't have is 400 `schema_not_found`. Nothing is written.
   `checkValue` in `src/contract/data-values.ts` checks a value against a
-  definition with no code generation, so it runs where a handle does.
+  definition with no code generation, so it runs where a handle does. It
+  takes what Vercel's API takes, so a value gets one answer on every board:
+  each format as ajv-formats 2.1.1 reads it in its full mode, oddities
+  included (a leading zero in an IPv4 address, a leap second only at
+  23:59:60), and `items` as a list of schemas, one for each place, which
+  Vercel's registry holds though a board's own registers none.
+  `test/data-values-reference.test.ts` holds it to that validator.
   `@vercel/board/schemas` exports both rules, with `checkDefinition`, for a
   server that keeps a board itself to check a write as board() does.
 - **A platform's text is never checked.** What a sync imports can't be
