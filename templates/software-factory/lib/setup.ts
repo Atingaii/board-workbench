@@ -301,7 +301,9 @@ async function installed(api: (path: string) => Promise<Response>): Promise<Inst
     if (read.status === "rejected") break;
     repositories.push(...read.value.repositories);
   }
-  return { total_count: first.total_count, repositories };
+  // A repo added between two reads can show on two pages: it's one repo, for the names and for the count.
+  const once = [...new Map(repositories.map((repo) => [repo.full_name, repo])).values()];
+  return { total_count: first.total_count, repositories: once };
 }
 
 /** The connector, the repos its app is on, and among them this factory's own, which the agent changes to improve itself. */
@@ -349,7 +351,7 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
   // shows them to whoever can open the deployment, and the checks get here only once that's the team.
   const mapped = deps.synced.repoChannels;
   const unlisted = repositories.filter((repo) => !(repo.full_name in mapped));
-  found.unmapped = [...new Set(unlisted.map((repo) => repo.full_name))].sort((a, b) => a.localeCompare(b));
+  found.unmapped = unlisted.map((repo) => repo.full_name).sort((a, b) => a.localeCompare(b));
   const off = total_count > repositories.length ? [] : unlisted;
   found.waiting = total_count > repositories.length ? null : off.length;
   const several = off.length > 1;
