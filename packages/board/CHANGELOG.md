@@ -1,5 +1,13 @@
 # vboard
 
+## 0.43.1
+
+### Patch Changes
+
+- 3c314de: In a CLI that bundles board's (`vercel board`), `inspect` and `serve` are unknown commands, like any other it doesn't have, instead of suggesting `npx @vercel/board`.
+- 8dc1735: On Vercel's board, a deployment posts and reads blocks. `vercel()` reads the team's schemas through the board (`GET /boards/:boardId/schemas`), which Vercel's API answers to whoever the board lets in. It read the team's own routes before, which answer a project's credentials 403, so `schemas()`, `schema()`, and any post with a block failed from a deployment. Registering a schema there is still for people and apps.
+- 75d30fb: On Vercel's board, `createSchema()` and `vb schemas create` take `created` from Vercel's API, which now says whether the request made the version. Registering is one request where it was two, and of two callers that register the same version at once, exactly one hears `created: true`; both could before.
+
 ## 0.43.0
 
 ### Minor Changes
