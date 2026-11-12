@@ -9,8 +9,7 @@ import { caller, personToken, testBoard, BOARD_URL } from './harness.ts'
 // With `stall.on`, its board never answers, whatever the request's signal says, and `stall.seen` keeps those requests.
 // With `stall.bodies`, a file's download answers, and its bytes never come; with `stall.breaks`, its connection drops after one byte.
 type Stall = { on: boolean; seen: Request[]; bodies?: boolean; breaks?: boolean }
-async function handle(stall: Stall = { on: false, seen: [] }) {
-  const served = testBoard()
+async function handle(stall: Stall = { on: false, seen: [] }, served = testBoard()) {
   const token = await personToken('u_ada', BOARD_URL)
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
@@ -52,6 +51,15 @@ describe('vb()', () => {
     expect(await vb(team, ['rm', first], { refuse: ['delete'] })).toEqual({ code: 2, stdout: '', stderr: "error: delete isn't available here.\n" })
     // However its flags are grouped: -a and -n with its value, before the command.
     expect(await vb(team, ['-an', '1', 'delete', first], { refuse: ['delete'] })).toEqual({ code: 2, stdout: '', stderr: "error: delete isn't available here.\n" })
+    expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(false)
+    // Or an option one command reads its own way is put first: --claim takes a value until `tasks` is found
+    // and none after, so read that way `delete` would be the command. What was found is what runs, or nothing does.
+    const moved = await vb(team, ['--claim', 'delete', 'tasks', first], { refuse: ['delete'] })
+    expect(moved).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Put --claim after tasks\./) })
+    const posted = await vb(team, ['--claim', 'post', 'tasks', 'made it through'], { refuse: ['post'] })
+    expect(posted).toMatchObject({ code: 2, stdout: '' })
+    expect(JSON.parse((await vb(team, ['read', 'dev', '--text', 'made it through', '--json'])).stdout).threads).toEqual([])
+    expect((await vb(team, ['channels', '--json'])).stdout).not.toContain('"tasks"')
     expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(false)
     expect((await vb(team, ['rm', first])).code).toBe(0)
     expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(true)
@@ -189,5 +197,66 @@ describe('vb()', () => {
     const notes = { readFile: async (path: string) => (path === '/work/note.md' ? new TextEncoder().encode('from the sandbox\n') : null) }
     const written = await vb(team, ['post', 'dev', '--text-file', '/work/note.md', '--no-sync'], notes)
     expect(JSON.parse((await vb(team, ['read', written.stdout.trim(), '--json'])).stdout).message.text).toBe('from the sandbox')
+  })
+
+  it('works a task over several calls on one handle, which keeps its claim, and runs no command', async () => {
+    const served = testBoard()
+    const stall: Stall = { on: false, seen: [] }
+    const team = await handle(stall, served)
+    const id = (await vb(team, ['tasks', 'create', 'work', 'fix CVE-123 in acme/web', '--label', 'step=fix', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'work'])).toEqual({ code: 0, stdout: `#${id}  ready      fix CVE-123 in acme/web         step=fix\n`, stderr: '' })
+    const claimed = await vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=fix', '--json'])
+    expect(claimed).toMatchObject({ code: 0, stderr: '' })
+    // The claim, for the program that called: its token stays with the handle that claimed.
+    const { claim, task } = JSON.parse(claimed.stdout) as { claim: Record<string, unknown>; task: { id: string } }
+    expect(task.id).toBe(id)
+    expect(Object.keys(claim).sort()).toEqual(['epoch', 'until'])
+    // Another handle on the same board, the same person's even, holds none.
+    const other = await handle(undefined, served)
+    expect(await vb(other, ['tasks', 'complete', id, 'not mine'])).toEqual({ code: 1, stdout: '', stderr: `error: You hold no claim on task #${id} as yourself.\n\n  Claim it:\n    vb tasks claim ${id}\n` })
+    expect(await vb(team, ['tasks', 'renew', id, '--json'])).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'complete', id, 'fixed in a1b2c3'])).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    expect(JSON.parse((await vb(team, ['read', id, '--json'])).stdout).message.task).toMatchObject({ state: 'completed', result: 'fixed in a1b2c3' })
+    // Settled, the handle holds it no longer.
+    expect((await vb(team, ['tasks', 'release', id])).stderr).toMatch(/^error: You hold no claim on task/)
+
+    // A claim is its profile's on a handle too: taken with --as, it isn't the handle's own.
+    const reviewed = (await vb(team, ['tasks', 'create', 'work', 'review the fix', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'claim', reviewed, '--as', 'reviewer'])).toMatchObject({ code: 0, stderr: '' })
+    expect((await vb(team, ['tasks', 'complete', reviewed])).stderr).toBe(`error: You hold no claim on task #${reviewed} as yourself.\n\n  Claim it:\n    vb tasks claim ${reviewed}\n`)
+    expect(await vb(team, ['tasks', 'complete', reviewed, 'reviewed', '--as', 'Reviewer'])).toEqual({ code: 0, stdout: `completed ${reviewed}\n`, stderr: '' })
+
+    // It runs no command on the machine it's called from, and a wait holds every later call: only with a signal.
+    const next = (await vb(team, ['tasks', 'create', 'work', 'run the tests', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'run', next, '--', 'true'])).toEqual({ code: 2, stdout: '', stderr: "error: tasks run isn't available in-process: it runs a command on this machine.\n" })
+    expect(JSON.parse((await vb(team, ['read', next, '--json'])).stdout).message.task.state).toBe('ready')
+    expect(await vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=never', '--wait', '1m'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/pass a signal/) })
+    const controller = new AbortController()
+    const waiting = vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=never', '--wait', '1m'], { signal: controller.signal })
+    controller.abort()
+    expect(await waiting).toEqual({ code: 0, stdout: '', stderr: '' })
+
+    // A claim taken by a call with a signal is the handle's: later calls renew and settle it, with a signal or without.
+    const bounded = () => ({ signal: AbortSignal.timeout(30_000) })
+    expect(await vb(team, ['tasks', 'claim', next], bounded())).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'renew', next], bounded())).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'release', next])).toEqual({ code: 0, stdout: `released ${next}\n`, stderr: '' })
+
+    // Any other task command its signal stops says so, and one that writes says it may have landed: a list doesn't.
+    stall.on = true
+    const stoppedWhile = async (argv: string[]) => {
+      const stopping = new AbortController()
+      const running = vb(team, [...argv, '--json'], { signal: stopping.signal })
+      setTimeout(() => stopping.abort(), 20)
+      const ran = await running
+      return { code: ran.code, ...(JSON.parse(ran.stderr) as { reason: string; message: string; hint?: string }) }
+    }
+    expect(await stoppedWhile(['tasks', 'claim', next])).toMatchObject({ code: 130, reason: 'canceled', message: `Stopped before it could claim task #${next}.`, hint: expect.stringMatching(/may have happened/) })
+    expect(await stoppedWhile(['tasks', 'unblock', next])).toMatchObject({ code: 130, reason: 'canceled', hint: expect.stringMatching(/may have happened/) })
+    const listing = await stoppedWhile(['tasks', 'work'])
+    expect(listing).toMatchObject({ code: 130, reason: 'canceled', message: 'Stopped before it could list tasks in work.' })
+    expect(listing.hint).toBeUndefined()
+    stall.on = false
+    expect(JSON.parse((await vb(team, ['read', next, '--json'])).stdout).message.task.state).toBe('ready')
   })
 })

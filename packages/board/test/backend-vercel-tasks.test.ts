@@ -4,6 +4,7 @@ import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
 import type { Caller } from '../src/server/backend.ts'
 import { block } from '../src/contract/blocks.ts'
+import { vb } from '../src/cli/embedded.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
 // Tasks on Vercel's board: vercel()'s task methods on the fake API's task routes, through the handle.
@@ -1592,5 +1593,54 @@ describe("vercel()'s tasks", () => {
     expect((await wide.tasks.list({ channel: 'many/c7' })).tasks.map((task) => task.message.text)).toEqual(['task 7'])
     // Whoever reads the whole board lists as many as there are.
     expect((await pong.tasks.list({ channel: 'many/', limit: 100 })).tasks).toHaveLength(51)
+  })
+})
+
+describe("vb's tasks on Vercel's board", () => {
+  it("says a claim of the next task names more channels and owners than the board looks through, as the board's error, with what narrows it", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    for (let n = 0; n < 7; n++) await julian.post(`wide/c${n}`, 'x')
+    await julian.tasks.create('wide/c3', { text: 'fix the build' })
+    await julian.tasks.create('wide/c3', { text: 'review the fix' })
+    const from = (owners: number) => Array.from({ length: owners }, (_, n) => ['--from', `vercel:user:u_owner${n}`]).flat()
+    // 7 channels and 33 owners, its own among them, are 231 places: said by what the command was doing, the board's words under it.
+    const wide = await vb(julian, ['tasks', 'claim', '--ready', 'wide/', ...from(32)])
+    expect(wide).toEqual({
+      code: 1,
+      stdout: '',
+      stderr: expect.stringMatching(/^error: Can't claim a task in wide\/\. That's too many channels and owners\.\n  [^\n]+\n\n  Name fewer owners with --from, or a smaller subtree\n$/),
+    })
+    // For a program: the board's code to branch on, and its own answer in data.
+    expect(JSON.parse((await vb(julian, ['tasks', 'claim', '--ready', 'wide/', ...from(32), '--json'])).stderr)).toEqual({
+      status: 'error',
+      reason: 'claim_too_wide',
+      message: "Can't claim a task in wide/. That's too many channels and owners.",
+      hint: 'Name fewer owners with --from, or a smaller subtree',
+      data: { error: { code: 'claim_too_wide', message: expect.any(String), status: 400 } },
+    })
+    // Each way out it names claims: fewer owners, then less of the tree.
+    expect(await vb(julian, ['tasks', 'claim', '--ready', 'wide/', ...from(27)])).toMatchObject({ code: 0, stdout: expect.stringMatching(/fix the build\n$/), stderr: '' })
+    expect(await vb(julian, ['tasks', 'claim', '--ready', 'wide/c3', ...from(32)])).toMatchObject({ code: 0, stdout: expect.stringMatching(/review the fix\n$/), stderr: '' })
+  })
+
+  it("says a subtree has more channels than the board reads for a claim of the next task or a list, with what narrows it", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    for (let n = 0; n < 51; n++) await julian.tasks.create(`many/c${n}`, { text: `task ${n}` })
+    const refused = (doing: string) => ({
+      code: 1,
+      stdout: '',
+      stderr: expect.stringMatching(new RegExp(`^error: Can't ${doing}\\. That's too many channels\\.\\n  [^\\n]+\\n\\n  Name a channel, or a smaller subtree\\n$`)),
+    })
+    // More than 50 channels it may claim in under the prefix.
+    expect(await vb(julian, ['tasks', 'claim', '--ready', 'many/'])).toEqual(refused('claim a task in many/'))
+    expect(await vb(julian, ['tasks', 'claim', '--ready', 'many/c7'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/task 7\n$/) })
+    // A caller that doesn't read the whole board lists 50 channels at most, on the board or under a prefix.
+    const narrowed = handleOn(api, 'user:u_jb', { can: 'many/=read' })
+    expect(await vb(narrowed, ['tasks', 'many/'])).toEqual(refused('list tasks in many/'))
+    expect(await vb(narrowed, ['tasks'])).toEqual(refused('list tasks'))
+    expect(JSON.parse((await vb(narrowed, ['tasks', '--json'])).stderr)).toMatchObject({ reason: 'channel_tree_too_large', hint: 'Name a channel, or a smaller subtree', data: { error: { code: 'channel_tree_too_large', status: 400 } } })
+    expect(await vb(narrowed, ['tasks', 'many/c8'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/ready +task 8\n$/), stderr: '' })
   })
 })
