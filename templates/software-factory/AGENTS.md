@@ -28,9 +28,10 @@ pnpm build
 - **Each setting lives where it's used.** Which channel each repo's PRs and issues come into, and
   which Slack channels mirror which board channels, are in `app/api/board/[[...path]]/channels.ts`
   (this repo's own go to `project-<name>/rsi`, which Slack's `#<project>-rsi` mirrors: where the
-  factory updates itself; each other repo gets a channel of its own beside it, added by the
-  onboard-repo skill). The board's sync, its connectors, and its watcher are in `factory.ts` beside
-  it. The agent's model, instructions, sandbox, tools, and skills are in `agent/`.
+  factory updates itself; each other repo gets a channel of its own beside it and a Slack
+  channel that mirrors it, both added by the onboard-repo skill). The board's sync, its
+  connectors, and its watcher are in `factory.ts` beside it. The agent's model, instructions,
+  sandbox, tools, and skills are in `agent/`.
 - **What a team keeps one of per name is named for the Vercel project** (`lib/project.ts`): the
   Connect connectors (`github/<project>`, `slack/<project>`), that Slack channel, and its channels
   on the team's board, all under `project-<name>`. A team's second factory gets its own, with

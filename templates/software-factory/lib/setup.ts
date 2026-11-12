@@ -329,8 +329,14 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
     return first !== -1 && !lines[first]!.startsWith("}") ? first : -1;
   };
   const INVITE = (channels: string[]) => `Invite the app to ${named(...channels)}`;
+  // What the channels are for, in a line: the factory's own, or the ones a repo it works on shows in.
+  const why = (channels: string[]) => {
+    const mirrored = [...new Set(channels.map((name) => deps.synced.slackChannels[name]))];
+    if (mirrored.every((to) => to === `${deps.synced.home}/rsi`)) return "Where the factory updates itself.";
+    return mirrored.length === 1 ? `Where ${mirrored[0]} shows in Slack.` : "Where the factory's channels show in Slack.";
+  };
   const invite = (channels: string[], command?: string): Task =>
-    todo(INVITE(channels), { hint: "Where the factory updates itself.", ...sourceLink(deps, CHANNELS_FILE, "Change the channel", names), ...(command ? { commands: [command] } : {}) });
+    todo(INVITE(channels), { hint: why(channels), ...sourceLink(deps, CHANNELS_FILE, "Change the channel", names), ...(command ? { commands: [command] } : {}) });
   const token = await deps.connect(connector).catch((error: unknown) => error);
   if (typeof token !== "string") {
     if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("slack", [todo(CONNECT), invite(wanted)], true);
