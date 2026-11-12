@@ -155,13 +155,17 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
     }
   }
 
+  // Signed out on your machine: said once, here, whatever else works. The board can answer through
+  // your own login while Connect and AI Gateway still wait on the project's token.
+  if (signedOut) tasks.push(signIn());
+
   // The board is the team's, in Vercel's API. A team has one once someone on it has opened it.
   const OPEN_BOARD = "Open the team's board once";
   const access = await deps.access().catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
   const board = !(access instanceof Error);
   if (access instanceof Error) {
     const refused = ["board_not_granted", "no_board"].includes((access as { code?: string }).code ?? "");
-    if (signedOut) tasks.push(signIn(), todo(OPEN_BOARD));
+    if (signedOut) tasks.push(todo(OPEN_BOARD));
     else if (refused) tasks.push(todo(OPEN_BOARD, { commands: [inspectCommand(project?.team, deps.synced.board)] }));
     else tasks.push(todo("Couldn't reach the team's board", { hint: message(access) }));
   } else {

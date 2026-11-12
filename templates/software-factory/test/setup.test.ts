@@ -312,6 +312,22 @@ test("locally, nothing asks whether the deployment is protected, and signing in 
   assert.ok(!requests.some((url) => url.includes("icon.svg")));
 });
 
+test("locally, a board that answers through your own login still leaves signing in to do, said once", async () => {
+  // The directory is linked, so the board works as you, but its environment was never pulled.
+  const { deps } = fake({
+    env: { PORT: "3000" },
+    deps: {
+      oidc: async () => Promise.reject(new Error("no token")),
+      credits: async () => Promise.reject(new Error("no token")),
+      connect: async () => Promise.reject(new Error("The 'x-vercel-oidc-token' header is missing")),
+    },
+  });
+  const steps = await shown(deps);
+  assert.deepEqual(done(steps), { vercel: false, github: false, slack: false, try: true });
+  assert.deepEqual(Object.values(steps).flatMap(commands), ["vercel link", "vercel env pull"]);
+  assert.deepEqual(commands(steps.vercel!), ["vercel link", "vercel env pull"]);
+});
+
 test("AI Gateway without credits says where to add them", async () => {
   const { vercel } = await shown(fake({ deps: { credits: async () => 0 } }).deps);
   assert.deepEqual(labels(todo(vercel!)), ["Add AI Gateway credits"]);
