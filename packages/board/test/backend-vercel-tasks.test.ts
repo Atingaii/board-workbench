@@ -3,6 +3,7 @@ import { board } from '../src/server/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
 import type { Caller } from '../src/server/backend.ts'
+import { block } from '../src/contract/blocks.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
 // Tasks on Vercel's board: vercel()'s task methods on the fake API's task routes, through the handle.
@@ -224,6 +225,30 @@ describe("vercel()'s tasks", () => {
     // The API's list answers each task with its root: only a latest reply is read apart.
     expect(julian.sent.filter((request) => request.path.startsWith('/messages/')).map((request) => request.path)).toEqual([`/messages/${reply.id}`])
     expect((await julian.messages({ channel: 'work', label: { 'board.task': 'waiting' } })).messages.map((message) => message.id)).toEqual([review.id])
+  })
+
+  it("has a new task's blocks checked before Vercel's API is asked, which checks them itself: a task refused for one makes no channel", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const sha = 'a'.repeat(40)
+    const wrong = `revert this\n\n${block('git-commit@1', { sha })}`
+    // board() refuses a block that doesn't fit its schema, as a post's: the API is asked for the schema, and to write nothing.
+    await expect(julian.tasks.create('reverts', { text: wrong })).rejects.toMatchObject({ status: 400, code: 'invalid_block' })
+    expect(julian.sent.filter((request) => request.method !== 'GET')).toEqual([])
+    // A caller of the API itself is refused the same, as a post is, before the channel it names is made.
+    const ask = async (path: string, body: Record<string, unknown>) => {
+      const response = await as(api, 'user:u_jb')(`${API}${path}?teamId=team_test`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operationId: crypto.randomUUID(), ...body }) })
+      return [response.status, ((await response.json()) as { error?: { code: string } }).error?.code ?? null]
+    }
+    expect(await ask('/v2/messageboard/boards/brd_test/tasks', { channel: 'reverts', text: wrong })).toEqual([400, 'invalid_block'])
+    expect(await ask('/v1/messageboard/boards/brd_test/threads', { channel: 'reverts', text: wrong })).toEqual([400, 'invalid_block'])
+    expect((await julian.channels()).map((channel) => channel.path)).not.toContain('reverts')
+    expect((await julian.tasks.list({ state: 'all' })).tasks).toEqual([])
+    // One that fits is a task, by either way in, and its root shows the block.
+    const fits = `revert this\n\n${block('git-commit@1', { sha, title: 'ship the index' })}`
+    expect(await ask('/v2/messageboard/boards/brd_test/tasks', { channel: 'reverts', text: fits })).toEqual([200, null])
+    expect((await julian.tasks.create('reverts', { text: fits })).task).toMatchObject({ task: { state: 'ready' }, blocks: [{ schema: 'git-commit', version: 1, data: { sha, title: 'ship the index' } }] })
+    expect((await julian.channels()).map((channel) => channel.path)).toContain('reverts')
   })
 
   it("sends a new task's files with it, as a post's go, and shows them on its root", async () => {

@@ -6,6 +6,8 @@ import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-gr
 import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
 import { parseProfileHeader } from '../src/contract/profile-header.ts'
 import { compileAccess, parseCan } from '../src/server/access.ts'
+import { findBlocks } from '../src/contract/blocks.ts'
+import { checkValue } from '../src/contract/data-values.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -267,6 +269,8 @@ type Shared = {
   projectIdHandles: boolean
   unscopedSync: boolean
   tasks: boolean
+  /** A schema the team has, by its ID: a built-in, or one it registered. */
+  schemaOf: (id: string) => Record<string, unknown> | undefined
 }
 
 const STORAGE = 'http://storage.test/'
@@ -551,6 +555,12 @@ function fakeBoard(shared: Shared, boardId: string) {
     const known = body.channel !== undefined ? channels.find((c) => c.name === body.channel) : channelAt(body.channelId)
     if (known) tokenMay(actor, 'post', known.id)
     if (Object.keys(body.labels ?? {}).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
+    // A first message whose embedded block doesn't match the schema it names starts no thread, and makes no channel.
+    for (const found of typeof body.text === 'string' && body.text.includes('json#') ? findBlocks(body.text) : []) {
+      const schema = found.problem === undefined ? shared.schemaOf(found.id) : undefined
+      const problem = schema ? checkValue(schema, found.data) : null
+      if (problem !== null) throw new Refused(400, 'invalid_block', `The ${found.id} block doesn't match its schema: ${problem}`)
+    }
     const checked = check(known?.name ?? String(body.channel))
     const channel = known ?? makeChannel(body.channel)
     const createdAt = now()
@@ -2056,6 +2066,7 @@ export function fakeMessageboard(
     projectIdHandles: options.projectIdHandles ?? false,
     unscopedSync: options.unscopedSync ?? false,
     tasks: options.tasks ?? true,
+    schemaOf: (id) => (BUILT_IN_SCHEMAS.find((row) => row.id === id) ?? schemas.kept.get(id))?.schema,
   }
 
   const schemas = fakeSchemas({ now, roles })
