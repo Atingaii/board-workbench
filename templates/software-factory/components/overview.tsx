@@ -1,10 +1,12 @@
 import type { ReactNode } from "react";
 import { FIRST_TASK_PATH } from "@/lib/first-task";
 import type { Running } from "@/lib/launcher";
-import { ago, firstTaskLine, onboarding } from "@/lib/markdown";
+import { ago, firstTaskLine, shows, waitingLine } from "@/lib/markdown";
+import { ONBOARD_PATH } from "@/lib/onboard";
 import { duration } from "@/lib/overview";
 import { Action } from "./action";
 import { Copy } from "./copy";
+import { Onboard } from "./onboard";
 
 /** A command, or a line to send, on one line beside its copy button. */
 export function Command({ text }: { text: string }): ReactNode {
@@ -62,15 +64,24 @@ export function Overview({ running: { overview, repos, ask, first }, now }: { ru
       <section className="panel">
         <h2>Repos</h2>
         <ul className="rows">
-          {repos.map(({ repo, channel }) => (
-            <li key={repo}>
-              {repo}
-              <span>{channel}</span>
+          {repos.map((repo) => (
+            <li key={repo.repo}>
+              {repo.repo}
+              <span>{shows(repo)}</span>
             </li>
           ))}
         </ul>
-        <p className="note">{onboarding(ask)}</p>
-        <Command text="onboard <owner>/<repo>" />
+        <Onboard path={ONBOARD_PATH} where={ask.slack ?? ask.channel} />
+        {ask.install ? (
+          <p className="note">
+            {waitingLine(ask)}{" "}
+            <a href={ask.install} target="_blank" rel="noreferrer">
+              Add the app to more repos
+            </a>
+          </p>
+        ) : waitingLine(ask) ? (
+          <p className="note">{waitingLine(ask)}</p>
+        ) : null}
       </section>
     </>
   );

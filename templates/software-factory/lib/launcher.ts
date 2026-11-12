@@ -4,7 +4,7 @@ import { ownRepo } from "./github.ts";
 import { joinPrompt } from "./markdown.ts";
 import { overview, type Overview } from "./overview.ts";
 import { channel, projectOf } from "./project.ts";
-import { boardDeps, inspectCommand, isLocal, liveDeps, mirrorOf, progress, READ, setup, type Setup } from "./setup.ts";
+import { boardDeps, inspectCommand, isLocal, liveDeps, mirrorOf, progress, READ, reposOf, setup, type Listed, type Setup } from "./setup.ts";
 
 // The launcher, checked now, for whichever of its faces was asked: the page, its markdown, or the
 // steps the agent's setup_steps tool reads.
@@ -12,10 +12,14 @@ import { boardDeps, inspectCommand, isLocal, liveDeps, mirrorOf, progress, READ,
 /** What the launcher shows once the factory runs. */
 export type Running = {
   overview: Overview;
-  /** The repos it works on, each with its channel. */
-  repos: { repo: string; channel: string }[];
-  /** How to onboard another: where to ask, on the board and in Slack, and how many repos have the GitHub app and no channel (null when that couldn't be told). */
-  ask: { channel: string; slack: string | null; waiting: number | null };
+  /** The repos it works on, each with where it shows. */
+  repos: Listed[];
+  /**
+   * How to onboard another: where the factory is asked, on the board and in Slack, how many repos
+   * have the GitHub app and no channel (null when that couldn't be told), and where on GitHub the
+   * app is added to more (null when that couldn't be told).
+   */
+  ask: { channel: string; slack: string | null; waiting: number | null; install: string | null };
   /** What to paste to a coding agent on your machine to have it join. */
   join: string;
   /** Where its first task stands, while the README is still the template's. */
@@ -50,8 +54,8 @@ export async function check(host: string | null): Promise<Launcher> {
     const rsi = channel("rsi");
     running = {
       overview: overview(result.found.recent, pulls, result.found.me.principal, new Date(), READ),
-      repos: Object.entries(repoChannels).map(([repo, to]) => ({ repo, channel: to })),
-      ask: { channel: rsi, slack: mirrorOf(slackChannels, rsi), waiting: result.found.waiting },
+      repos: reposOf({ repoChannels, slackChannels }),
+      ask: { channel: rsi, slack: mirrorOf(slackChannels, rsi), waiting: result.found.waiting, install: result.found.install },
       join: joinPrompt({ origin, team, board: boardName, home, repo: ownRepo(deps.env) }),
       first: result.found.first,
     };
