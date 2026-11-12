@@ -16,10 +16,10 @@ export type Running = {
   repos: Listed[];
   /**
    * How to onboard another: where the factory is asked, on the board and in Slack, how many repos
-   * have the GitHub app and no channel (null when that couldn't be told), and where on GitHub the
-   * app is added to more (null when that couldn't be told).
+   * have the GitHub app and no channel (null when that couldn't be told), which ones, to suggest,
+   * and where on GitHub the app is added to more (null when that couldn't be told).
    */
-  ask: { channel: string; slack: string | null; waiting: number | null; install: string | null };
+  ask: { channel: string; slack: string | null; waiting: number | null; suggest: string[]; install: string | null };
   /** What to paste to a coding agent on your machine to have it join. */
   join: string;
   /** Where its first task stands, while the README is still the template's. */
@@ -55,7 +55,7 @@ export async function check(host: string | null): Promise<Launcher> {
     running = {
       overview: overview(result.found.recent, pulls, result.found.me.principal, new Date(), READ),
       repos: reposOf({ repoChannels, slackChannels }),
-      ask: { channel: rsi, slack: mirrorOf(slackChannels, rsi), waiting: result.found.waiting, install: result.found.install },
+      ask: { channel: rsi, slack: mirrorOf(slackChannels, rsi), waiting: result.found.waiting, suggest: result.found.unmapped, install: result.found.install },
       join: joinPrompt({ origin, team, board: boardName, home, repo: ownRepo(deps.env) }),
       first: result.found.first,
     };

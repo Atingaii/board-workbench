@@ -56,6 +56,7 @@ function activity({ overview: { week, lastReplyAt, pulls }, repos, ask, first }:
     ...repos.map(({ repo, channel, slack }) => `- ${repo} in \`${channel}\`${slack ? `, ${slack} in Slack` : ""}`),
     // What the page does with a field and a button, said as the request it makes.
     `- ${[waitingLine(ask), `Onboard one: POST ${ONBOARD_PATH} with {"repo": "<owner>/<repo>"}, or ask in ${ask.slack ?? ask.channel}: onboard <owner>/<repo>`].filter(Boolean).join(" ")}`,
+    ...(ask.suggest.length ? [`- With the app, not onboarded: ${ask.suggest.join(", ")}`] : []),
     ...(ask.install ? [`- [Add the GitHub app to more repos](${ask.install})`] : []),
   ];
 }
