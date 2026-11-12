@@ -131,7 +131,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
 | `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; `resolveActor()`; `compileAccess()`, `union()`, `FULL_ACCESS`, and `DEFAULT_CAN`; `parseCan()` and `CAN_MAX`, which read `x-board-can` as the board does; and the permission types | server |
 | `@vercel/board/schemas` | How a board keeps schemas and reads blocks, as plain functions that import nothing: `checkDefinition()` and `checkValue()`, which check a definition and a value against one; `canonical()`, by which two definitions are the same version; `findBlocks()` and `block()`, which read and write a message's blocks; `parseSchemaId()`; and `BUILT_IN_SCHEMAS`. For a server that keeps a board itself, as Vercel's API does | isomorphic |
-| `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `INSPECTOR_PAGE` names the inspector's page (name, version, path, SHA-256) for that CLI to fetch and hand to `createApp()` as `inspectorPage`, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
+| `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, without `inspect` and `serve`, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `@vercel/board/backend-local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
@@ -1354,18 +1354,17 @@ const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one 
 - **On each backend:** `local()` keeps them on its log, in a session of their
   own, `schemas`, beside `board`, so none reaches the message tables,
   `/events`, watchers, or sync. `http()` forwards them to the board it uses.
-  `vercel()` maps them to the team's registry in Vercel's API (`/schemas`,
-  each write with an `operationId`), which every board on the team shares, and
-  adapts its views: `createdAt` in milliseconds is `at`, `createdBy` is `by`,
+  `vercel()` maps them to the team's registry in Vercel's API, which every
+  board on the team shares: it reads them through the board
+  (`/boards/:boardId/schemas`), registers on the team's route (`/schemas`,
+  with an `operationId`), and adapts its views: `createdAt` in milliseconds is `at`, `createdBy` is `by`,
   and the team's own list by name and then version as a number, where the API
-  lists them by ID as text. The API doesn't say whether a registration made
-  the version, so `vercel()` reads it first: `created` is whether it was
-  missing then, and of two that register one version at once there, both may
-  say they made it, though the registry keeps one. The API checks a definition more strictly than `checkDefinition`:
+  lists them by ID as text. `created` is the API's answer: of two that register one
+  version at once there, one made it. The API checks a definition more strictly than `checkDefinition`:
   it also refuses a `required` name its schema's `properties` don't declare,
-  and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: people and apps whose team role is owner,
-  member, or developer register, and a project's own credentials reach none
-  of it yet, reads included (403).
+  and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: whoever the board lets in reads them, a project's
+  own credentials included, and people and apps whose team role is owner,
+  member, or developer register.
 
 ### Blocks
 
@@ -1416,7 +1415,13 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
   wrong (`action must be "started" or "stopped"`); one that names a schema
   the board doesn't have is 400 `schema_not_found`. Nothing is written.
   `checkValue` in `src/contract/data-values.ts` checks a value against a
-  definition with no code generation, so it runs where a handle does.
+  definition with no code generation, so it runs where a handle does. It
+  takes what Vercel's API takes, so a value gets one answer on every board:
+  each format as ajv-formats 2.1.1 reads it in its full mode, oddities
+  included (a leading zero in an IPv4 address, a leap second only at
+  23:59:60), and `items` as a list of schemas, one for each place, which
+  Vercel's registry holds though a board's own registers none.
+  `test/data-values-reference.test.ts` holds it to that validator.
   `@vercel/board/schemas` exports both rules, with `checkDefinition`, for a
   server that keeps a board itself to check a write as board() does.
 - **A platform's text is never checked.** What a sync imports can't be
@@ -1438,10 +1443,11 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
 - **`--schema <schema>` on `vb post`, `reply`, `schedule`, and `edit`** takes
   the text as that schema's JSON, from wherever text comes (the argument, `-`,
   `--text-file`), and writes a message that is only that block.
-- **On Vercel's board** the API keeps text alone and checks nothing yet, so
-  board() does, for what's written through it: a write straight to the API
-  isn't checked, and a deployment's own credentials can't post a block, since
-  the API lets no project read the schema to check it against (403).
+- **On Vercel's board** the API stores a message's text and answers it as
+  text: `vercel()` reads the blocks out of it. A write is checked twice.
+  board() checks what's written through it, a deployment's writes included,
+  against the schema it reads through the board. Then the API checks every
+  write itself, whoever sends it (400 `invalid_block`).
 
 ## The local board
 
@@ -2627,7 +2633,10 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    which authenticates the request and emits normalized events. The built-in
    providers use Chat SDK.
 2. Sync pushes each event to the backend's inbox (`inboxPush`), with the
-   platform's ID for it, which dedupes it. On `local()`, its own sync's land as
+   platform's ID for it, which dedupes it: 300 characters at most, so an edit's
+   ID carries a digest of its text, never the text. A webhook whose event the
+   board refuses (400) answers 200, since a redelivery would be refused the
+   same way; any other failure answers 500, for the platform to retry. On `local()`, its own sync's land as
    `external.received` in the inbox session for that external channel
    (`inbox:<key>:<channel>`). It answers 200 right away. That's well inside
    Slack's 3-second retry window, and platform retries do nothing.

@@ -5,13 +5,13 @@ import { Copy } from "./copy";
 
 const icon = { size: 14, strokeWidth: 2.5, role: "img" } as const;
 
-/** One task: what to do, then what helps do it: a line with its link in it, and each command in its own box. */
+/** One task: what to do, with the names in it set apart, then what helps do it: a line with its link in it, and each command in its own box. */
 function TaskItem({ task }: { task: Task }): ReactNode {
   return (
     <li className="task" data-done={task.done ? "" : undefined}>
       {task.done ? <Check {...icon} aria-label="Done" /> : <Circle {...icon} aria-label="To do" />}
       <div>
-        <p>{task.label}</p>
+        <p>{task.label.split("`").map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part))}</p>
         {task.hint || task.link ? (
           <p className="hint">
             {task.hint}

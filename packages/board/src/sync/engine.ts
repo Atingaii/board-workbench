@@ -364,6 +364,11 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     try {
       response = await platform.receive(key, request, (received) => intake(key, received))
     } catch (error) {
+      // The board refused the event as it is: a redelivery is the same event, refused the same way.
+      if (error instanceof HttpError && error.status === 400) {
+        console.error('[board] dropped an event the board refuses', error)
+        return new Response(null, { status: 200 })
+      }
       console.error('[board] intake failed', error)
       return new Response('intake failed', { status: 500 })
     }

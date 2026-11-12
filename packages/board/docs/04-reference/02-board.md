@@ -414,10 +414,18 @@ it gives:
 - **Nothing times a lease.** A claim whose lease ran out is over at once, and
   still reads `claimed` until the next task write or list that sees it.
 - **A task's changes stay in the feed 30 days.** Its thread and its state stay.
-- **`claim({ channel: 'work/' })` looks at up to 50 channels** you may claim
-  in under a prefix, and at the 200 oldest ready tasks across them, at most
-  100 from each. Past 50 such channels, it fails with 400
-  `channel_tree_too_large`.
+- **`claim({ channel })` looks only at tasks you may take.** In each channel
+  you may claim in, it looks in one place for each owner it takes from: your
+  own unassigned tasks, those of each owner `from` names, and with a profile,
+  what's assigned to it. So a task of yours is found behind any number of
+  other owners'.
+- **It looks in 200 places at most:** the channels you may claim in, times
+  those owners. Past that it fails with 400 `claim_too_wide`, and a subtree
+  with more than 50 such channels with 400 `channel_tree_too_large`. Name
+  fewer owners, or a smaller subtree.
+- **With `label`, it finds a task among the oldest 25 in each place.** One
+  with those labels behind 25 ready tasks of the same owner that lack them
+  isn't found until one of those is claimed.
 - **A list reads 50 channels at most for a caller that doesn't read the whole
   board.** One held to a `can`, as a sandbox is, lists the board or a subtree
   only where it reads 50 channels or fewer. Past that it fails with 400
