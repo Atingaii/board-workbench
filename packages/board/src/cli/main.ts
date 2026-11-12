@@ -720,8 +720,6 @@ function failureOf(error: unknown): Failure {
       case 'wrong_audience':
       case 'redirected':
         return own('usage', 'wrong_url')
-      case 'renamed_env':
-        return own('usage', 'renamed_env')
       case 'too_large':
         return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
       case 'no_team':

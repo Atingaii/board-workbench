@@ -691,7 +691,6 @@ fails with the status its URL answered, or 502.
 | `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |
 | `no_token` | GitHub Actions refused an OIDC token (`permissions: id-token: write`) |
 | `protected` | the board is behind Vercel Deployment Protection: set `VERCEL_AUTOMATION_BYPASS_SECRET` |
-| `renamed_env` | `BOARD_AS` is set, which `BOARD_PROFILE` replaced: set `BOARD_PROFILE` instead |
 | `invalid_duration` | a `timeout` the handle can't read |
 | `too_many_redirects` | the board's URL redirects more than 20 times |
 | `redirected` | the board's URL redirects to another origin, where none of its credentials follow, and Deployment Protection there turns it away: use the URL it redirects to |

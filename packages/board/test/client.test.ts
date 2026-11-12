@@ -194,17 +194,6 @@ describe('board() with no backend', () => {
     expect([named.by.actor, named.author?.avatar]).toEqual(['vercel:user:u_julian+claude', null])
   })
 
-  it('refuses BOARD_AS, which BOARD_PROFILE replaced, rather than write as the person', async () => {
-    clean()
-    const team = testBoard()
-    vi.stubEnv('BOARD_URL', BOARD_URL)
-    vi.stubEnv('BOARD_TOKEN', await personToken())
-    vi.stubEnv('BOARD_AS', 'ci')
-    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => team.fetch(new Request(input, init)))
-    await expect(board().post('dev', 'from CI')).rejects.toMatchObject({ code: 'renamed_env', message: 'BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS.' })
-    expect((await team.messages({ channel: 'dev' })).messages).toEqual([])
-  })
-
   it("in a deployment, acts as a server's own user through its fetch: on the team it names, with none of the deployment's credentials or profile", async () => {
     // The deployment's OIDC token, a JWT that names its own team, as Vercel's does.
     const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
