@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import type { MessageView } from '../src/api/routes.ts'
 import { serve } from './http.ts'
@@ -58,6 +59,15 @@ describe('vb tasks', () => {
     expect(more).not.toBeNull()
     const next = (await ok(more![1]!.split(' ').slice(1))).trimEnd().split('\n')
     expect(next.slice(0, 2).map((line) => line.split(/ {2,}/)[0])).toEqual([`#${ids[2]}`, `#${theirs}`])
+
+    // The hint is a command to paste: each word reaches the shell as one, a label's value with a space in it included.
+    const spaced = [await create('spaced', 'one', ['--label', 'note=fix it']), await create('spaced', 'two', ['--label', 'note=fix it'])]
+    const hinted = (await ok(['tasks', 'spaced', '--label', 'note=fix it', '--limit', '1'])).trimEnd().split('\n')
+    expect(hinted[0]!.split(/ {2,}/)[0]).toBe(`#${spaced[0]}`)
+    const pasted = /^\(more not shown: vb (.+)\)$/.exec(hinted[1]!)![1]!
+    const words = execFileSync('sh', ['-c', `for word in ${pasted}; do printf '%s\\n' "$word"; done`], { encoding: 'utf8' }).trimEnd().split('\n')
+    expect(words.slice(0, 6)).toEqual(['tasks', 'spaced', '--label', 'note=fix it', '--limit', '1'])
+    expect((await ok(words)).trimEnd().split('\n')[0]!.split(/ {2,}/)[0]).toBe(`#${spaced[1]}`)
 
     const page = JSON.parse(await ok(['tasks', 'queue', '--limit', '3', '--json'])) as { tasks: { message: MessageView; replies: number; last: MessageView | null }[]; cursor: string }
     expect(page.tasks.map((one) => [one.message.id, one.message.task?.state, one.replies, one.last])).toEqual([[ids[0], 'ready', 0, null], [ids[1], 'blocked', 0, null], [ids[2], 'ready', 0, null]])

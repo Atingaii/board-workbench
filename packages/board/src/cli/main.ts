@@ -1817,7 +1817,8 @@ async function tasks(args: string[]): Promise<number> {
     }
     out(formatTasks(page.tasks))
     // A full page may not be all of them: where the next one starts.
-    if (page.tasks.length === limit) out(`(more not shown: ${[...rerunWithout(['--after']), '--after', page.cursor].join(' ')})`)
+    // A command to paste: each word quoted for a shell, the board's cursor among them, as `read` and `tail` print theirs.
+    if (page.tasks.length === limit) out(`(more not shown: ${commandLine(rerunWithout(['--after'], '--after', page.cursor))})`)
     return 0
   }
 
