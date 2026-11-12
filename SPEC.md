@@ -3616,9 +3616,10 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   lease ran out is expired first, in the same write; a finished task is 409
   `task_finished`. The new ones are checked as a new task's are, and must
   close no cycle: one that waits for the task already, through however many
-  tasks, is 400 `invalid_needs`. The board walks what the new prerequisites
-  need, up to 500 tasks, and refuses a change it would have to walk further
-  for. In one write the task waits for them (`task.needs_changed`), and
+  tasks, is 400 `invalid_needs`. Only a prerequisite the change adds can
+  close one: what the task keeps was checked when it was added. So the board
+  walks what the added ones need, up to 500 tasks, and refuses a change it
+  would have to walk further for; one that only drops some walks nothing. In one write the task waits for them (`task.needs_changed`), and
   `task.ready` follows when they've all completed; with none it's ready. A
   held task stays held, and the same set changes nothing. A claim, a
   completion readying what waited for it, and an unblock each go by what a

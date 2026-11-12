@@ -306,6 +306,28 @@ describe("vercel()'s tasks", () => {
     expect((await julian.thread(ship.id)).message.task).toMatchObject({ state: 'ready', needs: [review.id] })
   })
 
+  it("has only what a change adds looked behind for a cycle there, so one that drops a prerequisite lands whatever the task keeps", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    // A line of 501 tasks, each waiting for the one before: more than the API walks behind a prerequisite.
+    let last = (await julian.tasks.create('line', { text: 'the first' })).task
+    for (let n = 1; n <= 500; n++) last = (await julian.tasks.create('line', { text: `task ${n}`, needs: [last.id] })).task
+    const { task: other } = await julian.tasks.create('work', { text: 'beside the line' })
+    const { task: root } = await julian.tasks.create('work', { text: 'on its own' })
+    await expect(julian.tasks.needs(root.id, [last.id])).rejects.toMatchObject({ status: 400, code: 'invalid_needs' })
+    // A task made waiting for the line keeps it through a change that drops another, and through one that adds one.
+    const { task: made } = await julian.tasks.create('work', { text: 'made waiting for the whole line', needs: [last.id, other.id] })
+    expect((await julian.tasks.needs(made.id, [last.id])).task).toMatchObject({ state: 'waiting', needs: [last.id] })
+    expect((await julian.tasks.needs(made.id, [last.id, other.id])).task).toMatchObject({ state: 'waiting', needs: [last.id, other.id] })
+    // What it adds is still looked behind.
+    const { task: waits } = await julian.tasks.create('work', { text: 'waits for the one made', needs: [made.id] })
+    await expect(julian.tasks.needs(made.id, [last.id, other.id, waits.id])).rejects.toMatchObject({ status: 400, code: 'invalid_needs' })
+    // The set is checked as it's given before it's found to be the same: a kept one that was canceled since is refused.
+    await julian.tasks.cancel(other.id, 'not needed')
+    await expect(julian.tasks.needs(made.id, [last.id, other.id])).rejects.toMatchObject({ status: 400, code: 'invalid_needs' })
+    expect((await julian.thread(made.id)).message.task).toMatchObject({ state: 'waiting', needs: [last.id, other.id] })
+  }, 60_000)
+
   it("has a claim whose lease ran out expire before what its task needs changes, in the change's own write", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const api = fakeMessageboard()

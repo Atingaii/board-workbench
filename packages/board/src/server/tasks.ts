@@ -46,7 +46,7 @@ const stateNow = (task: Task, at: number): TaskState => (lapsed(task, at) ? 'rea
 
 const finished = (task: Task) => task.state === 'completed' || task.state === 'failed' || task.state === 'canceled'
 
-/** How many tasks a change of what a task needs walks, behind the new ones, to see that none waits for it. */
+/** How many tasks a change of what a task needs walks, behind the ones it adds, to see that none waits for it. */
 export const NEEDS_WALK_MAX = 500
 
 /** Whether `value` is shaped like an ID, `<where it's from>:<who>`, as every principal's and actor's is. What it names is a credential's to say, never a client's. */
@@ -292,14 +292,17 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
   /**
    * Refuses prerequisites that would make task `id` wait for itself: one that waits for it already,
    * through however many tasks. A new task can't be waited for, so only a change of what a task
-   * needs can close a cycle. It walks what the new ones need, and what those need, a level a read,
-   * and gives up past `NEEDS_WALK_MAX` tasks: a change it can't check is refused too.
+   * needs can close a cycle, and only with a prerequisite it adds: one the task keeps was looked
+   * behind when it was added, and whatever came to wait behind it since was checked as it did. So
+   * it walks what the `added` ones need, and what those need, a level a read, and gives up past
+   * `NEEDS_WALK_MAX` tasks: a change it can't check is refused too. One that only drops some walks
+   * nothing.
    */
-  async function acyclic(id: number, needs: readonly number[], position: number) {
+  async function acyclic(id: number, added: readonly number[], position: number) {
     const invalid = (need: number, why: string) => badRequest(`needs: #${need} ${why}`, 'invalid_needs')
-    /** Each task the walk reached, by the new prerequisite it reached it from. */
-    const from = new Map<number, number>(needs.map((need) => [need, need]))
-    for (let level = [...needs]; level.length > 0; ) {
+    /** Each task the walk reached, by the added prerequisite it reached it from. */
+    const from = new Map<number, number>(added.map((need) => [need, need]))
+    for (let level = [...added]; level.length > 0; ) {
       const found = await writes().reads.tables.messagesAt(level, position)
       const next: number[] = []
       for (const at of level)
@@ -309,7 +312,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
           from.set(need, from.get(at)!)
           next.push(need)
         }
-      if (from.size > NEEDS_WALK_MAX) throw invalid(needs[0]!, `has more than ${NEEDS_WALK_MAX} tasks behind it and the others: too many to check that none waits for #${id}`)
+      if (from.size > NEEDS_WALK_MAX) throw invalid(added[0]!, `has more than ${NEEDS_WALK_MAX} tasks behind it and the others: too many to check that none waits for #${id}`)
       level = next
     }
   }
@@ -689,7 +692,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
         if (task.state === 'claimed' && !over) throw conflict('task_claimed', `#${id} is claimed until ${task.claim!.until}: what it needs changes once no one holds it`)
         const needs = await needsAt(principal.access, refs, position, id)
         if (needs.ids.length === task.needs.length && needs.ids.every((need) => task.needs.includes(need))) return []
-        await acyclic(id, needs.ids, position)
+        await acyclic(id, needs.ids.filter((need) => !task.needs.includes(need)), position)
         const about = { id, thread: found.thread }
         return [
           ...(over ? [{ type: 'task.expired' as const, payload: { ...about, epoch: task.epoch } }] : []),

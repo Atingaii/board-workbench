@@ -616,6 +616,13 @@ describe('what a task needs, changed', () => {
     expect((await read(ada, root.id)).task).toMatchObject({ state: 'ready', needs: [] })
     // A failed one may be reopened, so it's something to wait for.
     expect((await needs(ada, root.id, [failed.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [failed.id] })
+    // The set is checked as it's given before it's found to be the same: one canceled since, or out of this caller's sight, is refused.
+    const gone = await task(ada, 'needed for now')
+    const waits = await task(ada, 'waits for it, and for a secret', { needs: [gone.id, secret.id] })
+    expect(code(await needs(narrowed, waits.id, [secret.id, gone.id]))).toEqual([400, 'invalid_needs'])
+    await ada('POST', `/tasks/${gone.id}/cancel`, { reason: 'not needed after all' })
+    expect(code(await needs(ada, waits.id, [gone.id, secret.id]))).toEqual([400, 'invalid_needs'])
+    expect((await read(ada, waits.id)).task).toMatchObject({ state: 'waiting', needs: [gone.id, secret.id] })
     // What names no task isn't one whose needs change.
     expect(code(await needs(ada, plain.id, []))).toEqual([404, 'not_a_task'])
     expect(code(await needs(ada, reply.id, []))).toEqual([404, 'not_a_task'])
@@ -644,7 +651,7 @@ describe('what a task needs, changed', () => {
     expect(code(await needs(ada, b.id, [a.id]))).toEqual([400, 'invalid_needs'])
   })
 
-  it('walks at most 500 tasks behind the new ones to look for itself, and refuses a change it would have to walk further for', async () => {
+  it('walks at most 500 tasks behind the ones a change adds to look for itself, and refuses a change it would have to walk further for', async () => {
     const { ada } = setup()
     // A line of 501 tasks, each waiting for the one before, and one that would wait for its end.
     let last = await task(ada, 'the first')
@@ -656,6 +663,19 @@ describe('what a task needs, changed', () => {
     expect(far.body.error.message).toContain('more than 500 tasks behind it')
     // One task nearer, the walk gets to the end of it.
     expect((await needs(ada, root.id, [line[499]!])).body.task.task).toMatchObject({ state: 'waiting', needs: [line[499]] })
+
+    // It walks only behind what a change adds: one the task keeps was looked behind when it was added, or the task was
+    // made with it, when nothing could wait for it yet. So a task made waiting for the whole line drops another
+    // prerequisite, or adds one, without the line being walked again.
+    const other = await task(ada, 'beside the line')
+    const made = await task(ada, 'made waiting for the whole line', { needs: [line[500]!, other.id] })
+    expect((await needs(ada, made.id, [line[500]!])).body.task.task).toMatchObject({ state: 'waiting', needs: [line[500]] })
+    expect((await needs(ada, made.id, [line[500]!, other.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [line[500], other.id] })
+    // What it adds is still looked behind: one that waits for the task is refused, whatever it keeps.
+    const waits = await task(ada, 'waits for the one made', { needs: [made.id] })
+    expect(code(await needs(ada, made.id, [line[500]!, other.id, waits.id]))).toEqual([400, 'invalid_needs'])
+    expect(code(await needs(ada, made.id, [waits.id]))).toEqual([400, 'invalid_needs'])
+    expect((await read(ada, made.id)).task).toMatchObject({ state: 'waiting', needs: [line[500], other.id] })
   }, 60_000)
 
   it("is its owner's to change, or manage's, while no one holds the task and it isn't finished", async () => {

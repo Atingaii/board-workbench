@@ -453,8 +453,8 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   follows in it when they've all completed; with none it's ready, a blocked
   task stays blocked, and the same set changes nothing. One that waits for the
   task already, through however many tasks, is 400 `invalid_needs`: the board
-  walks up to 500 tasks behind the new ones, and refuses a change it would
-  have to walk further for. A claimed task is 409 `task_claimed`, and a
+  walks up to 500 tasks behind the ones the change adds, and refuses a change
+  it would have to walk further for. One that only drops some walks nothing. A claimed task is 409 `task_claimed`, and a
   finished one 409 `task_finished`.
 - **`GET /tasks`** lists open tasks unless `state` is `all` or one state. `owner`
   and `for` take a handle or an ID, and `needs` a task's ID. Each task is

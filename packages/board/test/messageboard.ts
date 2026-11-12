@@ -598,7 +598,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   const MARKED_SEEN = 3
   /** What a list or a claim-next repairs, a request at most: lapsed claims it writes as expired, and waiting tasks a list finds ready. */
   const REPAIRS = 10
-  /** How many tasks a change of what a task needs walks, behind the new ones, to see that none waits for it. */
+  /** How many tasks a change of what a task needs walks, behind the ones it adds, to see that none waits for it. */
   const NEEDS_WALKED = 500
   /** The lapsed claims a claim-next finds: the longest-lapsed in each channel it names, and in all. */
   const LAPSED_EACH = 25
@@ -743,7 +743,8 @@ function fakeBoard(shared: Shared, boardId: string) {
   }
   /**
    * Refuses prerequisites that would make task `self` wait for itself: one that waits for it already, through however
-   * many tasks. It walks what the new ones need, and what those need, and gives up past `NEEDS_WALKED` tasks.
+   * many tasks. Only one the change adds can close a cycle, so it walks what those need, and what those need, and
+   * gives up past `NEEDS_WALKED` tasks: a change that only drops some walks nothing.
    */
   function acyclic(self: string, needs: readonly string[]) {
     const from = new Map(needs.map((id) => [id, id]))
@@ -1091,7 +1092,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         const needs = checkedNeeds(actor, body.needs, thread.id)
         // The same set changes nothing: not even a lapsed claim's expiry is written for it.
         if (needs.length !== task.needs.length || needs.some((id) => !task.needs.includes(id))) {
-          acyclic(thread.id, needs)
+          acyclic(thread.id, needs.filter((id) => !task.needs.includes(id)))
           lapse()
           // It waits for them from this write, and its `task.ready` follows in it when they have all completed: with
           // none it's ready, and one held for a person stays held.
