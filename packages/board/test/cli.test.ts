@@ -584,7 +584,6 @@ describe('cli', () => {
       code: 2,
       stderr: expect.stringMatching(/^error: --avatar is the avatar of the profile --as names: pass --as too\.\n/),
     })
-    expect(await vb(['whoami'], { BOARD_AS: 'claude' })).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: BOARD_AS is BOARD_PROFILE now, and nothing reads BOARD_AS\.\n/) })
   })
 
   it("writes as you inside a coding agent, whatever its environment says, and as a profile only when one is named", async () => {

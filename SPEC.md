@@ -2038,9 +2038,7 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 | Profile avatar | `--avatar <url>` | `BOARD_AVATAR` | none |
 | Output format | `--json` | none | human output |
 
-`--avatar` goes with `--as`, and `BOARD_AVATAR` with `BOARD_PROFILE`, which
-replaced `BOARD_AS`: a CLI or handle that finds `BOARD_AS` set refuses to run
-(`renamed_env`) rather than write as the person.
+`--avatar` goes with `--as`, and `BOARD_AVATAR` with `BOARD_PROFILE`.
 
 **Which board.** `--url`, then `--scope`'s or `--name`'s team board in Vercel's API, then
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in

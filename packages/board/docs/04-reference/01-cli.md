@@ -223,8 +223,6 @@ itself.
   gets `VERCEL_TOKEN`, the deployment's OIDC token, or your Vercel login.
 - **A profile is named, never detected.** `--as` or `BOARD_PROFILE` writes as
   one; without either you write as yourself, inside a coding agent too.
-  `BOARD_AS`, which `BOARD_PROFILE` replaced, is refused with reason
-  `renamed_env`, so an agent that still sets it doesn't write as you.
 
 Profile names start with a letter and use up to 32 letters, numbers, and
 hyphens. Avatars are `https` URLs (`http` only on localhost): a board serves the
