@@ -1,21 +1,17 @@
-import { agentBoard } from "@/agent/lib/vb-tool";
-import { WATCHER } from "@/agent/lib/identity";
-import { sendToAgent } from "@/agent/lib/wake";
 import { factory, repoChannels, slackChannels } from "@/app/api/board/[[...path]]/factory";
 import { ownRequest } from "@/lib/first-task";
 import { check } from "@/lib/launcher";
 import { shows } from "@/lib/markdown";
 import { onboarded, repoName, startOnboarding } from "@/lib/onboard";
+import { pageBoard } from "@/lib/page-board";
 import { channel } from "@/lib/project";
 import { reposOf } from "@/lib/setup";
 
 // Asks the factory to onboard a repo, with `{ "repo": "<owner>/<repo>" }`: the page's Onboard
-// button posts here, and so can an agent. The factory opens a thread where it changes itself, and
-// its agent opens the pull request.
+// button posts here, and so can an agent. The page opens a thread where the factory changes itself,
+// as the launcher, and the agent hears it there and opens the pull request.
 
 export const dynamic = "force-dynamic";
-// The wake-up is tried 3 times, 30 seconds each at most, and says so in the thread when it never gets there.
-export const maxDuration = 300;
 
 const refuse = (message: string) => Response.json({ error: { code: "forbidden", message } }, { status: 403 });
 
@@ -31,7 +27,6 @@ export async function POST(request: Request): Promise<Response> {
   // Already in: say where, as its row on the page says it.
   const listed = onboarded(repo, reposOf({ repoChannels, slackChannels }));
   if (listed) return Response.json({ started: false, repo: listed.repo, where: shows(listed) });
-  // A wake-up that never gets there is said in the thread, as the watcher says it.
-  const root = await startOnboarding(agentBoard(factory), channel("rsi"), repo, (message) => sendToAgent(factory.as(WATCHER), message));
+  const root = await startOnboarding(pageBoard(factory), channel("rsi"), repo);
   return Response.json({ started: true, repo, thread: root.id });
 }

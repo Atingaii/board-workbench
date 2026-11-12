@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
-import type { AgentMessage } from "../agent/lib/wake.ts";
 import { onboarded, repoName, startOnboarding } from "../lib/onboard.ts";
+import { pageBoard } from "../lib/page-board.ts";
 import { reposOf } from "../lib/setup.ts";
 
 // Onboarding a repo from the page, asked as the page asks it, on a real board kept in memory: what
-// lands on the board is what people see, and what reaches the agent is what `wake` gets.
+// lands on the board is what people see, and what the agent's watcher hears.
 
 test("a repo is taken as GitHub writes it, typed or pasted as its URL", () => {
   assert.equal(repoName("acme/web"), "acme/web");
@@ -52,24 +52,23 @@ test("the repos the page lists are the board's, each with its channel and the Sl
   ]);
 });
 
-test("asking opens one thread where the factory changes itself, naming the repo, and hands it to the agent", async () => {
+test("asking opens one thread where the factory changes itself, naming the repo, written by the launcher and not by the agent", async () => {
   const team = board({ backend: local({ memory: true }) });
-  const woken: AgentMessage[] = [];
-  const root = await startOnboarding(team, "project-factory/rsi", "acme/web", async (message) => void woken.push(message));
+  const page = pageBoard(team);
+  const root = await startOnboarding(page, "project-factory/rsi", "acme/web");
   const { messages } = await team.messages({ channel: "project-factory/" });
   assert.deepEqual(messages.map((message) => [message.id, message.channel, message.re]), [[root.id, "project-factory/rsi", null]]);
   // It says what to do and for which repo, so the agent that reads it needs nothing else.
   assert.match(messages[0]!.text, /^Onboard acme\/web\./);
-  assert.deepEqual(woken.map(({ thread, text }) => [thread, text]), [[root.id, `New board thread #${root.id}.`]]);
+  // Whoever reads the thread sees the page asked, not the agent asking itself.
+  assert.equal(messages[0]!.by.actor, (await page.me()).actor);
+  assert.notEqual(messages[0]!.by.actor, (await team.me()).actor);
 });
 
-test("each ask is a thread of its own, with its own wake-up", async () => {
+test("each ask is a thread of its own", async () => {
   const team = board({ backend: local({ memory: true }) });
-  const woken: AgentMessage[] = [];
-  const wake = async (message: AgentMessage) => void woken.push(message);
-  const web = await startOnboarding(team, "project-factory/rsi", "acme/web", wake);
-  const api = await startOnboarding(team, "project-factory/rsi", "acme/api", wake);
+  const web = await startOnboarding(pageBoard(team), "project-factory/rsi", "acme/web");
+  const api = await startOnboarding(pageBoard(team), "project-factory/rsi", "acme/api");
   assert.notEqual(web.id, api.id);
-  assert.deepEqual(woken.map((message) => message.thread), [web.id, api.id]);
-  assert.equal(new Set(woken.map((message) => message.key)).size, 2);
+  assert.deepEqual((await team.messages({ channel: "project-factory/" })).messages.map((message) => message.re), [null, null]);
 });

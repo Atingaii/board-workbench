@@ -1,9 +1,8 @@
 import type { Board, MessageView } from "@vercel/board";
-import type { AgentMessage } from "../agent/lib/wake.ts";
 import type { Listed } from "./setup.ts";
 
-// Onboarding a repo from the page: the factory is asked as anyone would ask it, in the thread it
-// opens for it, and its agent does the rest (the onboard-repo skill): a pull request to this
+// Onboarding a repo from the page: the factory is asked as anyone would ask it, in a thread the
+// page opens, and its agent does the rest (the onboard-repo skill): a pull request to this
 // factory's own repo.
 
 /** Where the page, or an agent, asks for a repo: a POST with `{ "repo": "<owner>/<repo>" }`. */
@@ -33,12 +32,8 @@ export const onboarded = (repo: string, repos: Listed[]): Listed | null => repos
 export const onboardText = (repo: string) => `Onboard ${repo}. Asked from this factory's page.`;
 
 /**
- * Asks: the factory opens the thread itself, where it changes itself, and hands it to its agent as
- * the watcher would. The agent's own message wakes nobody, so the wake-up is sent here. Asked
- * twice, there are two threads, as when two people ask: the agent looks for earlier work first.
+ * Asks: the page opens a thread where the factory changes itself, and the agent hears it as it
+ * hears anyone, through its watcher. Asked twice, there are two threads, as when two people ask:
+ * the agent looks for earlier work first.
  */
-export async function startOnboarding(agent: Pick<Board, "post">, channel: string, repo: string, wake: (message: AgentMessage) => Promise<void>): Promise<MessageView> {
-  const root = await agent.post(channel, { text: onboardText(repo) });
-  await wake({ thread: root.id, key: `onboard-${root.id}`, text: `New board thread #${root.id}.` });
-  return root;
-}
+export const startOnboarding = (page: Pick<Board, "post">, channel: string, repo: string): Promise<MessageView> => page.post(channel, { text: onboardText(repo) });

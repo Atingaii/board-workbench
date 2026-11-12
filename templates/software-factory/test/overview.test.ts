@@ -12,12 +12,13 @@ const HOUR = 3600 * SECOND;
 const DAY = 24 * HOUR;
 
 let next = 0;
-type By = "ada" | "agent" | "sync" | "watcher";
+type By = "ada" | "agent" | "sync" | "watcher" | "page";
 const BY: Record<By, { principal: string; profile: string | null }> = {
   ada: { principal: "vercel:user:u_ada", profile: null },
   agent: { principal: DEPLOYMENT, profile: null },
   sync: { principal: DEPLOYMENT, profile: "github:user:583231" },
   watcher: { principal: DEPLOYMENT, profile: "wake" },
+  page: { principal: DEPLOYMENT, profile: "launcher" },
 };
 const message = (re: string | null, by: By, at: number, more: { id?: string; text?: string; labels?: Record<string, string> } = {}) =>
   ({ id: more.id ?? `m${++next}`, re, text: more.text ?? "", labels: more.labels ?? {}, createdAt: ago(at), by: { ...BY[by], actor: "a" } }) as never;
@@ -56,6 +57,13 @@ test("the wait for a first reply is from a thread's first message that isn't the
   // With an even count, halfway between the middle two.
   assert.equal(week([...thread("a", DAY, 10 * SECOND), ...thread("b", 2 * DAY, 20 * SECOND)]).firstReplyMs, 15 * SECOND);
   assert.equal(week([message(null, "ada", DAY)]).firstReplyMs, null);
+});
+
+test("a thread someone asked for through the page waits on the agent like any other, and isn't answered until the agent replies", () => {
+  const asked = [message(null, "page", DAY, { id: "a" })];
+  assert.deepEqual([week(asked).answered, week(asked).firstReplyMs], [0, null]);
+  const answered = [...asked, message("a", "agent", DAY - 30 * SECOND)];
+  assert.deepEqual([week(answered).answered, week(answered).firstReplyMs], [1, 30 * SECOND]);
 });
 
 test("a read that came back full says the week may hold more", () => {
