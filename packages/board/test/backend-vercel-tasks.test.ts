@@ -77,6 +77,9 @@ describe("vercel()'s tasks", () => {
       'refuses a prerequisite that was canceled, which can never complete, and takes one that failed': 'passed',
       'lists the tasks that wait for one in the channel a list names, or its subtree, and no other': 'passed',
       'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed': 'passed',
+      'changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none': 'passed',
+      'refuses a change of needs that would make a task wait for itself, straight back or through others': 'passed',
+      'changes what a task needs only while no one holds it and it has not finished': 'passed',
       'holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'passed',
       'keeps a task assigned to a profile for that actor alone': 'passed',
       // This run sends no headers of its own: the kit's run with them, in backend-vercel.test.ts, checks it.

@@ -171,7 +171,7 @@ describe('the conformance kit', () => {
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
     expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
-    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 18 }, () => 'passed'))
+    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 21 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
     // Every task it made went with its root: none is left open, and none still wears a state.
@@ -227,6 +227,25 @@ describe('the conformance kit', () => {
     }
     expect(owns(await conformance(await clientOf(strict), { withHeaders: withHeaders(board.fetch) }))).toMatchObject({ status: 'failed', detail: expect.stringContaining('only the author can edit a message') })
   })
+
+  it('fails a board that takes a change of what a task needs and changes nothing', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    // It answers the task as it is, whatever it was asked to wait for.
+    const deaf: Fetch = async (request) => {
+      const { pathname } = new URL(request.url)
+      const changing = request.method === 'POST' ? /\/tasks\/([^/]+)\/needs$/.exec(pathname) : null
+      if (!changing) return board.fetch(request)
+      const read = await board.fetch(new Request(`${BOARD_URL}/messages/${changing[1]}`, { headers: request.headers }))
+      return Response.json({ task: (await read.json()).message })
+    }
+    const report = await conformance(await clientOf(deaf))
+    const failed = report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
+    expect(failed).toEqual([
+      ['changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none', 'a ready task, once it needs one that has not completed: expected "waiting", got "ready"'],
+      ['refuses a change of needs that would make a task wait for itself, straight back or through others', 'a task that would need itself: expected 400 invalid_needs, and it succeeded'],
+      ['changes what a task needs only while no one holds it and it has not finished', 'changing what a claimed task needs: expected 409 task_claimed, and it succeeded'],
+    ])
+  }, 60_000)
 
   it("fails a board that answers a create under a reply's ID with the task its thread is", async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
@@ -463,7 +482,7 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(taskless))
     expect(report.ok).toBe(true)
     const tasks = report.checks.filter((check) => check.group === 'tasks')
-    expect(tasks).toHaveLength(18)
+    expect(tasks).toHaveLength(21)
     // The one that needs no task route is about labels, which a board has either way.
     expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
     expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
@@ -493,6 +512,8 @@ describe('the conformance kit', () => {
         'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed',
         expect.stringContaining('got [["task.created","ready"],["task.claimed","claimed"],["task.blocked","blocked"],["task.unblocked","ready"]]'),
       ],
+      // Nothing was made to wait for another, so no change closes a cycle.
+      ['refuses a change of needs that would make a task wait for itself, straight back or through others', 'a task that would need one that waits for it: expected 400 invalid_needs, and it succeeded'],
       ['shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token', 'the feed should show the task become ready, within a few seconds'],
     ])
     // One that gives every claim its own default lease, whatever it asked for.
