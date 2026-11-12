@@ -3,6 +3,7 @@
 // `inspect` is in a chunk of its own, which only `inspect` loads, and its page isn't in it: the
 // app fetches the one `INSPECTOR_PAGE` names, and hands it over as `inspectorPage`.
 import { PAGE_SHA256 } from '../inspect/digest.ts'
+import { stoppedBy } from '../server/board.ts'
 import type { Board } from '../server/index.ts'
 import { VERSION } from '../version.ts'
 import { exitCode, failureDocument, formatFailure, type Failure, type Warning } from './failure.ts'
@@ -76,7 +77,11 @@ export type VbOptions = {
   writeFile?: (path: string, data: Uint8Array) => Promise<void> | PromiseLike<void>
   /** The text `-` reads, as stdin would hold it. */
   stdin?: string
-  /** Stops `tail` and `wait`, as Ctrl-C does. */
+  /**
+   * Ends the command and its requests: `tail` and `wait` as Ctrl-C does (0), any other with a
+   * failure, 1 when it's `AbortSignal.timeout()`'s and 130 otherwise. A write it stopped may have
+   * landed. Every request ends, whether or not the backend heeds it, on a handle `board()` made.
+   */
   signal?: AbortSignal
   /** Commands this caller doesn't run, which answer 2: `['tail', 'wait']` for an agent's tool. */
   refuse?: string[]
@@ -104,7 +109,8 @@ let queue: Promise<unknown> = Promise.resolve()
  * process, and returns what the CLI would print. `board` already says which board and who, so
  * `--url` doesn't apply, and the commands about your machine (`whoami`, `identity`,
  * `hooks`, `serve`, `inspect`) answer 2. Calls run one at a time, in order, so
- * `tail` and `wait`, which hold the rest until they end, need `options.signal`.
+ * `tail` and `wait`, which hold the rest until they end, need `options.signal`; it bounds any
+ * other call too: `{ signal: AbortSignal.timeout(30_000) }`.
  */
 export function vb(board: Board, argv: string[], options: VbOptions = {}): Promise<VbResult> {
   // `tail` never ends by itself and `wait` runs up to 30 minutes, holding every later call: only with a way to stop them.
@@ -122,7 +128,7 @@ export function vb(board: Board, argv: string[], options: VbOptions = {}): Promi
     let stderr = ''
     const decoder = new TextDecoder()
     const code = await mainWith(argv, { name: 'board', commands: {} }, {
-      board,
+      board: (options.signal && stoppedBy(board, options.signal)) || board,
       write: (chunk) => void (stdout += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })),
       error: (chunk) => void (stderr += chunk),
       readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach and --text-file can't read files", 'readFile'),
