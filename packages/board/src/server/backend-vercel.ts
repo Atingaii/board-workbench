@@ -413,17 +413,6 @@ function retryWait(attempt: number, retryAfter: string | null): number {
   return Math.min(asked, RETRY_MS * 2 ** attempt * (1 + Math.random()))
 }
 
-/**
- * An operation ID for a write its caller named with `id`, in a UUIDv7's shape, as the API takes one:
- * the same for the same `id`, so the API answers a retry with what the first call did. Every bit of
- * it is a hash of the `id`, the ones a UUIDv7 keeps its time in among them.
- */
-async function operationIdFor(id: string): Promise<string> {
-  const hash = await sha256(`board-batch\u001f${id}`)
-  const hex = `${hash.slice(0, 12)}7${hash.slice(13, 16)}${'89ab'[Number.parseInt(hash[16]!, 16) & 3]}${hash.slice(17, 32)}`
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
 /** `ms` passing, or `signal` stopping it first. */
 const pause = (ms: number, signal?: AbortSignal) =>
   ms <= 0 || signal?.aborted
@@ -2773,7 +2762,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async createTasks(caller, input, signal) {
       const who = await tasksAs(caller)
-      // A task waits for one that's there by its thread, and for another of the batch by its ref, which the API resolves.
+      // A task waits for one that's there by its thread, and for another of the batch by its ref, which the API resolves:
+      // each named once, the ones that were there first, as a board keeps them. The API tells a repeat by their order too.
       const waits = input.tasks.map((task) => {
         const refs = [...new Set((task.needs ?? []).flatMap((need) => (typeof need === 'string' ? [] : [need.ref])))]
         return { threads: needsOf((task.needs ?? []).filter((need) => typeof need === 'string')), refs }
@@ -2790,11 +2780,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           ...(task.for ? { for: task.for } : {}),
         }
       })
-      // The batch's `id` names the operation: a repeat of it answers the tasks the first one made.
-      const body = { operationId: input.id !== undefined ? await operationIdFor(input.id) : operationId(), channel: input.channel, tasks }
+      // The batch's `id` is its caller's own key for it: the API answers the key again, with the same request, with the
+      // tasks the first one made, and keeps it for good. The operation ID is this attempt's alone, and a time the API
+      // reads. The request is the same when its channel is named the same way and its tasks' fields are, so both go as given.
+      const body = { operationId: operationId(), channel: input.channel, ...(input.id !== undefined ? { idempotencyKey: input.id } : {}), tasks }
       const made = await api<{ tasks: (ApiTaskOf | { id: string })[] }>(who, 'POST', await onBoard(who, '/tasks/batch'), { version: 2, body, signal }).catch((error: unknown) => {
-        // An `id` sent again with other tasks is another write's, as on any board.
-        if (error instanceof HttpError && error.code === 'operation_conflict') throw duplicateId()
+        // An `id` sent again with other tasks, or for another channel, is another write's, as on any board.
+        if (error instanceof HttpError && error.code === 'idempotency_key_reused') throw duplicateId()
         // More bytes than one of the API's requests holds: none was made and less of it fits, as with more than it counts for one write.
         if (error instanceof HttpError && error.code === 'entity_too_large') throw new HttpError(400, 'batch_too_large', error.message)
         throw taskRefusal(error)

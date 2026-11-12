@@ -117,6 +117,16 @@ const EMOJI = /^[a-z0-9_+-]{1,64}$/
 const CHANNEL = /^[a-z0-9_-]+(\/[a-z0-9_-]+)*$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_(\d+)$/
 
+/** An operation ID's shape: a UUIDv7, lowercase. Its first 48 bits are when it was made, in milliseconds. */
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+/** How old a write's operation ID may be, and how far ahead of the API's clock, when no receipt answers it; and how long a receipt is kept. */
+const OPERATION_MAX_AGE_DAYS = 7
+const OPERATION_MAX_SKEW_S = 300
+const RECEIPT_KEPT_DAYS = 8
+const DAY_MS = 24 * 60 * 60 * 1000
+/** The bytes of JSON a batch's request may be. */
+const BATCH_BODY_BYTES = 65_536
+
 class Refused extends Error {
   readonly status: number
   readonly code: string
@@ -265,6 +275,8 @@ type Shared = {
   accounts: Accounts
   directory: Directory
   now: () => number
+  /** Notes that `actor`'s operation was answered: a retry of it is answered again, however old its ID has grown. */
+  receipt: (actor: Actor, operationId: unknown) => void
   stored: Map<string, Uint8Array<ArrayBuffer>>
   externalImports: boolean
   platformHandles: boolean
@@ -291,7 +303,10 @@ function fakeBoard(shared: Shared, boardId: string) {
   const once = <T,>(actor: Actor, operationId: unknown, write: () => T): T => {
     if (typeof operationId !== 'string') return write()
     const key = `${principalId(actor.principal)}|${operationId}`
-    if (!posted.has(key)) posted.set(key, write())
+    if (!posted.has(key)) {
+      posted.set(key, write())
+      shared.receipt(actor, operationId)
+    }
     return posted.get(key) as T
   }
   const feeds = new Map<string, Change[]>()
@@ -619,14 +634,23 @@ function fakeBoard(shared: Shared, boardId: string) {
   const PLACE_READS = 25
   const READY_IN_ALL = 200
   const LAPSED_IN_ALL = 50
-  /** What one batch's transaction holds at most, by the count its body gives, and the bytes of JSON its request may be. */
+  /** What one batch's transaction holds at most, by the count its body gives. */
   const BATCH_ITEMS = 100
-  const BATCH_BODY_BYTES = 65_536
   /** The feed shards a channel has: a batch's threads take a head on each they land on, eight at most. */
   const FEED_SHARDS = 8
-  const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   /** What each batch's operation answered, by its caller, with the body it was sent with. */
   const batches = new Map<string, { sent: string; channelId: string; tasks: ReturnType<typeof taskOf>[] }>()
+  /** The batch each caller's own key made, by its caller's principal, kept for good: a digest of the request, and the threads it made. */
+  const keyed = new Map<string, { digest: string; channelId: string; threads: string[] }>()
+  /**
+   * What makes two batch requests the same: the channel as it was named, by ID or by name, and the tasks, as many, in
+   * the same order, each with the same fields. A field left out is its empty value, and the operation ID is no part of it.
+   */
+  const batchDigest = (body: Record<string, any>) =>
+    JSON.stringify([
+      body.channelId !== undefined ? { id: body.channelId } : { name: body.channel },
+      (body.tasks as Record<string, any>[]).map((task) => [task.ref ?? null, task.text, Object.entries(task.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)), task.noSync ?? false, task.attachments ?? [], task.needs ?? [], task.for ?? null]),
+    ])
   /** A profile's name, as an actor ID ends with one. */
   const PROFILE_PART = /^[a-z0-9][a-z0-9-]{0,31}$/
   /** One of `owner`'s profiles, `<owner>+<profile>`: what a task is assigned to, never the bare owner. */
@@ -831,13 +855,14 @@ function fakeBoard(shared: Shared, boardId: string) {
   }
 
   /**
-   * The items a batch's transaction would hold, from its body alone: the board check and the receipt, a feed head for
-   * each task up to the channel's shards, six for each task, and one for each label (and one more for a task with
-   * any), each attachment, each need, each different task that was there, and each task whose needs are all such.
+   * The items a batch's transaction would hold, from its body alone: the board check and the receipt, one for the
+   * caller's key when it has one, a feed head for each task up to the channel's shards, six for each task, and one for
+   * each label (and one more for a task with any), each attachment, each need, each different task that was there, and
+   * each task whose needs are all such.
    */
-  function batchItems(tasks: { labels?: Record<string, string>; attachments?: string[]; needs?: (string | { ref: string })[] }[]): number {
+  function batchItems(tasks: { labels?: Record<string, string>; attachments?: string[]; needs?: (string | { ref: string })[] }[], keyed: boolean): number {
     const there = new Set(tasks.flatMap((task) => (task.needs ?? []).filter((need) => typeof need === 'string')))
-    let items = 2 + Math.min(tasks.length, FEED_SHARDS) + there.size
+    let items = 2 + (keyed ? 1 : 0) + Math.min(tasks.length, FEED_SHARDS) + there.size
     for (const task of tasks) {
       const labels = Object.keys(task.labels ?? {}).length
       const needs = task.needs ?? []
@@ -851,12 +876,13 @@ function fakeBoard(shared: Shared, boardId: string) {
    * written, in the order the API checks. Each task is made a millisecond after the one before it, so they list and are
    * claimed in the body's order.
    */
-  function makeBatch(actor: Actor, body: Record<string, any>): Thread[] {
+  function makeBatch(actor: Actor, body: Record<string, any>): { made: Thread[] } | { repeat: { channelId: string; threads: string[] } } {
     type Asked = { ref?: string; text: string; labels?: Record<string, string>; noSync?: boolean; attachments?: string[]; needs?: (string | { ref: string })[]; for?: string | null }
     const ref = (value: unknown): value is string => typeof value === 'string' && value.length >= 1 && value.length <= 64
     // The body's shape.
     if (!Array.isArray(body.tasks) || body.tasks.length < 1 || body.tasks.length > 100) throw bad('tasks is 1 to 100 tasks.')
     if ((body.channelId === undefined) === (body.channel === undefined)) throw bad('Name the channel by channelId or by channel.')
+    if (body.idempotencyKey !== undefined && (typeof body.idempotencyKey !== 'string' || body.idempotencyKey.length < 1 || body.idempotencyKey.length > 512)) throw bad('idempotencyKey is 1 to 512 characters.')
     for (const task of body.tasks as Record<string, any>[]) {
       if (typeof task !== 'object' || task === null) throw bad('A task is an object.')
       if (task.ref !== undefined && !ref(task.ref)) throw bad('ref is 1 to 64 characters.')
@@ -907,8 +933,15 @@ function fakeBoard(shared: Shared, boardId: string) {
       left -= next.length
     }
     // What fits one transaction, by the body's count, and one kept answer.
-    const items = batchItems(tasks)
+    const items = batchItems(tasks, body.idempotencyKey !== undefined)
     if (items > BATCH_ITEMS) throw new Refused(400, 'batch_too_large', `This batch takes ${items} items, and a transaction holds ${BATCH_ITEMS}: send it in parts.`, undefined, undefined, { items, limit: BATCH_ITEMS })
+    // The caller's own key, its principal's on this board, before anything about the batch is read: the same request
+    // under it stops here with what the first made, checked against nothing as it is by now, and another is refused.
+    const named = body.idempotencyKey !== undefined ? `${owner}|${body.idempotencyKey}` : null
+    const digest = batchDigest(body)
+    const landed = named !== null ? keyed.get(named) : undefined
+    if (landed && landed.digest !== digest) throw new Refused(409, 'idempotency_key_reused', 'That key made another batch: another channel, or other tasks.')
+    if (landed) return { repeat: landed }
     // What takes a read, in the API's order. A caller narrowed to channels is first told of a task it can't read there.
     const wanted = tasks.map((task) => (task.needs ?? []).filter((need) => typeof need === 'string'))
     if (actor.can) for (const id of wanted.flat()) if (threads.has(id) && !mayRead(actor, threads.get(id)!.channelId)) throw new Refused(400, 'invalid_needs', `${id} is not a task you can wait for.`)
@@ -939,7 +972,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       thread.lastMessage = { ...thread.lastMessage!, createdAt: first + at }
       makeTask(thread, actor, { owner, needs: [...there[at]!, ...inside[at]!.map((other) => made[other]!.id)], for: task.for ?? null, waits: false, claim: null }, body.operationId)
     }
-    return made
+    if (named !== null) keyed.set(named, { digest, channelId: channel.id, threads: made.map((thread) => thread.id) })
+    return { made }
   }
 
   /** Refuses a write whose claim doesn't hold the task now, saying why. */
@@ -1089,6 +1123,7 @@ function fakeBoard(shared: Shared, boardId: string) {
           const found = claimNext(actor, body, claim, share)
           if (found) {
             claimed.set(key, { thread: found, hash: claim.hash })
+            shared.receipt(actor, body.operationId)
             return answer(found)
           }
           if (Date.now() >= until) return { task: null }
@@ -1134,19 +1169,22 @@ function fakeBoard(shared: Shared, boardId: string) {
       return told(first)
     }
     if (method === 'POST' && rest === '/tasks/batch') {
-      // The request's body, as JSON, before anything of it is read: a batch of long texts is over it before it's over the count.
-      if (new TextEncoder().encode(JSON.stringify(body)).byteLength > BATCH_BODY_BYTES) throw new Refused(413, 'entity_too_large', `A request's body is ${BATCH_BODY_BYTES.toLocaleString('en-US')} bytes at most.`)
-      if (typeof body.operationId !== 'string' || !UUID_V7.test(body.operationId)) throw new Refused(400, 'invalid_operation_id', 'operationId is a UUIDv7.')
       const key = `${principalId(actor.principal)}|${body.operationId}`
-      const sent = JSON.stringify(body)
-      // The operation again answers the tasks as the first call answered them, and another body under it is refused.
-      const first = batches.get(key)
+      // What the request asks for, whichever attempt sends it: its body but the operation ID.
+      const { operationId: _attempt, ...asked } = body
+      const sent = JSON.stringify(asked)
+      // Without a key of the caller's own, the operation again answers the tasks as the first call answered them, and
+      // another body under it is refused. A request with a key is answered by its key.
+      const first = body.idempotencyKey === undefined ? batches.get(key) : undefined
       if (first && first.sent !== sent) throw new Refused(409, 'operation_conflict', 'That operation made other tasks.')
       // To a caller that can't read the channel, only the call that made them answers them whole.
       if (first) return { tasks: mayRead(actor, first.channelId) ? first.tasks : first.tasks.map(({ id }) => ({ id })) }
-      const made = makeBatch(actor, body)
-      const answered = { sent, channelId: made[0]!.channelId, tasks: made.map(taskOf) }
+      const batch = makeBatch(actor, body)
+      // The key again, with the same request: the tasks it made, as they are now, and their IDs alone to a caller that can't read them.
+      if ('repeat' in batch) return { tasks: batch.repeat.threads.map((id) => (mayRead(actor, batch.repeat.channelId) ? taskOf(threadAt(id)) : { id })) }
+      const answered = { sent, channelId: batch.made[0]!.channelId, tasks: batch.made.map(taskOf) }
       batches.set(key, answered)
+      shared.receipt(actor, body.operationId)
       return { tasks: answered.tasks }
     }
     const worked = /^\/tasks\/([^/]+)\/(claim|renew|release|complete|fail|block|unblock|reopen|assign|needs|cancel)$/.exec(rest)
@@ -2251,6 +2289,9 @@ export function fakeMessageboard(
   const stored = new Map<string, Uint8Array<ArrayBuffer>>()
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
+  /** When each operation was answered, by its caller: what a retry finds, for 8 days. */
+  const receipts = new Map<string, number>()
+  const receipt = (actor: Actor, operationId: unknown) => void (typeof operationId === 'string' && receipts.set(`${principalId(actor.principal)}|${operationId}`, Date.now()))
   const roles = options.roles ?? ROLES
   const directory = { members: { ...(options.members ?? MEMBERS) }, roles, projects: options.projects ?? PROJECTS, repositories: options.repositories ?? REPOSITORIES, apps: APPS }
   const shared: Shared = {
@@ -2258,6 +2299,7 @@ export function fakeMessageboard(
     accounts,
     directory,
     now,
+    receipt,
     stored,
     externalImports: options.externalImports ?? false,
     platformHandles: options.platformHandles ?? false,
@@ -2306,9 +2348,22 @@ export function fakeMessageboard(
     if (version === 2 && !/^\/boards\/[^/]+\/tasks(\/|$)/.test(path)) throw new Refused(404, 'not_found', `${method} /v2${path}`)
     // Completing an upload takes no body.
     const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
+    // A batch's request, as JSON, before anything of it is read: long texts are over it before they're over the count.
+    if (method === 'POST' && /\/tasks\/batch$/.test(path) && new TextEncoder().encode(JSON.stringify(body)).byteLength > BATCH_BODY_BYTES)
+      throw new Refused(413, 'entity_too_large', `A request's body is ${BATCH_BODY_BYTES.toLocaleString('en-US')} bytes at most.`)
     // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
     // Sync's routes take none either, but imports.
-    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path)) {
+      if (typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+      // Every write's operation ID is a UUIDv7, and its time is read: with no receipt to answer it, a write is refused
+      // unless that time is within the last 7 days and at most 5 minutes ahead. A hash laid out as one is almost never.
+      if (!UUID_V7.test(body.operationId)) throw new Refused(400, 'bad_request', 'operationId is a UUIDv7.')
+      const kept = receipts.get(`${principalId(actor.principal)}|${body.operationId}`)
+      const answered = kept !== undefined && Date.now() - kept <= RECEIPT_KEPT_DAYS * DAY_MS
+      const made = Number.parseInt(body.operationId.replaceAll('-', '').slice(0, 12), 16)
+      if (!answered && (made < Date.now() - OPERATION_MAX_AGE_DAYS * DAY_MS || made > Date.now() + OPERATION_MAX_SKEW_S * 1000))
+        throw new Refused(409, 'operation_expired_or_unknown', "That operation ID's time is not within the last 7 days.", undefined, undefined, { maxAgeDays: OPERATION_MAX_AGE_DAYS, maxClockSkewSeconds: OPERATION_MAX_SKEW_S })
+    }
     const me = () => {
       // An API with thread tasks says so, here and on a board's own me: one without says nothing of them.
       const tasks = shared.tasks ? { tasks: true as const } : {}
@@ -2353,6 +2408,7 @@ export function fakeMessageboard(
       const board = kept(`brd_${randomUUID()}`, body.name, new Set(actor.principal.type === 'project' ? [grantOf(actor.principal)] : []))
       others.push(board)
       ensured.set(`${principalId(actor.principal)}|${body.operationId}`, board)
+      receipt(actor, body.operationId)
       return { board: show(board), created: true }
     }
     const registry = schemas.route(method, path, body, actor)

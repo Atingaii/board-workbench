@@ -48,6 +48,15 @@ function handleOn(api: Api, principal = 'user:u_jb', { answered: hook, can }: { 
 }
 
 const threadOf = (id: string) => `thr_${/^msg_(.+)_1$/.exec(id)![1]}`
+/** An operation ID as the API takes one, a UUIDv7 made at `at`: its first 48 bits are that time, which the API reads. */
+const operationAt = (at = Date.now()) => {
+  const time = Math.floor(at).toString(16).padStart(12, '0')
+  const rest = crypto.randomUUID().replaceAll('-', '')
+  return `${time.slice(0, 8)}-${time.slice(8)}-7${rest.slice(13, 16)}-a${rest.slice(17, 20)}-${rest.slice(20)}`
+}
+/** When an operation ID says it was made. */
+const madeAt = (operationId: string) => Number.parseInt(operationId.replaceAll('-', '').slice(0, 12), 16)
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const JULIAN = 'vercel:user:u_jb'
 const ADA = 'vercel:user:u_ada'
 const MINUTE = 60_000
@@ -107,7 +116,7 @@ describe("vercel()'s tasks", () => {
     const plain = await julian.post('work', 'just a thread')
     const { task } = await julian.tasks.create('work', { text: 'a task' })
     const ask = async (method: string, path: string, body?: Record<string, unknown>) => {
-      const response = await as(api, 'user:u_jb')(`${API}${path}${path.includes('?') ? '&' : '?'}teamId=team_test`, { method, ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operationId: crypto.randomUUID(), ...body }) } : {}) })
+      const response = await as(api, 'user:u_jb')(`${API}${path}${path.includes('?') ? '&' : '?'}teamId=team_test`, { method, ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operationId: operationAt(), ...body }) } : {}) })
       return [response.status, ((await response.json()) as { error?: { code: string } }).error?.code ?? null]
     }
     const v1 = '/v1/messageboard/boards/brd_test'
@@ -293,27 +302,127 @@ describe("vercel()'s tasks", () => {
     expect((await julian.thread(ship!.id)).message.task?.state).toBe('waiting')
   })
 
-  it("names a batch's operation by its id, so the API answers a retry with the tasks it made, and another batch under that id is another write's", async () => {
+  it("sends a batch's id as the API's idempotency key, beside an operation ID that is each attempt's own and a time the API reads: a retry gets the tasks as they are now", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
     const plan = [{ ref: 'fix', text: 'fix the export' }, { text: 'review the fix', needs: [{ ref: 'fix' }] }]
     const first = await julian.tasks.createMany('work', plan, { id: 'release-42' })
+    // Someone claims one of them: the same id again answers the tasks as they are now, and makes none.
+    await julian.tasks.claim(first[0]!.id, { lease: 60 })
     const again = await julian.tasks.createMany('work', plan, { id: 'release-42' })
-    expect(again.map((root) => root.id)).toEqual(first.map((root) => root.id))
+    expect(again.map((root) => [root.id, root.task?.state])).toEqual([[first[0]!.id, 'claimed'], [first[1]!.id, 'waiting']])
     expect((await julian.tasks.list({ state: 'all' })).tasks).toHaveLength(2)
-    // The same operation both times, a UUIDv7 in shape as the API takes one, and another for another id or for none.
-    const operations = () => julian.sent.filter((request) => request.path === '/tasks/batch').map((request) => request.body!.operationId as string)
-    expect(operations()[1]).toBe(operations()[0])
+    // The id went as the batch's key, both times, each with an operation ID of its own: a UUIDv7 made just now, whose
+    // time the API reads. One laid out from the id would name a time it refuses.
+    const batches = () => julian.sent.filter((request) => request.path === '/tasks/batch').map((request) => request.body!)
+    expect(batches()[0]!.idempotencyKey).toEqual(expect.stringMatching(/^.{1,512}$/))
+    expect(batches()[1]!.idempotencyKey).toBe(batches()[0]!.idempotencyKey)
+    expect(batches()[1]!.operationId).not.toBe(batches()[0]!.operationId)
+    for (const { operationId } of batches()) {
+      expect(operationId).toMatch(UUID_V7)
+      expect(Math.abs(madeAt(operationId) - Date.now())).toBeLessThan(60_000)
+    }
+    // The request goes the same each time, which is what the API tells a repeat by: the channel by its name, and each task's fields as given.
+    expect(batches()[1]).toEqual({ ...batches()[0], operationId: batches()[1]!.operationId })
+    expect(batches()[0]).toMatchObject({ channel: 'work', tasks: [{ ref: 'fix', text: 'fix the export' }, { text: 'review the fix', needs: [{ ref: 'fix' }] }] })
+    // Another id is another key, and a batch without one has none: the same plan again is new tasks.
     await julian.tasks.createMany('work', plan, { id: 'release-43' })
     await julian.tasks.createMany('work', plan)
     await julian.tasks.createMany('work', plan)
-    expect(new Set(operations()).size).toBe(4)
-    expect(operations().every((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))).toBe(true)
+    expect(batches().slice(2).map((body) => typeof body.idempotencyKey)).toEqual(['string', 'undefined', 'undefined'])
+    expect(batches()[2]!.idempotencyKey).not.toBe(batches()[0]!.idempotencyKey)
     expect((await julian.tasks.list({ state: 'all' })).tasks).toHaveLength(8)
-    // The API's own word for an operation sent again with another body is a board's for an id used twice.
-    await expect(julian.tasks.createMany('work', [...plan, { text: 'and one more' }], { id: 'release-42' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    // The API's word for a key sent again with another request is a board's for an id used twice: other tasks, as many
+    // or not, the same ones in another order, and another channel.
+    const other: Parameters<typeof julian.tasks.createMany>[1][] = [
+      [{ ref: 'fix', text: 'fix the import' }, plan[1]!],
+      [plan[0]!, { ...plan[1]!, labels: { step: 'review' } }],
+      [plan[0]!, { text: 'review the fix' }],
+      [{ ...plan[0]!, noSync: true }, plan[1]!],
+      [{ ...plan[0]!, for: `${JULIAN}+fixer` }, plan[1]!],
+      [...plan, { text: 'and one more' }],
+      [plan[0]!],
+      [plan[1]!, plan[0]!],
+    ]
+    for (const tasks of other) await expect(julian.tasks.createMany('work', tasks, { id: 'release-42' }), JSON.stringify(tasks)).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
     await expect(julian.tasks.createMany('elsewhere', plan, { id: 'release-42' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    // A field left out is its empty value: the same request, written out in full.
+    const full = [{ ref: 'fix', text: 'fix the export', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'review the fix', needs: [{ ref: 'fix' }], labels: {} }]
+    expect((await julian.tasks.createMany('work', full, { id: 'release-42' })).map((root) => root.id)).toEqual(first.map((root) => root.id))
     expect((await julian.tasks.list({ state: 'all' })).tasks).toHaveLength(8)
+    // A key is its caller's: someone else's batch under the same id is their own.
+    const ada = handleOn(api, 'user:u_ada')
+    expect((await ada.tasks.createMany('work', plan, { id: 'release-42' })).map((root) => root.id)).not.toEqual(first.map((root) => root.id))
+    // A key takes one of the items a write holds: 14 plain tasks fit with one and 15 without, and a chain of 12 and of 13.
+    const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
+    const chain = (count: number) => Array.from({ length: count }, (_, n) => ({ ref: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ ref: `step-${n - 1}` }] } : {}) }))
+    await expect(julian.tasks.createMany('plans', plain(15), { id: 'fifteen' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
+    await expect(julian.tasks.createMany('plans', chain(13), { id: 'thirteen' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
+    expect(await julian.tasks.createMany('plans', plain(14), { id: 'fourteen' })).toHaveLength(14)
+    expect(await julian.tasks.createMany('plans', chain(12), { id: 'twelve' })).toHaveLength(12)
+    expect(await julian.tasks.createMany('plans', plain(15))).toHaveLength(15)
+    expect(await julian.tasks.createMany('plans', chain(13))).toHaveLength(13)
+  })
+
+  it("refuses a write whose operation ID names no recent time, on every route that takes one, unless a receipt answers it: what the fake reads as the API does", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'a task' })
+    const root = await julian.post('work', 'a thread')
+    const [thread, message] = [threadOf(task.id), threadOf(root.id)]
+    const ask = async (method: string, path: string, body: Record<string, unknown>) => {
+      const response = await as(api, 'user:u_jb')(`${API}${path}?teamId=team_test`, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      const answer = (await response.json()) as { error?: { code: string; maxAgeDays?: number; maxClockSkewSeconds?: number }; thread?: { id: string } }
+      return { status: response.status, code: answer.error?.code ?? null, error: answer.error, thread: answer.thread?.id }
+    }
+    const [DAY, MINUTE] = [24 * 60 * 60 * 1000, 60 * 1000]
+    const v1 = '/v1/messageboard/boards/brd_test'
+    const v2 = '/v2/messageboard/boards/brd_test'
+    const post = (operationId: string) => ask('POST', `${v1}/threads`, { operationId, channel: 'work', text: 'a post' })
+    // Its shape first: a UUIDv7, lowercase. Then its time: within the last 7 days, and no more than 5 minutes ahead.
+    expect((await post(crypto.randomUUID())).code).toBe('bad_request')
+    expect((await post(operationAt().toUpperCase())).code).toBe('bad_request')
+    expect(await post(operationAt(Date.now() - 7 * DAY - MINUTE))).toMatchObject({ status: 409, code: 'operation_expired_or_unknown', error: { maxAgeDays: 7, maxClockSkewSeconds: 300 } })
+    expect((await post(operationAt(Date.now() + 6 * MINUTE))).code).toBe('operation_expired_or_unknown')
+    expect((await post(operationAt(Date.now() - 7 * DAY + MINUTE))).status).toBe(200)
+    expect((await post(operationAt(Date.now() + 4 * MINUTE))).status).toBe(200)
+    // A caller's key laid out as a UUIDv7 names a time that's nowhere near: refused, as any stale one is.
+    expect((await post('59a5499d-52bc-7c56-bdab-1704843d29cb')).code).toBe('operation_expired_or_unknown')
+    // Every write that takes an operation ID, on both versions, before anything else about it is looked at.
+    const stale = () => operationAt(Date.now() - 8 * DAY)
+    for (const [method, path, body] of [
+      ['POST', `${v1}/channels`, { name: 'elsewhere' }],
+      ['POST', `${v1}/threads`, { channel: 'work', text: 'a post' }],
+      ['POST', `${v1}/threads/${message}/messages`, { text: 'a reply' }],
+      ['PATCH', `${v1}/threads/${message}/messages/1`, { text: 'edited' }],
+      ['POST', `${v1}/threads/${message}/messages/1/delete`, {}],
+      ['POST', `${v1}/threads/${message}/messages/1/reactions`, { emoji: 'eyes' }],
+      ['POST', `${v1}/threads/${message}/messages/1/labels`, { set: { step: 'fix' } }],
+      ['POST', `${v1}/schedules`, { channel: 'work', text: 'later', in: 60 }],
+      ['POST', `${v1}/grants`, { principals: [], can: {} }],
+      ['POST', '/v1/messageboard/boards/ensure', { name: 'security' }],
+      ['POST', `${v2}/tasks`, { channel: 'work', text: 'a task' }],
+      ['POST', `${v2}/tasks/batch`, { channel: 'work', tasks: [{ text: 'a task' }] }],
+      ['POST', `${v2}/tasks/claim`, { channel: 'work', claimToken: 'a'.repeat(43) }],
+      ['POST', `${v2}/tasks/${thread}/claim`, { claimToken: 'a'.repeat(43) }],
+      ['POST', `${v2}/tasks/${thread}/needs`, { needs: [] }],
+      ['POST', `${v2}/tasks/${thread}/cancel`, { reason: 'no' }],
+    ] as const)
+      expect([method, path, (await ask(method, path, { operationId: stale(), ...body })).code], `${method} ${path}`).toEqual([method, path, 'operation_expired_or_unknown'])
+    // None of them wrote anything.
+    expect((await julian.thread(root.id)).message).toMatchObject({ text: 'a thread', labels: {}, deleted: false })
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', epoch: 0 })
+    expect((await julian.channels()).map((channel) => channel.path)).toEqual(['general', 'work'])
+    // A retry finds its receipt for 8 days, however old its ID has grown: then the ID is past the 7 a new write may be.
+    const kept = operationAt()
+    const landed = await post(kept)
+    vi.setSystemTime(Date.now() + 7 * DAY + 12 * 60 * MINUTE)
+    expect(await post(kept)).toMatchObject({ status: 200, thread: landed.thread })
+    vi.setSystemTime(Date.now() + DAY)
+    expect((await post(kept)).code).toBe('operation_expired_or_unknown')
+    // Its own writes go on landing: each carries the time it's made at.
+    expect((await julian.post('work', 'eight days on')).text).toBe('eight days on')
   })
 
   it("makes none of a batch the API refuses, and says why in a board's codes: how its tasks wait, what it would wait for, and more than one write holds", async () => {
@@ -382,24 +491,23 @@ describe("vercel()'s tasks", () => {
     expect(julian.sent.filter((request) => request.method === 'POST')).toEqual([])
   })
 
-  it("leaves to the API what it never sends it: a batch of the wrong shape, an operation ID that is no UUIDv7, and the order the API refuses in", async () => {
+  it("leaves to the API what it never sends it: a batch of the wrong shape, and the order the API refuses in", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
     const { task: there } = await julian.tasks.create('work', { text: 'a task that was there' })
     const file = await julian.upload({ data: new TextEncoder().encode('the plan'), name: 'plan.txt', type: 'text/plain' })
-    const operation = () => `0190a5dc-${crypto.randomUUID().slice(9, 13)}-7${crypto.randomUUID().slice(15, 18)}-a${crypto.randomUUID().slice(20)}`
     const ask = async (body: Record<string, unknown>, can?: string) => {
       const response = await as(api, 'user:u_jb')(`${API}/v2/messageboard/boards/brd_test/tasks/batch?teamId=team_test`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...(can !== undefined ? { 'x-board-can': can } : {}) },
-        body: JSON.stringify({ operationId: operation(), channel: 'plans', ...body }),
+        body: JSON.stringify({ operationId: operationAt(), channel: 'plans', ...body }),
       })
       const answer = (await response.json()) as { error?: { code: string; items?: number; limit?: number } }
       return [response.status, answer.error?.code ?? null, ...(answer.error?.items !== undefined ? [answer.error.items, answer.error.limit] : [])]
     }
     const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
     const thread = threadOf(there.id)
-    expect(await ask({ operationId: 'release-42', tasks: plain(1) })).toEqual([400, 'invalid_operation_id'])
+    expect(await ask({ operationId: 'release-42', tasks: plain(1) })).toEqual([400, 'bad_request'])
     // A body of more than 64 KB is refused for that, whatever else it is, and says nothing of items.
     expect(await ask({ operationId: 'release-42', tasks: Array.from({ length: 101 }, () => ({ text: 'x'.repeat(700) })) })).toEqual([413, 'entity_too_large'])
     // The body's shape, before anything else.
@@ -433,6 +541,15 @@ describe("vercel()'s tasks", () => {
     expect(await ask({ tasks: [{ text: 'x', needs: [`thr_${crypto.randomUUID()}`] }, { text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([400, 'invalid_needs'])
     // None of it left a task, or the channel it named.
     expect((await julian.channels()).map((channel) => channel.path)).not.toContain('plans')
+    // A key of the caller's own: 1 to 512 characters of anything. The same request under it, a field left out being its
+    // empty value, makes nothing more; a channel named another way is another request.
+    expect(await ask({ idempotencyKey: '', tasks: plain(1) })).toEqual([400, 'bad_request'])
+    expect(await ask({ idempotencyKey: 'k'.repeat(513), tasks: plain(1) })).toEqual([400, 'bad_request'])
+    const keyed = { channel: 'keyed', idempotencyKey: `release 42 / the plan ${'é'.repeat(480)}` }
+    expect(await ask({ ...keyed, tasks: [{ ref: 'a', text: 'a' }, { text: 'b', needs: [{ ref: 'a' }] }] })).toEqual([200, null])
+    expect(await ask({ ...keyed, tasks: [{ ref: 'a', text: 'a', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'b', needs: [{ ref: 'a' }] }] })).toEqual([200, null])
+    expect((await julian.tasks.list({ channel: 'keyed', state: 'all' })).tasks).toHaveLength(2)
+    expect(await ask({ ...keyed, tasks: [{ ref: 'a', text: 'a' }, { text: 'b' }] })).toEqual([409, 'idempotency_key_reused'])
     // A file is looked at last, once the channel a batch names is made, as for one task: a batch refused for one leaves the channel, and no task.
     expect(await ask({ channel: 'filed', tasks: [{ text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([404, 'attachment_not_found'])
     expect((await julian.channels()).map((channel) => channel.path)).toContain('filed')
@@ -488,7 +605,7 @@ describe("vercel()'s tasks", () => {
     expect(julian.sent.filter((request) => request.method !== 'GET')).toEqual([])
     // A caller of the API itself is refused the same, as a post is, before the channel it names is made.
     const ask = async (path: string, body: Record<string, unknown>) => {
-      const response = await as(api, 'user:u_jb')(`${API}${path}?teamId=team_test`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operationId: crypto.randomUUID(), ...body }) })
+      const response = await as(api, 'user:u_jb')(`${API}${path}?teamId=team_test`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operationId: operationAt(), ...body }) })
       return [response.status, ((await response.json()) as { error?: { code: string } }).error?.code ?? null]
     }
     expect(await ask('/v2/messageboard/boards/brd_test/tasks', { channel: 'reverts', text: wrong })).toEqual([400, 'invalid_block'])
