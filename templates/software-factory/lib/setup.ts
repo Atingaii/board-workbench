@@ -1,6 +1,7 @@
 import type { Board, MessageView } from "@vercel/board";
 import { NAME } from "../agent/lib/identity.ts";
 import { githubScope, ownRepo } from "./github.ts";
+import { projectOf, type Project } from "./project.ts";
 
 // The launcher's steps: each is a short list of tasks, checked from this deployment as it is now.
 // Nothing here writes anything.
@@ -87,18 +88,6 @@ const createConnector = (service: "github" | "slack", connector: string, project
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
 
-type Project = { team: string; name: string } | null;
-
-/** The project a token names: its team's slug and its own name, or null when it doesn't read as one. */
-export function projectOf(jwt: string): Project {
-  try {
-    const { owner, project } = JSON.parse(Buffer.from(jwt.split(".")[1] ?? "", "base64url").toString());
-    return typeof owner === "string" && typeof project === "string" ? { team: owner, name: project } : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Where the project's settings are, from its OIDC token's claims. */
 function dashboard(project: Project) {
   const base = project ? `https://vercel.com/${project.team}/${project.name}` : "https://vercel.com/dashboard";
@@ -131,13 +120,15 @@ export const CHANNELS_FILE = "app/api/board/[[...path]]/channels.ts";
 
 /**
  * That file in this factory's own repo on GitHub, on the branch it was deployed from, opened on the
- * first line `find` picks. People edit the file, so the line is looked up in what was deployed, never
- * remembered; when it isn't found, the link opens the file. Nothing off a deployment from Git.
+ * line `find` picks (counted from 0, -1 for none). People edit the file, so the line is looked up in
+ * what was deployed, never remembered; when it isn't found, the link opens the file. Nothing off a
+ * deployment from Git.
  */
-function channelsLink(deps: Deps, label: string, find: (line: string) => boolean): { link?: Link } {
+function channelsLink(deps: Deps, label: string, find: (lines: string[]) => number): { link?: Link } {
   const own = ownRepo(deps.env);
   if (!own) return {};
-  const line = (deps.channels()?.split("\n").findIndex(find) ?? -1) + 1;
+  const source = deps.channels();
+  const line = (source === undefined ? -1 : find(source.split("\n"))) + 1;
   const path = CHANNELS_FILE.split("/").map(encodeURIComponent).join("/");
   return { link: { href: `https://github.com/${own}/blob/${deps.env.VERCEL_GIT_COMMIT_REF || "main"}/${path}${line ? `#L${line}` : ""}`, label } };
 }
@@ -255,7 +246,7 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
   const several = off.length > 1;
   const unmapped = `${off.slice(0, 2).join(", ")}${off.length > 2 ? `, +${off.length - 2}` : ""} ${several ? "aren't" : "isn't"} on the board yet.`;
   // The link opens where the map of repos starts.
-  const map = channelsLink(deps, several ? "Add them" : "Add it", (line) => line.startsWith("export const repoChannels"));
+  const map = channelsLink(deps, several ? "Add them" : "Add it", (lines) => lines.findIndex((line) => line.startsWith("export const repoChannels")));
   tasks.push(done(INSTALL, off.length ? { hint: unmapped, ...map } : {}));
   if (!own) return step("github", tasks);
 
@@ -277,8 +268,15 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   const wanted = Object.keys(deps.synced.slackChannels);
   const channel = wanted.join(", ");
   const CONNECT = "Create a Slack connector";
-  // What the channel is for, and the line that names it (a key of the map, in either quote), to name another.
-  const names = (line: string) => wanted.some((name) => [`"${name}"`, `'${name}'`].some((key) => line.trimStart().startsWith(key)));
+  // What the channel is for, and the line that names it, to name another: the entry that starts with
+  // its name in quotes, or the map's first entry, whose name is put together from the project's.
+  const names = (lines: string[]) => {
+    const quoted = lines.findIndex((line) => wanted.some((name) => [`"${name}"`, `'${name}'`].some((key) => line.trimStart().startsWith(key))));
+    if (quoted !== -1) return quoted;
+    const map = lines.findIndex((line) => line.startsWith("export const slackChannels"));
+    const first = map === -1 ? -1 : lines.findIndex((line, i) => i > map && line.trim() !== "" && !line.trimStart().startsWith("//"));
+    return first !== -1 && !lines[first]!.startsWith("}") ? first : -1;
+  };
   const invite = (channels: string, command?: string): Task =>
     todo(`Invite the app to ${channels}`, { hint: "Where the factory updates itself.", ...channelsLink(deps, "Change the channel", names), ...(command ? { commands: [command] } : {}) });
   const token = await deps.connect(connector).catch((error: unknown) => error);

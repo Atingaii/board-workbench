@@ -27,9 +27,12 @@ pnpm build
   default board; a dev server or a preview is on one named `factory-dev`.
 - **Each setting lives where it's used.** Which channel each repo's PRs and issues come into, and
   which Slack channels mirror which board channels, are in `app/api/board/[[...path]]/channels.ts`
-  (this repo's own go to `dev/factory`, which Slack's `#factory-rsi` mirrors: where the factory
+  (this repo's own go to `dev/factory`, which Slack's `#<project>-rsi` mirrors: where the factory
   updates itself). The board's sync, its connectors, and its watcher are in `factory.ts` beside
   it. The agent's model, instructions, sandbox, tools, and skills are in `agent/`.
+- **What a team keeps one of per name is named for the Vercel project** (`lib/project.ts`): the
+  Connect connectors (`github/<project>`, `slack/<project>`) and that Slack channel. A team's
+  second factory gets its own, with nothing to edit.
 - **Instructions are for every turn, skills for some.** `agent/lib/instructions.ts` holds the
   judgment every turn needs, with a line pointing at each skill; a procedure the agent needs only
   sometimes (reviewing, reproducing a bug, seeing a PR through, demos) is a skill in `agent/skills/`.

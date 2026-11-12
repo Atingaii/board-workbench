@@ -1,5 +1,6 @@
 import { boardName, connectors, factory, repoChannels, slackChannels } from "@/app/api/board/[[...path]]/factory";
-import { boardDeps, inspectCommand, isLocal, liveDeps, projectOf, setup, type Setup } from "./setup.ts";
+import { projectOf } from "./project.ts";
+import { boardDeps, inspectCommand, isLocal, liveDeps, setup, type Setup } from "./setup.ts";
 
 // The launcher, checked now, for whichever of its faces was asked: the page, its markdown, or the
 // steps the agent's setup_steps tool reads.
