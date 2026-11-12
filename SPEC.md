@@ -1358,10 +1358,8 @@ const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one 
   (`/boards/:boardId/schemas`), registers on the team's route (`/schemas`,
   with an `operationId`), and adapts its views: `createdAt` in milliseconds is `at`, `createdBy` is `by`,
   and the team's own list by name and then version as a number, where the API
-  lists them by ID as text. The API doesn't say whether a registration made
-  the version, so `vercel()` reads it first: `created` is whether it was
-  missing then, and of two that register one version at once there, both may
-  say they made it, though the registry keeps one. The API checks a definition more strictly than `checkDefinition`:
+  lists them by ID as text. `created` is the API's answer: of two that register one
+  version at once there, one made it. The API checks a definition more strictly than `checkDefinition`:
   it also refuses a `required` name its schema's `properties` don't declare,
   and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: whoever the board lets in reads them, a project's
   own credentials included, and people and apps whose team role is owner,

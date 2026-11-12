@@ -4,7 +4,6 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
-import { schemaId } from '../contract/data-schemas.ts'
 import { blocksIn } from '../contract/blocks.ts'
 import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
@@ -2262,16 +2261,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async createSchema(caller, input, signal) {
       const who = whoOf(caller)
-      // The API answers the schema whether or not this made it, so that's whether it was there before.
-      const there = await api(who, 'GET', `/schemas/${encodeURIComponent(schemaId(input.name, input.version))}`, signal ? { signal } : {}).then(
-        () => true,
-        (error: unknown) => {
-          if (error instanceof HttpError && error.code === 'schema_not_found') return false
-          throw error
-        },
-      )
-      const { schema } = await api<{ schema: ApiSchema }>(who, 'POST', '/schemas', { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
-      return { schema: schemaFrom(schema), created: !there }
+      // The API says whether this request made the version: of two that register one at once, one did.
+      const { schema, created } = await api<{ schema: ApiSchema; created: boolean }>(who, 'POST', '/schemas', { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      return { schema: schemaFrom(schema), created }
     },
     async schedule(caller, input, signal) {
       if (input.attachments?.length) throw notSupported('files on scheduled messages')
