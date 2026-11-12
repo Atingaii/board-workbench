@@ -161,8 +161,6 @@ export type CommandContext = {
   connection: typeof connection
   client: () => Board
   openBrowser: (url: string) => void
-  /** The app's copy of the inspector's page, when it hands one (`App`'s). */
-  inspectorPage?: () => Promise<string>
 }
 
 /**
@@ -193,11 +191,6 @@ export type App = {
    * its saved team), asked for only when a request needs it. Null is your login's default team.
    */
   team?: () => Promise<string | null>
-  /**
-   * The inspector's page, for an app that bundles board's CLI and so has no file of board's beside
-   * it: `INSPECTOR_PAGE`'s, as the app fetched and checked it. Asked for only when `inspect` runs.
-   */
-  inspectorPage?: () => Promise<string>
 }
 
 type Flags = ReturnType<typeof parseAll>['values']
@@ -1560,13 +1553,15 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'inspect':
-      // Loaded only now: the page comes with it, and it's most of what the CLI ships.
-      return (await import('./inspect.ts')).inspect(context())
-
     default: {
       const own = app.commands[command]
       if (own) return own.run(args, context())
+      // What only board's own CLI runs, on this machine: an app that embeds board's leaves it out.
+      if (STANDALONE.has(command))
+        throw usage(`${named()} has no ${command}: board's own CLI runs it.`, {
+          reason: 'unknown_command',
+          next: [{ instruction: "Run board's own CLI", argv: ['npx', '@vercel/board@latest', command] }],
+        })
       const names = [...commands.flatMap((known) => [known.name, ...(known.aliases ?? [])]), ...Object.keys(app.commands)]
       const guess = closest(command, names)
       // What people and agents type for a command that goes by another name here.
@@ -1648,7 +1643,6 @@ const context = (): CommandContext => ({
   connection,
   client,
   openBrowser,
-  ...(app.inspectorPage ? { inspectorPage: app.inspectorPage } : {}),
 })
 
 /**
@@ -1729,6 +1723,9 @@ function stopped(reason: unknown): Failed {
     ...(writes ? { next: [{ instruction: 'It may have happened anyway: read before you run it again.' }] } : {}),
   })
 }
+
+/** The commands only board's own CLI has (`local.ts`), by name: an app that embeds board's points to it. */
+const STANDALONE = new Set(['inspect', 'serve'])
 
 /** The commands about the machine the CLI runs on, not the board: none of them run in-process. */
 const MACHINE = new Set(['whoami', 'hooks', 'hook', 'serve', 'inspect'])
