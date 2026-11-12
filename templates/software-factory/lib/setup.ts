@@ -56,12 +56,15 @@ export function progress(steps: Step[]): { done: number; of: number; running: bo
   return { done, of: required.length, running: done === required.length };
 }
 
+/** What a factory is, in a line: under the page's title while it's being set up, and what a browser shows for the page. */
+export const ABOUT = "An agent that takes your team's issues to pull requests.";
+
 /** What the launcher says first, as a page and as markdown. */
 export function headline(setup: Setup): { title: string; lede: string } {
   if (setup.open) return { title: "Protect this deployment first", lede: "The setup shows once only your team can open this page." };
   return progress(setup.steps).running
     ? { title: "Your software factory is running", lede: "Bring it issues, threads, and questions." }
-    : { title: "Set up your software factory", lede: "An agent that takes your team's issues to pull requests." };
+    : { title: "Set up your software factory", lede: ABOUT };
 }
 
 type Env = Record<string, string | undefined>;
