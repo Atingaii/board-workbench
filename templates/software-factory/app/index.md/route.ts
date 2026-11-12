@@ -7,6 +7,6 @@ import { markdown } from "@/lib/markdown";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const { result, inspect } = await check(request.headers.get("host") ?? new URL(request.url).host);
-  return new Response(markdown(result, inspect), { headers: { "content-type": "text/markdown; charset=utf-8", vary: "accept" } });
+  const { result, inspect, running } = await check(request.headers.get("host") ?? new URL(request.url).host);
+  return new Response(markdown(result, inspect, running), { headers: { "content-type": "text/markdown; charset=utf-8", vary: "accept" } });
 }

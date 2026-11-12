@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { agentPrompt, markdown } from "../lib/markdown.ts";
+import { agentPrompt, joinPrompt, markdown } from "../lib/markdown.ts";
 import { channel } from "../lib/project.ts";
 import { isDone, setup, type Deps, type Step, type Task } from "../lib/setup.ts";
 
@@ -571,4 +571,59 @@ test("the prompt for an agent names the deployment and the command that reads it
   const local = agentPrompt("http://localhost:3000", true);
   assert.ok(local.endsWith(": curl http://localhost:3000"));
   assert.ok(!local.includes("vercel curl"));
+});
+
+test("once it runs, the markdown opens with what the factory has been doing, and how to onboard a repo", async () => {
+  const running = {
+    overview: {
+      week: { threads: 6, messages: 22, answered: 5, firstReplyMs: 14_000, more: false },
+      lastReplyAt: "2026-11-12T11:56:00.000Z",
+      pulls: { open: [{ repo: "acme/web", number: 12, title: "Fix the build", url: "https://github.com/acme/web/pull/12", draft: true }], merged: 3, closed: 1 },
+    },
+    repos: [{ repo: "acme/factory", channel: "project-factory/rsi" }],
+    ask: { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 3 },
+    join: "",
+  };
+  const text = markdown(await setup(fake().deps), INSPECT, running, new Date("2026-11-12T12:00:00.000Z"));
+  assert.ok(
+    text.startsWith(`# Your software factory is running
+
+Bring it issues, threads, and questions. 3 of 3 steps done, checked on this request.
+
+## This week
+
+- 6 threads, 22 messages
+- 5 answered, the first reply after 14s (median)
+- Last reply 4m ago
+
+## Pull requests
+
+- 1 open, 3 merged, 1 closed
+- [acme/web#12 Fix the build](https://github.com/acme/web/pull/12) (draft)
+
+## Repos
+
+- acme/factory in \`project-factory/rsi\`
+- 3 more have the GitHub app. To onboard one, ask in #factory-rsi: onboard <owner>/<repo>
+
+## 1. Vercel (done)
+`),
+    text,
+  );
+  // A week the read didn't reach the end of says so, and with no Slack channel the ask is on the board.
+  const busy = markdown(await setup(fake().deps), INSPECT, { ...running, overview: { ...running.overview, week: { ...running.overview.week, more: true, firstReplyMs: null } }, ask: { channel: "project-factory/rsi", slack: null, waiting: null } });
+  assert.ok(busy.includes("- 6+ threads, 22+ messages\n- 5 answered\n"), busy);
+  assert.ok(busy.includes("- To onboard one, ask in project-factory/rsi: onboard <owner>/<repo>"), busy);
+});
+
+test("the prompt for an agent to join names the team's board, the factory's channels, and where its ways are written", () => {
+  const prompt = joinPrompt({ origin: "https://factory.acme.dev", team: "acme", home: "project-factory", repo: "acme/factory" });
+  assert.ok(prompt.startsWith("Join the software factory at https://factory.acme.dev"));
+  assert.ok(prompt.includes("vercel board whoami --scope acme"));
+  assert.ok(prompt.includes("vercel board read project-factory/ --scope acme"));
+  assert.ok(prompt.includes("https://github.com/acme/factory"));
+  // Off a deployment from Git there's no repo to point at, and with no team the CLI's own linked one is used.
+  const bare = joinPrompt({ origin: "http://localhost:3000", team: undefined, home: "project-factory", repo: null });
+  assert.ok(!bare.includes("github.com") && !bare.includes("--scope"));
+  assert.ok(bare.includes("vercel board read project-factory/\n"));
 });

@@ -29,7 +29,20 @@ export type Step = { id: StepId; title: string; optional?: boolean; tasks: Task[
 export const isDone = (step: Step) => step.tasks.every((task) => task.done);
 
 /** What the launcher shows: its steps, or while strangers can open this deployment, only how to protect it. */
-export type Setup = { open: false; steps: Step[] } | { open: true; task: Task };
+export type Setup = { open: false; steps: Step[]; found: Found } | { open: true; task: Task };
+
+/** This deployment on its board: who it writes as, and what it may do there, by channel pattern. */
+export type Me = { principal: string; can: Record<string, readonly string[]> };
+
+/**
+ * What the checks came across on the way, for the page to show once the factory runs: this
+ * deployment on its board (null when it can't use it), the latest messages in its channels, and the
+ * repos its GitHub app is on that come into no channel (null when that couldn't be told).
+ */
+export type Found = { me: Me | null; recent: MessageView[]; waiting: string[] | null };
+
+/** How many messages one read of the factory's channels asks for. */
+export const READ = 200;
 
 /** Where setup stands: how many of the steps that aren't optional are done, and whether that's all of them. */
 export function progress(steps: Step[]): { done: number; of: number; running: boolean } {
@@ -59,8 +72,6 @@ export type Synced = {
   home: string;
 };
 
-type Me = { principal: string; can: Record<string, readonly string[]> };
-
 /** What the checks reach: the environment, the network, and the board. Tests pass their own. */
 export type Deps = {
   env: Env;
@@ -77,7 +88,7 @@ export type Deps = {
   /** Who this deployment is on its board, and what it may do there, by channel pattern. Rejects with the board's own error when it can't use it. */
   me(): Promise<Me>;
   /** The board's latest messages in a channel, newest last. */
-  messages(query: { channel: string; limit: number }): Promise<MessageView[]>;
+  messages(query: { channel: string; limit: number; label?: string[] }): Promise<MessageView[]>;
   /** A file of this factory as it was deployed, by its path from the project's root, to link to its lines. Nothing when it can't be read. */
   source(file: string): string | undefined;
 };
@@ -177,8 +188,9 @@ export async function setup(deps: Deps): Promise<Setup> {
     }
   }
   const vercel = await vercelStep(deps, local, project);
-  const [github, slack, tryIt] = await Promise.all([githubStep(deps, project), slackStep(deps, project), tryStep(deps, project, vercel.me)]);
-  return { open: false, steps: [vercel.step, github, slack, tryIt] };
+  const found: Found = { me: vercel.me, recent: [], waiting: null };
+  const [github, slack, tryIt] = await Promise.all([githubStep(deps, project, found), slackStep(deps, project), tryStep(deps, project, found)]);
+  return { open: false, steps: [vercel.step, github, slack, tryIt], found };
 }
 
 /** Protected, on the team's board, with AI Gateway. `me` is this project on the board, or null when it can't use it. */
@@ -227,7 +239,7 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
 type Repo = { full_name: string };
 
 /** The connector, the repos its app is on, and among them this factory's own, which the agent changes to improve itself. */
-async function githubStep(deps: Deps, project: Project): Promise<Step> {
+async function githubStep(deps: Deps, project: Project, found: Found): Promise<Step> {
   const connector = deps.synced.connectors.github;
   const own = ownRepo(deps.env);
   const CONNECT = "Create a GitHub connector";
@@ -269,6 +281,7 @@ async function githubStep(deps: Deps, project: Project): Promise<Step> {
   // Installed but in no channel: the board drops their PRs and issues (matched as GitHub writes them).
   const mapped = deps.synced.repoChannels;
   const off = total_count > repositories.length ? [] : repositories.map((repo) => repo.full_name).filter((name) => !(name in mapped));
+  found.waiting = total_count > repositories.length ? null : off;
   const several = off.length > 1;
   const unmapped = `${off.slice(0, 2).join(", ")}${off.length > 2 ? `, +${off.length - 2}` : ""} ${several ? "aren't" : "isn't"} on the board yet.`;
   // The link opens where the map of repos starts.
@@ -331,14 +344,16 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   return step("slack", [done(CONNECT), done(INVITE(wanted))], true);
 }
 
-async function tryStep(deps: Deps, project: Project, me: Me | null): Promise<Step> {
+async function tryStep(deps: Deps, project: Project, found: Found): Promise<Step> {
+  const { me } = found;
   const POST = "Post on the board, or open an issue";
   const REPLY = "Get a reply from the agent";
   // The Vercel step says how to open the board: nothing to try until then.
   if (!me) return step("try", [todo(POST), todo(REPLY)]);
   // The factory's channels, in one read: its own and the ones under it.
-  const recent: MessageView[] | Error = await deps.messages({ channel: `${deps.synced.home}/`, limit: 200 }).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+  const recent: MessageView[] | Error = await deps.messages({ channel: `${deps.synced.home}/`, limit: READ }).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
   if (recent instanceof Error) return step("try", [todo("Couldn't read the board", { hint: message(recent) }), todo(REPLY)]);
+  found.recent = recent;
   const heard = recent.some((m) => !byAgent(m.by, me.principal));
   const replied = recent.some((m) => byAgent(m.by, me.principal));
   return step("try", [heard ? done(POST) : todo(POST, { commands: [inspectCommand(project?.team, deps.synced.board)] }), replied ? done(REPLY) : todo(REPLY)]);
