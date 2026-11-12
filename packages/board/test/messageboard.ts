@@ -1279,7 +1279,8 @@ const BUILT_IN_SCHEMAS: SchemaRow[] = [
  * The team's data schemas, as Vercel's API keeps them, one registry for every board on the team: its
  * built-ins first, then the team's own by their IDs as text. A version registers once: the same
  * definition again answers it, without saying it made nothing, and another is 409. People and apps
- * register, but for a viewer; a project's token reaches none of it, reads included.
+ * register, but for a viewer, and read them on the team's routes, which answer a project's token 403.
+ * Whoever a board lets in reads them through it (`/boards/:boardId/schemas…`), a project included.
  */
 function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, Role> }) {
   const kept = new Map<string, SchemaRow>()
@@ -1287,18 +1288,21 @@ function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, 
   return {
     /** Every version the team registered, by its ID. */
     kept,
-    /** What `/schemas…` answers, or undefined for another route. */
+    /** What a read of `/schemas` or `/schemas/:id` answers, on the team's routes and through a board alike, or undefined for another path. */
+    read(path: string): unknown {
+      if (path === '/schemas') return { schemas: [...BUILT_IN_SCHEMAS, ...[...kept.values()].sort((a, b) => (a.id < b.id ? -1 : 1))], cursor: null }
+      if (!path.startsWith('/schemas/')) return undefined
+      const id = decodeURIComponent(path.slice('/schemas/'.length))
+      if (!ID.test(id)) throw new Refused(400, 'invalid_schema_id', 'Name a schema as name@version, such as git-commit@1.')
+      const schema = BUILT_IN_SCHEMAS.find((found) => found.id === id) ?? kept.get(id)
+      if (!schema) throw new Refused(404, 'schema_not_found', `Schema ${id} isn't registered for this team.`)
+      return { schema }
+    },
+    /** What the team's `/schemas…` answers, or undefined for another route. */
     route(method: string, path: string, body: Record<string, any>, actor: Actor): unknown {
       if (path !== '/schemas' && !path.startsWith('/schemas/')) return undefined
       if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
-      if (method === 'GET' && path === '/schemas') return { schemas: [...BUILT_IN_SCHEMAS, ...[...kept.values()].sort((a, b) => (a.id < b.id ? -1 : 1))], cursor: null }
-      if (method === 'GET') {
-        const id = decodeURIComponent(path.slice('/schemas/'.length))
-        if (!ID.test(id)) throw new Refused(400, 'invalid_schema_id', 'Name a schema as name@version, such as git-commit@1.')
-        const schema = BUILT_IN_SCHEMAS.find((found) => found.id === id) ?? kept.get(id)
-        if (!schema) throw new Refused(404, 'schema_not_found', `Schema ${id} isn't registered for this team.`)
-        return { schema }
-      }
+      if (method === 'GET') return this.read(path)
       if (method !== 'POST' || path !== '/schemas') return undefined
       if (actor.principal.type === 'user' && (roles[actor.principal.userId] ?? 'member') === 'viewer') throw new Refused(403, 'forbidden')
       if (actor.narrowed) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't change the team's schemas: that's its principal's job.")
@@ -1495,6 +1499,8 @@ export function fakeMessageboard(
     // A narrowed caller is never its principal's integration: a narrowed register would replace its registration.
     if (actor.narrowed && /^\/(watchers|sync|inbox)(\/|$)/.test(rest)) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't use its principal's watchers or sync's records.")
     if (method === 'GET' && rest === '') return { board: show(board) }
+    // The team's schemas, through a board: whoever it lets in reads them.
+    if (method === 'GET' && (rest === '/schemas' || rest.startsWith('/schemas/'))) return schemas.read(rest)
     // A board's own me: what the team's says, within what this board's grants give the caller.
     if (method === 'GET' && rest === '/me') {
       const said = me()

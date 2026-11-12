@@ -1353,18 +1353,19 @@ const sandbox = await team.schema('sandbox@1')  // 404 schema_not_found for one 
 - **On each backend:** `local()` keeps them on its log, in a session of their
   own, `schemas`, beside `board`, so none reaches the message tables,
   `/events`, watchers, or sync. `http()` forwards them to the board it uses.
-  `vercel()` maps them to the team's registry in Vercel's API (`/schemas`,
-  each write with an `operationId`), which every board on the team shares, and
-  adapts its views: `createdAt` in milliseconds is `at`, `createdBy` is `by`,
+  `vercel()` maps them to the team's registry in Vercel's API, which every
+  board on the team shares: it reads them through the board
+  (`/boards/:boardId/schemas`), registers on the team's route (`/schemas`,
+  with an `operationId`), and adapts its views: `createdAt` in milliseconds is `at`, `createdBy` is `by`,
   and the team's own list by name and then version as a number, where the API
   lists them by ID as text. The API doesn't say whether a registration made
   the version, so `vercel()` reads it first: `created` is whether it was
   missing then, and of two that register one version at once there, both may
   say they made it, though the registry keeps one. The API checks a definition more strictly than `checkDefinition`:
   it also refuses a `required` name its schema's `properties` don't declare,
-  and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: people and apps whose team role is owner,
-  member, or developer register, and a project's own credentials reach none
-  of it yet, reads included (403).
+  and a keyword for one type (`minLength`) with no `type` that says it. The API decides who: whoever the board lets in reads them, a project's
+  own credentials included, and people and apps whose team role is owner,
+  member, or developer register.
 
 ### Blocks
 
@@ -1437,10 +1438,9 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
 - **`--schema <schema>` on `vb post`, `reply`, `schedule`, and `edit`** takes
   the text as that schema's JSON, from wherever text comes (the argument, `-`,
   `--text-file`), and writes a message that is only that block.
-- **On Vercel's board** the API keeps text alone and checks nothing yet, so
-  board() does, for what's written through it: a write straight to the API
-  isn't checked, and a deployment's own credentials can't post a block, since
-  the API lets no project read the schema to check it against (403).
+- **On Vercel's board** the API keeps text alone. board() checks what's
+  written through it, a deployment's writes included, against the schema it
+  reads through the board, and the API checks every write again itself.
 
 ## The local board
 
