@@ -12,7 +12,7 @@ import { authorize, type Access, type Permission } from './access.ts'
 import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
 import { indexOf, ref, toMessageFilter, view, whoIs } from './feed.ts'
 import type { MessageFilter, ThreadSummary } from '../store/types.ts'
-import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type AlongEach, type Events, type Identity, type WriteContext } from './writes.ts'
+import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type AlongEach, type Events, type Identity, type RootTask, type WriteContext } from './writes.ts'
 
 /** The longest lease this board gives, in seconds: what a claim asks for past it comes back as this. */
 export const LEASE_CAP_S = 3600
@@ -490,9 +490,10 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
      * `task.created`, and `task.ready` when it waits only for tasks that were there and have all
      * completed. A task waits for the batch's others by their `ref`, wherever they come in it, and
      * those are new, so it waits. Refused before anything is read: an assignee that isn't its
-     * owner's, a `ref` two tasks go by or none has, and tasks that wait for each other.
+     * owner's, a `ref` two tasks go by or none has, and tasks that wait for each other. `asked` is
+     * what each is to be a task with, as its `task.created` will say it.
      */
-    startingMany(identity: Identity, tasks: readonly { ref?: string | undefined; needs?: readonly BatchNeed[] | undefined; for?: string | null | undefined }[]): AlongEach {
+    startingMany(identity: Identity, tasks: readonly { ref?: string | undefined; needs?: readonly BatchNeed[] | undefined; for?: string | null | undefined }[]): { along: AlongEach; asked: RootTask[] } {
       const { principal, author } = identity
       const assigned = tasks.map((task) => ownActor(principal.id, task.for))
       const plan = batchPlan(tasks)
@@ -500,7 +501,8 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       const { inside } = plan
       const named = tasks.map((task) => namedNeeds((task.needs ?? []).filter((need) => typeof need === 'string'), null))
       const outside = [...new Set(named.flatMap((needs) => [...needs.keys()]))]
-      return async () => {
+      const asked = tasks.map((_, at): RootTask => ({ there: [...named[at]!.keys()], inside: inside[at]!, for: assigned[at]! }))
+      const along: AlongEach = async () => {
         const position = await writes().reads.tables.position()
         // What the batch waits for that was there, read once for all its tasks.
         const found = outside.length === 0 ? new Map<number, Message>() : await writes().reads.tables.messagesAt(outside, position)
@@ -517,6 +519,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
             }),
         }
       }
+      return { along, asked }
     },
 
     /**

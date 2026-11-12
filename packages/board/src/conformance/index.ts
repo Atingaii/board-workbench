@@ -1257,6 +1257,9 @@ const CHECKS: Check[] = [
       const again = await ctx.board.tasks.createMany(ctx.channel, plan.map((one) => ({ ...one, labels: ctx.labels, noSync: true })), { id })
       alike(again.map((root) => root.id), made.map((root) => root.id), 'the tasks a retry with the same id answers')
       await rejects(taskBatch(ctx, [...plan, { text: 'conformance: batched, one more under the same id' }], { id }), 409, 'duplicate_id', 'another batch under the same id')
+      // As many tasks but other ones is another request too: the id names what was asked for, not how much of it.
+      const others = plan.map((one, at) => (at === 1 ? { ...one, text: 'conformance: batched, another plan of the same size under the same id' } : one))
+      await rejects(taskBatch(ctx, others, { id }), 409, 'duplicate_id', 'another plan of the same size under the same id')
       same((await mine()).length, made.length, 'the tasks made under that id')
       // One of the batch that completes readies what waited only for it, as any task does.
       await (await ctx.board.tasks.claim(fix.id, { lease: 60 })).complete()

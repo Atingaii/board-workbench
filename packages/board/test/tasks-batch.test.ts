@@ -21,6 +21,17 @@ async function setup(options: Parameters<typeof testBoard>[0] = {}) {
 }
 
 const code = (answer: { status: number; body: any }) => [answer.status, answer.body?.error?.code]
+/** A handle on `board` as a person, to upload as the CLI and agents do. */
+const handleAs = (board: ReturnType<typeof testBoard>, user: string) =>
+  projectBoard({
+    backend: http(BOARD_URL, {
+      fetch: async (input, init) => {
+        const request = new Request(input, init)
+        request.headers.set('authorization', `Bearer ${await personToken(user)}`)
+        return board.fetch(request)
+      },
+    }),
+  }).as(null)
 const batch = (call: Call, tasks: Asked[], more: Record<string, unknown> = {}) => call('POST', '/tasks/batch', { channel: 'work', tasks, ...more })
 const listed = async (call: Call, query = 'channel=work&state=all&limit=500'): Promise<MessageView[]> => (await call('GET', `/tasks?${query}`)).body.tasks.map((task: { message: MessageView }) => task.message)
 const events = async (call: Call, after: string): Promise<BoardEventView[]> => (await call('GET', `/events?after=${after}`)).body.events
@@ -151,8 +162,9 @@ describe('several tasks made at once', () => {
     expect((await ada('GET', '/channels')).body.channels.map((channel: { path: string }) => channel.path)).not.toContain('plans')
   })
 
-  it('answer a retry with the same id with the tasks the first one made, and refuse the id for any other batch', async () => {
-    const { ada, bo } = await setup()
+  it('answer a retry with the same id with the tasks the first one made, and refuse the id for any other request', async () => {
+    const { board, ada, bo } = await setup()
+    const file = await handleAs(board, 'u_ada').upload({ data: new TextEncoder().encode('the plan'), name: 'plan.txt', type: 'text/plain' })
     const plan: Asked[] = [
       { ref: 'fix', text: 'fix the export' },
       { text: 'review the fix', needs: [{ ref: 'fix' }] },
@@ -170,11 +182,36 @@ describe('several tasks made at once', () => {
     expect(twice.map((answer) => answer.status)).toEqual([201, 201])
     expect(twice[1]!.body.tasks.map((root: MessageView) => root.id)).toEqual(twice[0]!.body.tasks.map((root: MessageView) => root.id))
     expect(await listed(ada)).toHaveLength(4)
-    // The id names that batch: with fewer tasks, with more, or from someone else, it's another write's.
+    // The id names that request: with fewer tasks, with more, with as many but other ones, or the same in another order,
+    // in another channel, or from someone else, it's another write's.
     expect(code(await batch(ada, plan.slice(0, 1), { id: 'release-42' }))).toEqual([409, 'duplicate_id'])
     expect(code(await batch(ada, [...plan, { text: 'and one more' }], { id: 'release-42' }))).toEqual([409, 'duplicate_id'])
+    for (const [what, other] of Object.entries<Asked[]>({
+      'another text': [{ ref: 'fix', text: 'fix the import' }, plan[1]!],
+      'a need less': [plan[0]!, { text: 'review the fix' }],
+      'a label': [plan[0]!, { ...plan[1]!, labels: { step: 'review' } }],
+      'a file': [{ ...plan[0]!, attachments: [file.id] }, plan[1]!],
+      'kept off platforms': [{ ...plan[0]!, noSync: true }, plan[1]!],
+      'an assignee': [{ ...plan[0]!, for: `${ADA}+fixer` }, plan[1]!],
+      'one more need': [plan[0]!, { ...plan[1]!, needs: [{ ref: 'fix' }, ids[0]!] }],
+      'the other order': [plan[1]!, plan[0]!],
+    }))
+      expect(code(await batch(ada, other, { id: 'release-42' })), what).toEqual([409, 'duplicate_id'])
     expect(code(await batch(bo, plan, { id: 'release-42' }))).toEqual([409, 'duplicate_id'])
     expect(code(await batch(ada, plan, { id: 'release-42', channel: 'elsewhere' }))).toEqual([409, 'duplicate_id'])
+    // A field left out is its empty value: the same request written out in full is the same batch.
+    const full = [{ ref: 'fix', text: 'fix the export', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'review the fix', needs: [{ ref: 'fix' }], labels: {} }]
+    expect((await batch(ada, full, { id: 'release-42' })).body.tasks.map((root: MessageView) => root.id)).toEqual(ids)
+    // A ref is a name for the call alone: the board goes by what was made, so the same tasks under other refs are the same batch.
+    const renamed = [{ ref: 'repair', text: 'fix the export' }, { text: 'review the fix', needs: [{ ref: 'repair' }] }]
+    expect((await batch(ada, renamed, { id: 'release-42' })).body.tasks.map((root: MessageView) => root.id)).toEqual(ids)
+    // What's happened to its tasks since is no part of what was asked: an edit, a label, what one waits for now.
+    await ada('POST', `/messages/${ids[1]}/edit`, { text: 'review the fix, carefully' })
+    await ada('POST', `/messages/${ids[1]}/labels`, { set: { step: 'review' } })
+    await ada('POST', `/tasks/${ids[1]}/needs`, { needs: [] })
+    const after = await batch(ada, plan, { id: 'release-42' })
+    expect([after.status, after.body.tasks.map((root: MessageView) => [root.id, root.text, root.task?.needs])]).toEqual([201, [[ids[0], 'fix the export', []], [ids[1], 'review the fix, carefully', []]]])
+    expect(await listed(ada)).toHaveLength(4)
     // An id that is someone else's to write with is refused, as a post's is: the board's own, and another client's key.
     expect(code(await batch(ada, plan, { id: '0f8fad5b-d9cb-8469-a165-70867728950e' }))).toEqual([400, 'invalid_request'])
     expect(code(await batch(ada, plan, { id: 'key:vercel:user:u_bo:0123456789abcdef0123456789abcdef' }))).toEqual([400, 'invalid_request'])
@@ -229,16 +266,7 @@ describe('several tasks made at once', () => {
 
   it("have each root checked as a post's is: its blocks, its length, its labels, and its files", async () => {
     const { board, ada, bo } = await setup()
-    const team = (user: string) =>
-      projectBoard({
-        backend: http(BOARD_URL, {
-          fetch: async (input, init) => {
-            const request = new Request(input, init)
-            request.headers.set('authorization', `Bearer ${await personToken(user)}`)
-            return board.fetch(request)
-          },
-        }),
-      }).as(null)
+    const team = (user: string) => handleAs(board, user)
     const fine: Asked = { text: 'first, and fine' }
     const sha = 'a'.repeat(40)
     expect(code(await batch(ada, [fine, { text: `revert this\n\n${block('git-commit@1', { sha })}` }]))).toEqual([400, 'invalid_block'])

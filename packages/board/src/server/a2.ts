@@ -620,8 +620,10 @@ function build(options: A2Options, binding: BoardBinding) {
       const roots = await Promise.all(
         body.tasks.map(async (task, at) => ({ id: await rootId(at), text: task.text, labels: task.labels, noSync: task.noSync, attachments: await attachmentsFor(principal, task.attachments) })),
       )
-      const landed = body.id !== undefined ? { past: await rootId(body.tasks.length) } : undefined
-      return { tasks: await writeRoots(writes, { identity, proofs, channel: body.channel, roots, with: made, landed }) }
+      // The same `id` again is the same batch only for the same request, which the roots that landed say: as many, there,
+      // each with the same text, labels, and files, waiting for the same tasks, for the same actor.
+      const again = body.id !== undefined ? { past: await rootId(body.tasks.length), tasks: made.asked } : undefined
+      return { tasks: await writeRoots(writes, { identity, proofs, channel: body.channel, roots, with: made.along, again }) }
     },
     claimReadyTask: async (caller, body, signal) => tasks.claimReady(await identityOf(caller), body, signal),
     claimTask: async (caller, { id, lease }) => tasks.claim(await identityOf(caller), messageAt(id), lease),

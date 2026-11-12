@@ -543,7 +543,7 @@ describe('the conformance kit', () => {
     // checked where requests reach the board with no handle in front (test/tasks.test.ts).
   }, 60_000)
 
-  it("fails a board that gets a batch of tasks wrong: one that makes them in turn, one that keeps part of a batch it refuses, one that forgets a batch's id, one that drops what its tasks wait for, and one that answers out of order", async () => {
+  it("fails a board that gets a batch of tasks wrong: one that makes them in turn, one that keeps part of a batch it refuses, one that forgets a batch's id, one that knows it by its size alone, one that drops what its tasks wait for, and one that answers out of order", async () => {
     const BATCH = 'makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once'
     const ATOMIC = 'makes none of a batch when one of its tasks can not be made, wherever it comes in it'
     const failed = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
@@ -594,6 +594,17 @@ describe('the conformance kit', () => {
       return forgetful.fetch(new Request(request, { body: JSON.stringify(body) }))
     }
     expect(failed(await conformance(await clientOf(noId)))).toEqual([[BATCH, expect.stringMatching(/^the tasks a retry with the same id answers: expected \[.+\], got \[.+\]$/)]])
+    // One that knows a batch by its id and its size alone: as many other tasks under the id get the first ones back.
+    const counting = testBoard({ scheduler: fakeQueue().scheduler })
+    const first = new Map<string, Sent>()
+    const bySize: Fetch = async (request) => {
+      if (!batching(request)) return counting.fetch(request)
+      const body = (await request.json()) as Sent
+      const before = body.id !== undefined ? first.get(body.id) : undefined
+      if (body.id !== undefined && !before) first.set(body.id, body)
+      return counting.fetch(new Request(request, { body: JSON.stringify(before && before.tasks.length === body.tasks.length ? before : body) }))
+    }
+    expect(failed(await conformance(await clientOf(bySize)))).toEqual([[BATCH, 'another plan of the same size under the same id: expected 409 duplicate_id, and it succeeded']])
     // One whose batches drop what each task waits for: every one is ready as it's made, and nothing about them is refused.
     const flat = testBoard({ scheduler: fakeQueue().scheduler })
     const noNeeds: Fetch = async (request) => {
