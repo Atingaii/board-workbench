@@ -432,9 +432,8 @@ included, post to Slack and GitHub.
   fetches each file with its token, since an `<img>` can't send one.
 - **The bundle is built** into `dist/inspect/app.js` by `tsdown` (React
   included), which the standalone CLI reads where board is installed. Only it
-  has `inspect`: a CLI that bundles board's (`vercel board`) points to
-  `npx @vercel/board@latest inspect`, so no UI ships in it. `pnpm test` builds
-  first; running from source finds it in `dist`.
+  has `inspect`, so no UI ships in a CLI that bundles board's (`vercel board`).
+  `pnpm test` builds first; running from source finds it in `dist`.
 - **It's Just Chat's UI, ported.** Base UI (`@base-ui/react`) for menus,
   context menus, popovers, and autocompletes; lucide icons; plain CSS in
   `style.ts` with Just Chat's tokens. Right-clicking text keeps the browser's

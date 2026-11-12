@@ -1674,9 +1674,6 @@ async function runOnce(argv: string[], options: App): Promise<number> {
       else out(VERSION)
       return 0
     }
-    // Only board's own CLI has it, its help included: this one has no page for it.
-    const elsewhere = standalone(canonical(positionals[0]))
-    if (elsewhere) throw elsewhere
     // --help is help, never the command it's on: that command's page.
     if (flags.help) {
       out(help(positionals))
@@ -1718,27 +1715,6 @@ function stopped(reason: unknown): Failed {
     reason: timedOut ? 'timeout' : 'canceled',
     message: `${timedOut ? 'Timed out' : 'Stopped'} before it could ${doing()}.`,
     ...(writes ? { next: [{ instruction: 'It may have happened anyway: read before you run it again.' }] } : {}),
-  })
-}
-
-/** The commands only board's own CLI has (`local.ts`), by name: an app that embeds board's points to it. */
-const STANDALONE = new Set(['inspect', 'serve'])
-
-/**
- * A command only board's own CLI has, typed in an app that embeds board's: the same run there, as
- * typed. The app's team never reaches these arguments (`vercel board` takes `--scope` itself), so
- * `inspect`'s says where one goes, unless a URL names the board, and with it its team. `serve` runs
- * a board of its own, and reads none.
- */
-function standalone(command: string | undefined): Failed | undefined {
-  if (io.board || command === undefined || !STANDALONE.has(command) || Object.hasOwn(app.commands, command)) return undefined
-  const at = typed.indexOf('--')
-  const before = at === -1 ? typed : typed.slice(0, at)
-  const given = flags.url !== undefined || Boolean(process.env.BOARD_URL?.trim()) || (flags.scope ?? flags.team) !== undefined
-  const team = command === 'inspect' && !given ? ['--scope', '<TEAM>'] : []
-  return usage(`${named()} has no ${command}: board's own CLI runs it.`, {
-    reason: 'unknown_command',
-    next: [{ instruction: "Run board's own CLI", argv: ['npx', '@vercel/board@latest', ...before, ...team, ...(at === -1 ? [] : typed.slice(at))] }],
   })
 }
 
