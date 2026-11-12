@@ -68,6 +68,7 @@ describe("vercel()'s tasks", () => {
     }
     const kept = {
       'starts a thread as a task, or makes one of a thread that was there: it reads as its thread, and board.task finds it': 'passed',
+      'makes a task once for a client ID, and none under an ID a reply or a plain thread landed with': 'passed',
       'gives a task to one of the claims that race for it, and takes its result': 'passed',
       'gives a claim the lease it asks for, up to 5 minutes, and says when it ends': 'passed',
       "fences what a claim does: once it's over, its writes are lost and change nothing": 'passed',
@@ -109,7 +110,10 @@ describe("vercel()'s tasks", () => {
     expect(await ask('POST', `${v1}/threads/${threadOf(task.id)}/task/claim`, { claimToken: token })).toEqual([404, 'not_found'])
     expect(await ask('POST', `${v1}/threads/task/claim`, { claimToken: token, channel: 'work' })).toEqual([404, 'not_found'])
     expect(await ask('POST', `${v1}/threads`, { channel: 'work', text: 'a task, the old way', task: {} })).toEqual([400, 'bad_request'])
-    expect(await ask('GET', `${v1}/threads?task=open`)).toEqual([404, 'channel_not_found'])
+    expect(await ask('GET', `${v1}/threads?task=open`)).toEqual([400, 'bad_request'])
+    const { channels } = (await (await as(api, 'user:u_jb')(`${API}${v1}/channels?name=work&teamId=team_test`)).json()) as { channels: { id: string }[] }
+    expect(await ask('GET', `${v1}/threads?channelId=${channels[0]!.id}&task=open`)).toEqual([400, 'bad_request'])
+    expect(await ask('GET', `${v1}/threads?channelId=${channels[0]!.id}`)).toEqual([200, null])
     // And the new routes are version 2 alone, which has nothing else.
     expect(await ask('POST', `${v1}/tasks/${threadOf(task.id)}/claim`, { claimToken: token })).toEqual([404, 'not_found'])
     expect(await ask('GET', '/v2/messageboard/boards/brd_test/threads?channelId=x')).toEqual([404, 'not_found'])
@@ -466,6 +470,10 @@ describe("vercel()'s tasks", () => {
     // Past 50 channels under a prefix, the API refuses rather than look at some: its own code, as a 400.
     for (let n = 0; n < 51; n++) await julian.post(`many/c${n}`, 'x')
     await expect(julian.tasks.claim({ channel: 'many/' })).rejects.toMatchObject({ status: 400, code: 'channel_tree_too_large' })
+    // It counts the channels its caller may claim in: one held to a few of them under the prefix is looked for there.
+    const { task: far } = await julian.tasks.create('many/c50', { text: 'in the last of them' })
+    const few = handleOn(api, 'user:u_jb', { can: 'many/c7=read,label;many/c50=read,label' })
+    expect((await few.tasks.claim({ channel: 'many/', lease: 60 }))?.task.id).toBe(far.id)
   })
 
   it('holds a wait as long as the API holds one request, 25 seconds, and the handle asks again until its wait runs out', async () => {
@@ -748,6 +756,10 @@ describe("vercel()'s tasks", () => {
     const note = await julian.post('work', { id: 'note-1', text: 'a note' })
     await expect(julian.tasks.create('work', { text: 'a note', id: 'note-1' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
     expect((await julian.thread(note.id)).message.task).toBeUndefined()
+    // So is a reply's, in a task's thread too: the create doesn't answer the thread it landed in as its task.
+    await julian.reply(plain.task.id, { id: 'reply-1', text: 'linted' })
+    await expect(julian.tasks.create('work', { text: 'linted', id: 'reply-1' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    expect((await julian.tasks.list({ channel: 'work', state: 'all' })).tasks.map((task) => task.message.text)).toEqual(['deploy a1b2c3', 'lint'])
   })
 
   it("gives a caller that may post but not read its task back as what it asked for, when a retry answers its ID alone: by its ID or by its operation", async () => {
@@ -826,36 +838,116 @@ describe("vercel()'s tasks", () => {
     expect((await julian.threads({ channel: 'dev' })).threads.map((thread) => [thread.message.id, thread.message.task, thread.last?.id])).toEqual([[root.id, undefined, reply.id]])
   })
 
-  it("leaves no dependent waiting for good when a completion is cut off: the next task request that sees it readies it", async () => {
+  it("leaves no dependent waiting for good when a completion stops short: a claim of one, a list that shows one, and a claim of the next that finds none go on", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
     const { task: first } = await julian.tasks.create('repair', { text: 'everything waits for this' })
-    // More dependents than a completion readies in its own write, the last three each in a channel of its own.
+    // More dependents than a completion readies in its own write, the last four each in a channel of its own.
     const waiting: string[] = []
-    for (let n = 0; n < 18; n++) waiting.push((await julian.tasks.create(n < 15 ? 'repair' : `repair/late${n}`, { text: `dependent ${n}`, needs: [first.id] })).task.id)
-    const [byClaim, byNext, byList] = waiting.slice(15) as [string, string, string]
+    for (let n = 0; n < 19; n++) waiting.push((await julian.tasks.create(n < 15 ? 'repair' : `repair/late${n}`, { text: `dependent ${n}`, needs: [first.id] })).task.id)
+    const [byClaim, byList, byNext, alongside] = waiting.slice(15) as [string, string, string, string]
     const state = async (id: string) => (await julian.thread(id)).message.task?.state
     const { cursor } = await julian.poll({ channel: 'repair/' })
     api.cutNextCompletion()
-    await (await julian.tasks.claim(first.id, { lease: 60 })).complete()
-    expect(await Promise.all(waiting.map(state))).toEqual([...Array.from({ length: 15 }, () => 'ready'), 'waiting', 'waiting', 'waiting'])
+    // It answers all the same: what it didn't get to stays waiting, and nothing is retried for it.
+    expect((await (await julian.tasks.claim(first.id, { lease: 60 })).complete()).task?.state).toBe('completed')
+    expect(julian.sent.filter((request) => request.path.endsWith('/complete'))).toHaveLength(1)
+    expect(await Promise.all(waiting.map(state))).toEqual([...Array.from({ length: 15 }, () => 'ready'), 'waiting', 'waiting', 'waiting', 'waiting'])
 
-    // A claim of it readies and claims it in one write.
+    // A claim of one readies and claims it in one write.
     expect(await julian.tasks.claim(byClaim, { lease: 60 })).toMatchObject({ epoch: 1, task: { task: { state: 'claimed' } } })
-    // A claim of the next ready one, where nothing is ready, looks at what waits.
-    expect((await julian.tasks.claim({ channel: 'repair/late16', lease: 60 }))?.task.id).toBe(byNext)
-    // And a list that reads what waits writes it as it sees it. One of what's ready reads no waiting task, so it leaves it.
-    expect((await julian.tasks.list({ channel: 'repair/late17', state: 'ready' })).tasks).toEqual([])
+    // A list that reads what waits writes it as it sees it. One of what's ready reads no waiting task, so it leaves it.
+    expect((await julian.tasks.list({ channel: 'repair/late16', state: 'ready' })).tasks).toEqual([])
     expect(await state(byList)).toBe('waiting')
-    expect((await julian.tasks.list({ channel: 'repair/late17' })).tasks.map((task) => [task.message.id, task.message.task?.state])).toEqual([[byList, 'ready']])
+    expect((await julian.tasks.list({ channel: 'repair/late16' })).tasks.map((task) => [task.message.id, task.message.task?.state])).toEqual([[byList, 'ready']])
     expect(await state(byList)).toBe('ready')
+    // A claim of the next ready one that finds none goes on with the completion itself, wherever what waited for it
+    // is, and looks again: it reads no waiting task of its own.
+    expect(await state(byNext)).toBe('waiting')
+    expect((await julian.tasks.claim({ channel: 'repair/late17', lease: 60 }))?.task.id).toBe(byNext)
+    expect(await state(alongside)).toBe('ready')
     const repaired = (await julian.poll({ channel: 'repair/', after: cursor })).events.filter((event) => waiting.slice(15).includes(event.message?.id ?? ''))
-    expect(repaired.map((event) => [event.type, event.message?.id])).toEqual([
-      ['task.ready', byClaim],
-      ['task.claimed', byClaim],
-      ['task.ready', byNext],
-      ['task.claimed', byNext],
-      ['task.ready', byList],
-    ])
+    const changes = (id: string) => repaired.filter((event) => event.message?.id === id).map((event) => event.type)
+    expect([byClaim, byList, byNext, alongside].map(changes)).toEqual([['task.ready', 'task.claimed'], ['task.ready'], ['task.ready', 'task.claimed'], ['task.ready']])
+  })
+
+  it("goes on with a completion that stopped short when a list shows it, and when the API puts it off and it's sent again", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const state = async (id: string) => (await julian.thread(id)).message.task?.state
+    /** A task with 18 that wait for it, completed by a request that got to 15 of them. */
+    const stoppedShort = async (channel: string, handle = julian) => {
+      const { task: first } = await julian.tasks.create(channel, { text: 'everything waits for this' })
+      const waiting: string[] = []
+      for (let n = 0; n < 18; n++) waiting.push((await julian.tasks.create(channel, { text: `dependent ${n}`, needs: [first.id] })).task.id)
+      const claim = await handle.tasks.claim(first.id, { lease: 60 })
+      api.cutNextCompletion()
+      return { first, waiting, claim }
+    }
+    const left = async (waiting: string[]) => (await Promise.all(waiting.map(state))).filter((one) => one === 'waiting').length
+
+    // A list with the completed task on its page goes on with it: one of what's open doesn't show it.
+    const listed = await stoppedShort('listed')
+    await listed.claim.complete()
+    expect(await left(listed.waiting)).toBe(3)
+    await julian.tasks.list({ channel: 'elsewhere' })
+    expect(await left(listed.waiting)).toBe(3)
+    expect((await julian.tasks.list({ channel: 'listed', state: 'completed' })).tasks.map((task) => task.message.id)).toEqual([listed.first.id])
+    expect(await left(listed.waiting)).toBe(0)
+
+    // A completion the API put off once it was written goes again as the same operation, which goes on with it.
+    vi.useFakeTimers()
+    let putOff = false
+    const retrying = handleOn(api, 'user:u_jb', {
+      answered: (request, response) => {
+        if (putOff || !request.path.endsWith('/complete')) return response
+        putOff = true
+        return Response.json({ error: { code: 'board_busy', message: 'retry shortly' } }, { status: 503, headers: { 'retry-after': '1' } })
+      },
+    })
+    const retried = await stoppedShort('retried', retrying)
+    const completing = retried.claim.complete('done')
+    await vi.advanceTimersByTimeAsync(1500)
+    expect((await completing).task).toMatchObject({ state: 'completed', result: 'done' })
+    const [asked, resent] = retrying.sent.filter((request) => request.path.endsWith('/complete'))
+    expect(resent!.body).toEqual(asked!.body)
+    expect(await left(retried.waiting)).toBe(0)
+  })
+
+  it("lists a caller that doesn't read the whole board only the channels it reads, with no page spent on the rest, 50 channels at most", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    // More tasks than a page in a channel it can't read, older than the three it can.
+    for (let n = 0; n < 30; n++) await pong.tasks.create('secret', { text: `hidden ${n}` })
+    const shown: string[] = []
+    for (let n = 0; n < 3; n++) shown.push((await pong.tasks.create('work', { text: `shown ${n}` })).task.id)
+    const { task: waits } = await pong.tasks.create('work/sub', { text: 'waits for a shown one', needs: [shown[0]!] })
+    await pong.tasks.create('secret', { text: 'waits for it too, out of sight', needs: [shown[0]!] })
+    const narrowed = handleOn(api, 'project:prj_pong:production', { can: 'work=read;work/=read' })
+    const lists = () => narrowed.sent.filter((request) => request.method === 'GET' && request.path === '/tasks')
+
+    // The board, as far as it reads it: one page, and no cursor to follow past tasks it can't see.
+    expect((await narrowed.tasks.list()).tasks.map((task) => task.message.id)).toEqual([...shown, waits.id])
+    expect(lists().map((request) => request.query.cursor ?? null)).toEqual([null])
+    // A channel it can't read lists nothing, as a name no channel has does.
+    narrowed.sent.length = 0
+    expect(await narrowed.tasks.list({ channel: 'secret' })).toEqual({ tasks: [], cursor: '0' })
+    expect(await narrowed.tasks.list({ channel: 'nowhere' })).toEqual({ tasks: [], cursor: '0' })
+    expect(lists().map((request) => request.query.cursor ?? null)).toEqual([null, null])
+    // What waits for a task is, for it, what it reads of that.
+    expect((await narrowed.tasks.list({ needs: shown[0]! })).tasks.map((task) => task.message.id)).toEqual([waits.id])
+    // Whoever reads the whole board has them read from under the task: one page, however many tasks come before them.
+    pong.sent.length = 0
+    expect((await pong.tasks.list({ needs: shown[0]! })).tasks).toHaveLength(2)
+    expect(pong.sent.filter((request) => request.method === 'GET' && request.path === '/tasks')).toHaveLength(1)
+
+    // Past 50 channels it reads, on the board or under a prefix, the API refuses rather than read some: name a channel, or less of the tree.
+    for (let n = 0; n < 51; n++) await pong.tasks.create(`many/c${n}`, { text: `task ${n}` })
+    const wide = handleOn(api, 'project:prj_pong:production', { can: 'many/=read' })
+    await expect(wide.tasks.list({ channel: 'many/' })).rejects.toMatchObject({ status: 400, code: 'channel_tree_too_large' })
+    await expect(wide.tasks.list()).rejects.toMatchObject({ status: 400, code: 'channel_tree_too_large' })
+    expect((await wide.tasks.list({ channel: 'many/c7' })).tasks.map((task) => task.message.text)).toEqual(['task 7'])
+    // Whoever reads the whole board lists as many as there are.
+    expect((await pong.tasks.list({ channel: 'many/', limit: 100 })).tasks).toHaveLength(51)
   })
 })

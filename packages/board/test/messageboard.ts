@@ -84,6 +84,8 @@ type Task = {
   reason: string | null
   /** Who completed it, and when: a dependent readied later is readied in their name. No answer shows it. */
   completed?: { by: Actor; at: number }
+  /** It completed with tasks waiting for it that haven't all been readied: whoever sees it goes on. No answer shows it. */
+  marked?: true
 }
 type Thread = {
   id: string
@@ -333,7 +335,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   }
 
   /** A task as every answer shows it: never its claim's token, or the hash kept of it. */
-  const showTask = ({ claim, completed: _completed, maker: _maker, ...task }: Task) => ({
+  const showTask = ({ claim, completed: _completed, marked: _marked, maker: _maker, ...task }: Task) => ({
     ...task,
     needs: [...task.needs],
     claim: claim ? { actor: claim.actor, until: claim.until } : null,
@@ -587,11 +589,15 @@ function fakeBoard(shared: Shared, boardId: string) {
   const LEASE_MAX_S = 300
   /** The dependents a completion readies in its own write: the rest come in writes after it, before it answers. */
   const READIED_WITH = 15
-  /** What a list repairs of its page, at most: lapsed claims it writes as expired, and waiting tasks it finds ready. */
+  /** How many more a completion goes over before it answers, and how many whoever goes on with one does, a request. */
+  const GONE_OVER = 50
+  /** The completions a claim-next that found nothing to take goes on with, oldest first. */
+  const MARKED_SEEN = 3
+  /** What a list or a claim-next repairs, a request at most: lapsed claims it writes as expired, and waiting tasks a list finds ready. */
   const REPAIRS = 10
-  /** The oldest waiting tasks a claim-next that found nothing ready looks at: in each channel, and in all. */
-  const WAITING_LOOKED_AT = 25
-  const WAITING_IN_ALL = 50
+  /** The lapsed claims a claim-next finds: the longest-lapsed in each channel it names, and in all. */
+  const LAPSED_EACH = 25
+  const LAPSED_IN_ALL = 50
   /** A profile's name, as an actor ID ends with one. */
   const PROFILE_PART = /^[a-z0-9][a-z0-9-]{0,31}$/
   /** One of `owner`'s profiles, `<owner>+<profile>`: what a task is assigned to, never the bare owner. */
@@ -708,6 +714,18 @@ function fakeBoard(shared: Shared, boardId: string) {
     return true
   }
 
+  /**
+   * Goes on with a completion that hasn't readied everything that waited for it, for up to `budget` tasks, as whoever
+   * completed it: the mark comes off once none is left. It answers what's left of the budget.
+   */
+  function goOn(completed: Thread, budget: number, operationId: unknown): number {
+    const task = completed.task!
+    const left = [...threads.values()].filter((t) => t.task?.state === 'waiting' && t.task.needs.includes(completed.id) && done(t.task)).sort(oldestFirst)
+    for (const dependent of left.slice(0, budget)) ready(dependent, task.completed!.by, operationId)
+    if (left.length <= budget) delete task.marked
+    return Math.max(0, budget - left.length)
+  }
+
   /** What makes a thread a task, checked before anything is written: `self` is the thread, when it's there already. */
   function checkedTask(actor: Actor, channel: string, spec: Record<string, any>, self: string | null) {
     const owner = principalId(actor.principal)
@@ -801,28 +819,39 @@ function fakeBoard(shared: Shared, boardId: string) {
   const oldestFirst = (a: Thread, b: Thread) => a.createdAt - b.createdAt
 
   /** The oldest ready task there the caller takes: one assigned to its actor first, then an unassigned one it owns or `from` names. */
-  function claimNext(actor: Actor, body: Record<string, any>, claim: { hash: string; lease: number }): Thread | null {
+  function claimNext(actor: Actor, body: Record<string, any>, claim: { hash: string; lease: number }, share: { expiries: number; goneOver: number }): Thread | null {
     const named = channelsNamed(String(body.channel))
-    if (named.length > 50) throw new Refused(400, 'channel_tree_too_large', 'Name a prefix with at most 50 channels under it.')
-    // Channels where the caller lacks `label` are skipped: with it in none, there's nothing it claims.
+    // Channels where the caller lacks `label` are skipped: with it in none, there's nothing it claims. The limit counts those it may claim in.
     const labeled = named.filter((channel) => may(actor, 'label', channel.id))
     if (named.length > 0 && labeled.length === 0) throw new Refused(403, 'forbidden', 'You may not label there.')
+    if (labeled.length > 50) throw new Refused(400, 'channel_tree_too_large', 'Name a prefix with at most 50 channels you may claim in under it.')
     const owners = new Set([principalId(actor.principal), ...((body.from ?? []) as string[])])
     const wanted = Object.entries((body.labels ?? {}) as Record<string, string>)
     const inChannel = (channel: { id: string }) => [...threads.values()].filter((t) => t.channelId === channel.id && t.task).sort(oldestFirst)
+    const lapsed = (t: Thread) => t.task!.state === 'claimed' && t.task!.claim!.until <= now()
+    const longestLapsed = (a: Thread, b: Thread) => a.task!.claim!.until - b.task!.claim!.until
     const look = () => {
-      // The 200 oldest ready tasks across the channels it names, at most 100 from each, a lapsed claim's among them once its expiry is written.
-      const ready = labeled.flatMap((channel) => inChannel(channel).filter((t) => expire(t) || t.task!.state === 'ready').slice(0, 100)).sort(oldestFirst).slice(0, 200)
-      const mine = ready.filter((t) => wanted.every(([key, value]) => rootLabels(t)[key] === value))
-      return mine.find((t) => assignedTo(t.task!, actor)) ?? mine.find((t) => t.task!.for === null && owners.has(t.task!.owner)) ?? null
+      // The 200 oldest ready tasks across the channels it names, at most 100 from each, and their claims whose lease
+      // ran out longest ago, 25 from each and 50 in all: found in each channel, so another's can't hide them.
+      const ready = labeled.flatMap((channel) => inChannel(channel).filter((t) => t.task!.state === 'ready').slice(0, 100)).sort(oldestFirst).slice(0, 200)
+      const over = labeled.flatMap((channel) => inChannel(channel).filter(lapsed).sort(longestLapsed).slice(0, LAPSED_EACH)).sort(longestLapsed).slice(0, LAPSED_IN_ALL)
+      const mine = [...ready, ...over].sort(oldestFirst).filter((t) => wanted.every(([key, value]) => rootLabels(t)[key] === value))
+      return { found: mine.find((t) => assignedTo(t.task!, actor)) ?? mine.find((t) => t.task!.for === null && owners.has(t.task!.owner)) ?? null, over }
     }
-    let found = look()
-    if (!found) {
-      // Nothing ready there: it looks at the oldest waiting tasks of each channel, and readies those whose prerequisites have all completed.
-      const waiting = labeled.flatMap((channel) => inChannel(channel).filter((t) => t.task!.state === 'waiting').slice(0, WAITING_LOOKED_AT)).slice(0, WAITING_IN_ALL)
-      if (waiting.filter((t) => ready(t, actor, body.operationId)).length > 0) found = look()
+    let { found, over } = look()
+    if (!found && share.goneOver > 0) {
+      // Nothing to take: it goes on with the completions on the board that haven't readied everything that waited for
+      // them, the oldest few, wherever they and what waited are, and looks again. It looks through no waiting task itself.
+      const marked = [...threads.values()].filter((t) => t.task?.marked).sort((a, b) => a.task!.completed!.at - b.task!.completed!.at).slice(0, MARKED_SEEN)
+      for (const completed of marked) share.goneOver = goOn(completed, share.goneOver, undefined)
+      ;({ found, over } = look())
     }
-    if (found) hold(found, actor, claim, body.operationId)
+    // The lapsed claims it found there are ended, a few a request, beside the one it takes over: its expiry goes with its claim.
+    for (const thread of over) if (thread !== found && share.expiries > 0 && expire(thread)) share.expiries--
+    if (found) {
+      expire(found)
+      hold(found, actor, claim, body.operationId)
+    }
     return found
   }
 
@@ -869,6 +898,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (body.from !== undefined && !(Array.isArray(body.from) && body.from.length <= 32 && body.from.every((id: unknown) => typeof id === 'string'))) throw bad('from is at most 32 owner IDs.')
       if (body.wait !== undefined && !(typeof body.wait === 'number' && body.wait >= 0 && body.wait <= 25)) throw bad('wait is 0 to 25 seconds.')
       const until = Date.now() + (body.wait ?? 0) * 1000
+      // What one request spends on what it finds undone, however many times it looks.
+      const share = { expiries: REPAIRS, goneOver: GONE_OVER }
       return (async () => {
         for (;;) {
           // Once the operation claimed, a retry with its token answers that claim, as it was made, and any other token is refused.
@@ -877,7 +908,7 @@ function fakeBoard(shared: Shared, boardId: string) {
           if (prior) return answer(prior.thread)
           // A client that went away is claimed nothing new for: it looks at that before each look.
           if (signal?.aborted) return { task: null }
-          const found = claimNext(actor, body, claim)
+          const found = claimNext(actor, body, claim, share)
           if (found) {
             claimed.set(key, { thread: found, hash: claim.hash })
             return answer(found)
@@ -907,7 +938,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       const again = repeat(actor, body.clientId)
       if (again) {
         const thread = threadAt(again.thread.id)
-        if (!thread.task) throw new Refused(404, 'not_a_task', 'That client ID names a post that is no task.')
+        // A thread that isn't a task, or a reply, in a task's thread or not: for a caller that can't read it too.
+        if (!thread.task || again.message.sequence !== 1) throw new Refused(404, 'not_a_task', 'That client ID names a post that is no task.')
         // To a caller that can't read its channel, its ID and nothing else: it can't have asked for a claim, since `label` brings `read`.
         return mayRead(actor, thread.channelId) ? told(answer(thread)) : { task: { id: thread.id } }
       }
@@ -926,7 +958,9 @@ function fakeBoard(shared: Shared, boardId: string) {
     const worked = /^\/tasks\/([^/]+)\/(claim|renew|release|complete|fail|block|unblock|reopen|assign|cancel)$/.exec(rest)
     if (method !== 'POST' || !worked) return undefined
     const verb = worked[2]!
-    return once(actor, body.operationId, () => {
+    let wrote = false
+    const answered = once(actor, body.operationId, () => {
+      wrote = true
       const thread = taskThread(actor, decodeURIComponent(worked[1]!))
       const { task } = thread
       let from = task.state
@@ -962,13 +996,10 @@ function fakeBoard(shared: Shared, boardId: string) {
         fenced(thread, actor, body)
         Object.assign(task, { state: 'completed', claim: null, result, completed: { by: actor, at: now() } })
         taskEvent(thread, 'task.completed', actor, from, op)
-        // Its dependents whose last prerequisite it was: as many as fit in its own write, and the rest before it answers.
-        const waiting = [...threads.values()].filter((t) => t.task?.state === 'waiting' && t.task.needs.includes(thread.id)).sort(oldestFirst)
-        let readied = 0
-        for (const dependent of waiting) {
-          if (cut && readied >= READIED_WITH) break
-          if (ready(dependent, actor, op)) readied++
-        }
+        // The tasks that waited only for it: 15 in its own write, up to 50 more before it answers, and any left to
+        // whoever sees it marked. It answers 200 whether or not it got to every one.
+        task.marked = true
+        goOn(thread, cut ? READIED_WITH : READIED_WITH + GONE_OVER, op)
         cut = false
       } else if (verb === 'fail') {
         const reason = note(body.reason, 'reason', true)
@@ -1032,6 +1063,10 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
       return answer(thread)
     })
+    // A retry of a completion answers what the first call did, and goes on with what it left unreadied.
+    const again = wrote || verb !== 'complete' ? undefined : threads.get(decodeURIComponent(worked[1]!))
+    if (again?.task?.marked) goOn(again, GONE_OVER, body.operationId)
+    return answered
   }
 
   /**
@@ -1045,12 +1080,37 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (states?.length === 0) throw bad('state is open, all, or a state.')
     if (query('channelId') !== null && query('channel') !== null) throw new Refused(400, 'invalid_request', 'Name a channel by its ID or its name, not both.')
     const named = query('channel')
-    // A channel by its ID or its name is what the list reads. A tree, as any other filter, narrows each page after.
-    const one = query('channelId') !== null ? channelAt(query('channelId')!) : named !== null && !named.endsWith('/') ? (channels.find((channel) => channel.name === named) ?? null) : undefined
-    const tree = named?.endsWith('/') ? new Set(channelsNamed(named).map((channel) => channel.id)) : null
+    // Whoever reads the whole board lists it as it is. Anyone else lists only the channels it reads, so no page is
+    // shorter and no cursor placed for what it can't read.
+    const reads = (channel: { id: string }) => may(actor, 'read', channel.id)
+    const readsAll = channels.every(reads)
+    /** The channels the list reads: null for the whole board. */
+    let within: Set<string> | null = null
+    /** A tree a page is narrowed to after it's read, for a caller that reads the whole board. */
+    let tree: Set<string> | null = null
+    if (query('channelId') !== null) {
+      const channel = channels.find((c) => c.id === query('channelId'))
+      if (!channel || !reads(channel)) throw new Refused(404, 'channel_not_found')
+      within = new Set([channel.id])
+    } else if (named !== null && !named.endsWith('/')) {
+      const channel = channels.find((c) => c.name === named)
+      // A name no channel has lists nothing, and neither does one the caller can't read.
+      if (!channel || !reads(channel)) return { tasks: [], cursor: null }
+      within = new Set([channel.id])
+    } else if (readsAll) {
+      tree = named !== null ? new Set(channelsNamed(named).map((channel) => channel.id)) : null
+    } else {
+      const read = (named !== null ? channelsNamed(named) : channels).filter(reads)
+      if (read.length > 50) throw new Refused(400, 'channel_tree_too_large', 'Name a channel, or a smaller tree: this list would read more than 50 channels.')
+      within = new Set(read.map((channel) => channel.id))
+    }
     // What's ready is stored ready, or claimed with a lease that ran out: both are read, and the live claim decides after.
     const stored = states?.includes('ready') && !states.includes('claimed') ? [...states, 'claimed'] : states
-    const inOrder = [...threads.values()].filter((t) => t.task && (one === undefined || t.channelId === one?.id) && (stored === null || stored.includes(t.task.state))).sort(oldestFirst)
+    // The tasks that wait for one are read from under it for a caller that reads the whole board: for anyone else, `needs` is one more filter after each page.
+    const needs = query('needs')
+    const inOrder = [...threads.values()]
+      .filter((t) => t.task && (within === null || within.has(t.channelId)) && (stored === null || stored.includes(t.task.state)) && (!readsAll || needs === null || t.task.needs.includes(needs)))
+      .sort(oldestFirst)
     // `after` goes on after a task in creation order, in place of a cursor: a task the caller reads, which needn't be in the list.
     const after = query('after')
     if (after !== null && query('cursor') !== null) throw new Refused(400, 'invalid_request', 'Read on with after or with cursor, not both.')
@@ -1058,22 +1118,24 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (after !== null && (!last?.task || !may(actor, 'read', last.channelId))) throw new Refused(400, 'invalid_request', 'after names a task you can read.')
     const start = last ? inOrder.filter((t) => t.createdAt <= last.createdAt).length : 0
     const { items, cursor } = page(inOrder, query('cursor') ?? String(start), 25)
-    // What it sees that no request wrote yet, best effort: the expiry of a lapsed claim, and for the first waiting
-    // tasks on its page, the readying a completion was cut off before. A list that reads no waiting task readies none.
+    // What it sees that no request wrote yet, best effort: the expiry of a lapsed claim, a completion on its page that
+    // hasn't readied everything that waited for it, and for the first waiting tasks on its page, their readying. A
+    // list that reads no waiting task readies none of its own.
     let expired = 0
     for (const thread of items) if (expired < REPAIRS && expire(thread)) expired++
+    let goneOver = GONE_OVER
+    for (const thread of items.filter((t) => t.task?.marked)) goneOver = goOn(thread, goneOver, undefined)
     for (const thread of items.filter((t) => t.task?.state === 'waiting').slice(0, REPAIRS)) ready(thread, actor, undefined)
     const labels = url.searchParams.getAll('label').map((label) => label.split('=', 2) as [string, string | undefined])
     const wears = (t: Thread): Record<string, string> => ({ ...rootLabels(t), 'board.task': live(t.task!) })
     const kept = items.filter(
       (t) =>
-        may(actor, 'read', t.channelId) &&
         (tree === null || tree.has(t.channelId)) &&
         (states === null || states.includes(live(t.task!))) &&
         labels.every(([key, value]) => Object.hasOwn(wears(t), key) && (value === undefined || wears(t)[key] === value)) &&
         (query('owner') === null || t.task!.owner === query('owner')) &&
         (query('for') === null || t.task!.for === query('for')) &&
-        (query('needs') === null || t.task!.needs.includes(query('needs')!)),
+        (needs === null || t.task!.needs.includes(needs)),
     )
     return { tasks: kept.map(taskOf), cursor }
   }
@@ -1590,6 +1652,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       throw new Refused(404, 'not_found', `${method} /v2${rest}`)
     }
     if (method === 'GET' && rest === '/threads') {
+      // A channel's threads: it takes nothing of tasks, and refuses what it doesn't know.
+      if (url.searchParams.has('task') || !url.searchParams.has('channelId')) throw new Refused(400, 'bad_request', 'List a channel\'s threads: channelId, and no task.')
       const channelId = url.searchParams.get('channelId') ?? ''
       channelAt(channelId)
       const label = url.searchParams.get('label')

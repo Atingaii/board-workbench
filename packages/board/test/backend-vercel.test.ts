@@ -112,6 +112,7 @@ describe('vercel()', () => {
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'passed',
       // Tasks are the API's threads': vercel() maps each task method onto their routes.
       'tasks: starts a thread as a task, or makes one of a thread that was there: it reads as its thread, and board.task finds it': 'passed',
+      'tasks: makes a task once for a client ID, and none under an ID a reply or a plain thread landed with': 'passed',
       'tasks: gives a task to one of the claims that race for it, and takes its result': 'passed',
       'tasks: gives a claim the lease it asks for, up to 5 minutes, and says when it ends': 'passed',
       "tasks: fences what a claim does: once it's over, its writes are lost and change nothing": 'passed',

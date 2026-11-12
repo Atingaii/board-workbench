@@ -171,7 +171,7 @@ describe('the conformance kit', () => {
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
     expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
-    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 17 }, () => 'passed'))
+    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 18 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
     // Every task it made went with its root: none is left open, and none still wears a state.
@@ -227,6 +227,24 @@ describe('the conformance kit', () => {
     }
     expect(owns(await conformance(await clientOf(strict), { withHeaders: withHeaders(board.fetch) }))).toMatchObject({ status: 'failed', detail: expect.stringContaining('only the author can edit a message') })
   })
+
+  it("fails a board that answers a create under a reply's ID with the task its thread is", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    // It finds the post the ID landed with, and answers its thread's task whatever that post is.
+    let made: string | null = null
+    const threadFirst: Fetch = async (request) => {
+      const creating = request.method === 'POST' && new URL(request.url).pathname.endsWith('/tasks')
+      const response = await board.fetch(request)
+      if (!creating) return response
+      if (response.status === 201) made = await response.clone().text()
+      return response.status === 409 && made !== null ? new Response(made, { status: 201, headers: { 'content-type': 'application/json' } }) : response
+    }
+    const report = await conformance(await clientOf(threadFirst))
+    expect(report.checks.find((check) => check.name === 'makes a task once for a client ID, and none under an ID a reply or a plain thread landed with')).toMatchObject({
+      status: 'failed',
+      detail: 'a task under an ID a reply landed with: expected 409 duplicate_id, and it succeeded',
+    })
+  }, 60_000)
 
   it("fails a board that lists what waits for a task from every channel, or lets a caller wait for one it can't read", async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
@@ -444,7 +462,7 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(taskless))
     expect(report.ok).toBe(true)
     const tasks = report.checks.filter((check) => check.group === 'tasks')
-    expect(tasks).toHaveLength(17)
+    expect(tasks).toHaveLength(18)
     // The one that needs no task route is about labels, which a board has either way.
     expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
     expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])

@@ -375,7 +375,7 @@ async function post(ctx: Context, text: string, extra: { id?: string; attachment
   return message
 }
 
-async function reply(ctx: Context, re: string, text: string, extra: { after?: string } = {}) {
+async function reply(ctx: Context, re: string, text: string, extra: { after?: string; id?: string } = {}) {
   const message = await ctx.board.reply(re, { text, noSync: true, ...extra })
   ctx.posted.push(message.id)
   return message
@@ -891,6 +891,27 @@ const CHECKS: Check[] = [
       same(adopted.task.text, 'conformance: a thread to make a task', "the task's text, its root's")
       same((await ctx.board.thread(plain.id)).message.labels['board.task'], 'ready', "the thread's board.task, once it's a task")
       await rejects(ctx.board.tasks.create({ re: plain.id }), 409, 'already_a_task', 'making a task of a thread that is one')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'makes a task once for a client ID, and none under an ID a reply or a plain thread landed with',
+    run: async (ctx) => {
+      const id = `conformance-task-${ctx.labels.conformance}`
+      const under = (landed: string, text: string) =>
+        ctx.board.tasks.create(ctx.channel, { text, labels: ctx.labels, noSync: true, id: landed }).then((made) => {
+          ctx.posted.push(made.task.id)
+          return made
+        })
+      const { task: first } = await under(id, 'conformance: a task with an ID')
+      same((await under(id, 'conformance: a task with an ID')).task.id, first.id, 'the second task with the same client ID')
+      // An ID something else landed with names no task: a create under it is another write's, and makes nothing.
+      await reply(ctx, first.id, 'conformance: a reply with an ID', { id: `${id}-reply` })
+      const plain = await post(ctx, 'conformance: a thread with an ID', { id: `${id}-thread` })
+      await rejects(under(`${id}-reply`, 'conformance: a task under a reply\'s ID'), 409, 'duplicate_id', 'a task under an ID a reply landed with')
+      await rejects(under(`${id}-thread`, 'conformance: a task under a thread\'s ID'), 409, 'duplicate_id', 'a task under an ID a thread that is no task landed with')
+      same((await ctx.board.thread(plain.id)).message.task, undefined, 'the thread, after a task was asked for under its ID')
+      same((await ctx.board.tasks.list({ channel: ctx.channel, label: ctx.labels, state: 'all' })).tasks.filter((listed) => listed.message.text.includes('with an ID') || listed.message.text.includes("'s ID")).length, 1, 'the tasks made under those IDs')
     },
   },
   {
