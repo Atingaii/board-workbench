@@ -1300,6 +1300,9 @@ const CHECKS: Check[] = [
       // It reads like any label: a write may be conditional on it.
       await ctx.board.label(root.id, { set: { seen: 'yes' }, if: { 'board.task': 'ready' } })
       same((await ctx.board.thread(root.id)).message.labels.seen, 'yes', "a label set while board.task is what the write's `if` says")
+      await rejects(ctx.board.label(root.id, { set: { seen: 'no' }, if: { 'board.task': null } }), 409, 'label_conflict', 'a label write that holds on there being no task, on a task')
+      await rejects(ctx.board.label(root.id, { set: { seen: 'no' }, if: { 'board.task': 'claimed' } }), 409, 'label_conflict', "a label write that holds on a state the task isn't in")
+      same((await ctx.board.thread(root.id)).message.labels.seen, 'yes', 'the label, after the writes its `if` refused')
     },
   },
   {

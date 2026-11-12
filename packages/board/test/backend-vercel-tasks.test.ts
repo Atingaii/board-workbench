@@ -15,7 +15,7 @@ type Sent = { method: string; version: number; path: string; query: Record<strin
  * A handle on the fake's board through vercel(), as `principal`, and every request it sent the API: its version, and
  * its path under the board. `can` narrows it with `x-board-can`, as a proxy that holds its credential does.
  */
-function handleOn(api: Api, principal = 'user:u_jb', { answered: hook, can }: { can?: string; answered?: (request: Sent, response: Response) => Response } = {}) {
+function handleOn(api: Api, principal = 'user:u_jb', { answered: hook, can }: { can?: string | (() => string | undefined); answered?: (request: Sent, response: Response) => Response } = {}) {
   const sent: Sent[] = []
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = new Request(input, init)
@@ -33,7 +33,8 @@ function handleOn(api: Api, principal = 'user:u_jb', { answered: hook, can }: { 
     // As it was sent, its headers among it: who it's from beside its credentials. `answered` sees what came back, and may lose it.
     // In init, where as() reads them: a Request's own headers it would drop.
     const headers = new Headers(init?.headers)
-    if (can !== undefined) headers.set('x-board-can', can)
+    const narrowed = typeof can === 'function' ? can() : can
+    if (narrowed !== undefined) headers.set('x-board-can', narrowed)
     const answered = as(api, principal)(input, { ...init, headers }).then((response) => (hook ? hook(asked, response) : response))
     // A request its caller stops ends there, as fetch ends one: the fake goes on with what it was sent.
     const stopped = new Promise<never>((_, reject) => request.signal.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')), { once: true }))
@@ -551,6 +552,25 @@ describe("vercel()'s tasks", () => {
     expect(retried!.body).toMatchObject({ operationId: landed!.body!.operationId, claimToken: landed!.body!.claimToken })
     expect(cut.wrote().body).toMatchObject({ claimToken: landed!.body!.claimToken, epoch: 2 })
     await vi.waitFor(async () => expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', claim: null, epoch: 2 }))
+
+    // One that landed for a caller that may no longer claim there isn't answered to it: nothing comes back to release,
+    // and the claim runs out with its lease.
+    const left = new AbortController()
+    let narrowedSince: string | undefined
+    const held = handleOn(api, 'user:u_jb', {
+      can: () => narrowedSince,
+      answered: (request, response) => {
+        if (request.path !== '/tasks/claim' || narrowedSince !== undefined) return response
+        narrowedSince = 'work=read;elsewhere=read,label'
+        left.abort()
+        throw new DOMException('This operation was aborted', 'AbortError')
+      },
+    })
+    expect(await held.tasks.claim({ channel: 'work', wait: 5, lease: 60 }, { signal: left.signal }).catch(() => null)).toBeNull()
+    await vi.waitFor(() => expect(asks(held)).toHaveLength(2))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(held.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/claim', '/tasks/claim'])
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'claimed', epoch: 3 })
   })
 
   it("shows each task change in the feed as the board's event, built from the task right after it, a renewal only to a read of everything", async () => {
@@ -806,6 +826,14 @@ describe("vercel()'s tasks", () => {
       [made.task.id, 'from a form'],
       [landed.task.id, 'from another form'],
     ])
+
+    // An ID a post of its own landed with that is no task names none, for it too: it isn't answered the thread's ID as if it were one.
+    vi.useRealTimers()
+    await blind.post('intake', { id: 'note-1', text: 'a note' })
+    await expect(blind.tasks.create('intake', { text: 'a note', id: 'note-1' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    await pong.reply(made.task.id, { id: 'reply-1', text: 'noted' })
+    await expect(blind.tasks.create('intake', { text: 'noted', id: 'reply-1' })).rejects.toMatchObject({ status: 409, code: 'duplicate_id' })
+    expect((await pong.tasks.list({ channel: 'intake', state: 'all' })).tasks.map((task) => task.message.text)).toEqual(['from a form', 'from another form'])
   })
 
   it("reads as a board that keeps no tasks where the API's /me says nothing of them, and asks it nothing else", async () => {

@@ -905,10 +905,12 @@ function fakeBoard(shared: Shared, boardId: string) {
       const share = { expiries: REPAIRS, goneOver: GONE_OVER }
       return (async () => {
         for (;;) {
-          // Once the operation claimed, a retry with its token answers that claim, as it was made, and any other token is refused.
+          // Once the operation claimed, a retry with its token answers that claim, as it was made, and any other token is
+          // refused. It answers it only while the caller may still claim in the task's channel, one the request names:
+          // otherwise nothing, as for a channel it can't claim in.
           const prior = claimed.get(key)
           if (prior && prior.hash !== claim.hash) throw new Refused(409, 'operation_conflict', 'That operation claimed with another token.')
-          if (prior) return answer(prior.thread)
+          if (prior) return may(actor, 'label', prior.thread.channelId) && channelsNamed(body.channel).some((channel) => channel.id === prior.thread.channelId) ? answer(prior.thread) : { task: null }
           // A client that went away is claimed nothing new for: it looks at that before each look.
           if (signal?.aborted) return { task: null }
           const found = claimNext(actor, body, claim, share)
