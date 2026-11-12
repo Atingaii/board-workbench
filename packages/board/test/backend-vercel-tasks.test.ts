@@ -526,6 +526,76 @@ describe("vercel()'s tasks", () => {
     expect((await few.tasks.claim({ channel: 'many/', lease: 60 }))?.task.id).toBe(far.id)
   })
 
+  it("claims its own task from behind any number of other owners', and by its labels only among the oldest 25 it may take in each place", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const ada = handleOn(api, 'user:u_ada')
+    // More of someone else's ready tasks than a look reads of one owner's, all older than the caller's own.
+    for (let n = 0; n < 120; n++) await ada.tasks.create('queue', { text: `ada's ${n}` })
+    const { task: mine } = await julian.tasks.create('queue', { text: 'my own, last in' })
+    expect((await julian.tasks.claim({ channel: 'queue', lease: 60 }))?.task.id).toBe(mine.id)
+    // They're someone else's still: it takes them only when it names their owner, oldest first.
+    expect(await julian.tasks.claim({ channel: 'queue' })).toBeNull()
+    expect((await julian.tasks.claim({ channel: 'queue', from: [ADA], lease: 60 }))?.task.text).toBe("ada's 0")
+
+    // What's left to look through is its own, and only labels narrow it: the API reads the 25 oldest of an owner's in a
+    // channel, so a task with the labels asked for behind those isn't found until one of them is claimed.
+    for (let n = 0; n < 25; n++) await julian.tasks.create('steps', { text: `review ${n}`, labels: { step: 'review' } })
+    const { task: fix } = await julian.tasks.create('steps', { text: 'fix, behind 25 reviews', labels: { step: 'fix' } })
+    expect(await julian.tasks.claim({ channel: 'steps', label: { step: 'fix' } })).toBeNull()
+    expect((await julian.tasks.claim({ channel: 'steps', label: { step: 'review' }, lease: 60 }))?.task.text).toBe('review 0')
+    expect((await julian.tasks.claim({ channel: 'steps', label: { step: 'fix' }, lease: 60 }))?.task.id).toBe(fix.id)
+    // One assigned to the caller's profile is in a place of its own, so those don't hide it either.
+    const { task: given } = await julian.tasks.create('steps', { text: 'for the fixer', labels: { step: 'fix' }, for: `${JULIAN}+fixer` })
+    expect((await julian.as('fixer').tasks.claim({ channel: 'steps', label: { step: 'fix' }, lease: 60 }))?.task.id).toBe(given.id)
+    // And what's assigned to it goes first, before older tasks of its principal's that anyone may take.
+    const { task: later } = await julian.tasks.create('steps', { text: 'for the fixer too', for: `${JULIAN}+fixer` })
+    expect((await julian.as('fixer').tasks.claim({ channel: 'steps', lease: 60 }))?.task.id).toBe(later.id)
+    expect((await julian.as('fixer').tasks.claim({ channel: 'steps', lease: 60 }))?.task.text).toBe('review 1')
+  })
+
+  it("is told when a claim of the next task names more channels and owners than the API looks through: 200 places", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    for (let n = 0; n < 7; n++) await julian.post(`wide/c${n}`, 'x')
+    const owners = Array.from({ length: 32 }, (_, n) => `vercel:user:u_owner${n}`)
+    // A place is a channel it may claim in and an owner it takes from, its own among them: 7 channels and 33 owners are 231.
+    await expect(julian.tasks.claim({ channel: 'wide/', from: owners })).rejects.toMatchObject({ status: 400, code: 'claim_too_wide' })
+    // Fewer owners fit, and so does less of the tree. Its own principal counts once, named or not.
+    expect(await julian.tasks.claim({ channel: 'wide/', from: owners.slice(0, 27) })).toBeNull()
+    expect(await julian.tasks.claim({ channel: 'wide/', from: [JULIAN, ...owners.slice(0, 27)] })).toBeNull()
+    expect(await julian.tasks.claim({ channel: 'wide/c3', from: owners })).toBeNull()
+    // A profile looks in one more place a channel, for what's assigned to it: 7 channels and 29 are 203.
+    await expect(julian.as('fixer').tasks.claim({ channel: 'wide/', from: owners.slice(0, 27) })).rejects.toMatchObject({ status: 400, code: 'claim_too_wide' })
+    expect(await julian.as('fixer').tasks.claim({ channel: 'wide/', from: owners.slice(0, 26) })).toBeNull()
+    // Only the channels it may claim in count: held to two of them, every owner fits.
+    const few = handleOn(api, 'user:u_jb', { can: 'wide/c1=read,label;wide/c2=read,label' })
+    expect(await few.tasks.claim({ channel: 'wide/', from: owners })).toBeNull()
+  })
+
+  it("leaves a claim whose lease ran out alone when its task isn't the caller's to take: whoever may take it ends it", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const ada = handleOn(api, 'user:u_ada')
+    const { task: theirs } = await ada.tasks.create('queue', { text: "ada's, held by a claim that lapses", claim: true, lease: 30 })
+    const { task: mine } = await julian.tasks.create('queue', { text: 'my own, held by a claim that lapses', claim: true, lease: 30 })
+    vi.setSystemTime(Date.now() + 31_000)
+    const { cursor } = await julian.poll({ channel: 'queue' })
+    const stored = async (id: string) => (await julian.thread(id)).message.task
+    // It takes over its own, and never reads the other: its expiry isn't written.
+    expect((await julian.tasks.claim({ channel: 'queue', lease: 60 }))?.task.id).toBe(mine.id)
+    expect(await julian.tasks.claim({ channel: 'queue' })).toBeNull()
+    expect(await stored(theirs.id)).toMatchObject({ state: 'claimed', epoch: 1 })
+    expect((await julian.poll({ channel: 'queue', after: cursor })).events.map((event) => [event.type, event.message?.id])).toEqual([
+      ['task.expired', mine.id],
+      ['task.claimed', mine.id],
+    ])
+    // Someone who takes from its owner does, in the claim that takes it over.
+    expect((await julian.tasks.claim({ channel: 'queue', from: [ADA], lease: 60 }))?.task.id).toBe(theirs.id)
+    expect(await stored(theirs.id)).toMatchObject({ state: 'claimed', epoch: 2, claim: { actor: JULIAN } })
+  })
+
   it('holds a wait as long as the API holds one request, 25 seconds, and the handle asks again until its wait runs out', async () => {
     vi.useFakeTimers()
     const api = fakeMessageboard()

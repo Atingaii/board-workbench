@@ -608,8 +608,11 @@ function fakeBoard(shared: Shared, boardId: string) {
   const MARKED_SEEN = 3
   /** What a list or a claim-next repairs, a request at most: lapsed claims it writes as expired, and waiting tasks a list finds ready. */
   const REPAIRS = 10
-  /** The lapsed claims a claim-next finds: the longest-lapsed in each channel it names, and in all. */
-  const LAPSED_EACH = 25
+  /** The places a claim-next looks in at most: the channels it may claim in, times the owners it takes from. */
+  const PLACES = 200
+  /** What it reads of each place, of ready tasks and of lapsed claims, and of all of them. */
+  const PLACE_READS = 25
+  const READY_IN_ALL = 200
   const LAPSED_IN_ALL = 50
   /** A profile's name, as an actor ID ends with one. */
   const PROFILE_PART = /^[a-z0-9][a-z0-9-]{0,31}$/
@@ -838,18 +841,27 @@ function fakeBoard(shared: Shared, boardId: string) {
     const labeled = named.filter((channel) => may(actor, 'label', channel.id))
     if (named.length > 0 && labeled.length === 0) throw new Refused(403, 'forbidden', 'You may not label there.')
     if (labeled.length > 50) throw new Refused(400, 'channel_tree_too_large', 'Name a prefix with at most 50 channels you may claim in under it.')
-    const owners = new Set([principalId(actor.principal), ...((body.from ?? []) as string[])])
+    // It looks only at what the caller may take: in each channel, one place for each owner it takes unassigned tasks
+    // from, its own principal and each other one `from` names, and with a profile, one for what's assigned to its actor.
+    const self = principalId(actor.principal)
+    const owners = [self, ...new Set(((body.from ?? []) as string[]).filter((owner) => owner !== self))]
+    if (labeled.length * (owners.length + (actor.profile ? 1 : 0)) > PLACES) throw new Refused(400, 'claim_too_wide', `Name fewer owners or a smaller tree: this would look in more than ${PLACES} places.`)
     const wanted = Object.entries((body.labels ?? {}) as Record<string, string>)
-    const inChannel = (channel: { id: string }) => [...threads.values()].filter((t) => t.channelId === channel.id && t.task).sort(oldestFirst)
+    const places = labeled.flatMap((channel) => {
+      const tasks = [...threads.values()].filter((t) => t.channelId === channel.id && t.task)
+      return [...owners.map((owner) => tasks.filter((t) => t.task!.for === null && t.task!.owner === owner)), ...(actor.profile ? [tasks.filter((t) => assignedTo(t.task!, actor))] : [])]
+    })
     const lapsed = (t: Thread) => t.task!.state === 'claimed' && t.task!.claim!.until <= now()
     const longestLapsed = (a: Thread, b: Thread) => a.task!.claim!.until - b.task!.claim!.until
+    /** What's assigned to the caller's actor first, then in `order`. */
+    const assignedFirst = (order: (a: Thread, b: Thread) => number) => (a: Thread, b: Thread) => Number(assignedTo(b.task!, actor)) - Number(assignedTo(a.task!, actor)) || order(a, b)
     const look = () => {
-      // The 200 oldest ready tasks across the channels it names, at most 100 from each, and their claims whose lease
-      // ran out longest ago, 25 from each and 50 in all: found in each channel, so another's can't hide them.
-      const ready = labeled.flatMap((channel) => inChannel(channel).filter((t) => t.task!.state === 'ready').slice(0, 100)).sort(oldestFirst).slice(0, 200)
-      const over = labeled.flatMap((channel) => inChannel(channel).filter(lapsed).sort(longestLapsed).slice(0, LAPSED_EACH)).sort(longestLapsed).slice(0, LAPSED_IN_ALL)
-      const mine = [...ready, ...over].sort(oldestFirst).filter((t) => wanted.every(([key, value]) => rootLabels(t)[key] === value))
-      return { found: mine.find((t) => assignedTo(t.task!, actor)) ?? mine.find((t) => t.task!.for === null && owners.has(t.task!.owner)) ?? null, over }
+      // From each place, its oldest ready tasks and its claims whose lease ran out longest ago, a few of each, and of
+      // all those a bounded number, the assigned ones first. Each is the caller's to take, so only `labels` narrow them.
+      const ready = places.flatMap((tasks) => tasks.filter((t) => t.task!.state === 'ready').sort(oldestFirst).slice(0, PLACE_READS)).sort(assignedFirst(oldestFirst)).slice(0, READY_IN_ALL)
+      const over = places.flatMap((tasks) => tasks.filter(lapsed).sort(longestLapsed).slice(0, PLACE_READS)).sort(assignedFirst(longestLapsed)).slice(0, LAPSED_IN_ALL)
+      const mine = [...ready, ...over].filter((t) => wanted.every(([key, value]) => rootLabels(t)[key] === value)).sort(assignedFirst(oldestFirst))
+      return { found: mine[0] ?? null, over }
     }
     let { found, over } = look()
     if (!found && share.goneOver > 0) {
@@ -859,7 +871,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       for (const completed of marked) share.goneOver = goOn(completed, share.goneOver, undefined)
       ;({ found, over } = look())
     }
-    // The lapsed claims it found there are ended, a few a request, beside the one it takes over: its expiry goes with its claim.
+    // The lapsed claims it found are ended, a few a request, beside the one it takes over, whose expiry goes with its
+    // claim. One on a task that isn't the caller's to take it never read, so it leaves it.
     for (const thread of over) if (thread !== found && share.expiries > 0 && expire(thread)) share.expiries--
     if (found) {
       expire(found)
