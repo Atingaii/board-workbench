@@ -137,7 +137,9 @@ function problemIn(schema: unknown, value: unknown, at: string): string | null {
   if (Array.isArray(value)) {
     if (typeof schema.minItems === 'number' && value.length < schema.minItems) return `${it} must have at least ${schema.minItems} items`
     if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) return `${it} must have at most ${schema.maxItems} items`
-    // One schema for every item, or a list of them, one for each place: items past the list are free.
+    // One schema for every item, or a list of them, one for each place. Items past the list are
+    // free: no registry takes `additionalItems`, and Vercel's takes a list only with `minItems` and
+    // `maxItems` at its length.
     const places = Array.isArray(schema.items) ? schema.items : null
     if (schema.items !== undefined)
       for (let index = 0; index < (places ? Math.min(places.length, value.length) : value.length); index++) {

@@ -1,7 +1,7 @@
 import ajv from 'ajv'
 import ajvFormats from 'ajv-formats'
 import { describe, expect, it } from 'vitest'
-import { SCHEMA_FORMATS } from '../src/contract/data-schemas.ts'
+import { checkDefinition, SCHEMA_FORMATS } from '../src/contract/data-schemas.ts'
 import { checkValue } from '../src/contract/data-values.ts'
 
 // `checkValue` against the validator Vercel's API checks a value with, set up as that API sets it
@@ -79,13 +79,14 @@ function generator(start: number) {
   function schema(depth = 0): Record<string, unknown> | boolean {
     if (depth > 0 && random() < 0.04) return random() < 0.7
     const out: Record<string, unknown> = {}
-    const type = pick(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null', undefined, ['string', 'null'], ['integer', 'null'], ['object', 'array']] as const)
+    // A definition describes an object: so does the one at the top.
+    const type = depth === 0 ? 'object' : pick(['object', 'array', 'string', 'string', 'number', 'integer', 'integer', 'boolean', 'null', undefined, ['string', 'null'], ['integer', 'null'], ['object', 'array']] as const)
     if (type !== undefined) out.type = type
     const is = (name: string) => type === name || (Array.isArray(type) && (type as readonly string[]).includes(name))
     const sub = () => schema(depth + 1)
     const deep = depth < 3
     if (is('object')) {
-      const names = deep && random() < 0.7 ? [...new Set(Array.from({ length: int(3) + 1 }, () => pick(NAMES)))] : []
+      const names = deep && (depth === 0 || random() < 0.7) ? [...new Set(Array.from({ length: int(3) + 1 }, () => pick(NAMES)))] : []
       if (names.length > 0) out.properties = Object.fromEntries(names.map((name) => [name, sub()]))
       const required = names.filter(() => random() < 0.5)
       if (required.length > 0) out.required = required
@@ -120,7 +121,51 @@ function generator(start: number) {
     if (deep && random() < 0.08) out.not = sub()
     return out
   }
-  return { schema, value }
+  /**
+   * A value shaped by `definition`: right more often than not, and wrong at each keyword's edge (a
+   * number beside its bound, a string one character short, an item out of place), so that every
+   * keyword decides answers. A free value is what the top-level type alone refuses.
+   */
+  function valueFor(definition: unknown, depth = 0): unknown {
+    if (typeof definition !== 'object' || definition === null || random() < 0.08) return value(depth)
+    const rule = definition as Record<string, unknown>
+    if ('const' in rule && random() < 0.6) return rule.const
+    if (Array.isArray(rule.enum) && random() < 0.6) return pick(rule.enum)
+    for (const keyword of ['oneOf', 'anyOf', 'allOf']) if (Array.isArray(rule[keyword]) && random() < 0.3) return valueFor(pick(rule[keyword] as unknown[]), depth)
+    const numbers = (...names: string[]) => names.map((name) => rule[name]).filter((bound): bound is number => typeof bound === 'number')
+    const type = pick(rule.type === undefined ? ['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'] : Array.isArray(rule.type) ? (rule.type as string[]) : [rule.type as string])
+    if (type === 'null') return null
+    if (type === 'boolean') return random() < 0.5
+    if (type === 'number' || type === 'integer') {
+      const bounds = numbers('minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum')
+      const near = bounds.length > 0 ? pick(bounds) + pick([-1, 0, 0, 1, 0.5]) : pick(NUMBERS)
+      const stepped = typeof rule.multipleOf === 'number' && random() < 0.6 ? Math.round(near / rule.multipleOf) * rule.multipleOf : near
+      return type === 'integer' && random() < 0.8 ? Math.round(stepped) : stepped
+    }
+    if (type === 'string') {
+      if (typeof rule.format === 'string' && random() < 0.7) return pick(SAMPLES[rule.format as keyof typeof SAMPLES])
+      const lengths = numbers('minLength', 'maxLength')
+      const length = lengths.length > 0 ? Math.max(0, pick(lengths) + pick([-1, 0, 0, 1])) : int(7)
+      // Astral characters count once each, however many code units they take.
+      return (random() < 0.2 ? '😀' : 'x').repeat(length)
+    }
+    if (type === 'array') {
+      if (Array.isArray(rule.items)) {
+        const list = rule.items.map((item) => valueFor(item, depth + 1))
+        // Short by one, or its first two out of place, now and then.
+        const slip = random()
+        return slip < 0.15 ? list.slice(1) : slip < 0.3 && list.length > 1 ? [list[1], list[0], ...list.slice(2)] : list
+      }
+      const counts = numbers('minItems', 'maxItems')
+      const length = counts.length > 0 ? Math.max(0, pick(counts) + pick([-1, 0, 0, 1])) : int(4)
+      return Array.from({ length }, () => (rule.items === undefined ? value(depth + 1) : valueFor(rule.items, depth + 1)))
+    }
+    const made: Record<string, unknown> = {}
+    for (const [name, property] of Object.entries((rule.properties ?? {}) as Record<string, unknown>)) if (random() < 0.85) made[name] = valueFor(property, depth + 1)
+    if (random() < 0.25) made[pick(NAMES)] = typeof rule.additionalProperties === 'object' ? valueFor(rule.additionalProperties, depth + 1) : value(depth + 1)
+    return made
+  }
+  return { schema, value, valueFor }
 }
 
 describe('a value, as Vercel\'s API would take it', () => {
@@ -135,8 +180,8 @@ describe('a value, as Vercel\'s API would take it', () => {
       }
     }
     expect(disagree).toEqual([])
-    // The reference is listening: it has these formats, and parts them as the API does.
-    const takes = (format: string, sample: string) => checkValue({ type: 'object', properties: { v: { type: 'string', format } } }, { v: sample }) === null
+    // The reference is listening: it has these formats, and parts them where the API does.
+    const takes = (format: string, sample: string) => reference({ type: 'object', properties: { v: { type: 'string', format } } })!({ v: sample })
     expect([takes('ipv4', '10.0.0.01'), takes('uri', 'https://x.com/<a>'), takes('time', '10:00:60Z'), takes('time', '10:00:00+99:99'), takes('date-time', '2026-11-11\t10:00:00Z')]).toEqual([true, false, false, true, true])
   })
 
@@ -147,26 +192,31 @@ describe('a value, as Vercel\'s API would take it', () => {
     expect(values.map((value) => checkValue(schema, value) === null)).toEqual(values.map(takes))
     expect(checkValue(schema, { pair: [4, 'cpu'] })).toBe('pair[0] must be a string')
     expect(checkValue(schema, { pair: ['cpu', 4] })).toBeNull()
+    // What would say more of the items past a list, `additionalItems`, no registry takes: not a board's, and not Vercel's, whose keywords are a board's.
+    expect(checkDefinition({ type: 'object', properties: { pair: { type: 'array', items: { type: 'string' }, additionalItems: false } } })).toMatch(/additionalItems/)
   })
 
-  it('gets the same answer across generated definitions and values', () => {
-    const { schema, value } = generator(7)
+  it('gets the same answer across generated definitions, for values shaped by each', () => {
+    const { schema, valueFor } = generator(7)
     const disagree: unknown[] = []
-    let compared = 0
-    for (let round = 0; round < 1500; round++) {
-      const definition = { ...(schema() as Record<string, unknown>), type: 'object' }
+    let taken = 0
+    let refusedInside = 0
+    for (let round = 0; round < 900; round++) {
+      const definition = schema() as Record<string, unknown>
       const takes = reference(definition)
       // What the reference won't compile, the API registers none of.
       if (!takes) continue
-      for (let each = 0; each < 6; each++) {
-        // Half the values are objects, as a block's data is.
-        const candidate = each % 2 === 0 ? value() : Object.fromEntries(Array.from({ length: 3 }, (_, index) => [['a', 'b', 'c'][index]!, value(1)]))
-        compared++
-        if ((checkValue(definition, candidate) === null) !== takes(candidate)) disagree.push({ definition, candidate })
+      for (let each = 0; each < 16; each++) {
+        const candidate = valueFor(definition)
+        const answer = takes(candidate)
+        if ((checkValue(definition, candidate) === null) !== answer) disagree.push({ definition, candidate })
+        if (answer) taken++
+        // An object the reference refuses is refused by a keyword inside, not by the type at the top.
+        else if (typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate)) refusedInside++
       }
     }
     expect(disagree.slice(0, 3)).toEqual([])
-    // Enough of them compiled to mean something.
-    expect(compared).toBeGreaterThan(2000)
+    // Enough answers each way to mean something: values the keywords take, and values they refuse.
+    expect({ taken: taken > 1000, refusedInside: refusedInside > 300 }).toEqual({ taken: true, refusedInside: true })
   }, 60_000)
 })
