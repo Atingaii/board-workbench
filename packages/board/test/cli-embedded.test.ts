@@ -321,6 +321,32 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("says to attach text over the limit when Vercel's API refuses it, on a post and an edit", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const long = 'x'.repeat(10_001)
+      expect(await capture(() => app.run(['post', 'dev', long, '--scope', 'acme']))).toMatchObject({
+        code: 1,
+        stderr: expect.stringMatching(/^error: Can't post to dev\. A message's text is at most 10,000 characters\.\n\n {2}Put the long part in a file and --attach it, with a short summary as the text\n/),
+      })
+      const id = (await capture(() => app.run(['post', 'dev', 'short', '--scope', 'acme']))).stdout.trim()
+      expect(await capture(() => app.run(['edit', id, long, '--scope', 'acme']))).toMatchObject({
+        code: 1,
+        stderr: expect.stringMatching(/A message's text is at most 10,000 characters\.\n\n {2}Keep the edit short, and reply with the long part in a file with --attach\n/),
+      })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("names where another project's import came from by that project, and takes it to --source by its name or its ID", async () => {
     const home = await isolated()
     const api = fakeMessageboard({ slug: 'acme', projects: { prj_www: 'www' } })

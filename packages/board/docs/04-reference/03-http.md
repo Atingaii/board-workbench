@@ -420,8 +420,8 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   is, and needs `label` in its channel. The caller's principal owns the task.
   `needs` names tasks the caller can read, none of them canceled: one that was
   can never complete. `claim: true` claims it in the same write.
-- **A claim is a lease.** `lease` is seconds, 30 to 3600, and 900 when left
-  out. The answer's `claim` is `{ epoch, token, until }`: `epoch` and `token` go
+- **A claim is a lease.** `lease` is seconds, and 900 when left out. The
+  answer's `claim` is `{ epoch, token, until }`: `epoch` and `token` go
   on every write the claim makes, and `until` is when the lease ends. The token
   shows only there. Of claims that race, one lands.
 - **A claim's writes are fenced.** `renew`, `release`, `complete`, `fail`, and
@@ -444,6 +444,13 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   which `team.tasks.claim` and `vb tasks claim --wait` do.
 - **Completing a task** readies each task that waited only for it, in the same
   write. A failed or canceled one readies nothing.
+- **A backend holds its own limits on a task.** A request is checked for its
+  shape, and how much a task holds is the backend's to say. The local board
+  takes a root as a message is (10,000 characters, 10 files), 20 `needs`, a
+  lease of 30 to 3600 seconds, a `result` or `reason` of 1,000 characters, a
+  `kind` of 64, and 32 owners in `from`: past one it answers 400
+  `invalid_request`, or `text_too_long` for the text. On Vercel's board, its
+  API's limits apply, and its refusal is the answer.
 - **Its owner changes it,** while it may post or label in its channel, and so
   does `manage` there: `block`, `unblock`, `reopen`, `assign`, and `cancel`.
   Anyone else gets 403 `task_not_owned`. A caller that writes as a profile

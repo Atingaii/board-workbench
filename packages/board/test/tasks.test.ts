@@ -327,10 +327,48 @@ describe('a claim', () => {
     expect((await read(ada, state.id)).task).toMatchObject({ epoch: 1, claim: { actor: BO } })
   })
 
+  it("holds its own limits on a task, which no request schema checks for it: a root's text and files, a note, a hold's kind, and the owners a claim takes from", async () => {
+    const { ada } = setup()
+    const refused = async (answer: { status: number; body: any }, words: string) => {
+      expect([...code(answer), answer.body.error?.message]).toEqual([400, 'invalid_request', words])
+    }
+    // A task's root is a message: its text is as long as one's, and it carries as many files.
+    const long = await ada('POST', '/tasks', { channel: 'work', text: 'x'.repeat(10_001) })
+    expect([...code(long), long.body.error.hint]).toEqual([400, 'text_too_long', expect.stringMatching(/attach it to a message/)])
+    expect((await ada('POST', '/tasks', { channel: 'work', text: 'x'.repeat(10_000) })).status).toBe(201)
+    const files = (count: number) => Array.from({ length: count }, (_, n) => `${'A'.repeat(21)}${String.fromCharCode(65 + n)}`)
+    await refused(await ada('POST', '/tasks', { channel: 'work', text: 'with a trace', attachments: files(11) }), 'attachments: a message carries at most 10')
+    // Ten are within it: they're looked up, and these aren't files.
+    expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'with a trace', attachments: files(10) }))).toEqual([404, 'attachment_not_found'])
+
+    // A result or a reason is a line or two, and a kind a short name.
+    const { id } = await task(ada, 'a long build')
+    const held = await claim(ada, id)
+    const note = 'x'.repeat(1001)
+    await refused(await ada('POST', `/tasks/${id}/complete`, { ...held, result: note }), "result: a task's result is at most 1,000 characters")
+    await refused(await ada('POST', `/tasks/${id}/fail`, { ...held, reason: note }), "reason: a task's reason is at most 1,000 characters")
+    await refused(await ada('POST', `/tasks/${id}/block`, { ...held, reason: note }), "reason: a task's reason is at most 1,000 characters")
+    await refused(await ada('POST', `/tasks/${id}/block`, { ...held, reason: 'approve the deploy?', kind: 'k'.repeat(65) }), 'kind: a kind is up to 64 lowercase letters, numbers, and _.-')
+    await refused(await ada('POST', `/tasks/${id}/cancel`, { reason: note }), "reason: a task's reason is at most 1,000 characters")
+    // None of them changed it, and what's within them does.
+    expect((await read(ada, id)).task).toMatchObject({ state: 'claimed', epoch: 1 })
+    expect((await ada('POST', `/tasks/${id}/block`, { ...held, reason: 'x'.repeat(1000), kind: 'k'.repeat(64) })).body.task.task).toMatchObject({ state: 'blocked', blocked: { kind: 'k'.repeat(64) } })
+
+    // A claim takes tasks from 32 owners beside its caller.
+    const owners = (count: number) => Array.from({ length: count }, (_, n) => `vercel:user:u_${n}`)
+    await refused(await ada('POST', '/tasks/claim', { channel: 'work', from: owners(33) }), 'from: a claim takes tasks from at most 32 owners')
+    expect((await ada('POST', '/tasks/claim', { channel: 'work', label: { step: 'none-has-this' }, from: owners(32) })).body).toEqual({ task: null })
+  })
+
   it('takes a lease of 30 seconds to an hour, says when it ends, and renews from now', async () => {
     const { ada } = setup()
     const { id } = await task(ada, 'a long build')
     for (const lease of [29, 3601, -1, '5m']) expect(code(await ada('POST', `/tasks/${id}/claim`, { lease })), String(lease)).toEqual([400, 'invalid_request'])
+    // The same for a claim of the next ready task, and for one a task is made with: nothing is claimed, and nothing made.
+    const next = await ada('POST', '/tasks/claim', { channel: 'work', lease: 3601 })
+    expect([...code(next), next.body.error.message]).toEqual([400, 'invalid_request', 'lease: a lease is 30 to 3600 seconds'])
+    expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'made and claimed', claim: true, lease: 29 }))).toEqual([400, 'invalid_request'])
+    expect((await ada('GET', '/tasks?channel=work&state=all')).body.tasks.map((found: { message: MessageView }) => [found.message.id, found.message.task?.state])).toEqual([[id, 'ready']])
     const held = await claim(ada, id, { lease: 30 })
     expect(held.until).toBe(at(30 * SECOND))
     vi.setSystemTime(T0 + 20 * SECOND)
@@ -449,7 +487,7 @@ describe('a task that needs others', () => {
     expect(await read(ada, review.id)).toMatchObject({ labels: { 'board.task': 'ready' }, task: { state: 'ready' } })
     expect((await bo('POST', `/tasks/${review.id}/claim`, {})).status).toBe(200)
 
-    // A task waits for at most 20 others, as many as Vercel's board takes.
+    // A task waits for at most 20 others here: more is refused before any of them is looked up.
     const many = (count: number) => ({ channel: 'work', text: 'ship it all', needs: Array.from({ length: count }, (_, i) => String(1000 + i)) })
     expect(code(await ada('POST', '/tasks', many(21)))).toEqual([400, 'invalid_request'])
     expect(code(await ada('POST', '/tasks', many(20)))).toEqual([400, 'invalid_needs'])
