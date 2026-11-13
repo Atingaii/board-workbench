@@ -49,6 +49,10 @@ type ApiThread = {
   createdAt: number
   createdBy: ApiActor
   labels?: Labels
+  /** With `include=messages` on a thread list: its first message, as it is now. */
+  rootMessage?: ApiMessage
+  /** With `include=messages`: its newest message, when it has replies. */
+  latestMessage?: ApiMessage
 }
 type ApiMessage = {
   id: string
@@ -1233,6 +1237,25 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return all<ApiThread>(who, await onBoard(who, '/threads'), 'threads', { channelId: channel.id, label }, signal)
   }
 
+  /** Whether the API lists threads with their first and newest messages (`include=messages`): until it refuses the parameter, it's asked. */
+  let threadsWithMessages = true
+  /**
+   * A page of a channel's threads, each with its first and newest message where the API sends them, so
+   * showing them costs no read of its own. An API from before `include=messages` takes no parameter
+   * it doesn't know and answers 400: the page is read again without it, and it's never asked again.
+   */
+  async function threadPage(who: Who, path: string, query: { channelId: string; label: string | undefined; cursor: string | undefined }, signal: AbortSignal) {
+    type Page = { threads: ApiThread[]; cursor: string | null }
+    if (threadsWithMessages)
+      try {
+        return await api<Page>(who, 'GET', path, { query: { ...query, include: 'messages' }, signal })
+      } catch (error) {
+        if (!(error instanceof HttpError && error.status === 400 && /additional property/i.test(error.message))) throw error
+        threadsWithMessages = false
+      }
+    return api<Page>(who, 'GET', path, { query, signal })
+  }
+
   /**
    * A channel's threads, as far as a read needs: the API lists them most recently active first, so
    * it stops at the first not active since `after`, or at the `limit` newest when it's given one
@@ -1244,7 +1267,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const out: ApiThread[] = []
     let cursor: string | undefined
     do {
-      const found = await api<{ threads: ApiThread[]; cursor: string | null }>(who, 'GET', path, { query: { channelId: channel.id, label, cursor }, signal })
+      const found = await threadPage(who, path, { channelId: channel.id, label, cursor }, signal)
       out.push(...found.threads)
       cursor = found.cursor ?? undefined
       const last = out.at(-1)
@@ -1253,25 +1276,26 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return out
   }
 
-  /** A thread at a glance: its root, its reply count, and its latest reply, read by reference. */
   /**
-   * A page of threads as their summaries: each thread's first and newest messages are read, then every author
-   * on the page is asked for together, before any is named.
+   * A page of threads as their summaries: each thread's first and newest messages as its thread list brought them,
+   * or read by reference from an API that lists threads without them, then every author on the page is asked for
+   * together, before any is named.
    */
   async function summaries(who: Who, page: { thread: ApiThread; channel: ApiChannel }[], signal: AbortSignal): Promise<ThreadSummaryView[]> {
     const read = await Promise.all(
-      page.map(({ thread }) =>
-        Promise.all([
-          messageById(who, idAt(thread.id, 1), signal),
-          thread.lastMessage && thread.lastMessage.sequence > 1 ? messageById(who, thread.lastMessage.id, signal) : null,
-        ]),
-      ),
+      page.map(({ thread }) => {
+        const replied = thread.lastMessage !== undefined && thread.lastMessage.sequence > 1
+        return Promise.all([
+          thread.rootMessage ?? messageById(who, idAt(thread.id, 1), signal).then((found) => found.message),
+          !replied ? null : (thread.latestMessage ?? messageById(who, thread.lastMessage!.id, signal).then((found) => found.message)),
+        ])
+      }),
     )
-    naming(who, read.flatMap(([root, last]) => [root.message.createdBy, ...(last ? [last.message.createdBy] : [])]))
+    naming(who, read.flatMap(([root, last]) => [root.createdBy, ...(last ? [last.createdBy] : [])]))
     return Promise.all(
       page.map(async ({ thread, channel }, i) => {
         const [root, last] = read[i]!
-        const [message, newest] = await Promise.all([view(who, root.message, channel.name), last && view(who, last.message, channel.name)])
+        const [message, newest] = await Promise.all([view(who, root, channel.name), last && view(who, last, channel.name)])
         // The API counts deleted messages too.
         return { message, replies: thread.messageCount - 1, last: newest }
       }),
