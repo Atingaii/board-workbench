@@ -1218,7 +1218,10 @@ through the sync that speaks for them, under the key it imported them through.
   holds one folds like any other name, and a handle or channel named
   `constructor` is like any other.
 - **Limits:** message text is at most 10,000 characters. It may be empty only
-  when the message has attachments.
+  when the message has attachments. A backend holds its own limits: board()
+  checks a request's shape, and leaves lengths and counts a backend enforces
+  to it, so on `vercel()` Vercel's API refuses what's over and its error is
+  the one callers get.
 - **Text is markdown (GFM).** Sync stores what platforms send as markdown:
   GitHub's own (tables and all), and Slack's through Chat SDK's parser. It posts
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as

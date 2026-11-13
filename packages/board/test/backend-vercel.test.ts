@@ -205,10 +205,10 @@ describe('vercel()', () => {
     await expect(julian.post(`ops/${'a'.repeat(77)}`, 'too long for the API')).rejects.toMatchObject({ status: 400, code: 'invalid_channel_name' })
   })
 
-  it('refuses text over the limit as text_too_long before it reaches the API, on a post, a reply, and an edit', async () => {
+  it("leaves a message's length to Vercel's API: text over its limit fails with the API's error, on a post, a reply, and an edit", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
-    const tooLong = { status: 400, code: 'text_too_long', hint: expect.stringMatching(/attach it to a message/) }
+    const tooLong = { status: 400, code: 'invalid_message' }
     await expect(julian.post('dev', 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
     const { id: root } = await julian.post('dev', 'hi')
     await expect(julian.reply(root, 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)

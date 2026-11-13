@@ -3,6 +3,7 @@ import {
   ActorId,
   AttachmentId,
   ATTACHMENTS_PER_MESSAGE_MAX,
+  CHANNEL_PATTERN_MAX,
   ChannelPath,
   DIRECT_UPLOAD_BYTES_MAX,
   Emoji,
@@ -11,11 +12,11 @@ import {
   LabelValue,
   MESSAGE_TEXT_MAX,
   MessageText,
+  SentText,
   platformAvatar,
   storable,
 } from '../contract/schemas.ts'
 import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
-import { SCHEMA_DESCRIPTION_MAX, SCHEMA_NAME, SCHEMA_VERSION_MAX } from '../contract/data-schemas.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
@@ -94,7 +95,7 @@ export const PostBody = z
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     /** May be empty when the message has attachments. */
-    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
+    text: z.string().default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
     /**
@@ -104,7 +105,7 @@ export const PostBody = z
     sync: z.array(z.union([z.string().min(3).max(300), ResolvedSyncTarget])).max(10).optional(),
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** IDs from `POST /attachments`. */
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
     /**
      * A reply's precondition: a message in its thread, the newest as the caller read it. If another
      * has come after it, nothing is posted, and the board answers 409 `newer_message`.
@@ -140,10 +141,10 @@ export const ScheduleBody = z
   .object({
     channel: ChannelPath.optional(),
     re: Ref.optional(),
-    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
+    text: z.string().default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
     in: Duration.optional(),
     at: Instant.optional(),
     every: Duration.optional(),
@@ -211,7 +212,7 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
 ])
 
 /** What a grant lets its principals do: a map from channel pattern to `'all'` or a list, `[]` for none. Kept as written. */
-export const GrantCan = z.record(z.string().min(1).max(300), CanGrant)
+export const GrantCan = z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), CanGrant)
 
 /** A grant: who it names, and one `can` for all of them. The same principals again are another grant. */
 export const GrantBody = z.strictObject({
@@ -259,9 +260,9 @@ export const UpdateGrantBody = z
  * Strict, so a board that doesn't know a field refuses it: what it kept could never be changed.
  */
 export const SchemaBody = z.strictObject({
-  name: z.string().regex(SCHEMA_NAME, 'a schema name is up to 80 lowercase letters, numbers, and ._-, starting with a letter'),
-  version: z.number().int().min(1).max(SCHEMA_VERSION_MAX),
-  description: z.string().min(1).max(SCHEMA_DESCRIPTION_MAX).refine(storable, 'a description has a NUL character or a lone surrogate').optional(),
+  name: z.string().regex(/^[a-z][a-z0-9._-]*$/, 'a schema name is lowercase letters, numbers, and ._-, starting with a letter'),
+  version: z.number().int().min(1),
+  description: z.string().min(1).refine(storable, 'a description has a NUL character or a lone surrogate').optional(),
   schema: z.record(z.string(), z.unknown()),
 })
 
@@ -485,7 +486,7 @@ export const UploadStartBody = z.object({
 /** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers` (its `content-type` included), before `expiresAt`, then finish it. */
 export type UploadTicket = { id: string; url: string; headers: Record<string, string>; expiresAt: string }
 
-export const EditBody = z.object({ text: MessageText, revision: Revision.optional() })
+export const EditBody = z.object({ text: SentText, revision: Revision.optional() })
 export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (other platforms ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(50).optional() }).optional()
