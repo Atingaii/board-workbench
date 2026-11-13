@@ -278,14 +278,26 @@ describe('several tasks made at once', () => {
     expect(saw).toEqual(['fix the export', 'review the fix'])
   })
 
-  it('are 100 at most on any board: one more is batch_too_large, and makes none', async () => {
+  it('are 100 at most on the local board, a limit of its own: one more is batch_too_large, and makes none', async () => {
     const { ada } = await setup()
     const many = (count: number): Asked[] => Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))
     const over = await batch(ada, many(101))
     expect(over).toEqual({ status: 400, body: { error: { code: 'batch_too_large', message: 'a batch makes 100 tasks at most, and this one has 101: send it in parts' } } })
     expect(await listed(ada)).toEqual([])
-    // It's said so whatever else is wrong with it: its sender splits it first.
-    expect(code(await batch(ada, [...many(100), { text: '' }]))).toEqual([400, 'batch_too_large'])
+    // A batch of the wrong shape is refused for that first, as any request is: how many this board makes is its own to say after.
+    expect(code(await batch(ada, [...many(100), { text: '' }]))).toEqual([400, 'invalid_request'])
+    // And of each task, what one made alone holds here: its text and files as a message's, 20 needs, and a key of 64 characters.
+    const one = async (task: Record<string, unknown>) => {
+      const answer = await batch(ada, [{ text: 'first, and fine' }, task as Asked])
+      return [...code(answer), answer.body.error?.message]
+    }
+    expect((await one({ text: 'x'.repeat(10_001) })).slice(0, 2)).toEqual([400, 'text_too_long'])
+    expect(await one({ text: 'with traces', attachments: Array.from({ length: 11 }, (_, n) => `${'A'.repeat(21)}${String.fromCharCode(65 + n)}`) })).toEqual([400, 'invalid_request', 'tasks.1.attachments: a message carries at most 10'])
+    expect(await one({ text: 'after them all', needs: Array.from({ length: 21 }, (_, n) => String(9000 + n)) })).toEqual([400, 'invalid_request', 'tasks.1.needs: a task waits for at most 20 tasks'])
+    expect(await one({ key: 'k'.repeat(65), text: 'a long name' })).toEqual([400, 'invalid_request', "tasks.1.key: a task's key is at most 64 characters"])
+    // Twenty needs, however often each is named, and a key of 64 are within them.
+    expect((await one({ key: 'k'.repeat(64), text: 'a long name', needs: Array.from({ length: 40 }, (_, n) => String(9000 + (n % 20))) })).slice(0, 2)).toEqual([400, 'invalid_needs'])
+    expect(await listed(ada)).toEqual([])
     const full = await batch(ada, many(100))
     expect(full.status).toBe(201)
     const roots = full.body.tasks as MessageView[]

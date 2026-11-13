@@ -6,10 +6,10 @@ import { LEASES_SESSION, leasesContract, type LeaseEvents } from '../contract/co
 import type { BoardEvent } from '../contract/events.ts'
 import { foldMessages, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
-import { OPEN_TASK_STATES, TASK_LABEL, TASK_NEEDS_MAX, TASK_NOTE_MAX, TaskHoldKind, type TaskState } from '../contract/schemas.ts'
+import { OPEN_TASK_STATES, TASK_BATCH_MAX, TASK_KEY_MAX, TASK_LABEL, TASK_NEEDS_MAX, TASK_NOTE_MAX, TaskHoldKind, type TaskState } from '../contract/schemas.ts'
 import { batchPlan, type BatchNeed } from '../contract/task-batch.ts'
 import { authorize, type Access, type Permission } from './access.ts'
-import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
+import { badRequest, batchTooLarge, forbidden, HttpError, notFound } from './errors.ts'
 import { indexOf, ref, toMessageFilter, view, whoIs } from './feed.ts'
 import type { MessageFilter, ThreadSummary } from '../store/types.ts'
 import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type AlongEach, type Events, type Identity, type WriteContext } from './writes.ts'
@@ -40,6 +40,16 @@ export const taskLimits = {
   },
   from(owners: readonly string[] | undefined) {
     if ((owners?.length ?? 0) > FROM_MAX) throw badRequest(`from: a claim takes tasks from at most ${FROM_MAX} owners`)
+  },
+  /** A batch: how many tasks this board makes in one append, which its sender splits on, and of each what one task holds. */
+  batch(tasks: readonly { key?: string | undefined; needs?: readonly BatchNeed[] | undefined }[]) {
+    if (tasks.length > TASK_BATCH_MAX) throw batchTooLarge(tasks.length, TASK_BATCH_MAX)
+    for (const [at, task] of tasks.entries()) {
+      if (task.key !== undefined && task.key.length > TASK_KEY_MAX) throw badRequest(`tasks.${at}.key: a task's key is at most ${TASK_KEY_MAX} characters`)
+      // Each task it waits for once, however it's named: one of the batch by its key, one that's there by its ID.
+      const waits = new Set(task.needs?.map((need) => (typeof need === 'string' ? `id ${need}` : `key ${need.key}`)))
+      if (waits.size > TASK_NEEDS_MAX) throw badRequest(`tasks.${at}.needs: a task waits for at most ${TASK_NEEDS_MAX} tasks`)
+    }
   },
 }
 /** A timer that fires this early waits again; any closer counts as on time. */

@@ -451,9 +451,9 @@ const [fix, review, ship] = await team.tasks.createMany(
   `task.created`, in the order given.
 - **A task's `key` names it for the others of the call.** A task waits for
   one before it or after it. A `key` two tasks have, one no task has, and
-  tasks that wait for each other are 400 `invalid_needs`. A `key` is 1 to 64
-  characters, and means nothing once the call returns: use the IDs it
-  answers. It's no part of what makes a repeat safe: that's the call's `id`.
+  tasks that wait for each other are 400 `invalid_needs`. A `key` means
+  nothing once the call returns: use the IDs it answers. How long one may be
+  is the backend's to say: 64 characters on the local board and on Vercel's. It's no part of what makes a repeat safe: that's the call's `id`.
 - **A task that waits for one of the call waits.** One that waits only for
   tasks that were there and have all completed is ready in the same write.
 - **Each task is checked as `create` checks one:** its text and blocks, its
@@ -466,10 +466,10 @@ const [fix, review, ship] = await team.tasks.createMany(
   order, each with the same `key`, text, labels, `noSync`, files, needs, and
   `for`, as you gave them. Anything else under that `id` is 409
   `duplicate_id`. A board keeps an `id` for good.
-- **100 tasks at most.** More is 400 `batch_too_large`, and so is a batch
-  with more than a board holds in one write. Nothing is made.
-  [`local()`](../01-board/10-local.md) holds all 100, one append of at most
-  301 events. Vercel's board holds fewer: see below.
+- **A board says how many it makes in one write.** More is 400
+  `batch_too_large`, and nothing is made.
+  [`local()`](../01-board/10-local.md) makes 100, one append of at most 301
+  events. Vercel's board holds fewer: see below.
 - **The middleware sees each task's root as a post,** one after the other,
   before any is written: one it drops makes none. A retry of a batch that
   landed never reaches it.
@@ -578,7 +578,9 @@ it gives:
   with an `id`.** A task's labels, files, and needs count toward it, so a
   chain of 13 fits, or of 12 with an `id`, and 11 tasks with a label each
   either way. More is 400 `batch_too_large`, with nothing made, and its
-  message says how many the batch counts for.
+  message says how many the batch counts for. A request of more than 100
+  tasks is refused before that for its shape, as the API's 400
+  `invalid_request`.
 - **A retried batch goes through the middleware again there.** The API has
   no read of a batch by its `id`, and tells the same request by what it's
   sent, after the middleware. One that isn't the same twice makes a retry

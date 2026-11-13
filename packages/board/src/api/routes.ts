@@ -15,9 +15,6 @@ import {
   SentText,
   platformAvatar,
   storable,
-  TASK_BATCH_MAX,
-  TASK_NEEDS_MAX,
-  TASK_KEY_MAX,
   EDITED_HOLD,
   SentTaskHoldKind,
   SentTaskNote,
@@ -239,7 +236,7 @@ export const CreateTaskBody = z
 const BatchRequest = z.string().min(1).max(64)
 
 /** A task another task of the same batch waits for, by the `key` it goes by there. */
-const TaskKey = z.string().min(1).max(TASK_KEY_MAX).refine(storable, 'key has a NUL character or a lone surrogate')
+const TaskKey = z.string().min(1).refine(storable, 'key has a NUL character or a lone surrogate')
 
 /**
  * Several new threads in one channel, each a task, made in one write: all of them or none. A task is
@@ -255,20 +252,20 @@ export const CreateTasksBody = z.object({
       z
         .object({
           key: TaskKey.optional(),
-          /** May be empty when the task's root has attachments. */
-          text: z.string().max(MESSAGE_TEXT_MAX),
+          /** May be empty when the task's root has attachments. As long as a post's text may be: the backend says how long that is. */
+          text: z.string(),
           labels: Labels.optional(),
           noSync: z.boolean().optional(),
           /** IDs from `POST /attachments`, as a post takes them. */
-          attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
-          needs: z.array(z.union([Ref, z.object({ key: TaskKey }).strict()])).max(TASK_NEEDS_MAX).optional(),
+          attachments: z.array(AttachmentId).optional(),
+          /** How many tasks one may wait for is the backend's to say. */
+          needs: z.array(z.union([Ref, z.object({ key: TaskKey }).strict()])).optional(),
           for: ActorId.nullable().optional(),
         })
         .refine((task) => task.text.trim().length > 0 || (task.attachments?.length ?? 0) > 0, { message: 'message text is empty', path: ['text'] })
         .refine((task) => storable(task.text), { message: 'message text has a NUL character or a lone surrogate', path: ['text'] }),
     )
-    .min(1)
-    .max(TASK_BATCH_MAX),
+    .min(1),
   id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
   /**
    * From a board in front of this one: its digest of what the batch asked for as it was given, before

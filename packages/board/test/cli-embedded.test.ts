@@ -399,6 +399,14 @@ describe('the embedded CLI', () => {
         stdout: '',
         stderr: `error: Can't change what task #${others[0]} needs. It waits for tasks you can read, and none that waits for it.\n  A task waits for 20 tasks at most.\n\n  See what it waits for now:\n    vercel board read ${others[0]}\n  Or see the tasks there are:\n    vercel board tasks --state all\n`,
       })
+      // A plan's tasks are held to the same: the longest text says what the API's refusal of one means.
+      const plan = join(home, 'plan.json')
+      await writeFile(plan, JSON.stringify([{ text: 'fix CVE-123 in acme/web' }, { text: 'x'.repeat(10_001) }]))
+      expect(await run('tasks', 'create', 'plans', '--tasks-file', plan)).toEqual({
+        code: 1,
+        stdout: '',
+        stderr: "error: Can't create tasks in plans. A message's text is at most 10,000 characters.\n\n  Keep it short, and reply to the task with the long part in a file with --attach\n",
+      })
       // The task is as it was, and what's within the API's limits lands.
       expect(await run('tasks', 'complete', id, 'x'.repeat(1000))).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
     } finally {

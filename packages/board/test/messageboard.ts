@@ -909,6 +909,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       const needs: unknown[] = task.needs ?? []
       const named = Array.isArray(needs) ? needs.map((need) => (typeof need === 'string' && THREAD_ID.test(need) ? `task ${need}` : typeof need === 'object' && need !== null && aKey((need as { key?: unknown }).key) ? `key ${(need as { key: string }).key}` : null)) : [null]
       if (named.length > 20 || named.includes(null) || new Set(named).size !== named.length) throw bad('needs is at most 20 task IDs or keys, each named once.')
+      const files: unknown[] = task.attachments ?? []
+      if (!Array.isArray(files) || files.length > 10 || new Set(files).size !== files.length) throw bad('A message carries up to 10 different attachments.')
     }
     const tasks = body.tasks as Asked[]
     // What the caller may: post there, and label when a task has labels.
@@ -919,7 +921,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     // Each task's own fields, in the body's order, then a file two of them carry.
     const owner = principalId(actor.principal)
     for (const task of tasks) {
-      if (typeof task.text !== 'string' || (!task.text.trim() && !(task.attachments?.length && task.text === '')) || task.text.length > 10_000) throw new Refused(400, 'invalid_message')
+      if (typeof task.text !== 'string' || (!task.text.trim() && !(task.attachments?.length && task.text === '')) || task.text.length > 10_000) throw new Refused(400, 'invalid_message', 'A message is 1 to 10000 characters.')
       const labels = task.labels ?? {}
       if (typeof labels !== 'object' || Object.values(labels).some((value) => typeof value !== 'string')) throw new Refused(400, 'invalid_label')
       if (Object.keys(labels).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")

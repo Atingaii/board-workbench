@@ -1,6 +1,6 @@
 import { ZodError } from 'zod'
 import { handleErrors, type ErrorOrigin } from '../client/client.ts'
-import { MESSAGE_TEXT_MAX, TASK_BATCH_MAX } from '../contract/schemas.ts'
+import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
 
 export class HttpError extends Error {
   readonly status: number
@@ -41,9 +41,9 @@ export const textTooLong = () =>
   })
 export const duplicateId = () =>
   new HttpError(409, 'duplicate_id', 'that id was already used for a different write')
-/** More tasks than one batch makes, on any board. Nothing was made: its sender splits it. */
-export const batchTooLarge = (tasks: number) =>
-  new HttpError(400, 'batch_too_large', `a batch makes ${TASK_BATCH_MAX} tasks at most, and this one has ${tasks}: send it in parts`)
+/** More tasks than a board makes in one batch: `most` is how many it does. Nothing was made, and its sender splits it. */
+export const batchTooLarge = (tasks: number, most: number) =>
+  new HttpError(400, 'batch_too_large', `a batch makes ${most} tasks at most, and this one has ${tasks}: send it in parts`)
 
 export const json = (body: unknown, status = 200, headers?: HeadersInit) =>
   new Response(JSON.stringify(body), {
@@ -74,8 +74,7 @@ export function toErrorResponse(error: unknown): Response {
   if (error instanceof ZodError) {
     const issue = error.issues[0] && reported(error.issues[0])
     // A message's own text over the limit (not a field inside one, like a link's preview) says what to do instead.
-    const ownText = issue?.path.length === 1 || (issue?.path.length === 3 && issue.path[0] === 'tasks')
-    if (issue?.code === 'too_big' && issue.origin === 'string' && issue.maximum === MESSAGE_TEXT_MAX && ownText && issue.path.at(-1) === 'text')
+    if (issue?.code === 'too_big' && issue.origin === 'string' && issue.maximum === MESSAGE_TEXT_MAX && issue.path.length === 1 && issue.path[0] === 'text')
       return toErrorResponse(textTooLong())
     const path = issue?.path.length ? `${issue.path.join('.')}: ` : ''
     return json(

@@ -508,13 +508,13 @@ describe("vercel()'s tasks", () => {
     expect(julian.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/batch'])
     expect((await julian.channels()).map((channel) => channel.path)).not.toContain('long')
     expect(await julian.tasks.createMany('long', long(6))).toHaveLength(6)
-    // More than any batch makes is board()'s own to say: the API is never asked.
+    // More tasks than a body of the API's takes is the API's to say, in its words: it's asked, and makes none.
     julian.sent.length = 0
-    await expect(julian.tasks.createMany('plans', plain(101))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('100 tasks at most') })
-    expect(julian.sent.filter((request) => request.method === 'POST')).toEqual([])
+    await expect(julian.tasks.createMany('plans', plain(101))).rejects.toMatchObject({ status: 400, code: 'invalid_request', message: 'tasks is 1 to 100 tasks.' })
+    expect(julian.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/batch'])
   })
 
-  it("leaves to the API what it never sends it: a batch of the wrong shape, and the order the API refuses in", async () => {
+  it("has a batch refused in the API's own order, whatever the board checked first: its shape, what the caller may, each task, the count, and then what takes a read", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
     const { task: there } = await julian.tasks.create('work', { text: 'a task that was there' })
@@ -1159,6 +1159,12 @@ describe("vercel()'s tasks", () => {
     await refused(() => claim.block(note), /\/block$/, shape('reason is 1 to 1,000 characters, not blank.'))
     await refused(() => claim.block('approve the deploy?', { kind: 'k'.repeat(65) }), /\/block$/, shape('kind is up to 64 lowercase letters, numbers, and _.-'))
     await refused(() => julian.tasks.cancel(task.id, note), /\/cancel$/, shape('reason is 1 to 1,000 characters, not blank.'))
+    // A batch: a task's name in it, and of each task what one made alone holds.
+    const batch = /^\/tasks\/batch$/
+    await refused(() => julian.tasks.createMany('work', [{ key: 'k'.repeat(65), text: 'a long name' }]), batch, shape('key is 1 to 64 characters.'))
+    await refused(() => julian.tasks.createMany('work', [{ text: 'fine' }, { text: 'x'.repeat(10_001) }]), batch, { code: 'invalid_message', message: 'A message is 1 to 10000 characters.' })
+    await refused(() => julian.tasks.createMany('work', [{ text: 'after them all', needs: others }]), batch, shape('needs is at most 20 task IDs or keys, each named once.'))
+    await refused(() => julian.tasks.createMany('work', [{ text: 'with traces', attachments: files }]), batch, shape('A message carries up to 10 different attachments.'))
     // The owners a claim takes from.
     const owners = Array.from({ length: 33 }, (_, n) => `vercel:user:u_${n}`)
     await refused(() => julian.tasks.claim({ channel: 'leases', from: owners }), /^\/tasks\/claim$/, shape('from is at most 32 owner IDs.'))

@@ -150,6 +150,18 @@ describe('vb tasks create --tasks-file', () => {
     expect(rows(await ok(['tasks', 'create', 'typos', '--tasks-file', whole])).map((row) => row.replace(/\s+/g, ' ').split(' ').slice(1, 2))).toEqual([['ready'], ['waiting']])
   }, 60_000)
 
+  it("says what to do with a task's text the board won't take, and makes none of its batch", async () => {
+    const path = await planFile([{ text: 'fix CVE-123 in acme/web' }, { text: 'x'.repeat(10_001) }], 'long.json')
+    const refused = await vb(['tasks', 'create', 'long', '--tasks-file', path])
+    expect(refused).toEqual({
+      code: 1,
+      stdout: '',
+      stderr: "error: Can't create tasks in long. A message's text is at most 10,000 characters.\n\n  Keep it short, and reply to the task with the long part in a file with --attach\n",
+    })
+    expect(failure(await vb(['tasks', 'create', 'long', '--tasks-file', path, '--json'])).reason).toBe('payload_too_large')
+    expect(await ok(['channels'])).not.toMatch(/^long\b/m)
+  }, 60_000)
+
   it('says what a plan that stopped midway made, and the command that makes the rest under the same key', async () => {
     // 120 steps, each after the one before: more than one write holds. The 111th also waits for a task that isn't there.
     const steps = Array.from({ length: 120 }, (_, n) => ({ key: `step-${n}`, text: `migrate shard ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))

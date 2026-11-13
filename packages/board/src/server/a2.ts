@@ -629,6 +629,12 @@ function build(options: A2Options, binding: BoardBinding) {
       return { task, ...(claim ? { claim } : {}) }
     },
     async createTasks(caller, body) {
+      // This board's own limits on a batch, and on each task's root as on any message.
+      taskLimits.batch(body.tasks)
+      for (const [at, task] of body.tasks.entries()) {
+        if (task.text.length > MESSAGE_TEXT_MAX) throw textTooLong()
+        if ((task.attachments?.length ?? 0) > ATTACHMENTS_PER_MESSAGE_MAX) throw badRequest(`tasks.${at}.attachments: a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX}`)
+      }
       const identity = await identityOf(caller)
       const { principal } = identity
       // New threads, posted as any are: `post` where they land, and `label` when any carries labels.

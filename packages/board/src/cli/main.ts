@@ -1682,6 +1682,8 @@ async function createPlan(target: string, text: string | undefined, path: string
   if (own !== undefined) throw usage(`${own === 'text' ? 'Text' : `--${own}`} is one task's: with --tasks-file, each task in the file has its own.`)
   const board = client()
   const tasks = await planFrom(path, board)
+  // Each root is a message: the longest says what a backend's refusal of one's text means, as for a task made alone.
+  sentLength = Math.max(0, ...tasks.map((task) => (typeof task.text === 'string' ? task.text.length : 0)))
   const key = flags['idempotency-key'] ?? crypto.randomUUID()
   let made: MessageView[]
   try {
