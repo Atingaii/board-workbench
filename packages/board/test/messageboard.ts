@@ -882,11 +882,12 @@ function fakeBoard(shared: Shared, boardId: string) {
     share.first = false
     if (!found && first) {
       // Nothing to take: once a request, it goes on with the completions on the board that haven't readied everything
-      // that waited for them, the oldest few, wherever they and what waited are, and looks again. It looks through no
-      // waiting task itself.
+      // that waited for them, the oldest few, wherever they and what waited are, and looks again when that readied
+      // any. It looks through no waiting task itself.
+      const before = share.goneOver
       const marked = [...threads.values()].filter((t) => t.task?.marked).sort((a, b) => a.task!.completed!.at - b.task!.completed!.at).slice(0, MARKED_SEEN)
       for (const completed of marked) share.goneOver = goOn(completed, share.goneOver, undefined)
-      ;({ found, over } = look())
+      if (share.goneOver < before) ({ found, over } = look())
     }
     // The lapsed claims it found are ended, a few a request, beside the one it takes over, whose expiry goes with its
     // claim. One on a task that isn't the caller's to take it never read, so it leaves it.
@@ -963,26 +964,29 @@ function fakeBoard(shared: Shared, boardId: string) {
         return answer(found)
       }
       return (async () => {
-        // The look it starts with, and the one before it waits.
-        let seen = woken()
+        // The look it starts with.
         const started = look()
-        if (started) return started
-        if (!(body.wait > 0)) return nothing
-        for (;;) {
+        if (started || !(body.wait > 0)) return started ?? nothing
+        for (let woke = false; ; woke = true) {
+          // What it's woken by is watched before it looks again, so a task that turns ready in between wakes it.
+          const seen = woken()
+          // The look before it waits, or the one a wake-up brings. That one is followed by two more, a little apart,
+          // when it finds nothing: the event can come before the index has the task.
+          let answered = look()
+          for (const after of woke ? LOOKS_AGAIN_MS : []) {
+            const left = until - Date.now()
+            if (answered || left <= 0 || share.looks >= LOOKS) break
+            await pause(Math.min(after, left))
+            answered = look()
+          }
+          if (answered) return answered
+          // Out of time, or out of looks: with those spent it answers nothing, though its wait isn't up.
+          if (Date.now() >= until || share.looks >= LOOKS) return nothing
           // It waits for a change in a channel it names that can make a task claimable, or for its wait to run out.
           while (woken() === seen && Date.now() < until && !signal?.aborted) await pause(10)
-          const woke = woken() !== seen
-          seen = woken()
-          // Woken, it looks up to three times, a little apart. With its wait run out it looks once more: a lease that
-          // ran out, or a grant, makes a task claimable with no event. Either way it has only so many looks: with those
-          // spent it answers nothing, though its wait isn't up.
-          for (const after of woke ? [0, ...LOOKS_AGAIN_MS] : [0]) {
-            if (after > 0) await pause(Math.min(after, Math.max(0, until - Date.now())))
-            if (share.looks >= LOOKS) return nothing
-            const answered = look()
-            if (answered) return answered
-          }
-          if (!woke || share.looks >= LOOKS) return nothing
+          if (signal?.aborted) return nothing
+          // A wait that ran out looks once more: a lease that ran out, or a grant, makes a task claimable with no event.
+          if (woken() === seen) return look() ?? nothing
         }
       })()
     }
