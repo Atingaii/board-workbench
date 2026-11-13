@@ -2244,16 +2244,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       type Read = { board: { name?: string } }
       // A board named by its ID is read, so `whoami` names only one there is and you can reach.
       const reached = options.board ? await api<Read>(who, 'GET', path) : null
-      // Its name is said to a caller who may read the board. A handle narrowed with a `can` asks as
-      // it's narrowed, and whoever the API refuses the read gets none.
+      // Its name is said to a caller who may read the board. A handle narrowed with a `can` that reads
+      // nowhere gets none, and nothing is asked for it; one that reads somewhere asks as it's narrowed,
+      // and whoever the API refuses the read gets none either.
       const can = 'self' in caller ? caller.can : undefined
+      const reads = can === undefined || compileAccess(parseCan(can)).anywhere('read')
       const found =
         reached !== null && can === undefined
           ? reached
-          : await api<Read>(can === undefined ? who : { ...who, can }, 'GET', path).catch((error: unknown) => {
-              if (error instanceof HttpError && error.status === 403) return null
-              throw error
-            })
+          : reads
+            ? await api<Read>(can === undefined ? who : { ...who, can }, 'GET', path).catch((error: unknown) => {
+                if (error instanceof HttpError && error.status === 403) return null
+                throw error
+              })
+            : null
       // The team's ID: the API says it when this board names the team by its slug, or not at all.
       const id = team?.startsWith('team_') ? team : (await self(who)).teamId
       return {

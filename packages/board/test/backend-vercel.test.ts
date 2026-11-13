@@ -741,8 +741,12 @@ describe('vercel()', () => {
     // A handle narrowed with a can asks as it's narrowed: the name is for one that reads somewhere.
     const team = handleOn(api)
     expect(await team.as('fixer', { can: { 'dev/': ['read'] } }).discovery()).toMatchObject({ name: 'General' })
+    // One that reads nowhere gets none, whatever the API would answer: the board isn't read for it.
+    const reads = () => api.requests.filter((made) => made === 'GET /boards/brd_test').length
+    const asked = reads()
     expect(await team.as('fixer', { can: { 'dev/': ['post'] } }).discovery()).not.toHaveProperty('name')
     expect(await team.as('fixer', { can: {} }).discovery()).not.toHaveProperty('name')
+    expect(reads()).toBe(asked)
     // One on a board named by its ID still learns where it is, and no name it may not read.
     const onSecurity = board({ backend: vercel({ team: 'team_test', board: 'brd_sec', api: API, fetch: as(api, 'user:u_jb') }) })
     expect(await onSecurity.discovery()).toMatchObject({ name: 'Security' })
