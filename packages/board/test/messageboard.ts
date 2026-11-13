@@ -636,6 +636,9 @@ function fakeBoard(shared: Shared, boardId: string) {
   const hashOf = (token: string) => createHash('sha256').update(token).digest('hex')
   const bad = (message: string) => new Refused(400, 'bad_request', message)
   const finishedFor = (task: Task) => task.state === 'completed' || task.state === 'canceled'
+  /** What a change of a finished task is refused with: one code, and words that say a failed one can be reopened. */
+  const finishedTask = (task: Task) =>
+    new Refused(409, 'task_finished', task.state === 'failed' ? 'The task failed: reopen it to make it claimable again, or cancel it.' : 'The task is finished.')
   /** Set by a test: the next completion ends after its own write, as a request cut off there does, readying no more than fit in it. */
   let cut = false
 
@@ -1040,7 +1043,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         const lapsed = task.state === 'claimed' && task.claim!.until <= now()
         if (task.state === 'waiting' && !done(task)) throw new Refused(409, 'task_waiting', 'The task waits for others.')
         if (task.state === 'blocked') throw new Refused(409, 'task_blocked', 'The task is held for a person.')
-        if (finishedFor(task) || task.state === 'failed') throw new Refused(409, 'task_finished', `The task is ${task.state}.`)
+        if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
         if (task.for !== null && !assignedTo(task, actor)) throw new Refused(409, 'task_assigned', 'The task is assigned to another actor.')
         if (task.state === 'claimed' && !lapsed) throw new Refused(409, 'task_claimed', 'Someone holds the task.', undefined, task.claim!.until)
         // What it found to repair goes in the same write as the claim: a lapsed lease's expiry, or a readying that was cut off.
@@ -1082,14 +1085,14 @@ function fakeBoard(shared: Shared, boardId: string) {
           lapse()
           if (task.state === 'claimed') throw new Refused(409, 'task_claimed', 'Someone holds the task: only its claim holds it for a person.')
           if (task.state === 'blocked') throw new Refused(409, 'task_blocked', 'The task is held already.')
-          if (finishedFor(task) || task.state === 'failed') throw new Refused(409, 'task_finished', `The task is ${task.state}.`)
+          if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
         }
         Object.assign(task, { state: 'blocked', claim: null, blocked: { kind: body.kind ?? null, reason } })
         taskEvent(thread, 'task.blocked', actor, from, op)
       } else if (verb === 'unblock') {
         ownerOrManage(actor, thread)
         // A finished task has no hold to lift, a failed one included.
-        if (finishedFor(task) || task.state === 'failed') throw new Refused(409, 'task_finished', `The task is ${task.state}.`)
+        if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
         lapse()
         if (task.state === 'blocked') {
           // One that needs others waits again, always: when they have all completed, its `task.ready` follows in the same
@@ -1101,7 +1104,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       } else if (verb === 'reopen') {
         ownerOrManage(actor, thread)
         // A completed or canceled task stays finished; an open one is answered as it is.
-        if (finishedFor(task)) throw new Refused(409, 'task_finished', `The task is ${task.state}.`)
+        if (finishedFor(task)) throw finishedTask(task)
         lapse()
         if (task.state === 'failed') {
           Object.assign(task, { state: 'ready', reason: null })
@@ -1112,7 +1115,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         const assigned: unknown = body.for
         if (!(assigned === null || profileOf(task.owner, assigned))) throw new Refused(400, 'invalid_for', "A task is assigned to one of its owner's profiles.")
         const to = assigned as string | null
-        if (finishedFor(task) || task.state === 'failed') throw new Refused(409, 'task_finished', `The task is ${task.state}.`)
+        if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
         lapse()
         if (task.for !== to) {
           task.for = to
@@ -1121,7 +1124,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       } else {
         const reason = note(body.reason, 'reason', true)
         ownerOrManage(actor, thread)
-        if (finishedFor(task)) throw new Refused(409, 'task_finished', `The task is ${task.state}.`)
+        if (finishedFor(task)) throw finishedTask(task)
         lapse()
         Object.assign(task, { state: 'canceled', claim: null, blocked: null, reason })
         taskEvent(thread, 'task.canceled', actor, from, op)
