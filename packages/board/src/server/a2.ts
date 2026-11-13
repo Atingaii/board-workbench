@@ -12,7 +12,7 @@ import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { type Actor, type ExternalCopy, type Message } from '../contract/folds.ts'
 import { importedHandle, shownName, userIdOf } from '../contract/profiles.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
-import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import { INBOX_EVENT_ID_MAX, type Discovery, type InboxEntry, type Me, type ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, parseCan, type Access, type Permission } from './access.ts'
@@ -21,7 +21,7 @@ import { viaOf } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
-import { badRequest, duplicateId, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
+import { badRequest, duplicateId, forbidden, HttpError, notFound, textTooLong, toErrorResponse } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
@@ -362,6 +362,12 @@ function build(options: A2Options, binding: BoardBinding) {
       }),
     )
 
+  /** This board's own limits on a message, which requests leave to the backend. */
+  const withinLimits = ({ text, attachments }: { text: string; attachments?: readonly string[] | undefined }) => {
+    if (text.length > MESSAGE_TEXT_MAX) throw textTooLong()
+    if ((attachments?.length ?? 0) > ATTACHMENTS_PER_MESSAGE_MAX) throw badRequest(`attachments: a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX}`)
+  }
+
   /** A registrant's queue, in the watch contract: its watchers' and sync's matches, and its inbox. */
   const queueOf = (owner: string) => watchers.server.session(registrantSession(owner))
 
@@ -394,6 +400,7 @@ function build(options: A2Options, binding: BoardBinding) {
   /** A post as it lands: what the caller may post, with the files it may have. */
   async function postNow(caller: Caller, identity: Identity, parsed: Protocol['post']['input']): Promise<Protocol['post']['output']> {
     const { principal } = identity
+    withinLimits(parsed)
     const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
     const proofs = await authorizePost(writes, principal.access, body)
     ownId(caller, principal, body.id)
@@ -543,6 +550,7 @@ function build(options: A2Options, binding: BoardBinding) {
       return postNow(caller, await identityOf(caller), parsed)
     },
     async edit(caller, { id, text, revision }) {
+      withinLimits({ text })
       const identity = await identityOf(caller)
       const authorized = await authorizeOwn(writes, identity, messageAt(id), 'edit')
       await writeEdit(writes, { identity, authorized, text, revision })
@@ -567,6 +575,7 @@ function build(options: A2Options, binding: BoardBinding) {
       return { ok: true }
     },
     async schedule(caller, parsed) {
+      withinLimits(parsed)
       const identity = (await identityOf(caller))
       const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
       // Checked now, where the caller sees it, and again at every send.
