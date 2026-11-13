@@ -426,11 +426,12 @@ export function hasApp(repo: string, { unmapped, waiting }: Pick<Found, "unmappe
 export type Asked = ({ onboarded: true } & Listed) | { repo: string; onboarded: false; app: boolean | null };
 
 /**
- * What the agent's setup_steps tool reads: the page's steps with their tasks, the repos the factory
- * works on, and how many more its GitHub app is on. With `repo`, also whether the app is on that
- * one, which the agent can't tell from a thread, where its GitHub access covers only what's
- * onboarded. One repo at a time and never the list: the agent answers people who aren't on the
- * team, from GitHub and Slack, and a thread about one repo has no business with the others' names.
+ * What the agent's setup_steps tool reads: the page's steps with their tasks, and how many repos
+ * the factory works on and how many more its GitHub app is on. With `repo`, also where that one
+ * shows, or whether the app is on it, which the agent can't tell from a thread, where its GitHub
+ * access covers only what's onboarded. One repo at a time and never a list of names: the agent
+ * answers people who aren't on the team, from GitHub and Slack, and a thread about one repo has no
+ * business with the others' names.
  */
 export function stepsView({ steps, found }: Extract<Setup, { open: false }>, synced: Pick<Synced, "repoChannels" | "slackChannels">, repo: string | null = null) {
   const onboarded = reposOf(synced);
@@ -442,7 +443,7 @@ export function stepsView({ steps, found }: Extract<Setup, { open: false }>, syn
   };
   return {
     steps: steps.map((step) => ({ title: step.title, optional: step.optional ?? false, done: isDone(step), tasks: step.tasks })),
-    repos: { onboarded, waiting: found.waiting },
+    repos: { onboarded: onboarded.length, waiting: found.waiting },
     ...(repo ? { asked: about(repo) } : {}),
   };
 }
