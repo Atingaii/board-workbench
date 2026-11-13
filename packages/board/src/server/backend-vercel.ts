@@ -2789,7 +2789,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       for (const owner of input.from ?? []) if (!isId(owner)) throw badRequest(`from: ${owner} is a handle, which several can share: name the owner by ID`, 'invalid_from')
       if (signal.aborted) return { task: null }
       const path = await onBoard(who, '/tasks/claim')
-      // The API holds a request up to 25 seconds, then answers that nothing was ready: whoever waits longer asks again, as the handle does.
+      // The API holds a request up to 25 seconds, and answers that it took nothing by then or sooner: it looks only so
+      // many times, so where many tasks change it answers before its wait is up. Nothing here says the wait ran out:
+      // whoever waits asks again until their own wait is up, as the handle does.
       const wait = Math.min(WAIT_MAX_S, Math.ceil(input.wait ?? 0))
       const token = newClaimToken()
       const body = {
