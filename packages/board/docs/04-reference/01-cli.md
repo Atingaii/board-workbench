@@ -961,6 +961,11 @@ $ vb tasks work/ --state all --limit 2
   `claude` is settled as `claude`.
 - **`unblock` and `reopen` that change nothing** exit 0 and say so: `812
   wasn't blocked`.
+- **A board holds its own limits on a task:** how long a result or a reason
+  is, how many tasks one waits for, how many owners `--from` names. Past one,
+  the command says what it was doing, with the board's words under it, and
+  exits 2. A task's text over what a message holds is `payload_too_large`:
+  keep it short, and reply to the task with the long part in a file.
 
 What can go wrong, by `reason`:
 

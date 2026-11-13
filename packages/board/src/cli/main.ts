@@ -814,7 +814,15 @@ function failureOf(error: unknown): Failure {
   if (status === 400 && (code === 'text_too_long' || (code === 'invalid_message' && sentLength > MESSAGE_TEXT_MAX)))
     return {
       ...theirs('limit', 'payload_too_large', `Can't ${doing()}. A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.`, [
-        { instruction: current.command === 'edit' ? 'Keep the edit short, and reply with the long part in a file with --attach' : 'Put the long part in a file and --attach it, with a short summary as the text' },
+        // A task's root takes no file, and neither does an edit: the long part goes in a reply that does.
+        {
+          instruction:
+            current.command === 'edit'
+              ? 'Keep the edit short, and reply with the long part in a file with --attach'
+              : current.command === 'tasks'
+                ? 'Keep it short, and reply to the task with the long part in a file with --attach'
+                : 'Put the long part in a file and --attach it, with a short summary as the text',
+        },
       ]),
       details: [],
     }
@@ -1863,8 +1871,11 @@ async function tasks(args: string[]): Promise<number> {
         })
       made = await board.tasks.create({ re: messageId(target) }, about)
     } else {
+      // A task's root is a message: how long its text is says what a backend's refusal of it means, as for a post.
+      const said = await text(body)
+      sentLength = said.length
       made = await board.tasks.create(target, {
-        text: await text(body),
+        text: said,
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
