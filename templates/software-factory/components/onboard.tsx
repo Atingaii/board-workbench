@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useState, useTransition } from "react";
 
-type Answer = { started: true; repo: string } | { started: false; repo: string; where: string } | { error: { message: string } };
+type Answer = { started: true; repo: string } | { started: false; repo: string; where: string } | { started: false; repo: string; missing: true } | { error: { message: string } };
 
 /**
  * A repo to onboard, typed or pasted, and the button that asks the factory for it: a POST to the
@@ -27,6 +27,7 @@ export function Onboard({ path, where, suggest }: { path: string; where: string;
           // Nothing answered, or nothing that reads: trying again may help. A refusal says why, and trying again won't.
           if (!answer) return setSaid("Couldn't ask the factory. Try again.");
           if ("error" in answer) return setSaid(`Couldn't ask the factory: ${answer.error.message}.`);
+          if (!answer.started && "missing" in answer) return setSaid(`The GitHub app isn't on ${answer.repo}. Add it on GitHub first.`);
           if (!answer.started) return setSaid(`${answer.repo} is already in ${answer.where}.`);
           setRepo("");
           setSaid(`Asked in ${where}. The factory opens a pull request for ${answer.repo}.`);

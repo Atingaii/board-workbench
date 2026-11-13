@@ -292,7 +292,11 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
     // Signed out on your machine: the Vercel step says how to sign in.
     if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("github", [todo(CONNECT), todo(INSTALL)]);
     // The connector is there, and its app is on nothing yet.
-    if (token instanceof Error && token.name === "ConnectorInstallationRequiredError") return step("github", [done(CONNECT), todo(INSTALL)]);
+    if (token instanceof Error && token.name === "ConnectorInstallationRequiredError") {
+      // On no repo at all, which is known, not a read that fell short.
+      found.waiting = 0;
+      return step("github", [done(CONNECT), todo(INSTALL)]);
+    }
     if (taken(token)) return step("github", [attach(deps, "github", connector, project), todo(INSTALL)]);
     return step("github", [todo(CONNECT, { commands: [createConnector("github", connector, project)] }), todo(INSTALL)]);
   }
@@ -317,7 +321,10 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
   // Where GitHub asks which repos the app is on.
   found.install = app ? `https://github.com/apps/${app}/installations/new` : null;
   const install = found.install ? { link: { href: found.install, label: "Configure the app" } } : {};
-  if (total_count === 0) return step("github", [...tasks, todo(INSTALL, install)]);
+  if (total_count === 0) {
+    found.waiting = 0;
+    return step("github", [...tasks, todo(INSTALL, install)]);
+  }
   // Installed but in no channel: the board drops their PRs and issues (matched as GitHub writes them).
   // The step says how many. Which ones is for the page to suggest when someone onboards one: it
   // shows them to whoever can open the deployment, and the checks get here only once that's the team.
@@ -404,6 +411,42 @@ export type Listed = { repo: string; channel: string; slack: string | null };
 /** The repos the board brings in, in the map's order, each with where it shows. */
 export const reposOf = ({ repoChannels, slackChannels }: Pick<Synced, "repoChannels" | "slackChannels">): Listed[] =>
   Object.entries(repoChannels).map(([repo, channel]) => ({ repo, channel, slack: mirrorOf(slackChannels, channel) }));
+
+/**
+ * Whether the GitHub app is on a repo no channel brings in yet, as far as the checks read: its name
+ * as GitHub writes it, `false` when they read every repo the app is on and it isn't one, and `null`
+ * when they couldn't tell (no connector, GitHub didn't answer, or more repos than one check reads).
+ */
+export function hasApp(repo: string, { unmapped, waiting }: Pick<Found, "unmapped" | "waiting">): string | false | null {
+  const name = unmapped.find((candidate) => candidate.toLowerCase() === repo.toLowerCase());
+  return name ?? (waiting === null ? null : false);
+}
+
+/** What the agent is told about one repo it asked about: where it shows when it's onboarded, or whether the GitHub app is on it, as far as the checks could tell. */
+export type Asked = ({ onboarded: true } & Listed) | { repo: string; onboarded: false; app: boolean | null };
+
+/**
+ * What the agent's setup_steps tool reads: the page's steps with their tasks, and how many repos
+ * the factory works on and how many more its GitHub app is on. With `repo`, also where that one
+ * shows, or whether the app is on it, which the agent can't tell from a thread, where its GitHub
+ * access covers only what's onboarded. One repo at a time and never a list of names: the agent
+ * answers people who aren't on the team, from GitHub and Slack, and a thread about one repo has no
+ * business with the others' names.
+ */
+export function stepsView({ steps, found }: Extract<Setup, { open: false }>, synced: Pick<Synced, "repoChannels" | "slackChannels">, repo: string | null = null) {
+  const onboarded = reposOf(synced);
+  const about = (name: string): Asked => {
+    const listed = onboarded.find((entry) => entry.repo.toLowerCase() === name.toLowerCase());
+    if (listed) return { onboarded: true, ...listed };
+    const app = hasApp(name, found);
+    return { repo: typeof app === "string" ? app : name, onboarded: false, app: app === null ? null : app !== false };
+  };
+  return {
+    steps: steps.map((step) => ({ title: step.title, optional: step.optional ?? false, done: isDone(step), tasks: step.tasks })),
+    repos: { onboarded: onboarded.length, waiting: found.waiting },
+    ...(repo ? { asked: about(repo) } : {}),
+  };
+}
 
 /**
  * `github` and `slack` are those steps: the first task needs the first one done, since it's a pull

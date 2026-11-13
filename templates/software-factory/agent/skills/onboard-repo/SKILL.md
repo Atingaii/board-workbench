@@ -10,9 +10,13 @@ channel, and they show in Slack once a Slack channel mirrors that one. Both maps
 `app/api/board/[[...path]]/channels.ts`. Whoever asks for a repo wants to know where they'll see
 it, so work that out first, and say it in the pull request and in the thread.
 
-1. **Check the GitHub app is on it:** `gh api /installation/repositories --jq '.repositories[].full_name'`.
-   If the repo isn't listed, say so and stop: someone on the team adds the app to it, and the
-   setup page links to where.
+1. **Check the GitHub app is on it:** call setup_steps with `repo`. Don't ask `gh`: in a thread
+   your GitHub access covers only repos already onboarded, so one that isn't never shows there,
+   whether the app is on it or not. What `asked` says:
+   - already onboarded: say where it shows, and stop.
+   - `app: false`: say so and stop. Someone on the team adds the app to it, and the setup page
+     links to where.
+   - `app: null`: it couldn't be told. Go on, and say you couldn't confirm the app is on it.
 2. **Pick its board channel:** `channel("<name>")`, a channel of its own under this factory's.
    `<name>` is the repo's name as a channel takes it: lowercase letters, digits, `-` and `_`.
 3. **Pick where it shows in Slack.** A board channel shows in Slack only through a Slack channel
