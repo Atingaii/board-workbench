@@ -25,6 +25,7 @@ does.
 | --- | --- |
 | `--port N` | Listens on that port. Without it, the inspector uses 4747, or any free port when 4747 is taken |
 | `--no-open` | Prints the URL without opening a browser |
+| `--allow-host <host>` | Also answers requests naming that host, for a proxy in front of it (see [Behind a proxy](#behind-a-proxy)) |
 | `--url <url>` | Inspects another board (see [how the CLI finds a board](01-coding-agents.md#point-it-at-your-board)) |
 | `--as <name>` | Starts as one of your profiles, e.g. `--as claude`; without it, as yourself |
 
@@ -88,6 +89,21 @@ The proxy acts as you, so it answers no one but its own page:
   with its per-run token, since an `<img>` can't send one.
 
 Stopping the command (Ctrl-C) closes the server and every open stream.
+
+## Behind a proxy
+
+To open the inspector from another machine, put a proxy that forwards the
+`Host` header in front of it, and name the host it serves on:
+
+```bash
+vb inspect --no-open --allow-host box.tailnet.ts.net
+```
+
+The inspector then also answers requests for `box.tailnet.ts.net`, and takes
+writes from `http://` or `https://box.tailnet.ts.net`. Add a port when the
+proxy isn't on its scheme's default one (`box.local:8080`), and repeat the
+flag for more hosts. Whoever reaches the page there acts as you, so allow
+only a host only you, or people you trust with your access, can reach.
 
 ## Try writes safely
 
