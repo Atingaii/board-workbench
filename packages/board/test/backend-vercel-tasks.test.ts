@@ -631,6 +631,47 @@ describe("vercel()'s tasks", () => {
     expect((await next)?.task).toMatchObject({ id: task.id, task: { state: 'claimed', epoch: 2 } })
   })
 
+  it("is answered nothing before a request's wait is up where tasks change that aren't its to take, and the handle asks again until its own wait is up", async () => {
+    vi.useFakeTimers()
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const web = handleOn(api, 'project:prj_web:production')
+    const asks = () => julian.sent.filter((request) => request.path === '/tasks/claim')
+    /** The project's tasks, one every second and a half, for `seconds`: each wakes whoever waits there, and none is julian's to take. */
+    const busy = async (seconds: number) => {
+      for (let passed = 0; passed < seconds; passed += 1.5) {
+        await web.tasks.create('work', { text: `the project's own, ${passed}s in` })
+        await vi.advanceTimersByTimeAsync(1500)
+      }
+    }
+    // Julian waits a minute for a review. The API looks only so many times a request, so it answers that it took
+    // nothing well before the 25 seconds it was asked to wait, and the handle asks again, a new operation each time.
+    const waiting = julian.tasks.claim({ channel: 'work', label: { step: 'review' }, wait: 60 })
+    await busy(15)
+    expect(asks().length).toBeGreaterThan(2)
+    expect(asks().every((request) => request.body!.wait === 25)).toBe(true)
+    expect(new Set(asks().map((request) => request.body!.operationId)).size).toBe(asks().length)
+    // A review made now is the one it claims, a quarter of its minute in.
+    const { task } = await julian.tasks.create('work', { text: 'review the fix', labels: { step: 'review' } })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect((await waiting)?.task).toMatchObject({ id: task.id, task: { state: 'claimed' } })
+
+    // With nothing of its own coming, it says so only when its own wait is up: not at the API's first answer.
+    julian.sent.length = 0
+    const started = Date.now()
+    let answered = false
+    const nothing = julian.tasks.claim({ channel: 'work', label: { step: 'deploy' }, wait: 40 }).finally(() => (answered = true))
+    await busy(36)
+    expect(answered).toBe(false)
+    expect(asks().length).toBeGreaterThan(4)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await nothing).toBeNull()
+    expect(Date.now() - started).toBeGreaterThanOrEqual(40_000)
+    // What it asked for each time is what was left of its wait, 25 seconds of it at most.
+    expect(asks().map((request) => request.body!.wait).every((wait, n, waits) => wait <= 25 && (n === 0 || wait <= waits[n - 1]!))).toBe(true)
+    expect(asks().at(-1)!.body!.wait).toBeLessThan(10)
+  })
+
   it("takes nothing for a caller that left while it waited, and gives back a claim that landed all the same", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
