@@ -71,7 +71,7 @@ export function Overview({ running: { overview, repos, ask, first }, now }: { ru
             </li>
           ))}
         </ul>
-        <Onboard path={ONBOARD_PATH} where={ask.slack ?? ask.channel} />
+        <Onboard path={ONBOARD_PATH} where={ask.slack ?? ask.channel} suggest={ask.suggest} />
         {ask.install ? (
           <p className="note">
             {waitingLine(ask)}{" "}
