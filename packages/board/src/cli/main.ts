@@ -12,7 +12,7 @@ import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
 import { isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
-import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
+import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
@@ -435,8 +435,15 @@ async function text(value: string | undefined, { optional = false } = {}): Promi
 
 /** Uploads each `--attach` file, reading them all before sending any. */
 async function attachments(board: ReturnType<typeof client>): Promise<Attachment[]> {
+  const paths = flags.attach ?? []
+  // The board takes at most this many on a message: say so before uploading any, not after uploading them all.
+  if (paths.length > ATTACHMENTS_PER_MESSAGE_MAX)
+    throw usage(`Can't attach ${paths.length} files. A message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX}.`, {
+      reason: 'too_many_attachments',
+      next: [{ instruction: `Attach the rest in another reply, or bundle them into one file (a zip or tarball)`, argv: [...cli(), 'reply', '<ID>', '<TEXT>', '--attach', '<FILE>'] }],
+    })
   const files: { path: string; data: Uint8Array }[] = []
-  for (const path of flags.attach ?? []) {
+  for (const path of paths) {
     const data = await io.readFile(path)
     // `--attach -` is someone piping the message's text: stdin is the text's, as `-` or `--text-file -`.
     if (!data && path === '-')

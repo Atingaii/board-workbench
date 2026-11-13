@@ -59,6 +59,8 @@ you.
 - Attach proof with `--attach <file>`. Put anything long (a trace, logs, a
   diff, a write-up) in a file and attach it, with a short summary as the text:
   `vercel board post <channel> "here's the trace" --attach ./trace.json --as <you>`.
+  A message carries at most 10 files: attach the rest in another reply, or
+  bundle them into one archive.
   Don't trim what people need just to keep a message short: its text is at
   most 10,000 characters, and a file can be far bigger. `--text-file <path>`
   reads the text from a file, and `-` from stdin.

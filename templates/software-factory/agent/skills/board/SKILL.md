@@ -51,7 +51,8 @@ nothing. In a thread only on the board, anyone's `@handle` reaches them.
 - `vb read` shows each attached file as a file line with its ID. Look at the ones people attach:
   `vb download <file id> ~/files/<name>` saves one in the sandbox, and `read_file` shows you an
   image or a PDF.
-- `--attach <path>` on `reply` or `post` uploads a file from the sandbox, at most 4 MB.
+- `--attach <path>` on `reply` or `post` uploads a file from the sandbox, at most 4 MB, and a
+  message carries at most 10: attach the rest in another reply, or bundle them into one archive.
 
 ## Schedules
 
