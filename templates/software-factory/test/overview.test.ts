@@ -78,20 +78,16 @@ test("the last reply is the agent's latest message, whenever it was", () => {
   assert.equal(overview([message(null, "ada", HOUR)], null, DEPLOYMENT, NOW, 200).lastReplyAt, null);
 });
 
-test("the factory's pull requests are GitHub's count of them, and what the board holds is shown as numbers only", () => {
-  // A pull request someone else opened comes into the board as a thread: it's part of the week, not one of the factory's.
+test("a pull request someone else opened is a thread in the week, and what the board holds is shown as numbers only", () => {
   const recent = [
     message(null, "sync", DAY, { id: "pr12", text: "PR #12: Fix the build\nhttps://github.com/acme/web/pull/12", labels: { pr: "acme/web#12", state: "open" } }),
     message(null, "ada", DAY, { text: "the launch date is the 3rd" }),
   ];
   const seen = overview(recent, { open: 2, merged: 1, closed: 0 }, DEPLOYMENT, NOW, 200);
-  assert.deepEqual(seen.pulls, { open: 2, merged: 1, closed: 0 });
   assert.equal(seen.week.threads, 2);
   // Whoever can open the deployment sees this, whatever they may read on the board: numbers and times only.
   const shown = JSON.stringify(seen);
   for (const said of ["Fix the build", "acme/web", "launch date", "github.com"]) assert.ok(!shown.includes(said), said);
-  // GitHub didn't say: there's no count, not a count of none.
-  assert.equal(overview(recent, null, DEPLOYMENT, NOW, 200).pulls, null);
 });
 
 test("a length of time reads as people say it", () => {

@@ -351,8 +351,13 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
     found.waiting = 0;
     return step("github", [...tasks, todo(INSTALL, install)]);
   }
-  // What the factory itself opened, in the repos the board brings in.
-  found.pulls = app ? await pullsBy(api, app, Object.keys(deps.synced.repoChannels)).catch(() => null) : null;
+  // What the factory itself opened, in the repos the board brings in: asked now, beside the rest of
+  // the step, and waited for with whatever the step returns.
+  const counting = app ? pullsBy(api, app, Object.keys(deps.synced.repoChannels)).catch(() => null) : Promise.resolve(null);
+  const counted = async (result: Step): Promise<Step> => {
+    found.pulls = await counting;
+    return result;
+  };
   // Installed but in no channel: the board drops their PRs and issues (matched as GitHub writes them).
   // The step says how many. Which ones is for the page to suggest when someone onboards one: it
   // shows them to whoever can open the deployment, and the checks get here only once that's the team.
@@ -366,19 +371,19 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
   // The link opens where the map of repos starts.
   const map = sourceLink(deps, CHANNELS_FILE, several ? "Add them" : "Add it", (lines) => lines.findIndex((line) => line.startsWith("export const repoChannels")));
   tasks.push(done(INSTALL, off.length ? { hint: unmapped, ...map } : {}));
-  if (!own) return step("github", tasks);
+  if (!own) return counted(step("github", tasks));
 
   const WHY = "So the agent can change its own code.";
   const repo = repositories.find((candidate) => candidate.full_name.toLowerCase() === own.toLowerCase());
   // GitHub listed a first page only, and this repo isn't on it.
-  if (!repo && total_count > repositories.length) return step("github", [...tasks, todo(`Check that the app is on ${named(own)}`, { hint: WHY, ...install })]);
-  if (!repo) return step("github", [...tasks, todo(`Install the app on ${named(own)}`, { hint: WHY, ...install })]);
+  if (!repo && total_count > repositories.length) return counted(step("github", [...tasks, todo(`Check that the app is on ${named(own)}`, { hint: WHY, ...install })]));
+  if (!repo) return counted(step("github", [...tasks, todo(`Install the app on ${named(own)}`, { hint: WHY, ...install })]));
   // GitHub lists an app's repos with every permission false, so ask for what the agent's turns ask
   // for (agent/lib/credentials.ts): a token for this repo alone, here one that can write to it, which
   // GitHub only issues when the app may.
   const writable = await deps.connect(connector, githubScope([repo.full_name], ["contents:write"])!).catch((error: unknown) => error);
-  if (typeof writable !== "string") return step("github", [...tasks, todo(write(own), { hint: WHY, ...install })]);
-  return step("github", [...tasks, done(write(own))]);
+  if (typeof writable !== "string") return counted(step("github", [...tasks, todo(write(own), { hint: WHY, ...install })]));
+  return counted(step("github", [...tasks, done(write(own))]));
 }
 
 async function slackStep(deps: Deps, project: Project): Promise<Step> {

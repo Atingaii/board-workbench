@@ -1,30 +1,13 @@
 import { boardName, connectors, factory, repoChannels, slackChannels } from "@/app/api/board/[[...path]]/factory";
-import type { FirstTask } from "./first-task.ts";
 import { ownRepo } from "./github.ts";
-import { joinPrompt } from "./markdown.ts";
-import { overview, type Overview } from "./overview.ts";
 import { channel, projectOf } from "./project.ts";
-import { boardDeps, inspectCommand, isLocal, liveDeps, mirrorOf, progress, READ, reposOf, setup, type Listed, type Setup } from "./setup.ts";
+import { runningOf, type Running } from "./running.ts";
+import { boardDeps, inspectCommand, isLocal, liveDeps, setup, type Setup } from "./setup.ts";
+
+export type { Running };
 
 // The launcher, checked now, for whichever of its faces was asked: the page, its markdown, or the
 // steps the agent's setup_steps tool reads.
-
-/** What the launcher shows once the factory runs. */
-export type Running = {
-  overview: Overview;
-  /** The repos it works on, each with where it shows. */
-  repos: Listed[];
-  /**
-   * How to onboard another: where the factory is asked, on the board and in Slack, how many repos
-   * have the GitHub app and no channel (null when that couldn't be told), which ones, to suggest,
-   * and where on GitHub the app is added to more (null when that couldn't be told).
-   */
-  ask: { channel: string; slack: string | null; waiting: number | null; suggest: string[]; install: string | null };
-  /** What to paste to a coding agent on your machine to have it join. */
-  join: string;
-  /** Where its first task stands, while the README is still the template's. */
-  first: FirstTask;
-};
 
 export type Launcher = {
   result: Setup;
@@ -46,16 +29,6 @@ export async function check(host: string | null): Promise<Launcher> {
   const team = await deps.oidc().then((token) => projectOf(token)?.team, () => undefined);
   const local = isLocal(deps.env);
   const origin = `${local ? "http" : "https"}://${host ?? deps.env.VERCEL_PROJECT_PRODUCTION_URL ?? "localhost"}`;
-  let running: Running | null = null;
-  if (!result.open && result.found.me && progress(result.steps).running) {
-    const rsi = channel("rsi");
-    running = {
-      overview: overview(result.found.recent, result.found.pulls, result.found.me.principal, new Date(), READ),
-      repos: reposOf({ repoChannels, slackChannels }),
-      ask: { channel: rsi, slack: mirrorOf(slackChannels, rsi), waiting: result.found.waiting, suggest: result.found.unmapped, install: result.found.install },
-      join: joinPrompt({ origin, team, board: boardName, home, repo: ownRepo(deps.env) }),
-      first: result.found.first,
-    };
-  }
+  const running = runningOf(result, { repoChannels, slackChannels, home }, { origin, team, board: boardName, repo: ownRepo(deps.env) }, new Date());
   return { result, inspect: inspectCommand(team, boardName), origin, local, running };
 }

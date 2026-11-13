@@ -1,6 +1,6 @@
 import { FIRST_TASK_PATH } from "./first-task.ts";
 import { ONBOARD_PATH } from "./onboard.ts";
-import type { Running } from "./launcher.ts";
+import type { Running } from "./running.ts";
 import { duration } from "./overview.ts";
 import { headline, isDone, progress, type Setup, type Step, type Task } from "./setup.ts";
 
