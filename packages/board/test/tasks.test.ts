@@ -678,6 +678,43 @@ describe('what a task needs, changed', () => {
     expect((await read(ada, made.id)).task).toMatchObject({ state: 'waiting', needs: [line[500], other.id] })
   }, 60_000)
 
+  it("follows no completed task's needs looking for a cycle, so finished work behind a prerequisite is never too much to check, and a cycle through unfinished tasks is still refused", async () => {
+    const { ada } = setup()
+    const done = async (id: string) => expect((await ada('POST', `/tasks/${id}/complete`, await claim(ada, id))).status).toBe(200)
+    // A line of 511 tasks, each waiting for the one before, worked from its start to its end: more finished work than a walk goes through.
+    let last = await task(ada, 'the first')
+    const line = [last.id]
+    for (let n = 1; n <= 510; n++) line.push((last = await task(ada, `waits for #${last.id}`, { needs: [last.id] })).id)
+    for (const id of line) await done(id)
+    // A task that isn't finished waits for the end of it. Another comes to wait for that one: nothing behind the line's end is looked at.
+    const recent = await task(ada, 'the next release', { needs: [line[510]!] })
+    const root = await task(ada, 'ship it')
+    const waits = await needs(ada, root.id, [recent.id])
+    expect(code(waits), JSON.stringify(waits.body.error)).toEqual([200, undefined])
+    expect(waits.body.task.task).toMatchObject({ state: 'waiting', needs: [recent.id] })
+    // The end of the line itself is a prerequisite like any: it completed, so the task is ready.
+    const other = await task(ada, 'on its own')
+    const ready = await needs(ada, other.id, [line[510]!])
+    expect(code(ready), JSON.stringify(ready.body.error)).toEqual([200, undefined])
+    expect(ready.body.task.task).toMatchObject({ state: 'ready', needs: [line[510]] })
+
+    // A cycle through tasks that aren't finished is found, with finished ones on the way: the walk goes on past a
+    // completed prerequisite to the others beside it.
+    const a = await task(ada, 'a')
+    const b = await task(ada, 'b', { needs: [line[510]!, a.id] })
+    const c = await task(ada, 'c', { needs: [line[0]!, b.id] })
+    const around = await needs(ada, a.id, [line[510]!, c.id])
+    expect(code(around)).toEqual([400, 'invalid_needs'])
+    expect(around.body.error.message).toBe(`needs: #${c.id} waits for #${a.id} already: they would wait for each other`)
+    expect(code(await needs(ada, recent.id, [line[510]!, root.id]))).toEqual([400, 'invalid_needs'])
+    // Only a completed task's needs are left alone. A canceled one may have waited for anything, the task itself included.
+    const dropped = await task(ada, 'dropped while it waited', { needs: [a.id] })
+    const behind = await task(ada, 'waits for the dropped one', { needs: [dropped.id] })
+    expect((await ada('POST', `/tasks/${dropped.id}/cancel`, { reason: 'not needed after all' })).status).toBe(200)
+    expect(code(await needs(ada, a.id, [behind.id]))).toEqual([400, 'invalid_needs'])
+    expect((await read(ada, a.id)).task).toMatchObject({ state: 'ready', needs: [] })
+  }, 120_000)
+
   it("is its owner's to change, or manage's, while no one holds the task and it isn't finished", async () => {
     const { ada, bo, board } = setup()
     const fix = await task(ada, 'fix CVE-123')
