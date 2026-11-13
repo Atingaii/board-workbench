@@ -556,6 +556,11 @@ it gives:
   those owners. Past that it fails with 400 `claim_too_wide`, and a subtree
   with more than 50 such channels with 400 `channel_tree_too_large`. Name
   fewer owners, or a smaller subtree.
+- **One request for a ready task waits 25 seconds at most, and can answer
+  sooner.** What wakes it is a change to a task, or to a root's labels, in
+  the channels it names, and it looks 12 times at most. Where many tasks
+  change it answers that it took nothing after a few seconds, so
+  `claim({ channel, wait })` asks again until `wait` is up.
 - **With `label`, it finds a task among the oldest 25 in each place.** One
   with those labels behind 25 ready tasks of the same owner that lack them
   isn't found until one of those is claimed.

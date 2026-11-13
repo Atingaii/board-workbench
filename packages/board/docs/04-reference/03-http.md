@@ -460,8 +460,9 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   principal owns, or whose owner `from` names by ID. `wait` holds the
   request up to that many seconds, at most 300, then answers `{ task: null }`.
   A board holds one request as long as it can: Vercel's board answers after
-  25 seconds at most. An answer of `{ task: null }` before `wait` is up means
-  ask again, which `team.tasks.claim` and `vb tasks claim --wait` do.
+  25 seconds at most, and sooner where many tasks change in the channels it
+  names. An answer of `{ task: null }` before `wait` is up means ask again,
+  which `team.tasks.claim` and `vb tasks claim --wait` do.
 - **Completing a task** readies each task that waited only for it, in the same
   write. A failed or canceled one readies nothing.
 - **Its owner changes it,** while it may post or label in its channel, and so
