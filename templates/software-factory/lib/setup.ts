@@ -292,7 +292,11 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
     // Signed out on your machine: the Vercel step says how to sign in.
     if (isLocal(deps.env) && !deps.env.VERCEL_OIDC_TOKEN) return step("github", [todo(CONNECT), todo(INSTALL)]);
     // The connector is there, and its app is on nothing yet.
-    if (token instanceof Error && token.name === "ConnectorInstallationRequiredError") return step("github", [done(CONNECT), todo(INSTALL)]);
+    if (token instanceof Error && token.name === "ConnectorInstallationRequiredError") {
+      // On no repo at all, which is known, not a read that fell short.
+      found.waiting = 0;
+      return step("github", [done(CONNECT), todo(INSTALL)]);
+    }
     if (taken(token)) return step("github", [attach(deps, "github", connector, project), todo(INSTALL)]);
     return step("github", [todo(CONNECT, { commands: [createConnector("github", connector, project)] }), todo(INSTALL)]);
   }
@@ -317,7 +321,10 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
   // Where GitHub asks which repos the app is on.
   found.install = app ? `https://github.com/apps/${app}/installations/new` : null;
   const install = found.install ? { link: { href: found.install, label: "Configure the app" } } : {};
-  if (total_count === 0) return step("github", [...tasks, todo(INSTALL, install)]);
+  if (total_count === 0) {
+    found.waiting = 0;
+    return step("github", [...tasks, todo(INSTALL, install)]);
+  }
   // Installed but in no channel: the board drops their PRs and issues (matched as GitHub writes them).
   // The step says how many. Which ones is for the page to suggest when someone onboards one: it
   // shows them to whoever can open the deployment, and the checks get here only once that's the team.
@@ -415,16 +422,28 @@ export function hasApp(repo: string, { unmapped, waiting }: Pick<Found, "unmappe
   return name ?? (waiting === null ? null : false);
 }
 
+/** What the agent is told about one repo it asked about: where it shows when it's onboarded, or whether the GitHub app is on it, as far as the checks could tell. */
+export type Asked = ({ onboarded: true } & Listed) | { repo: string; onboarded: false; app: boolean | null };
+
 /**
- * What the agent's setup_steps tool reads: the page's steps with their tasks, and the factory's
- * repos as this deployment sees them, which is more than the agent can from a thread, where its
- * GitHub access covers only what's onboarded. `waiting` is the repos the GitHub app is on that no
- * channel brings in, and `waitingComplete` whether that's all of them.
+ * What the agent's setup_steps tool reads: the page's steps with their tasks, the repos the factory
+ * works on, and how many more its GitHub app is on. With `repo`, also whether the app is on that
+ * one, which the agent can't tell from a thread, where its GitHub access covers only what's
+ * onboarded. One repo at a time and never the list: the agent answers people who aren't on the
+ * team, from GitHub and Slack, and a thread about one repo has no business with the others' names.
  */
-export function stepsView({ steps, found }: Extract<Setup, { open: false }>, synced: Pick<Synced, "repoChannels" | "slackChannels">) {
+export function stepsView({ steps, found }: Extract<Setup, { open: false }>, synced: Pick<Synced, "repoChannels" | "slackChannels">, repo: string | null = null) {
+  const onboarded = reposOf(synced);
+  const about = (name: string): Asked => {
+    const listed = onboarded.find((entry) => entry.repo.toLowerCase() === name.toLowerCase());
+    if (listed) return { onboarded: true, ...listed };
+    const app = hasApp(name, found);
+    return { repo: typeof app === "string" ? app : name, onboarded: false, app: app === null ? null : app !== false };
+  };
   return {
     steps: steps.map((step) => ({ title: step.title, optional: step.optional ?? false, done: isDone(step), tasks: step.tasks })),
-    repos: { onboarded: reposOf(synced), waiting: found.unmapped, waitingComplete: found.waiting !== null },
+    repos: { onboarded, waiting: found.waiting },
+    ...(repo ? { asked: about(repo) } : {}),
   };
 }
 
