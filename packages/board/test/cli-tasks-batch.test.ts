@@ -92,6 +92,38 @@ describe('vb tasks create --tasks-file', () => {
     expect(refused.stderr.split('\n').slice(0, 2)).toEqual(["error: Can't create tasks in none. A task's needs are tasks you can read, or keys of the plan's own.", '  needs: the tasks with the keys "a", "b" wait for each other'])
   }, 60_000)
 
+  it('refuses a key no task takes, and a need that is neither an ID nor a key, before anything is made', async () => {
+    const refused = async (plan: unknown, extra: NodeJS.ProcessEnv = {}) => {
+      const path = await planFile(plan)
+      const ran = await vb(['tasks', 'create', 'typos', '--tasks-file', path], extra)
+      expect([ran.code, ran.stdout], JSON.stringify(plan)).toEqual([2, ''])
+      return ran.stderr.replaceAll(path, 'plan.json').split('\n')
+    }
+    // A key an edit away from one a task takes is said with that one, and with the task it's on.
+    expect(await refused([{ key: 'fix', text: 'fix it' }, { text: 'review it', need: [{ key: 'fix' }] }])).toEqual(['error: Unknown key "need" on task 2 of plan.json. Did you mean "needs"?', '', '  See what a plan takes:', '    vb tasks create --help', ''])
+    expect((await refused([{ text: 'fix it', label: { step: 'fix' } }]))[0]).toBe('error: Unknown key "label" on task 1 of plan.json. Did you mean "labels"?')
+    expect((await refused([{ text: 'fix it' }, { text: 'review it' }, { text: 'ship it', 'no-sync': true }]))[0]).toBe('error: Unknown key "no-sync" on task 3 of plan.json. Did you mean "noSync"?')
+    expect((await refused([{ text: 'fix it', Needs: [] }]))[0]).toBe('error: Unknown key "Needs" on task 1 of plan.json. Did you mean "needs"?')
+    // One that's near none is said with what a task takes.
+    expect((await refused([{ text: 'fix it', priority: 'high' }])).slice(0, 2)).toEqual(['error: Unknown key "priority" on task 1 of plan.json.', '  a task takes key, text, labels, needs, for, noSync, attachments'])
+    // What a task waits for is a list, each a task's ID or a key of the plan's own.
+    expect((await refused([{ key: 'fix', text: 'fix it' }, { text: 'review it', needs: [{ key: 'fix' }, { ref: 'fix' }] }]))[0]).toBe('error: Task 2 of plan.json needs {"ref":"fix"}, which isn\'t a task\'s ID or {"key": "…"}.')
+    for (const odd of [true, null, ['812'], { key: 'fix', text: 'fix it' }, { key: 5 }, '', '#', 1.5])
+      expect((await refused([{ text: 'review it', needs: ['812', odd] }]))[0]).toBe(`error: Task 1 of plan.json needs ${JSON.stringify(odd)}, which isn't a task's ID or {"key": "…"}.`)
+    expect((await refused([{ text: 'review it', needs: [{ task: 'a'.repeat(100) }] }]))[0]).toBe(`error: Task 1 of plan.json needs {"task":"${'a'.repeat(50)}…, which isn't a task's ID or {"key": "…"}.`)
+    expect((await refused([{ text: 'review it', needs: '812' }]))[0]).toBe('error: Task 1 of plan.json has needs that aren\'t a list, such as [{"key": "fix"}, "812"].')
+    // From stdin, and for a program: the same, as one document.
+    const piped = await vb(['tasks', 'create', 'typos', '--tasks-file', '-', '--json'], {}, JSON.stringify([{ text: 'fix it', labls: { step: 'fix' } }]))
+    expect([piped.code, piped.stdout]).toEqual([2, ''])
+    expect(failure(piped)).toMatchObject({ reason: 'invalid_arguments', message: 'Unknown key "labls" on task 1 of stdin. Did you mean "labels"?', next: [{ argv: ['vb', 'tasks', 'create', '--help'] }] })
+    // Nothing was sent: no task before the one refused was made, so the channel isn't there, and a board that can't be reached isn't asked.
+    expect(await ok(['channels'])).not.toMatch(/^typos\b/m)
+    expect((await refused([{ text: 'fix it', for: 'fixer', need: [] }], { BOARD_URL: 'http://127.0.0.1:1/api/board' }))[0]).toBe('error: Unknown key "need" on task 1 of plan.json. Did you mean "needs"?')
+    // Every key a task does take goes through.
+    const whole = await planFile([{ key: 'fix', text: 'fix it', labels: { step: 'fix' }, needs: [], for: 'fixer', noSync: true, attachments: [] }, { text: 'review it', needs: [{ key: 'fix' }] }])
+    expect(rows(await ok(['tasks', 'create', 'typos', '--tasks-file', whole])).map((row) => row.replace(/\s+/g, ' ').split(' ').slice(1, 2))).toEqual([['ready'], ['waiting']])
+  }, 60_000)
+
   it('says what a plan that stopped midway made, and the command that makes the rest under the same key', async () => {
     // 120 steps, each after the one before: more than one write holds. The 111th also waits for a task that isn't there.
     const steps = Array.from({ length: 120 }, (_, n) => ({ key: `step-${n}`, text: `migrate shard ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))

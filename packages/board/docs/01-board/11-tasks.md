@@ -218,7 +218,9 @@ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
 ```
 
 - **A plan is a JSON array of tasks,** from a file, or from stdin for `-`.
-  Each is `{ key?, text, labels?, needs?, for?, noSync?, attachments? }`.
+  Each is `{ key?, text, labels?, needs?, for?, noSync?, attachments? }`. Any
+  other key is refused before a task is made, so a `need` for `needs` can't
+  make a task that waits for nothing.
 - **A task's `key` names it for the others of the plan.** `needs` takes
   `{ "key": "fix" }` for a task of the plan, before it or after it, or an ID
   for one that's there.

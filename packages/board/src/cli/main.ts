@@ -1679,6 +1679,50 @@ async function createPlan(target: string, text: string | undefined, path: string
   return 0
 }
 
+/** What a task of a `--tasks-file` takes, as `tasks.createMany` does. */
+const PLAN_KEYS = ['key', 'text', 'labels', 'needs', 'for', 'noSync', 'attachments']
+
+/** The help page that says what a plan holds. */
+const planHelp = (): Recovery => ({ instruction: 'See what a plan takes', argv: [...cli(), 'tasks', 'create', '--help'] })
+
+/** One of a plan task's `needs`: a task that's there, by its ID as text or as a number, or `{ "key": … }` for one of the plan's own. */
+function isNeed(need: unknown): boolean {
+  if (typeof need === 'string') return need.replace(/^#/, '').length > 0
+  if (typeof need === 'number') return Number.isSafeInteger(need) && need >= 0
+  if (typeof need !== 'object' || need === null) return false
+  const keys = Object.keys(need)
+  return keys.length === 1 && keys[0] === 'key' && typeof (need as { key: unknown }).key === 'string'
+}
+
+/**
+ * Refuses a plan that says something a task doesn't take, before anything is sent. The board
+ * drops a key it doesn't know, so a `need` for `needs` would make a task that waits for nothing,
+ * without a word: here the file can say which task, and the key that was meant.
+ */
+function checkPlan(plan: Record<string, unknown>[], where: string): void {
+  for (const [at, task] of plan.entries()) {
+    const unknown = Object.keys(task).find((name) => !PLAN_KEYS.includes(name))
+    if (unknown !== undefined) {
+      const meant = PLAN_KEYS.find((known) => known.toLowerCase() === unknown.toLowerCase()) ?? closest(unknown, PLAN_KEYS)
+      throw new Failed({
+        class: 'usage',
+        reason: 'invalid_arguments',
+        message: `Unknown key ${JSON.stringify(unknown)} on task ${at + 1} of ${where}.${meant ? ` Did you mean ${JSON.stringify(meant)}?` : ''}`,
+        ...(meant ? {} : { details: [`a task takes ${PLAN_KEYS.join(', ')}`] }),
+        next: [planHelp()],
+      })
+    }
+    if (!('needs' in task)) continue
+    const needs = '[{"key": "fix"}, "812"]'
+    if (!Array.isArray(task.needs)) throw usage(`Task ${at + 1} of ${where} has needs that aren't a list, such as ${needs}.`, { next: [planHelp()] })
+    const odd = task.needs.find((need) => !isNeed(need))
+    if (odd !== undefined) {
+      const said = JSON.stringify(odd)
+      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}, which isn't a task's ID or {"key": "…"}.`, { next: [planHelp()] })
+    }
+  }
+}
+
 /** The tasks a `--tasks-file` holds: a JSON array, from the file or from stdin for `-`. An ID may be written `#812`, and `for` as a profile's name. */
 async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
   const where = path === '-' ? 'stdin' : path
@@ -1693,11 +1737,12 @@ async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
   try {
     parsed = JSON.parse(source)
   } catch {
-    throw usage(`${where} isn't JSON.`)
+    throw usage(`${where} isn't JSON.`, { next: [planHelp()] })
   }
   const shape = 'A plan is a JSON array of tasks: [{"key": "fix", "text": "…"}, {"text": "…", "needs": [{"key": "fix"}]}].'
-  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((task) => typeof task !== 'object' || task === null || Array.isArray(task))) throw usage(`${where} holds no tasks. ${shape}`)
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((task) => typeof task !== 'object' || task === null || Array.isArray(task))) throw usage(`${where} holds no tasks. ${shape}`, { next: [planHelp()] })
   const plan = parsed as (Record<string, unknown> & { needs?: unknown; for?: unknown })[]
+  checkPlan(plan, where)
   // A profile's name is the caller's own profile, as --for takes one: an actor's ID goes as it is.
   const named = plan.some((task) => typeof task.for === 'string' && !task.for.includes(':'))
   const principal = named ? (await board.me()).principal : ''

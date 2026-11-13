@@ -952,9 +952,10 @@ $ vb tasks work/ --state all --limit 2
   text, labels?, needs?, for?, noSync?, attachments? }`, from a file, or from
   stdin for `-`. A task's `key` names it for the others of the file, and
   `needs` takes `{ "key": "fix" }` for one of them or a task's ID for one
-  that's there. `for` takes a profile's name. Text, `--label`, `--needs`,
-  `--for`, `--claim`, and `--no-sync` are one task's, so they don't go with
-  it.
+  that's there. `for` takes a profile's name. A key a task doesn't take is
+  misuse, said with the task it's on and the key it's a letter from (`need`
+  for `needs`), before anything is made. Text, `--label`, `--needs`, `--for`,
+  `--claim`, and `--no-sync` are one task's, so they don't go with it.
 - **A plan of any length works.** Up to 100 tasks go in one write, all or
   none. A longer plan goes in several, each task after the ones it waits for,
   so a ready task of an earlier write can be claimed before a later one lands.

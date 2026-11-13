@@ -60,6 +60,8 @@ error: Can't create tasks in migration. A task's needs are tasks you can read, o
     vb tasks create migration --tasks-file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
 ```
 
+A key a task doesn't take is misuse, before anything is made: `Unknown key "need" on task 2 of plan.json. Did you mean "needs"?`. So is a need that's neither a task's ID nor `{ "key": … }`.
+
 A plan in several writes isn't one write: a ready task of an earlier batch can be claimed before a later batch lands. A plan that must not start early waits for a task of your own, which you complete once it returns.
 
 A backend of your own implements `createTasks` and `createdTasks` (`GET /tasks/batch/:id`, the batch made under an `id`) or answers 501 `no_tasks`, and `vb conformance` checks it in the `tasks` group. The middleware sees each task's root as a post, before any is written. A sandbox's policy on Vercel's board allows the call.
