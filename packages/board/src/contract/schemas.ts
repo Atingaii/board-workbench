@@ -135,6 +135,15 @@ export const TaskNote = z
   .refine((text) => text.trim().length > 0, 'it is empty')
   .refine(storable, 'it has a NUL character or a lone surrogate')
 
+/** A task's result or reason as a request sends it: its length is the backend's to judge. */
+export const SentTaskNote = z
+  .string()
+  .refine((text) => text.trim().length > 0, 'it is empty')
+  .refine(storable, 'it has a NUL character or a lone surrogate')
+
+/** A hold's kind as a request sends it: its length is the backend's to judge. */
+export const SentTaskHoldKind = z.string().regex(/^[a-z0-9][a-z0-9_.-]*$/, 'a kind is lowercase letters, numbers, and _.-')
+
 /** Why a task is held, as whoever held it names it: `needs_input`, `awaiting_approval`. `edited` is the board's own. */
 /** The kind of the hold the board places itself, when someone who doesn't own a task edits its root: no request holds a task as it. */
 export const EDITED_HOLD = 'edited'

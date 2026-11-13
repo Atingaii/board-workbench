@@ -3734,7 +3734,10 @@ Task changes are board facts, in the board log:
   Each event changes one root, so a fold of one message can't look at
   another's: `task.ready` is what says its prerequisites completed. A task made
   when they already have gets it in the same write, and so does one unblocked
-  once they have. A task needs at most 20 others.
+  once they have. A task needs at most 20 others on the local board: how
+  many is the backend's to say, as every length and count of a task is. A
+  request's schema checks its shape, and a backend refuses what's over its
+  own limits, so on `vercel()` the refusal is Vercel's API's.
 - **A write a task has moved on from changes nothing in the fold:** an older
   epoch, a finished task, a second `task.created`. The writes refuse first;
   the fold is what holds for whoever folds the log themselves.
@@ -3766,8 +3769,8 @@ Task changes are board facts, in the board log:
 | POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled; a claimed one's claim ends |
 
 A task reads like the thread it is: `GET /messages/:id`. `lease` and `wait`
-are seconds, as `/events`'s `wait` is: a lease of 30 to 3600, and a `wait` of
-at most 300. Errors: 404
+are seconds, as `/events`'s `wait` is: a `wait` of at most 300, and a lease as
+long as the backend gives (the local board takes 30 to 3600). Errors: 404
 `not_a_task` for a thread that isn't one; 403 `forbidden` (a claim without `label`) and `task_not_owned`; 409
 `task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished`,
 `already_a_task`, and

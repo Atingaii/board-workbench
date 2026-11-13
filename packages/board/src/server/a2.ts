@@ -25,7 +25,7 @@ import { badRequest, duplicateId, forbidden, HttpError, notFound, textTooLong, t
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
-import { createTasks } from './tasks.ts'
+import { createTasks, taskLimits } from './tasks.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
 import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
@@ -602,6 +602,10 @@ function build(options: A2Options, binding: BoardBinding) {
     },
     tasks: async (caller, query) => tasks.list(await identityOf(caller), query),
     async createTask(caller, body) {
+      // A new thread's root is a message, within what this board holds of one, and a task within what it holds of those.
+      if (body.re === undefined) withinLimits({ text: body.text ?? '', attachments: body.attachments })
+      taskLimits.needs(body.needs)
+      taskLimits.lease(body.lease)
       const identity = await identityOf(caller)
       const { principal } = identity
       const about = { needs: body.needs, for: body.for, claim: body.claim, lease: body.lease }
@@ -617,18 +621,40 @@ function build(options: A2Options, binding: BoardBinding) {
       const claim = await made.claimed(messageAt(task.id))
       return { task, ...(claim ? { claim } : {}) }
     },
-    claimReadyTask: async (caller, body, signal) => tasks.claimReady(await identityOf(caller), body, signal),
-    claimTask: async (caller, { id, lease }) => tasks.claim(await identityOf(caller), messageAt(id), lease),
-    renewTask: async (caller, { id, epoch, token, lease }) => tasks.renew(await identityOf(caller), messageAt(id), { epoch, token }, lease),
+    async claimReadyTask(caller, body, signal) {
+      taskLimits.lease(body.lease)
+      taskLimits.from(body.from)
+      return tasks.claimReady(await identityOf(caller), body, signal)
+    },
+    async claimTask(caller, { id, lease }) {
+      taskLimits.lease(lease)
+      return tasks.claim(await identityOf(caller), messageAt(id), lease)
+    },
+    async renewTask(caller, { id, epoch, token, lease }) {
+      taskLimits.lease(lease)
+      return tasks.renew(await identityOf(caller), messageAt(id), { epoch, token }, lease)
+    },
     releaseTask: async (caller, { id, epoch, token }) => tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.released' }),
-    completeTask: async (caller, { id, epoch, token, result }) => tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.completed', result: result ?? null }),
-    failTask: async (caller, { id, epoch, token, reason }) => tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.failed', reason }),
-    blockTask: async (caller, { id, reason, kind, epoch, token }) =>
-      tasks.block(await identityOf(caller), messageAt(id), { reason, kind, ...(epoch !== undefined && token !== undefined ? { proof: { epoch, token } } : {}) }),
+    async completeTask(caller, { id, epoch, token, result }) {
+      taskLimits.note('result', result)
+      return tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.completed', result: result ?? null })
+    },
+    async failTask(caller, { id, epoch, token, reason }) {
+      taskLimits.note('reason', reason)
+      return tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.failed', reason })
+    },
+    async blockTask(caller, { id, reason, kind, epoch, token }) {
+      taskLimits.note('reason', reason)
+      taskLimits.kind(kind)
+      return tasks.block(await identityOf(caller), messageAt(id), { reason, kind, ...(epoch !== undefined && token !== undefined ? { proof: { epoch, token } } : {}) })
+    },
     unblockTask: async (caller, { id }) => tasks.unblock(await identityOf(caller), messageAt(id)),
     reopenTask: async (caller, { id }) => tasks.reopen(await identityOf(caller), messageAt(id)),
     assignTask: async (caller, { id, for: actor }) => tasks.assign(await identityOf(caller), messageAt(id), actor),
-    cancelTask: async (caller, { id, reason }) => tasks.cancel(await identityOf(caller), messageAt(id), reason),
+    async cancelTask(caller, { id, reason }) {
+      taskLimits.note('reason', reason)
+      return tasks.cancel(await identityOf(caller), messageAt(id), reason)
+    },
     grants: async (caller) => access.grants(await identityOf(caller)),
     createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
     updateGrant: async (caller, input) => access.updateGrant(await identityOf(caller), input),

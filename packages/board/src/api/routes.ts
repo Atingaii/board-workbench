@@ -3,7 +3,6 @@ import {
   ActorId,
   AttachmentId,
   ATTACHMENTS_PER_MESSAGE_MAX,
-  CHANNEL_PATH_MAX,
   CHANNEL_PATTERN_MAX,
   ChannelPath,
   DIRECT_UPLOAD_BYTES_MAX,
@@ -16,10 +15,9 @@ import {
   SentText,
   platformAvatar,
   storable,
-  TASK_NEEDS_MAX,
   EDITED_HOLD,
-  TaskHoldKind,
-  TaskNote,
+  SentTaskHoldKind,
+  SentTaskNote,
   TaskState,
 } from '../contract/schemas.ts'
 import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
@@ -186,15 +184,17 @@ export const SchedulesQuery = z.object({
   all: flag.optional(),
 })
 
-/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. As long as a channel's path may be, and the `/`. */
-const ChannelOrSubtree = z.string().max(CHANNEL_PATH_MAX + 1).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
+/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. As long as a grant's pattern for either. */
+const ChannelOrSubtree = z.string().max(CHANNEL_PATTERN_MAX).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
 
-/** A lease's shortest and longest, in seconds, and what a claim gets when it asks for none. */
-export const LEASE_MIN_S = 30
-export const LEASE_MAX_S = 3600
+/** What a claim gets when it asks for no lease, in seconds. */
 export const LEASE_DEFAULT_S = 900
-/** How long a claim holds its task, in seconds: 30 to 3600, 900 when left out. A board gives what's asked up to its own cap, never under 300. */
-const Lease = z.number().min(LEASE_MIN_S).max(LEASE_MAX_S)
+/**
+ * How long a claim holds its task, in seconds, 900 when left out. How short and how long one may
+ * be is the backend's to say: the local board takes 30 to 3600, and a board gives what's asked up
+ * to its own cap, never under 300.
+ */
+const Lease = z.number()
 
 /** What a claim's own writes carry: the `epoch` and `token` its claim answered. */
 const Claimed = { epoch: z.number().int().positive(), token: z.string().min(1).max(128) }
@@ -209,12 +209,14 @@ export const CreateTaskBody = z
   .object({
     channel: ChannelPath.optional(),
     re: Ref.optional(),
-    text: z.string().max(MESSAGE_TEXT_MAX).optional(),
+    /** As long as a post's text may be: the backend says how long that is. */
+    text: z.string().optional(),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
     /** IDs from `POST /attachments`, as a post takes them. */
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
-    needs: z.array(Ref).max(TASK_NEEDS_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
+    /** How many tasks one may wait for is the backend's to say. */
+    needs: z.array(Ref).optional(),
     for: ActorId.nullable().optional(),
     claim: z.boolean().optional(),
     lease: Lease.optional(),
@@ -258,27 +260,28 @@ export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()
 export const ClaimReadyTaskBody = z.object({
   channel: ChannelOrSubtree,
   label: Labels.optional(),
-  from: z.array(z.string().min(1).max(256)).max(32).optional(),
+  /** How many owners one claim takes from is the backend's to say. */
+  from: z.array(z.string().min(1).max(256)).optional(),
   lease: Lease.optional(),
   wait: z.number().min(0).max(300).optional(),
 })
 
 export const RenewTaskBody = z.object({ ...Claimed, lease: Lease.optional() })
 export const ReleaseTaskBody = z.object(Claimed)
-export const CompleteTaskBody = z.object({ ...Claimed, result: TaskNote.optional() })
-export const FailTaskBody = z.object({ ...Claimed, reason: TaskNote })
+export const CompleteTaskBody = z.object({ ...Claimed, result: SentTaskNote.optional() })
+export const FailTaskBody = z.object({ ...Claimed, reason: SentTaskNote })
 /** A hold for a person. A claimed task's comes from its claim, with the claim's `epoch` and `token`. Kind `edited` is the board's own, so none asks for it. */
 export const BlockTaskBody = z
   .object({
-    reason: TaskNote,
-    kind: TaskHoldKind.refine((kind) => kind !== EDITED_HOLD, "`edited` is the board's own kind, for a task whose root someone else edited: name another").optional(),
+    reason: SentTaskNote,
+    kind: SentTaskHoldKind.refine((kind) => kind !== EDITED_HOLD, "`edited` is the board's own kind, for a task whose root someone else edited: name another").optional(),
     epoch: Claimed.epoch.optional(),
     token: Claimed.token.optional(),
   })
   .refine((body) => (body.epoch === undefined) === (body.token === undefined), { message: 'a claim is its `epoch` and its `token`: pass both, or neither' })
 /** The one actor of its owner's that claims the task, or null for anyone who may. */
 export const AssignTaskBody = z.object({ for: ActorId.nullable() })
-export const CancelTaskBody = z.object({ reason: TaskNote })
+export const CancelTaskBody = z.object({ reason: SentTaskNote })
 
 const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
 const ClaimValue = z.string().min(1).max(1000)
