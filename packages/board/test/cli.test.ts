@@ -649,7 +649,9 @@ describe('cli', () => {
     expect(await vb(['download', attachment.id, saved])).toMatchObject({ code: 0, stdout: `${saved}\n` })
     expect(await readFile(saved)).toEqual(Buffer.from([137, 80, 78, 71]))
     expect(await vb(['post', 'proofs', 'x', '--attach', join(dir, 'missing.png')])).toMatchObject({ code: 2, stderr: `error: Can't attach ${join(dir, 'missing.png')}. There's no such file.\n` })
-  }, 20_000) // five CLI runs: a cold start right after install can pass the default 5s
+    const eleven = Array.from({ length: 11 }, () => ['--attach', shot]).flat()
+    expect((await vb(['reply', id, 'all of them', ...eleven])).stderr).toMatch(/^error: Can't attach 11 files\. A message carries at most 10\./)
+  }, 20_000) // six CLI runs: a cold start right after install can pass the default 5s
 
   it('downloads an attachment whose id starts with "-", which reads like a flag', async () => {
     // Boards minted one in 64 of these before they stopped: they're still out there.
