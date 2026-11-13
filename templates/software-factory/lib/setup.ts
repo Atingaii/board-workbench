@@ -41,11 +41,11 @@ export type Me = { principal: string; can: Record<string, readonly string[]> };
 /**
  * What the checks came across on the way, for the page to show once the factory runs: this
  * deployment on its board (null when it can't use it), the latest messages in its channels, how
- * many repos its GitHub app is on that come into no channel (null when that couldn't be told),
- * where on GitHub that app is added to more repos (null when its name couldn't be told), and where
- * its first task stands (null when there's none to offer).
+ * many repos its GitHub app is on that come into no channel (null when that couldn't be told) and
+ * which, by name, for the page to suggest, where on GitHub that app is added to more repos (null
+ * when its name couldn't be told), and where its first task stands (null when there's none to offer).
  */
-export type Found = { me: Me | null; recent: MessageView[]; waiting: number | null; install: string | null; first: FirstTask };
+export type Found = { me: Me | null; recent: MessageView[]; waiting: number | null; unmapped: string[]; install: string | null; first: FirstTask };
 
 /** How many messages one read of the factory's channels asks for. */
 export const READ = 200;
@@ -199,7 +199,7 @@ export async function setup(deps: Deps): Promise<Setup> {
     }
   }
   const vercel = await vercelStep(deps, local, project);
-  const found: Found = { me: vercel.me, recent: [], waiting: null, install: null, first: null };
+  const found: Found = { me: vercel.me, recent: [], waiting: null, unmapped: [], install: null, first: null };
   const [connected, mirrored] = [githubStep(deps, project, found), slackStep(deps, project)];
   const [github, slack, tryIt] = await Promise.all([connected, mirrored, tryStep(deps, project, found, connected, mirrored)]);
   return { open: false, steps: [vercel.step, github, slack, tryIt], found };
@@ -250,6 +250,36 @@ async function vercelStep(deps: Deps, local: boolean, project: Project): Promise
 
 type Repo = { full_name: string };
 
+/** What GitHub answers for the repos an app is on: how many in all, and one page of them. */
+type Installed = { total_count: number; repositories: Repo[] };
+
+/** How many pages of an app's repos one check reads, 100 to a page. Past that, it knows the first thousand. */
+const REPO_PAGES = 10;
+
+/**
+ * The repos an app is on. The first page says how many there are, and the rest are read together.
+ * A later page that fails costs only what came after it: the first page is all a small factory
+ * needs, and with fewer repos than GitHub counted, the checks know they didn't read them all.
+ */
+async function installed(api: (path: string) => Promise<Response>): Promise<Installed> {
+  const page = async (number: number) => {
+    const response = await api(`/installation/repositories?per_page=100&page=${number}`);
+    if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
+    return (await response.json()) as Installed;
+  };
+  const first = await page(1);
+  const pages = Math.min(Math.ceil(first.total_count / 100), REPO_PAGES);
+  const rest = await Promise.allSettled(Array.from({ length: Math.max(pages - 1, 0) }, (_, i) => page(i + 2)));
+  const repositories = [...first.repositories];
+  for (const read of rest) {
+    if (read.status === "rejected") break;
+    repositories.push(...read.value.repositories);
+  }
+  // A repo added between two reads can show on two pages: it's one repo, for the names and for the count.
+  const once = [...new Map(repositories.map((repo) => [repo.full_name, repo])).values()];
+  return { total_count: first.total_count, repositories: once };
+}
+
 /** The connector, the repos its app is on, and among them this factory's own, which the agent changes to improve itself. */
 async function githubStep(deps: Deps, project: Project, found: Found): Promise<Step> {
   const connector = deps.synced.connectors.github;
@@ -274,12 +304,8 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
       headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", ...init.headers },
       signal: AbortSignal.timeout(10_000),
     });
-  type Listed = { total_count: number; repositories: Repo[] };
-  const read: [Listed, string | null] | Error = await Promise.all([
-    api("/installation/repositories?per_page=100").then(async (response) => {
-      if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
-      return (await response.json()) as Listed;
-    }),
+  const read: [Installed, string | null] | Error = await Promise.all([
+    installed(api),
     api("/graphql", { method: "POST", body: JSON.stringify({ query: "query { viewer { login } }" }) })
       .then(async (response) => ((await response.json()) as { data?: { viewer?: { login?: string } } }).data?.viewer?.login ?? null)
       .catch(() => null),
@@ -288,15 +314,17 @@ async function githubStep(deps: Deps, project: Project, found: Found): Promise<S
 
   const [{ total_count, repositories }, viewer] = read;
   const app = viewer?.replace(/\[bot\]$/, "") ?? null;
-  // Where GitHub asks which repos the app is on: GitHub lists them there for whoever may see them.
+  // Where GitHub asks which repos the app is on.
   found.install = app ? `https://github.com/apps/${app}/installations/new` : null;
   const install = found.install ? { link: { href: found.install, label: "Configure the app" } } : {};
   if (total_count === 0) return step("github", [...tasks, todo(INSTALL, install)]);
   // Installed but in no channel: the board drops their PRs and issues (matched as GitHub writes them).
-  // How many, and not which: the app's repos are read as the app, and whoever can open the deployment
-  // sees this page, whatever they can see on GitHub.
+  // The step says how many. Which ones is for the page to suggest when someone onboards one: it
+  // shows them to whoever can open the deployment, and the checks get here only once that's the team.
   const mapped = deps.synced.repoChannels;
-  const off = total_count > repositories.length ? [] : repositories.filter((repo) => !(repo.full_name in mapped));
+  const unlisted = repositories.filter((repo) => !(repo.full_name in mapped));
+  found.unmapped = unlisted.map((repo) => repo.full_name).sort((a, b) => a.localeCompare(b));
+  const off = total_count > repositories.length ? [] : unlisted;
   found.waiting = total_count > repositories.length ? null : off.length;
   const several = off.length > 1;
   const unmapped = `${off.length} ${several ? "repos" : "repo"} with the app ${several ? "aren't" : "isn't"} on the board yet.`;

@@ -367,6 +367,8 @@ describe('cli', () => {
     // This board syncs nowhere, so typing shows nowhere, and that's fine.
     expect(await vb(['typing', id])).toMatchObject({ code: 0, stdout: '', stderr: '' })
     expect(await vb(['typing', id, 'running', 'tests…'])).toMatchObject({ code: 0, stdout: '', stderr: '' })
+    expect(await vb(['typing', id, 'a'.repeat(50)])).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(['typing', id, 'a'.repeat(51)])).toMatchObject({ code: 2, stderr: expect.stringContaining('50') })
     expect((await vb(['label', id, 'status=investigating'])).code).toBe(0)
 
     const read = await vb(['read', id])
@@ -647,7 +649,12 @@ describe('cli', () => {
     expect(await vb(['download', attachment.id, saved])).toMatchObject({ code: 0, stdout: `${saved}\n` })
     expect(await readFile(saved)).toEqual(Buffer.from([137, 80, 78, 71]))
     expect(await vb(['post', 'proofs', 'x', '--attach', join(dir, 'missing.png')])).toMatchObject({ code: 2, stderr: `error: Can't attach ${join(dir, 'missing.png')}. There's no such file.\n` })
-  }, 20_000) // five CLI runs: a cold start right after install can pass the default 5s
+    // One of the 11 doesn't exist: reading the files before counting them would say so instead.
+    const eleven = [...Array.from({ length: 10 }, () => ['--attach', shot]).flat(), '--attach', join(dir, 'missing.png')]
+    const many = await vb(['reply', id, 'all of them', ...eleven])
+    expect(many.code).toBe(2)
+    expect(many.stderr).toMatch(/^error: Can't attach 11 files\. A message carries at most 10\./)
+  }, 20_000) // six CLI runs: a cold start right after install can pass the default 5s
 
   it('downloads an attachment whose id starts with "-", which reads like a flag', async () => {
     // Boards minted one in 64 of these before they stopped: they're still out there.

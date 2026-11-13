@@ -129,13 +129,13 @@ test("it asks for no secret to get through its own protection, and shows no bala
   ]);
 });
 
-test("GitHub counts the repos the app is on that come into no channel, without naming them, and links to where one is added", async () => {
+test("GitHub counts the repos the app is on that come into no channel, and links to where one is added", async () => {
   // The app is on acme/factory, which comes into its channel on its own, and acme/web, which no one mapped.
   const { github } = await shown(fake().deps);
   assert.equal(isDone(github!), true);
   const installed = github!.tasks.find((task) => task.hint);
   assert.equal(installed?.hint, "1 repo with the app isn't on the board yet.");
-  // Which ones is the app's to know: whoever can open the deployment sees this page.
+  // The step says how many, in a line: which ones is for the field that onboards one.
   const several = await shown(
     fake({
       routes: {
@@ -148,6 +148,76 @@ test("GitHub counts the repos the app is on that come into no channel, without n
   assert.ok(!JSON.stringify(Object.values(several)).includes("payroll"));
   // The link opens where the map of repos starts.
   assert.match(linked(installed!.link!.href), /^export const repoChannels\b/);
+});
+
+/** A page of an installation's repos, as GitHub pages them: 100 to a page, named so they sort in order. */
+const pages = (total: number) => (_init?: RequestInit, url = "") => {
+  const page = Number(new URL(url).searchParams.get("page") ?? 1);
+  const names = Array.from({ length: total }, (_, i) => (i === 0 ? "acme/factory" : `acme/repo-${String(i).padStart(4, "0")}`));
+  return json({ total_count: total, repositories: names.slice((page - 1) * 100, page * 100).map((full_name) => ({ full_name })) });
+};
+const repoPages = (requests: string[]) => requests.filter((url) => url.includes("/installation/repositories")).map((url) => new URL(url).searchParams.get("page"));
+
+test("the checks name the repos with the app that come into no channel, in order, for the page to suggest", async () => {
+  const { deps, requests } = fake({
+    routes: {
+      "https://api.github.com/installation/repositories": () =>
+        json({ total_count: 4, repositories: ["web", "factory", "Payroll", "acquisition"].map((name) => ({ full_name: `acme/${name}` })) }),
+    },
+  });
+  const result = await setup(deps);
+  // acme/factory comes into its own channel, so it isn't one to onboard.
+  assert.deepEqual(result.open ? null : result.found.unmapped, ["acme/acquisition", "acme/Payroll", "acme/web"]);
+  // One page was enough, and one was asked for.
+  assert.deepEqual(repoPages(requests), ["1"]);
+  // A deployment anyone can open is told how to close it, and nothing of what the app can see.
+  const open = await setup(fake({ routes: { "https://factory.acme.dev/icon.svg": () => new Response("", { status: 200 }) } }).deps);
+  assert.equal(open.open, true);
+  assert.ok(!JSON.stringify(open).includes("acme/web"), JSON.stringify(open));
+});
+
+test("the app's repos are read past GitHub's first page, a hundred at a time, and no further than ten pages", async () => {
+  const some = fake({ routes: { "https://api.github.com/installation/repositories": pages(150) } });
+  const read = await setup(some.deps);
+  assert.deepEqual(repoPages(some.requests).sort(), ["1", "2"]);
+  assert.equal(read.open ? null : read.found.waiting, 149);
+  assert.equal(read.open ? null : read.found.unmapped.at(-1), "acme/repo-0149");
+  // A full last page isn't followed by an empty one.
+  const exact = fake({ routes: { "https://api.github.com/installation/repositories": pages(200) } });
+  await setup(exact.deps);
+  assert.deepEqual(repoPages(exact.requests).sort(), ["1", "2"]);
+  // More than it reads: it names what it read, and doesn't say how many are left out.
+  const many = fake({ routes: { "https://api.github.com/installation/repositories": pages(1500) } });
+  const capped = await setup(many.deps);
+  assert.equal(repoPages(many.requests).length, 10);
+  assert.equal(capped.open ? null : capped.found.waiting, null);
+  assert.equal(capped.open ? null : capped.found.unmapped.length, 999);
+});
+
+test("a later page of the app's repos that fails costs what came after it, not the step", async () => {
+  // 350 repos, and GitHub fails the third page of four.
+  const all = pages(350);
+  const { deps } = fake({
+    routes: { "https://api.github.com/installation/repositories": (init, url = "") => (new URL(url).searchParams.get("page") === "3" ? json({ message: "Server Error" }, 502) : all(init, url)) },
+  });
+  const result = await setup(deps);
+  assert.equal(result.open, false);
+  if (result.open) return;
+  // The step stands on the first page, as it did when that was all it read.
+  assert.equal(isDone(result.steps[1]!), true);
+  // What was read before the gap is named, in order, and nothing is concluded about the rest.
+  assert.deepEqual([result.found.unmapped.length, result.found.unmapped.at(-1)], [199, "acme/repo-0199"]);
+  assert.equal(result.found.waiting, null);
+  // A repo GitHub lists on two pages, as when one is added between two reads, is named once, and
+  // counted once: 150 repos whose second page repeats the first's are 100 read, so not all of them.
+  const repeats = pages(150);
+  const twice = await setup(fake({ routes: { "https://api.github.com/installation/repositories": (init, url = "") => repeats(init, url.replace(/&page=\d+/, "&page=1")) } }).deps);
+  assert.equal(twice.open ? null : twice.found.unmapped.length, 99);
+  assert.equal(twice.open ? undefined : twice.found.waiting, null);
+  assert.ok(!JSON.stringify(twice.open ? [] : twice.steps).includes("with the app"), "the step counts no repos it didn't read");
+  // The first page failing is still the step's to say.
+  const none = await setup(fake({ routes: { "https://api.github.com/installation/repositories": () => json({ message: "Server Error" }, 502) } }).deps);
+  assert.deepEqual(none.open ? [] : none.steps[1]!.tasks.filter((task) => !task.done).map((task) => task.label), ["Couldn't list the app's repos"]);
 });
 
 test("the checks find where the GitHub app is added to more repos, by the app's own name, and nowhere when GitHub doesn't say it", async () => {
@@ -688,7 +758,7 @@ test("once it runs, the markdown opens with what the factory has been doing, and
       { repo: "acme/factory", channel: "project-factory/rsi", slack: "#factory-rsi" },
       { repo: "acme/web", channel: "project-factory/web", slack: null },
     ],
-    ask: { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 3, install: "https://github.com/apps/acme-factory/installations/new" },
+    ask: { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 3, suggest: ["acme/api", "acme/docs", "acme/ops"], install: "https://github.com/apps/acme-factory/installations/new" },
     join: "",
     first: null,
   };
@@ -713,6 +783,7 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
 - acme/factory in \`project-factory/rsi\`, #factory-rsi in Slack
 - acme/web in \`project-factory/web\`
 - 3 more have the GitHub app. Onboard one: POST /api/launcher/onboard with {"repo": "<owner>/<repo>"}, or ask in #factory-rsi: onboard <owner>/<repo>
+- With the app, not onboarded: acme/api, acme/docs, acme/ops
 - [Add the GitHub app to more repos](https://github.com/apps/acme-factory/installations/new)
 
 ## 1. Vercel (done)
@@ -720,9 +791,9 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
     text,
   );
   // A week the read didn't reach the end of says so, and with no Slack channel the ask is on the board.
-  const busy = markdown(await setup(fake().deps), INSPECT, { ...running, overview: { ...running.overview, week: { ...running.overview.week, more: true, firstReplyMs: null } }, ask: { channel: "project-factory/rsi", slack: null, waiting: null, install: null } });
+  const busy = markdown(await setup(fake().deps), INSPECT, { ...running, overview: { ...running.overview, week: { ...running.overview.week, more: true, firstReplyMs: null } }, ask: { channel: "project-factory/rsi", slack: null, waiting: null, suggest: [], install: null } });
   assert.ok(busy.includes("- 6+ threads, 22+ messages\n- 5 answered\n"), busy);
-  // And when GitHub didn't say the app's name, there's nowhere to send anyone to add it.
+  // And when GitHub didn't say the app's name or its repos, there's nowhere to send anyone to add it, and none to name.
   assert.ok(busy.includes(`- acme/web in \`project-factory/web\`\n- Onboard one: POST /api/launcher/onboard with {"repo": "<owner>/<repo>"}, or ask in project-factory/rsi: onboard <owner>/<repo>\n\n## 1. Vercel`), busy);
   // While its README is still the template's, the first task comes before the week: on offer, then where it is.
   const offer = markdown(await setup(fake().deps), INSPECT, { ...running, first: "offer" });
