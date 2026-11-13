@@ -304,13 +304,13 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const data = await fetch()
     return data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
   }
-  override async post(target: string, kind: ResolvedTarget['kind'], { as: _sender, files, ...body }: ProviderPost): Promise<ProviderDelivery> {
+  override async post(target: string, kind: ResolvedTarget['kind'], { as: _sender, deployments: _listed, files, ...body }: ProviderPost): Promise<ProviderDelivery> {
     if (kind === 'channel' && !this.canStartThreads) throw new Error(`${this.platform} cannot start threads`)
     await this.ready()
     const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(files?.length ? { ...body, files: this.named(files) } : body)
     return { thread: this.toNative(sent.threadId), message: sent.id, ...(files?.length ? { files: this.transport.fileIds?.(sent.raw) ?? [] } : {}) }
   }
-  override async edit(thread: string, message: string, { as: _sender, files, ...body }: ProviderPost) {
+  override async edit(thread: string, message: string, { as: _sender, deployments: _listed, files, ...body }: ProviderPost) {
     await (await this.ready()).editMessage(this.toChat(thread), message, files ? { ...body, files: this.named(files) } : body)
   }
   override async delete(thread: string, message: string) { await (await this.ready()).deleteMessage(this.toChat(thread), message) }

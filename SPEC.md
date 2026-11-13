@@ -1228,7 +1228,13 @@ through the sync that speaks for them, under the key it imported them through.
   starting with `[vc]: #…`) shows as one line per
   deployment: status, project, preview link, and when it was updated. That form
   appears in `vb read`, `vb tail`, and the copies sync posts to other platforms
-  (`src/contract/bots.ts`). `vb inspect` keeps rendering Vercel's own table,
+  (`src/contract/bots.ts`). Sync hands a provider the comment's deployments
+  with that markdown (`deployments` in what it's asked to post or edit), and
+  Slack's lays them out as Vercel's table (Project, Deployment, Actions,
+  Updated) in place of the lines, the ones Vercel skipped in a line under it:
+  one message that follows the comment's edits. It stays lines where Slack
+  refuses the layout, a renderer wrote the deployments its own way, or the
+  message goes out with files. `vb inspect` keeps rendering Vercel's own table,
   which it shows well. The board stores what the bot wrote, and `--json` and
   the API return it unchanged.
 

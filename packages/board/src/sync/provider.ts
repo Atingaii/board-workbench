@@ -1,3 +1,4 @@
+import type { VercelDeployment } from '../contract/bots.ts'
 import { z } from 'zod'
 import type { Actor } from '../contract/folds.ts'
 import type { MessageView, SourceJoin, SourceRead } from '../api/routes.ts'
@@ -52,7 +53,13 @@ export type ProviderFile = { data: Uint8Array; filename: string; mimeType?: stri
  * person as themselves, which a platform that cuts names short keeps whole.
  */
 export type ProviderSender = { name: string; avatar: string | null; attribution?: string }
-export type ProviderPost = { markdown: string; files?: ProviderFile[]; as?: ProviderSender }
+/**
+ * What a platform is asked to post or edit: markdown, which it converts to its own format.
+ * `deployments` comes with Vercel's deployment comment, whose markdown lists them a line each,
+ * for a platform that lays them out itself (Slack's table).
+ */
+export type ProviderPost = { markdown: string; files?: ProviderFile[]; as?: ProviderSender; deployments?: VercelDeployment[] }
+export type { VercelDeployment }
 export type ProviderDelivery = { thread: string; message: string; files?: string[] }
 export type ProviderOptions = {
   platform: string
