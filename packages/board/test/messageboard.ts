@@ -1066,6 +1066,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     let wrote = false
     const answered = once(actor, body.operationId, () => {
       wrote = true
+      // A change of needs is refused for its body's shape before anything about the task: up to 100 thread IDs, repeats among them.
+      if (verb === 'needs' && (!Array.isArray(body.needs) || body.needs.length > 100 || body.needs.some((id: unknown) => typeof id !== 'string' || !THREAD_ID.test(id)))) throw bad('needs is up to 100 thread IDs.')
       const thread = taskThread(actor, decodeURIComponent(worked[1]!))
       const { task } = thread
       let from = task.state
@@ -1162,9 +1164,15 @@ function fakeBoard(shared: Shared, boardId: string) {
         ownerOrManage(actor, thread)
         if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
         if (task.state === 'claimed' && task.claim!.until > now()) throw new Refused(409, 'task_claimed', 'Someone holds the task: what it needs changes once no one does.', undefined, task.claim!.until)
-        const needs = checkedNeeds(actor, body.needs, thread.id)
+        // The set as given, however often each task is named: 20 different tasks at most, each one the caller can wait for.
+        const named = body.needs as string[]
+        const set = [...new Set(named)]
+        if (set.length > 20) throw new Refused(400, 'invalid_needs', 'A task waits for 20 tasks at most.')
+        const needs = checkedNeeds(actor, set, thread.id)
         // The same set changes nothing: not even a lapsed claim's expiry is written for it.
         if (needs.length !== task.needs.length || needs.some((id) => !task.needs.includes(id))) {
+          // Another set names each task once.
+          if (set.length !== named.length) throw new Refused(400, 'invalid_needs', 'A task is named once among what another waits for.')
           acyclic(thread.id, needs.filter((id) => !task.needs.includes(id)))
           lapse()
           // It waits for them from this write, and its `task.ready` follows in it when they have all completed: with

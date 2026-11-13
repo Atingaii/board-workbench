@@ -385,6 +385,12 @@ describe('the embedded CLI', () => {
       await refused(['tasks', 'fail', id, note], [`error: Can't fail task #${id}.`, '  reason is 1 to 1,000 characters, not blank.'])
       await refused(['tasks', 'block', id, 'approve the deploy?', '--kind', 'k'.repeat(65)], [`error: Can't block task #${id}.`, '  kind is up to 64 lowercase letters, numbers, and _.-'])
       await refused(['tasks', 'cancel', id, note], [`error: Can't cancel task #${id}.`, '  reason is 1 to 1,000 characters, not blank.'])
+      // What a task waits for, changed: the API's own code for too many, said as the command says a set it can't take.
+      expect(await run('tasks', 'needs', others[0]!, ...others.slice(1), id)).toEqual({
+        code: 2,
+        stdout: '',
+        stderr: `error: Can't change what task #${others[0]} needs. It waits for tasks you can read, and none that waits for it.\n  A task waits for 20 tasks at most.\n\n  See what it waits for now:\n    vercel board read ${others[0]}\n  Or see the tasks there are:\n    vercel board tasks --state all\n`,
+      })
       // The task is as it was, and what's within the API's limits lands.
       expect(await run('tasks', 'complete', id, 'x'.repeat(1000))).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
     } finally {

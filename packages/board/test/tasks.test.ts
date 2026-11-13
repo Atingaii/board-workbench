@@ -649,7 +649,11 @@ describe('what a task needs, changed', () => {
     // One the caller can't read is no task to it, as when it makes one.
     const narrowed = person(board, 'ada', { 'x-board-can': '*=post;work=read,post,label' })
     expect(code(await needs(narrowed, root.id, [secret.id]))).toEqual([400, 'invalid_needs'])
-    expect(code(await needs(ada, root.id, Array.from({ length: 21 }, (_, i) => String(1000 + i))))).toEqual([400, 'invalid_request'])
+    // It waits for at most 20 tasks here, a limit of this board's own: more is refused before any of them is looked up.
+    const many = await needs(ada, root.id, Array.from({ length: 21 }, (_, i) => String(1000 + i)))
+    expect([...code(many), many.body.error.message]).toEqual([400, 'invalid_request', 'needs: a task waits for at most 20 tasks'])
+    // Twenty of them, however often each is named, are within it: they're looked up, and these aren't tasks.
+    expect(code(await needs(ada, root.id, Array.from({ length: 40 }, (_, i) => String(1000 + (i % 20)))))).toEqual([400, 'invalid_needs'])
     expect(code(await ada('POST', `/tasks/${root.id}/needs`, {}))).toEqual([400, 'invalid_request'])
     expect((await read(ada, root.id)).task).toMatchObject({ state: 'ready', needs: [] })
     // A failed one may be reopened, so it's something to wait for.

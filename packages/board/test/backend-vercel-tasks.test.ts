@@ -744,7 +744,11 @@ describe("vercel()'s tasks", () => {
     const others: string[] = []
     for (let n = 0; n < 21; n++) others.push((await julian.tasks.create('work', { text: `step ${n}` })).task.id)
     await refused(() => julian.tasks.create('work', { text: 'after them all', needs: others }), /^\/tasks$/, shape('needs is at most 20 thread IDs, with no repeats.'))
-    expect((await julian.tasks.create('work', { text: 'after twenty', needs: others.slice(0, 20) })).task.task?.needs).toHaveLength(20)
+    const { task: twenty } = await julian.tasks.create('work', { text: 'after twenty', needs: others.slice(0, 20) })
+    expect(twenty.task?.needs).toHaveLength(20)
+    // The same when what a task waits for changes: the API takes the set, and says it's too many in its own way.
+    await refused(() => julian.tasks.needs(twenty.id, others), /\/needs$/, { code: 'invalid_needs', message: 'A task waits for 20 tasks at most.' })
+    expect((await julian.thread(twenty.id)).message.task?.needs).toHaveLength(20)
     // A lease, wherever one is asked for.
     const { task } = await julian.tasks.create('leases', { text: 'a long build' })
     const lease = shape('leaseSeconds is 30 to 3,600.')

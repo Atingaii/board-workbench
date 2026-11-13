@@ -244,6 +244,7 @@ describe('vb()', () => {
     await over(['tasks', 'cancel', held, note], [`error: Can't cancel task #${held}.`, "  reason: a task's reason is at most 1,000 characters"])
     await over(['tasks', 'create', 'work', 'after them all', ...Array.from({ length: 21 }, (_, n) => ['--needs', String(9000 + n)]).flat()], ["error: Can't create a task in work.", '  needs: a task waits for at most 20 tasks'])
     await over(['tasks', 'claim', '--ready', 'work', ...Array.from({ length: 33 }, (_, n) => ['--from', `vercel:user:u_${n}`]).flat()], ["error: Can't claim a task in work.", '  from: a claim takes tasks from at most 32 owners'])
+    await over(['tasks', 'needs', shipped, ...Array.from({ length: 21 }, (_, n) => String(9000 + n))], [`error: Can't change what task #${shipped} needs.`, '  needs: a task waits for at most 20 tasks'])
     // A root's text is a message's: what to do with the long part, where a task takes it.
     expect(await vb(team, ['tasks', 'create', 'work', 'x'.repeat(10_001)])).toEqual({
       code: 1,
