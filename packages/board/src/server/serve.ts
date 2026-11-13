@@ -51,7 +51,7 @@ import {
 import type { Method, Protocol } from '../api/protocol.ts'
 import type { ExternalAuthor } from '../contract/external.ts'
 import type { Actor } from '../contract/folds.ts'
-import { ATTACHMENT_BYTES_MAX, RESERVED_LABEL_PREFIX, type Attachment, type Labels } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, RESERVED_LABEL_PREFIX, TASK_BATCH_MAX, type Attachment, type Labels } from '../contract/schemas.ts'
 import { findBlocks } from '../contract/blocks.ts'
 import type { SchemaDefinition } from '../contract/data-schemas.ts'
 import { checkValue } from '../contract/data-values.ts'
@@ -63,7 +63,7 @@ import { claimsOf, KNOWN_AGENTS, viaOf } from './actors.ts'
 import { importedHandle, userIdOf } from '../contract/profiles.ts'
 import type { CallerRequest } from './auth.ts'
 import { avatarSvg } from './avatars.ts'
-import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
+import { badRequest, batchTooLarge, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
 import { DroppedError, runMiddleware, type Write, type WriteSource } from './middleware.ts'
 import { createRouter, METHODS, openapi, queryObject, readCapped, readJson, type BoardRoute } from './routing.ts'
 import { FULL_ACCESS, parseCan, type Access } from './access.ts'
@@ -159,8 +159,14 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return CreateTaskBody.parse(await body())
     case 'createdTasks':
       return { id, ...CreatedTasksQuery.parse(queryObject(url)) }
-    case 'createTasks':
-      return CreateTasksBody.parse(await body())
+    case 'createTasks': {
+      const sent = await body()
+      // Every root of a batch goes through the middleware before a backend sees one, so more than any backend makes
+      // stops here, before anything runs for it: said as that, which its sender splits on, whatever else is wrong with it.
+      const tasks = (sent as { tasks?: unknown } | null | undefined)?.tasks
+      if (Array.isArray(tasks) && tasks.length > TASK_BATCH_MAX) throw batchTooLarge(tasks.length, TASK_BATCH_MAX)
+      return CreateTasksBody.parse(sent)
+    }
     case 'claimReadyTask':
       return ClaimReadyTaskBody.parse(await body())
     case 'claimTask':

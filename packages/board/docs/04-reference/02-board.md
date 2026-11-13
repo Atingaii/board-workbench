@@ -466,10 +466,11 @@ const [fix, review, ship] = await team.tasks.createMany(
   order, each with the same `key`, text, labels, `noSync`, files, needs, and
   `for`, as you gave them. Anything else under that `id` is 409
   `duplicate_id`. A board keeps an `id` for good.
-- **A board says how many it makes in one write.** More is 400
-  `batch_too_large`, and nothing is made.
-  [`local()`](../01-board/10-local.md) makes 100, one append of at most 301
-  events. Vercel's board holds fewer: see below.
+- **100 tasks at most.** More is 400 `batch_too_large`, before the
+  [middleware](../01-board/08-middleware.md) sees any of them, and so is a
+  batch with more than a board holds in one write. Nothing is made.
+  [`local()`](../01-board/10-local.md) holds all 100, one append of at most
+  301 events. Vercel's board holds fewer: see below.
 - **The middleware sees each task's root as a post,** one after the other,
   before any is written: one it drops makes none. A retry of a batch that
   landed never reaches it.
@@ -578,9 +579,7 @@ it gives:
   with an `id`.** A task's labels, files, and needs count toward it, so a
   chain of 13 fits, or of 12 with an `id`, and 11 tasks with a label each
   either way. More is 400 `batch_too_large`, with nothing made, and its
-  message says how many the batch counts for. A request of more than 100
-  tasks is refused before that for its shape, as the API's 400
-  `invalid_request`.
+  message says how many the batch counts for.
 - **A retried batch goes through the middleware again there.** The API has
   no read of a batch by its `id`, and tells the same request by what it's
   sent, after the middleware. One that isn't the same twice makes a retry

@@ -278,15 +278,17 @@ describe('several tasks made at once', () => {
     expect(saw).toEqual(['fix the export', 'review the fix'])
   })
 
-  it('are 100 at most on the local board, a limit of its own: one more is batch_too_large, and makes none', async () => {
+  it('are 100 at most on any board: one more is batch_too_large, and makes none', async () => {
     const { ada } = await setup()
     const many = (count: number): Asked[] => Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))
     const over = await batch(ada, many(101))
     expect(over).toEqual({ status: 400, body: { error: { code: 'batch_too_large', message: 'a batch makes 100 tasks at most, and this one has 101: send it in parts' } } })
     expect(await listed(ada)).toEqual([])
-    // A batch of the wrong shape is refused for that first, as any request is: how many this board makes is its own to say after.
-    expect(code(await batch(ada, [...many(100), { text: '' }]))).toEqual([400, 'invalid_request'])
-    // And of each task, what one made alone holds here: its text and files as a message's, 20 needs, and a key of 64 characters.
+    // It's said so whatever else is wrong with it: its sender splits it first.
+    expect(code(await batch(ada, [...many(100), { text: '' }]))).toEqual([400, 'batch_too_large'])
+    // A batch of 100 of the wrong shape is refused for that, as any request is.
+    expect(code(await batch(ada, [...many(99), { text: '' }]))).toEqual([400, 'invalid_request'])
+    // Of each task, what one made alone holds is this board's own to say: its text and files as a message's, 20 needs, and a key of 64 characters.
     const one = async (task: Record<string, unknown>) => {
       const answer = await batch(ada, [{ text: 'first, and fine' }, task as Asked])
       return [...code(answer), answer.body.error?.message]
@@ -304,6 +306,17 @@ describe('several tasks made at once', () => {
     expect(roots.map((root) => root.text)).toEqual(many(100).map((task) => task.text))
     expect(roots.map((root, at) => root.task?.needs)).toEqual(roots.map((_, at) => (at === 0 ? [] : [roots[at - 1]!.id])))
     expect((await listed(ada)).map((root) => [root.id, root.task?.state])).toEqual(roots.map((root, at) => [root.id, at === 0 ? 'ready' : 'waiting']))
+  })
+
+  it('never reach the middleware when there are more than any board makes: no root of a batch that can not land is screened', async () => {
+    let saw = 0
+    const count: Middleware = async ({ next }) => void (saw++, await next())
+    const { ada } = await setup({ middleware: [count] })
+    expect(code(await batch(ada, Array.from({ length: 2000 }, (_, n) => ({ text: `step ${n}` }))))).toEqual([400, 'batch_too_large'])
+    expect(saw).toBe(0)
+    // One it takes is screened a root at a time.
+    expect(code(await batch(ada, [{ text: 'fix the export' }, { text: 'review the fix' }]))).toEqual([201, undefined])
+    expect(saw).toBe(2)
   })
 
   it('need `post` where they land and `label` when any of them has labels, and come back to a sender that can not read them as it sent them', async () => {

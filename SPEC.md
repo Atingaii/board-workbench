@@ -3670,8 +3670,8 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   made one, on every backend: its maker hears at once. A failed task is one,
   since `reopen` can retry it.
 - **Several tasks are made in one write.** `team.tasks.createMany(channel,
-  tasks, { id? })` (`POST /tasks/batch`) starts a thread for each of its
-  tasks in one channel: all of them or none, on every backend, and no
+  tasks, { id? })` (`POST /tasks/batch`) starts a thread for each of up to
+  100 tasks in one channel: all of them or none, on every backend, and no
   event of any before all have landed. Each is what `POST /tasks` starts a
   thread with, less `claim` and `id`, and is checked as one is. A task names
   itself with `key` for the others of the batch, and `needs` takes a task's
@@ -3696,12 +3696,14 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   post's carries its own, each root's post in turn and, on the event after
   the first root, the `id` with that digest. Vercel's API keeps a digest of
   what it's sent beside the batch's key, and has no read by it, so there a
-  retry goes through the middleware again. A batch with more than a
-  backend holds in one write is 400 `batch_too_large`, the backend's own to
-  say as a task's other limits are: `local()` makes 100 tasks, one append of
-  at most 301 events, and Vercel's board what fits one of the API's
-  transactions, 15 plain tasks, or 14 with an `id`. Nothing is made, and the
-  sender splits it.
+  retry goes through the middleware again. More than 100 tasks is 400
+  `batch_too_large` on every backend, `board()`'s own to say: each root goes
+  through the middleware before a backend sees any, so it takes no more
+  than any backend makes. A batch with more than a backend holds in one
+  write is refused the same way, by the backend: `local()` holds all 100,
+  one append of at most 301 events, and Vercel's board what fits one of the
+  API's transactions, 15 plain tasks, or 14 with an `id`. Nothing is made,
+  and the sender splits it.
 - **A plan longer than a batch is several batches.** `createTasksInChunks(
   team, channel, tasks, { id? })`, a plain function on `tasks.createMany`,
   makes each task after the ones it waits for, names a task an earlier batch
@@ -3864,7 +3866,7 @@ Task changes are board facts, in the board log:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, needs?, for?, claim?, lease?, id? }` starts a thread as a task (its root takes files as a post does, and may be empty with one), or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` one. Answers 201 `{ task, claim? }`, where `task` is its root. Needs `post` for a new thread (and `label` for its labels), or `label` in its channel to make `re` one, and `label` for `claim`. `re` is a root that's there: 409 `already_a_task` for one that's a task. A retry with the same `id` answers the task that landed, without the claim it was made with, whose token was answered once |
-| POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of its tasks in one write, all or none. A task is `{ key?, text, labels?, noSync?, attachments?, needs?: (MessageId \| { key })[], for? }`. Answers 201 `{ tasks }`, their roots in order. 400 `invalid_needs` for a `key` two tasks have or none has, or tasks that need each other; 400 `batch_too_large` for more than a board holds in one write |
+| POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of 1 to 100 tasks in one write, all or none. A task is `{ key?, text, labels?, noSync?, attachments?, needs?: (MessageId \| { key })[], for? }`. Answers 201 `{ tasks }`, their roots in order. 400 `invalid_needs` for a `key` two tasks have or none has, or tasks that need each other; 400 `batch_too_large` for more than a board holds in one write |
 | GET | `/tasks/batch/:id` | The caller's own batch made under `id`: `{ tasks }`, their roots as they are now, in order. 404 `batch_not_found` for none. board() asks it before a batch's roots reach the middleware, with `request`, its digest of what was asked: 409 `duplicate_id` when the batch was made for another request |
 | GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `for`, `needs` (the tasks waiting on one). Answers `{ tasks, cursor }`; `after` (a `cursor` it reported) and `limit` page |
 | POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists by ID, claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`, which a board may answer sooner (Vercel's looks 12 times at most a request); the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |

@@ -117,7 +117,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator (as a profile, only what that profile scheduled), or `manage` in its channel. Answers `{ schedule, canceled }` |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, id?, needs?, for?, claim?, lease? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` roots one. Answers 201 `{ task, claim? }`, where `task` is its root. See [Tasks](#tasks) |
-| POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of its tasks, in one write. A task is `{ key?, text, labels?, noSync?, attachments?, needs?, for? }`. Answers 201 `{ tasks }`, their roots in order |
+| POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of 1 to 100 tasks, in one write. A task is `{ key?, text, labels?, noSync?, attachments?, needs?, for? }`. Answers 201 `{ tasks }`, their roots in order |
 | GET | `/tasks/batch/:id` | The batch you made under that `id`: `{ tasks }`, their roots as they are now, in order. 404 `batch_not_found` when you made none |
 | GET | `/tasks` | `{ tasks, cursor }`: tasks as thread summaries, oldest first. Query: `channel`, `state`, `label`, `by`, `owner`, `for`, `needs`, `after`, `limit` |
 | POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: claims the oldest ready task in a channel or subtree. Answers `{ task, claim }`, or `{ task: null }` |
@@ -439,8 +439,8 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   [middleware](../01-board/08-middleware.md), which a retry never reaches. A
   board in front of this one sends `request`, its digest of what it was given,
   so both tell a repeat by the same thing; leave it out otherwise. More
-  than a board holds in one write is 400 `batch_too_large`: send it in
-  parts. The local board makes 100 tasks in one.
+  than 100 tasks, or more than a board holds in one write, is 400
+  `batch_too_large`: send it in parts.
 - **A claim is a lease.** `lease` is seconds, and 900 when left out. The
   answer's `claim` is `{ epoch, token, until }`: `epoch` and `token` go
   on every write the claim makes, and `until` is when the lease ends. The token
@@ -804,7 +804,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
 | 400 | `reserved_label` | a write that sets or unsets a label under `board.` |
 | 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, the task itself, a task that was canceled, or, on a change, one that waits for it already; in a batch, a `key` two tasks have or no task has, or tasks that wait for each other |
-| 400 | `batch_too_large` | a batch of more than the board holds in one write (100 tasks on the local board): nothing was made, so send it in parts |
+| 400 | `batch_too_large` | a batch of more than 100 tasks, or of more than the board holds in one write: nothing was made, so send it in parts |
 | 400 | `invalid_from` | a claim whose `from` names an owner by handle: several can share one, so `from` takes IDs |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |

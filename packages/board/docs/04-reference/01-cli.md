@@ -958,8 +958,8 @@ $ vb tasks work/ --state all --limit 2
   misuse, said with the task it's on and the key it's a letter from (`need`
   for `needs`), before anything is made. Text, `--label`, `--needs`, `--for`,
   `--claim`, and `--no-sync` are one task's, so they don't go with it.
-- **A plan of any length works.** As many tasks as the board holds go in one
-  write, all or none. A longer plan goes in several, each task after the ones it waits for,
+- **A plan of any length works.** Up to 100 tasks go in one write, all or
+  none. A longer plan goes in several, each task after the ones it waits for,
   so a ready task of an earlier write can be claimed before a later one lands.
   See [Several tasks at once](./02-board.md#several-tasks-at-once).
 - **`--idempotency-key` names the plan.** The same key and file again make

@@ -235,8 +235,8 @@ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
 - **A task's `key` names it for the others of the plan.** `needs` takes
   `{ "key": "fix" }` for a task of the plan, before it or after it, or an ID
   for one that's there.
-- **As many tasks as the board holds are one write:** all of them or none,
-  and none shows before all have landed. A longer plan goes in several writes, each task
+- **Up to 100 tasks are one write:** all of them or none, and none shows
+  before all have landed. A longer plan goes in several writes, each task
   after the ones it waits for, so it isn't one: a ready task of an earlier
   write can be claimed before a later one lands.
 - **`--idempotency-key` names the plan.** The same key and file again make

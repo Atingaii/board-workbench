@@ -508,10 +508,10 @@ describe("vercel()'s tasks", () => {
     expect(julian.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/batch'])
     expect((await julian.channels()).map((channel) => channel.path)).not.toContain('long')
     expect(await julian.tasks.createMany('long', long(6))).toHaveLength(6)
-    // More tasks than a body of the API's takes is the API's to say, in its words: it's asked, and makes none.
+    // More than any batch makes is board()'s own to say: the API is never asked.
     julian.sent.length = 0
-    await expect(julian.tasks.createMany('plans', plain(101))).rejects.toMatchObject({ status: 400, code: 'invalid_request', message: 'tasks is 1 to 100 tasks.' })
-    expect(julian.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/batch'])
+    await expect(julian.tasks.createMany('plans', plain(101))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('100 tasks at most') })
+    expect(julian.sent.filter((request) => request.method === 'POST')).toEqual([])
   })
 
   it("has a batch refused in the API's own order, whatever the board checked first: its shape, what the caller may, each task, the count, and then what takes a read", async () => {

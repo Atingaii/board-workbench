@@ -415,8 +415,8 @@ export function createBoardClient(options: ClientOptions) {
    * Starts a thread in `channel` for each of `tasks`, as tasks, in one write: all of them or none,
    * and none shows before all have landed. It answers their roots in the order given. A task waits
    * for the ones made with it by their `key`. With `id`, a retry answers the tasks the first call
-   * made. A board says how many it holds in one write, and throws a 400 `batch_too_large` for more:
-   * `createTasksInChunks` makes a longer plan, in several.
+   * made. A board makes 100 at most, and throws a 400 `batch_too_large` for more, or for more than it
+   * holds in one write: `createTasksInChunks` makes a longer plan, in several.
    */
   async function createTasks(channel: string, tasks: TaskInBatch[], opts: { id?: string } = {}): Promise<MessageView[]> {
     const sent = tasks.map((task) => (task.attachments?.length ? { ...task, attachments: task.attachments.map((file) => (typeof file === 'string' ? file : file.id)) } : task))

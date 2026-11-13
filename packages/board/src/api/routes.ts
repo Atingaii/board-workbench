@@ -15,6 +15,7 @@ import {
   SentText,
   platformAvatar,
   storable,
+  TASK_BATCH_MAX,
   EDITED_HOLD,
   SentTaskHoldKind,
   SentTaskNote,
@@ -265,7 +266,8 @@ export const CreateTasksBody = z.object({
         .refine((task) => task.text.trim().length > 0 || (task.attachments?.length ?? 0) > 0, { message: 'message text is empty', path: ['text'] })
         .refine((task) => storable(task.text), { message: 'message text has a NUL character or a lone surrogate', path: ['text'] }),
     )
-    .min(1),
+    .min(1)
+    .max(TASK_BATCH_MAX),
   id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
   /**
    * From a board in front of this one: its digest of what the batch asked for as it was given, before
