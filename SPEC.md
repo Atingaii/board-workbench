@@ -3653,7 +3653,11 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   tasks, is 400 `invalid_needs`. Only a prerequisite the change adds can
   close one: what the task keeps was checked when it was added. So the board
   walks what the added ones need, up to 500 tasks, and refuses a change it
-  would have to walk further for; one that only drops some walks nothing. In one write the task waits for them (`task.needs_changed`), and
+  would have to walk further for; one that only drops some walks nothing. It
+  follows no completed task's needs: a task completes only once all it needs
+  has, and neither changes after, so nothing behind a completed task is the
+  task being changed, which hasn't completed. Finished work behind a
+  prerequisite, however much, is never in the way. In one write the task waits for them (`task.needs_changed`), and
   `task.ready` follows when they've all completed; with none it's ready. A
   held task stays held, and the same set changes nothing. A claim, a
   completion readying what waited for it, and an unblock each go by what a

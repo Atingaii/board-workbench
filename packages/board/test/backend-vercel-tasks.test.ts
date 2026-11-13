@@ -749,6 +749,34 @@ describe("vercel()'s tasks", () => {
     expect((await julian.thread(made.id)).message.task).toMatchObject({ state: 'waiting', needs: [last.id, other.id] })
   }, 60_000)
 
+  it("has no completed task's needs followed for a cycle there, so finished work behind a prerequisite is never too much to check, and a cycle through unfinished tasks is still refused", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    // A line of 511 tasks, each waiting for the one before, worked from its start to its end: more than the API walks.
+    let last = (await julian.tasks.create('line', { text: 'the first' })).task
+    const line = [last.id]
+    for (let n = 1; n <= 510; n++) line.push((last = (await julian.tasks.create('line', { text: `task ${n}`, needs: [last.id] })).task).id)
+    for (const id of line) await (await julian.tasks.claim(id, { lease: 60 })).complete()
+    // A task that isn't finished waits for the end of it, and another comes to wait for that one.
+    const { task: recent } = await julian.tasks.create('work', { text: 'the next release', needs: [line[510]!] })
+    const { task: root } = await julian.tasks.create('work', { text: 'ship it' })
+    expect((await julian.tasks.needs(root.id, [recent.id])).task).toMatchObject({ state: 'waiting', needs: [recent.id] })
+    const { task: other } = await julian.tasks.create('work', { text: 'on its own' })
+    expect((await julian.tasks.needs(other.id, [line[510]!])).task).toMatchObject({ state: 'ready', needs: [line[510]] })
+    // A cycle through tasks that aren't finished is found past a completed prerequisite beside them.
+    const { task: a } = await julian.tasks.create('work', { text: 'a' })
+    const { task: b } = await julian.tasks.create('work', { text: 'b', needs: [line[510]!, a.id] })
+    const { task: c } = await julian.tasks.create('work', { text: 'c', needs: [line[0]!, b.id] })
+    await expect(julian.tasks.needs(a.id, [line[510]!, c.id])).rejects.toMatchObject({ status: 400, code: 'invalid_needs' })
+    await expect(julian.tasks.needs(recent.id, [line[510]!, root.id])).rejects.toMatchObject({ status: 400, code: 'invalid_needs' })
+    // Only a completed task's needs are left alone: a canceled one may have waited for anything.
+    const { task: dropped } = await julian.tasks.create('work', { text: 'dropped while it waited', needs: [a.id] })
+    const { task: behind } = await julian.tasks.create('work', { text: 'waits for the dropped one', needs: [dropped.id] })
+    await julian.tasks.cancel(dropped.id, 'not needed after all')
+    await expect(julian.tasks.needs(a.id, [behind.id])).rejects.toMatchObject({ status: 400, code: 'invalid_needs' })
+    expect((await julian.thread(a.id)).message.task).toMatchObject({ state: 'ready', needs: [] })
+  }, 120_000)
+
   it("has a claim whose lease ran out expire before what its task needs changes, in the change's own write", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const api = fakeMessageboard()

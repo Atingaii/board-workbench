@@ -309,6 +309,12 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
    * it walks what the `added` ones need, and what those need, a level a read, and gives up past
    * `NEEDS_WALK_MAX` tasks: a change it can't check is refused too. One that only drops some walks
    * nothing.
+   *
+   * It follows no completed task's needs. A task completes by a claim, which it takes only once
+   * all it needs has completed, and neither it nor they change after: completed is for good, and a
+   * finished task's needs can't be changed. So everything behind a completed task has completed,
+   * and task `id`, which hasn't, isn't there. Finished work behind a prerequisite, however much,
+   * is never too much to check. A canceled task is followed: it may have waited for anything.
    */
   async function acyclic(id: number, added: readonly number[], position: number) {
     const invalid = (need: number, why: string) => badRequest(`needs: #${need} ${why}`, 'invalid_needs')
@@ -317,13 +323,16 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     for (let level = [...added]; level.length > 0; ) {
       const found = await writes().reads.tables.messagesAt(level, position)
       const next: number[] = []
-      for (const at of level)
-        for (const need of found.get(at)?.task?.needs ?? []) {
+      for (const at of level) {
+        const task = found.get(at)?.task
+        if (!task || task.state === 'completed') continue
+        for (const need of task.needs) {
           if (need === id) throw invalid(from.get(at)!, `waits for #${id} already: they would wait for each other`)
           if (from.has(need)) continue
           from.set(need, from.get(at)!)
           next.push(need)
         }
+      }
       if (from.size > NEEDS_WALK_MAX) throw invalid(added[0]!, `has more than ${NEEDS_WALK_MAX} tasks behind it and the others: too many to check that none waits for #${id}`)
       level = next
     }

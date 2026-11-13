@@ -792,19 +792,23 @@ function fakeBoard(shared: Shared, boardId: string) {
   /**
    * Refuses prerequisites that would make task `self` wait for itself: one that waits for it already, through however
    * many tasks. Only one the change adds can close a cycle, so it walks what those need, and what those need, and
-   * gives up past `NEEDS_WALKED` tasks: a change that only drops some walks nothing.
+   * gives up past `NEEDS_WALKED` tasks: a change that only drops some walks nothing. A completed task's needs
+   * aren't followed: they have all completed, and this task hasn't.
    */
   function acyclic(self: string, needs: readonly string[]) {
     const from = new Map(needs.map((id) => [id, id]))
     for (let level = [...needs]; level.length > 0; ) {
       const next: string[] = []
-      for (const at of level)
-        for (const need of threads.get(at)?.task?.needs ?? []) {
+      for (const at of level) {
+        const task = threads.get(at)?.task
+        if (!task || task.state === 'completed') continue
+        for (const need of task.needs) {
           if (need === self) throw new Refused(400, 'invalid_needs', `${from.get(at)} waits for this task already: they would wait for each other.`)
           if (from.has(need)) continue
           from.set(need, from.get(at)!)
           next.push(need)
         }
+      }
       if (from.size > NEEDS_WALKED) throw new Refused(400, 'invalid_needs', `More than ${NEEDS_WALKED} tasks are behind those: too many to check that none waits for this task.`)
       level = next
     }
