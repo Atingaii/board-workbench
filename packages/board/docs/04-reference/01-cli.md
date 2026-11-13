@@ -266,7 +266,7 @@ $ vb read 812
 | `schedule` | `{ schedule, outcome: "scheduled" }`; `schedule cancel`'s outcome is `canceled`, or `unchanged` when it already wasn't pending |
 | `tasks [channel]` | `{ tasks, cursor }`: each task `{ message, replies, last }`, its root carrying `task`. `cursor` goes to `--after` for the next page |
 | `tasks claim`, `tasks renew`, `tasks create --claim` | `{ task, claim }`: the task's root, and `{ epoch, until }`. The claim's token stays with the CLI. `create --claim` adds `outcome: "created"` |
-| `tasks create`, and every other `tasks` write | `{ task, outcome }`, `outcome` being `created`, `released`, `completed`, `failed`, `blocked`, `unblocked`, `reopened`, `assigned` or `unassigned`, or `canceled`; `unchanged` when an `unblock` or a `reopen` had nothing to change. `tasks run` adds the command's `code` when it failed |
+| `tasks create`, and every other `tasks` write | `{ task, outcome }`, `outcome` being `created`, `released`, `completed`, `failed`, `blocked`, `unblocked`, `reopened`, `assigned` or `unassigned`, `set` for `needs`, or `canceled`; `unchanged` when an `unblock` or a `reopen` had nothing to change. `tasks run` adds the command's `code` when it failed |
 | `wait` | `{ event }`: `{ cursor, type, createdAt, payload, message, actor }` |
 | `tail` | one event per line, as they come |
 | `whoami` | `{ actor, name, handle, profile, expiresAt, can, board, source }` |
@@ -896,6 +896,7 @@ vb tasks block <id> "<reason>" [--kind <kind>]
 vb tasks unblock <id>
 vb tasks reopen <id>
 vb tasks assign <id> (<profile> | --pool)
+vb tasks needs <id> (<id>... | --none)
 vb tasks cancel <id> "<reason>"
 ```
 
@@ -917,6 +918,7 @@ Threads agents are to do, each with a state the board keeps. See
 | `tasks unblock` | lifts a hold, as its owner | `unblocked 812` |
 | `tasks reopen` | makes a failed task ready again, as its owner | `reopened 812` |
 | `tasks assign` | keeps a task for one of its owner's profiles, or with `--pool` for anyone | `assigned 812 to fixer`, `unassigned 812` |
+| `tasks needs` | sets what a task waits for, as its owner: the tasks named, in place of what it waited for | `814 needs #812 #813`, `814 needs nothing` |
 | `tasks cancel` | calls a task off, as its owner | `canceled 812` |
 
 ```text
@@ -979,6 +981,10 @@ $ vb tasks work/ --state all --limit 2
   `claude` is settled as `claude`.
 - **`unblock` and `reopen` that change nothing** exit 0 and say so: `812
   wasn't blocked`.
+- **`needs`** names every task the task waits for now, by ID: what it waited
+  for and isn't named, it waits for no longer. `--none` says nothing, so the
+  task is ready. One of the two is required, so a command cut short changes
+  nothing. It's for a task no one holds that isn't finished.
 
 What can go wrong, by `reason`:
 
@@ -991,7 +997,7 @@ What can go wrong, by `reason`:
 | `task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished` | the task can't be claimed or changed as it is: someone holds it, it's for another profile, it waits for a task, it's held for a person, or it ended | 1 |
 | `task_not_owned` | the change is its owner's to make, or `manage`'s in its channel. A profile owns only the tasks it made | 1 |
 | `not_a_task`, `already_a_task` | the thread isn't a task, or `create <id>` named one that is | 1 |
-| `invalid_needs` | `--needs` named something that isn't a task you can read. In a plan, a `key` two tasks have or none has, or tasks that wait for each other | 2 |
+| `invalid_needs` | `--needs` or `tasks needs` named something that isn't a task you can read, or `tasks needs` a task that waits for this one. In a plan, a `key` two tasks have or none has, or tasks that wait for each other | 2 |
 | `duplicate_id` | `--idempotency-key` was used for another task, or with `--tasks-file`, for other tasks | 1 |
 | `invalid_from` | `--from` named an owner by handle: several can share one, so it takes IDs | 2 |
 | `command_not_found` | `run`'s command couldn't start. The task is released | 1 |
@@ -1006,6 +1012,20 @@ error: Can't claim task #832. Someone holds it.
 
   See who holds it, and until when:
     vb read 832
+$ vb tasks needs 814 812 813
+814 needs #812 #813
+$ vb tasks needs 814 --none
+814 needs nothing
+$ vb tasks needs 812 814
+812 needs #814
+$ vb tasks needs 814 812
+error: Can't change what task #814 needs. It waits for tasks you can read, and none that waits for it.
+  needs: #812 waits for #814 already: they would wait for each other
+
+  See what it waits for now:
+    vb read 814
+  Or see the tasks there are:
+    vb tasks --state all
 ```
 
 ```json plan.json

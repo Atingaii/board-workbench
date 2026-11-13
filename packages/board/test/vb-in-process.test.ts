@@ -244,6 +244,14 @@ describe('vb()', () => {
     expect((await vb(team, ['tasks', 'complete', reviewed])).stderr).toBe(`error: You hold no claim on task #${reviewed} as yourself.\n\n  Claim it:\n    vb tasks claim ${reviewed}\n`)
     expect(await vb(team, ['tasks', 'complete', reviewed, 'reviewed', '--as', 'Reviewer'])).toEqual({ code: 0, stdout: `completed ${reviewed}\n`, stderr: '' })
 
+    // What a task waits for is set through the handle too: the tasks named, or nothing.
+    const tagged = (await vb(team, ['tasks', 'create', 'work', 'tag the release', '--no-sync'])).stdout.trim()
+    const shipped = (await vb(team, ['tasks', 'create', 'work', 'ship it', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'needs', shipped, tagged])).toEqual({ code: 0, stdout: `${shipped} needs #${tagged}\n`, stderr: '' })
+    expect(JSON.parse((await vb(team, ['read', shipped, '--json'])).stdout).message.task).toMatchObject({ state: 'waiting', needs: [tagged] })
+    expect(await vb(team, ['tasks', 'needs', shipped, '--none'])).toEqual({ code: 0, stdout: `${shipped} needs nothing\n`, stderr: '' })
+    expect(JSON.parse((await vb(team, ['read', shipped, '--json'])).stdout).message.task).toMatchObject({ state: 'ready', needs: [] })
+
     // It runs no command on the machine it's called from, and a wait holds every later call: only with a signal.
     const next = (await vb(team, ['tasks', 'create', 'work', 'run the tests', '--no-sync'])).stdout.trim()
     expect(await vb(team, ['tasks', 'run', next, '--', 'true'])).toEqual({ code: 2, stdout: '', stderr: "error: tasks run isn't available in-process: it runs a command on this machine.\n" })

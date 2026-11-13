@@ -3745,6 +3745,7 @@ vb tasks block <id> "<reason>" [--kind <kind>]
 vb tasks unblock <id>
 vb tasks reopen <id>
 vb tasks assign <id> (<profile> | --pool)
+vb tasks needs <id> (<id>... | --none)
 vb tasks cancel <id> "<reason>"
 ```
 
@@ -3759,10 +3760,13 @@ vb tasks cancel <id> "<reason>"
   fix CVE-123 in acme/web`, for `claim`, `renew`, and `create --claim`.
   **Other writes say what happened, in a line:** `completed 812`, `blocked
   813`, `unassigned 815`. An `unblock` or a `reopen` that changed nothing says
-  `813 wasn't blocked`.
+  `813 wasn't blocked`. **`needs` says what the task waits for now:** `814
+  needs #812 #813`, or `814 needs nothing` for `--none`. It takes the tasks
+  or `--none`, never neither, so a command cut short changes nothing.
 - **`--json`** is `{ tasks, cursor }` for a list, `{ task, claim }` for a
   claim, its `claim` being `{ epoch, until }` without the token, and `{ task,
-  outcome }` for the rest, `outcome` being what the line says, or `unchanged`.
+  outcome }` for the rest, `outcome` being what the line says, `set` for
+  `needs`, or `unchanged`.
   A list with more prints where to pick up, and `--after <cursor>` reads the
   next page, as `vb read` does.
 - **`vb read` shows a task's state under its root:** `task  claimed by claude

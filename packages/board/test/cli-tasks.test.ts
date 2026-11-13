@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { MessageView } from '../src/api/routes.ts'
 import { serve } from './http.ts'
 import { personToken } from './harness.ts'
-import { env, url, useBoard, vb } from './cli-harness.ts'
+import { url, useBoard, vb } from './cli-harness.ts'
 import { asProfile, bo, claimOn, create, deployment, failure, ok, start, task, until } from './cli-tasks-harness.ts'
 
 useBoard()
@@ -296,10 +296,8 @@ describe('vb tasks', () => {
     await ok(['tasks', 'fail', third, 'no credentials'], worker)
     await ok(['tasks', 'reopen', third])
     // What it waits for, changed by its owner: for another task now, then for nothing.
-    const needs = async (id: string, waits: string[]) =>
-      expect((await fetch(`${url}/tasks/${id}/needs`, { method: 'POST', headers: { authorization: `Bearer ${env.BOARD_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ needs: waits }) })).status).toBe(200)
-    await needs(third, [second, first])
-    await needs(third, [])
+    await ok(['tasks', 'needs', third, second, first])
+    await ok(['tasks', 'needs', third, '--none'])
 
     const lines = [
       `#${first}  shown  task created by u_julian`,

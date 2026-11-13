@@ -129,6 +129,14 @@ describe('the embedded CLI', () => {
     expect(await readdir(join(home, 'board', 'claims'))).toEqual([])
     expect(await capture(() => app.run(['tasks', 'embedded', '--state', 'all']))).toEqual({ code: 0, stdout: `#${id}  completed  fix CVE-123 in acme/web         fixed in a1b2c3\n`, stderr: '' })
 
+    // What a task waits for is set there too, and a command cut short names the app's help.
+    const next = (await capture(() => app.run(['tasks', 'create', 'embedded/next', 'review the fix']))).stdout.trim()
+    const first = (await capture(() => app.run(['tasks', 'create', 'embedded/next', 'tag the release']))).stdout.trim()
+    expect(await capture(() => app.run(['tasks', 'needs', next, first]))).toEqual({ code: 0, stdout: `${next} needs #${first}\n`, stderr: '' })
+    expect(await capture(() => app.run(['tasks', 'needs', next]))).toEqual({ code: 2, stdout: '', stderr: 'error: Missing the tasks it waits for now, by ID, or --none for nothing.\n\n  See how to use it:\n    vercel board tasks --help\n' })
+    expect(await capture(() => app.run(['tasks', 'needs', next, '--none']))).toEqual({ code: 0, stdout: `${next} needs nothing\n`, stderr: '' })
+    expect(await capture(() => app.run(['tasks', 'embedded/next']))).toEqual({ code: 0, stdout: `#${next}  ready      review the fix\n#${first}  ready      tag the release\n`, stderr: '' })
+
     // A plan from a file, in as many writes as it takes: one that stops midway names the app's command to finish it.
     const steps = Array.from({ length: 101 }, (_, n) => ({ text: `step ${n}`, ...(n === 100 ? { needs: ['999999'] } : {}) }))
     const plan = join(home, 'plan.json')

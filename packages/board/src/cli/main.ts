@@ -663,6 +663,7 @@ function doing(): string {
       if (a === 'create' && flags['tasks-file'] !== undefined) return `create tasks in ${b ?? 'a channel'}`
       if (a === 'create') return b !== undefined && isMessageRef(b) ? `make ${ref(b)} a task` : `create a task in ${b ?? 'a channel'}`
       if (a === 'renew') return `renew the claim on ${one}`
+      if (a === 'needs') return `change what ${one} needs`
       return `${a} ${one}`
     }
     case 'grants':
@@ -1628,7 +1629,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 }
 
 /** What `tasks` does to a task, by the word after it: any other word is a channel to list. */
-const TASK_VERBS = new Set(['create', 'claim', 'run', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'cancel'])
+const TASK_VERBS = new Set(['create', 'claim', 'run', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'needs', 'cancel'])
 const TASK_STATES = ['waiting', 'ready', 'claimed', 'blocked', 'completed', 'failed', 'canceled']
 
 /** A task's ID as you'd write it: `#812` or `812`. */
@@ -2127,6 +2128,17 @@ async function tasks(args: string[]): Promise<number> {
       else out(profile === undefined ? `unassigned ${messageRef(id)}` : `assigned ${messageRef(id)} to ${profile.toLowerCase()}`)
       return 0
     }
+    case 'needs': {
+      const needs = rest.slice(1).map((need) => taskId(need))
+      if (flags.none && needs.length > 0) throw usage(`Tasks are what ${ref(id)} waits for, and --none for nothing: pass one of them.`)
+      if (!flags.none && needs.length === 0) throw usage('Missing the tasks it waits for now, by ID, or --none for nothing.', { reason: 'missing_arguments' })
+      const task = await board.tasks.needs(id, needs)
+      // What it waits for now, as the board has it: the line `tasks` shows under it, and `tail` when it changes.
+      const now = task.task?.needs ?? []
+      if (flags.json) result({ task, outcome: 'set' })
+      else out(`${messageRef(id)} needs ${now.length ? now.map((need) => ref(need)).join(' ') : 'nothing'}`)
+      return 0
+    }
     default: {
       // cancel
       one(rest[2], 'a task and a reason, quoted')
@@ -2169,6 +2181,8 @@ function taskFailure(code: string, status: number): { class: Failure['class']; m
     case 'invalid_needs':
       // A plan's tasks name each other by key too: what's wrong is in the board's words, under this.
       if (flags['tasks-file'] !== undefined) return { class: 'usage', message: `Can't ${doing()}. A task's needs are tasks you can read, or keys of the plan's own.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
+      // A change of what a task waits for takes what a new task takes, and none that waits for it: the board's words say which.
+      if (command === 'tasks' && args[0] === 'needs') return { class: 'usage', message: `Can't ${doing()}. It waits for tasks you can read, and none that waits for it.`, next: [...read('See what it waits for now'), { instruction: 'Or see the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
       return { class: 'usage', message: `Can't ${doing()}. --needs takes tasks you can read.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
     // A board's own bounds on how much one request looks through, as Vercel's has: less of the tree fits.
     case 'claim_too_wide':
