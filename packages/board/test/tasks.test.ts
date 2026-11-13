@@ -1574,6 +1574,19 @@ describe("the handle's tasks", () => {
     expect((await ada('GET', '/tasks?channel=work')).body.tasks).toHaveLength(2)
   })
 
+  it("claims the next task in a channel whose path is as long as a path may be, and in its subtree", async () => {
+    const { board } = setup()
+    const longest = `work/${'a'.repeat(2043)}`
+    const made = await board.tasks.create(longest, 'deep in the tree')
+    const claim = await board.tasks.claim({ channel: longest })
+    expect(claim?.task.id).toBe(made.task.id)
+    await claim!.release()
+    // With the `/` that names it and what's under it, one character more.
+    expect((await board.tasks.claim({ channel: `${longest}/` }))?.task.id).toBe(made.task.id)
+    // A path longer than any channel's names none.
+    await expect(board.tasks.claim({ channel: `${longest}b/` })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+  })
+
   it('waits for a task that becomes ready while it asks', async () => {
     const { board } = setup()
     vi.useRealTimers()
