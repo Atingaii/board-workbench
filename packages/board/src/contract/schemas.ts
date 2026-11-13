@@ -1,6 +1,8 @@
 import { z } from 'zod'
 
-export const CHANNEL_PATH_MAX = 80
+export const CHANNEL_PATH_MAX = 2048
+/** A grant's channel pattern: a path, or a path and its subtree (`ops/`). */
+export const CHANNEL_PATTERN_MAX = CHANNEL_PATH_MAX + 1
 export const MESSAGE_TEXT_MAX = 10_000
 /** The longest `x-board-can` header the board reads; a schedule keeps its creator's. */
 export const CAN_MAX = 4000
@@ -10,8 +12,16 @@ export const ATTACHMENTS_PER_MESSAGE_MAX = 10
 export const RESERVED_LABEL_PREFIX = 'board.'
 /** The label a task's root wears, with its state as the value. */
 export const TASK_LABEL = 'board.task'
-/** How many tasks one task may wait for. */
+/** How many tasks one task waits for at most, in the log: the local board's limit, which a request's schema leaves to it. */
 export const TASK_NEEDS_MAX = 20
+/**
+ * How many tasks one batch makes at most, on any board. board() refuses more itself: every root goes
+ * through its middleware before a backend sees one, so it takes no more than any backend makes. A
+ * board that holds fewer in a write says so, and `createTasksInChunks` sends this many first.
+ */
+export const TASK_BATCH_MAX = 100
+/** The longest name a batch's task goes by among the batch's others, on the local board. */
+export const TASK_KEY_MAX = 64
 /** The longest result or reason a task keeps: a line or two, with the detail in its thread. */
 export const TASK_NOTE_MAX = 1000
 
@@ -32,6 +42,12 @@ export const storable = (value: string) => !value.includes('\u0000') && value.is
 
 /** `value` as the board keeps it, for what comes in from a platform: without NUL, and a lone surrogate as U+FFFD. */
 export const toStorable = (value: string) => value.replaceAll('\u0000', '').toWellFormed()
+
+/** A message's text as a request sends it: its length is the backend's to judge. */
+export const SentText = z
+  .string()
+  .refine((text) => text.trim().length > 0, 'message text is empty')
+  .refine(storable, 'message text has a NUL character or a lone surrogate')
 
 export const MessageText = z
   .string()
@@ -126,6 +142,15 @@ export const TaskNote = z
   .max(TASK_NOTE_MAX)
   .refine((text) => text.trim().length > 0, 'it is empty')
   .refine(storable, 'it has a NUL character or a lone surrogate')
+
+/** A task's result or reason as a request sends it: its length is the backend's to judge. */
+export const SentTaskNote = z
+  .string()
+  .refine((text) => text.trim().length > 0, 'it is empty')
+  .refine(storable, 'it has a NUL character or a lone surrogate')
+
+/** A hold's kind as a request sends it: its length is the backend's to judge. */
+export const SentTaskHoldKind = z.string().regex(/^[a-z0-9][a-z0-9_.-]*$/, 'a kind is lowercase letters, numbers, and _.-')
 
 /** Why a task is held, as whoever held it names it: `needs_input`, `awaiting_approval`. `edited` is the board's own. */
 /** The kind of the hold the board places itself, when someone who doesn't own a task edits its root: no request holds a task as it. */

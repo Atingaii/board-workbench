@@ -168,6 +168,18 @@ export type TaskOptions = {
 export type NewTaskOptions = TaskOptions & Pick<PostOptions, 'text' | 'labels' | 'noSync' | 'attachments' | 'id'>
 
 /**
+ * One task of several made together: its root's text, labels, `noSync`, and `attachments`, as a
+ * post takes them. `key` is a name for it among the others, and `needs` takes a task's ID, or
+ * `{ key }` for one made with it, before or after it. `for` is the one actor of yours that claims it.
+ */
+export type TaskInBatch = Required<Pick<PostOptions, 'text'>> &
+  Pick<PostOptions, 'labels' | 'noSync' | 'attachments'> & {
+    key?: string
+    needs?: (string | { key: string })[]
+    for?: string | null
+  }
+
+/**
  * What a claim does, each fenced by the claim: once it's over (released, settled, held, taken over,
  * or past its lease), they throw a 409 `claim_lost` and change nothing.
  */
@@ -400,14 +412,26 @@ export function createBoardClient(options: ClientOptions) {
   }
 
   /**
+   * Starts a thread in `channel` for each of `tasks`, as tasks, in one write: all of them or none,
+   * and none shows before all have landed. It answers their roots in the order given. A task waits
+   * for the ones made with it by their `key`. With `id`, a retry answers the tasks the first call
+   * made. A board makes 100 at most, and throws a 400 `batch_too_large` for more, or for more than it
+   * holds in one write: `createTasksInChunks` makes a longer plan, in several.
+   */
+  async function createTasks(channel: string, tasks: TaskInBatch[], opts: { id?: string } = {}): Promise<MessageView[]> {
+    const sent = tasks.map((task) => (task.attachments?.length ? { ...task, attachments: task.attachments.map((file) => (typeof file === 'string' ? file : file.id)) } : task))
+    return (await call<{ tasks: MessageView[] }>('POST', '/tasks/batch', { body: { channel, tasks: sent, ...(opts.id !== undefined ? { id: opts.id } : {}) } })).tasks
+  }
+
+  /**
    * Claims task `target`, or with `{ channel }` the oldest ready task in that channel (`work`) or
    * subtree (`work/`) that has every label in `label`: one assigned to you first, then an
    * unassigned one you own, or whose owner `from` names by ID (400 `invalid_from` for a handle,
    * which several can share). It needs `label` where the task
    * is. A task by ID that can't be claimed throws a 409 (`task_claimed`, `task_waiting`, ...); a
    * channel with nothing ready answers null, after waiting up to `wait` seconds for one. `lease`
-   * is how long you hold it, in seconds: 30 to 3600, the board's default without one. The claim's
-   * `until` says what the board gave.
+   * is how long you hold it, in seconds, the board's default without one: a board says how short
+   * and how long one may be, and the claim's `until` says what it gave.
    */
   async function claimTask(target: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
   async function claimTask(target: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
@@ -581,6 +605,7 @@ export function createBoardClient(options: ClientOptions) {
        */
       list: (query: Omit<TasksQueryInput, 'label'> & { label?: Record<string, string> | string[] } = {}) => call<TasksPage>('GET', `/tasks${queryString(query)}`),
       create: createTask,
+      createMany: createTasks,
       claim: claimTask,
       /** What a claim you hold does, from the `epoch` and `token` it answered: for a process that kept them, as `vb` does between commands. */
       held,
@@ -592,6 +617,12 @@ export function createBoardClient(options: ClientOptions) {
       reopen: (id: string) => taskWrite(id, 'reopen'),
       /** Assigns a task to one of its owner's actors (`<owner>+<profile>`), the only one that claims it then, or with null to anyone who may. */
       assign: (id: string, actor: string | null) => taskWrite(id, 'assign', { for: actor }),
+      /**
+       * Replaces what a task waits for, by their IDs: it waits for those now, and is ready once they've all completed, or
+       * at once with none. For its owner, while no one holds it and it isn't finished. One that would make it wait for
+       * itself, through however many tasks, throws a 400 `invalid_needs`.
+       */
+      needs: (id: string, needs: string[]) => taskWrite(id, 'needs', { needs }),
       /** Cancels a task that hasn't completed, ending any claim. What waits for it keeps waiting. */
       cancel: (id: string, reason: string) => taskWrite(id, 'cancel', { reason }),
     },

@@ -6,15 +6,52 @@ import { LEASES_SESSION, leasesContract, type LeaseEvents } from '../contract/co
 import type { BoardEvent } from '../contract/events.ts'
 import { foldMessages, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
-import { OPEN_TASK_STATES, TASK_LABEL, type TaskState } from '../contract/schemas.ts'
+import { OPEN_TASK_STATES, TASK_BATCH_MAX, TASK_KEY_MAX, TASK_LABEL, TASK_NEEDS_MAX, TASK_NOTE_MAX, TaskHoldKind, type TaskState } from '../contract/schemas.ts'
+import { batchPlan, type BatchNeed } from '../contract/task-batch.ts'
 import { authorize, type Access, type Permission } from './access.ts'
-import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
+import { badRequest, batchTooLarge, forbidden, HttpError, notFound } from './errors.ts'
 import { indexOf, ref, toMessageFilter, view, whoIs } from './feed.ts'
 import type { MessageFilter, ThreadSummary } from '../store/types.ts'
-import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type Events, type Identity, type WriteContext } from './writes.ts'
+import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type AlongEach, type Events, type Identity, type WriteContext } from './writes.ts'
 
-/** The longest lease this board gives, in seconds: what a claim asks for past it comes back as this. */
+/** The shortest and the longest lease this board gives, in seconds. */
+export const LEASE_MIN_S = 30
 export const LEASE_CAP_S = 3600
+/** How many owners one claim takes tasks from on this board, beside its caller. */
+const FROM_MAX = 32
+
+/**
+ * This board's own limits on a task. board() checks a request's shape and leaves how much a
+ * backend holds to the backend, so these are checked here: what's over one is refused as a
+ * misshapen request is, 400 `invalid_request`, before anything is read or written.
+ */
+export const taskLimits = {
+  lease(seconds: number | undefined) {
+    if (seconds !== undefined && !(seconds >= LEASE_MIN_S && seconds <= LEASE_CAP_S)) throw badRequest(`lease: a lease is ${LEASE_MIN_S} to ${LEASE_CAP_S} seconds`)
+  },
+  needs(refs: readonly string[] | undefined) {
+    if (new Set(refs).size > TASK_NEEDS_MAX) throw badRequest(`needs: a task waits for at most ${TASK_NEEDS_MAX} tasks`)
+  },
+  note(what: 'result' | 'reason', note: string | null | undefined) {
+    if (typeof note === 'string' && note.length > TASK_NOTE_MAX) throw badRequest(`${what}: a task's ${what} is at most ${TASK_NOTE_MAX.toLocaleString('en-US')} characters`)
+  },
+  kind(kind: string | undefined) {
+    if (kind !== undefined && !TaskHoldKind.safeParse(kind).success) throw badRequest('kind: a kind is up to 64 lowercase letters, numbers, and _.-')
+  },
+  from(owners: readonly string[] | undefined) {
+    if ((owners?.length ?? 0) > FROM_MAX) throw badRequest(`from: a claim takes tasks from at most ${FROM_MAX} owners`)
+  },
+  /** A batch: how many tasks this board makes in one append, which its sender splits on, and of each what one task holds. */
+  batch(tasks: readonly { key?: string | undefined; needs?: readonly BatchNeed[] | undefined }[]) {
+    if (tasks.length > TASK_BATCH_MAX) throw batchTooLarge(tasks.length, TASK_BATCH_MAX)
+    for (const [at, task] of tasks.entries()) {
+      if (task.key !== undefined && task.key.length > TASK_KEY_MAX) throw badRequest(`tasks.${at}.key: a task's key is at most ${TASK_KEY_MAX} characters`)
+      // Each task it waits for once, however it's named: one of the batch by its key, one that's there by its ID.
+      const waits = new Set(task.needs?.map((need) => (typeof need === 'string' ? `id ${need}` : `key ${need.key}`)))
+      if (waits.size > TASK_NEEDS_MAX) throw badRequest(`tasks.${at}.needs: a task waits for at most ${TASK_NEEDS_MAX} tasks`)
+    }
+  },
+}
 /** A timer that fires this early waits again; any closer counts as on time. */
 const EARLY_MS = 1000
 /** Roots a scan of tasks reads at a time. */
@@ -45,6 +82,9 @@ const lapsed = (task: Task, at: number) => task.state === 'claimed' && Date.pars
 const stateNow = (task: Task, at: number): TaskState => (lapsed(task, at) ? 'ready' : task.state)
 
 const finished = (task: Task) => task.state === 'completed' || task.state === 'failed' || task.state === 'canceled'
+
+/** How many tasks a change of what a task needs walks, behind the ones it adds, to see that none waits for it. */
+export const NEEDS_WALK_MAX = 500
 
 /** Whether `value` is shaped like an ID, `<where it's from>:<who>`, as every principal's and actor's is. What it names is a credential's to say, never a client's. */
 const isId = (value: string) => /^[^\s:]+:\S+$/.test(value)
@@ -268,22 +308,70 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
    * maker hears now. A failed one may yet be reopened, so it's still something to wait for.
    */
   async function needsAt(access: Access, refs: readonly string[] | undefined, position: number, self: number | null): Promise<{ ids: number[]; completed: boolean }> {
-    const invalid = (value: string, why: string) => badRequest(`needs: #${value} ${why}`, 'invalid_needs')
+    const named = namedNeeds(refs, self)
+    return needsAmong(access, named, named.size === 0 ? new Map<number, Message>() : await writes().reads.tables.messagesAt([...named.keys()], position))
+  }
+
+  const invalidNeed = (value: string, why: string) => badRequest(`needs: #${value} ${why}`, 'invalid_needs')
+
+  /** The messages `refs` name, each by the ref that named it: one that names none, or `self`, is refused. */
+  function namedNeeds(refs: readonly string[] | undefined, self: number | null): Map<number, string> {
     const named = new Map<number, string>()
     for (const value of refs ?? []) {
       const id = indexOf(value)
-      if (id === null || id === 0) throw invalid(value, "isn't a task")
-      if (id === self) throw invalid(value, "is the task itself: it can't wait for itself")
+      if (id === null || id === 0) throw invalidNeed(value, "isn't a task")
+      if (id === self) throw invalidNeed(value, "is the task itself: it can't wait for itself")
       named.set(id, value)
     }
-    const ids = [...named.keys()]
-    const found = ids.length === 0 ? new Map<number, Message>() : await writes().reads.tables.messagesAt(ids, position)
+    return named
+  }
+
+  /** The tasks `named` names among `found`, the messages read for them, and whether they've all completed. */
+  function needsAmong(access: Access, named: ReadonlyMap<number, string>, found: ReadonlyMap<number, Message>): { ids: number[]; completed: boolean } {
     for (const [id, value] of named) {
       const need = found.get(id)
-      if (!need?.task || !access.readable(need.channel)) throw invalid(value, "isn't a task")
-      if (need.task.state === 'canceled') throw invalid(value, 'was canceled: it can never complete')
+      if (!need?.task || !access.readable(need.channel)) throw invalidNeed(value, "isn't a task")
+      if (need.task.state === 'canceled') throw invalidNeed(value, 'was canceled: it can never complete')
     }
+    const ids = [...named.keys()]
     return { ids, completed: ids.every((id) => found.get(id)!.task!.state === 'completed') }
+  }
+
+  /**
+   * Refuses prerequisites that would make task `id` wait for itself: one that waits for it already,
+   * through however many tasks. A new task can't be waited for, so only a change of what a task
+   * needs can close a cycle, and only with a prerequisite it adds: one the task keeps was looked
+   * behind when it was added, and whatever came to wait behind it since was checked as it did. So
+   * it walks what the `added` ones need, and what those need, a level a read, and gives up past
+   * `NEEDS_WALK_MAX` tasks: a change it can't check is refused too. One that only drops some walks
+   * nothing.
+   *
+   * It follows no completed task's needs. A task completes by a claim, which it takes only once
+   * all it needs has completed, and neither it nor they change after: completed is for good, and a
+   * finished task's needs can't be changed. So everything behind a completed task has completed,
+   * and task `id`, which hasn't, isn't there. Finished work behind a prerequisite, however much,
+   * is never too much to check. A canceled task is followed: it may have waited for anything.
+   */
+  async function acyclic(id: number, added: readonly number[], position: number) {
+    const invalid = (need: number, why: string) => badRequest(`needs: #${need} ${why}`, 'invalid_needs')
+    /** Each task the walk reached, by the added prerequisite it reached it from. */
+    const from = new Map<number, number>(added.map((need) => [need, need]))
+    for (let level = [...added]; level.length > 0; ) {
+      const found = await writes().reads.tables.messagesAt(level, position)
+      const next: number[] = []
+      for (const at of level) {
+        const task = found.get(at)?.task
+        if (!task || task.state === 'completed') continue
+        for (const need of task.needs) {
+          if (need === id) throw invalid(from.get(at)!, `waits for #${id} already: they would wait for each other`)
+          if (from.has(need)) continue
+          from.set(need, from.get(at)!)
+          next.push(need)
+        }
+      }
+      if (from.size > NEEDS_WALK_MAX) throw invalid(added[0]!, `has more than ${NEEDS_WALK_MAX} tasks behind it and the others: too many to check that none waits for #${id}`)
+      level = next
+    }
   }
 
   /** Whether every task `task` waits for has completed, as of `position`, leaving out `but`, which is completing now. */
@@ -440,6 +528,40 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
         return { epoch: held.epoch, token, until: held.claim.until }
       }
       return { along, claimed }
+    },
+
+    /**
+     * What makes several new threads tasks, to append with their roots, all in one write: for each,
+     * `task.created`, and `task.ready` when it waits only for tasks that were there and have all
+     * completed. A task waits for the batch's others by their `key`, wherever they come in it, and
+     * those are new, so it waits. Refused before anything is read: an assignee that isn't its
+     * owner's, a `key` two tasks have or none has, and tasks that wait for each other.
+     */
+    startingMany(identity: Identity, tasks: readonly { key?: string | undefined; needs?: readonly BatchNeed[] | undefined; for?: string | null | undefined }[]): AlongEach {
+      const { principal, author } = identity
+      const assigned = tasks.map((task) => ownActor(principal.id, task.for))
+      const plan = batchPlan(tasks)
+      if ('problem' in plan) throw badRequest(`needs: ${plan.problem}`, 'invalid_needs')
+      const { inside } = plan
+      const named = tasks.map((task) => namedNeeds((task.needs ?? []).filter((need) => typeof need === 'string'), null))
+      const outside = [...new Set(named.flatMap((needs) => [...needs.keys()]))]
+      return async () => {
+        const position = await writes().reads.tables.position()
+        // What the batch waits for that was there, read once for all its tasks.
+        const found = outside.length === 0 ? new Map<number, Message>() : await writes().reads.tables.messagesAt(outside, position)
+        const needs = named.map((refs) => needsAmong(principal.access, refs, found))
+        const readied = needs.map(({ ids, completed }, at) => ids.length > 0 && completed && inside[at]!.length === 0)
+        return {
+          position,
+          counts: readied.map((ready) => (ready ? 2 : 1)),
+          events: (roots) =>
+            roots.map((root, at): Events => {
+              const about = { id: root.id, thread: root.thread }
+              const waitsFor = [...needs[at]!.ids, ...inside[at]!.map((other) => roots[other]!.id)]
+              return [{ type: 'task.created', payload: { ...about, needs: waitsFor, for: assigned[at]!, by: author } }, ...(readied[at] ? [{ type: 'task.ready' as const, payload: about }] : [])]
+            }),
+        }
+      }
     },
 
     /**
@@ -640,6 +762,34 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       const root = await changeTask(identity, id, (found) => {
         if (finished(found.task)) throw conflict('task_finished', `#${id} is ${found.task.state}`)
         return found.task.for === assigned ? [] : [{ type: 'task.assigned', payload: { id, thread: found.thread, for: assigned, by: identity.author } }]
+      })
+      return { task: await shown(identity, root) }
+    },
+
+    /**
+     * Replaces what a task waits for, for its owner or `manage`, while no one holds it and it isn't
+     * finished. They're checked as a new task's are, and must leave it waiting for no task that
+     * waits for it. It waits for them from this write, and `task.ready` follows in it when they've
+     * all completed; with none it's ready. A held task stays held, and the same set changes nothing.
+     */
+    async needs(identity: Identity, id: number, refs: readonly string[]): Promise<{ task: MessageView }> {
+      const { principal } = identity
+      owns(identity, await taskOf(principal.access, id))
+      const root = await changeTask(identity, id, async (found, position) => {
+        const { task } = found
+        if (finished(task)) throw conflict('task_finished', `#${id} is ${task.state}`)
+        // A claim whose lease ran out is over: its expiry goes first, in the same append.
+        const over = lapsed(task, Date.now())
+        if (task.state === 'claimed' && !over) throw conflict('task_claimed', `#${id} is claimed until ${task.claim!.until}: what it needs changes once no one holds it`)
+        const needs = await needsAt(principal.access, refs, position, id)
+        if (needs.ids.length === task.needs.length && needs.ids.every((need) => task.needs.includes(need))) return []
+        await acyclic(id, needs.ids.filter((need) => !task.needs.includes(need)), position)
+        const about = { id, thread: found.thread }
+        return [
+          ...(over ? [{ type: 'task.expired' as const, payload: { ...about, epoch: task.epoch } }] : []),
+          { type: 'task.needs_changed', payload: { ...about, needs: needs.ids, by: identity.author } },
+          ...(needs.ids.length > 0 && needs.completed && task.state !== 'blocked' ? [{ type: 'task.ready' as const, payload: about }] : []),
+        ]
       })
       return { task: await shown(identity, root) }
     },

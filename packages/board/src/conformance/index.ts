@@ -1,5 +1,5 @@
 import { INBOX_EVENT_ID_MAX, type Explanation, type GrantView, type Me, type MessageView, type RegistrationView } from '../api/routes.ts'
-import { BoardError, type ExplainPrincipal, type TaskOptions } from '../client/client.ts'
+import { BoardError, type ExplainPrincipal, type TaskInBatch, type TaskOptions } from '../client/client.ts'
 import { block } from '../contract/blocks.ts'
 import { canonical } from '../contract/data-schemas.ts'
 import { canText, compileAccess, type Permission } from '../server/access.ts'
@@ -386,6 +386,13 @@ async function task(ctx: Context, text: string, options: TaskOptions & { labels?
   const { labels, ...rest } = options
   const made = await ctx.board.tasks.create(ctx.channel, { text, labels: { ...ctx.labels, ...labels }, noSync: true, ...rest })
   ctx.posted.push(made.task.id)
+  return made
+}
+
+/** Several tasks of this run's, made in one write: the run deletes their roots at the end, as it does a task's. */
+async function taskBatch(ctx: Context, tasks: TaskInBatch[], opts: { id?: string } = {}) {
+  const made = await ctx.board.tasks.createMany(ctx.channel, tasks.map((one) => ({ ...one, labels: ctx.labels, noSync: true })), opts)
+  ctx.posted.push(...made.map((root) => root.id))
   return made
 }
 
@@ -1109,6 +1116,187 @@ const CHECKS: Check[] = [
   },
   {
     group: 'tasks',
+    name: 'changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none',
+    run: async (ctx) => {
+      const { task: done } = await task(ctx, 'conformance: a prerequisite that has completed')
+      await (await ctx.board.tasks.claim(done.id, { lease: 60 })).complete()
+      const { task: open } = await task(ctx, 'conformance: a prerequisite that has not')
+      const { task: root } = await task(ctx, 'conformance: a task whose needs change')
+      const label = [`conformance=${ctx.labels.conformance}`]
+      let { cursor } = await ctx.board.poll({ channel: ctx.channel, label })
+      // A ready task waits again, for one that hasn't completed.
+      const waiting = await ctx.board.tasks.needs(root.id, [open.id])
+      same(waiting.task?.state, 'waiting', 'a ready task, once it needs one that has not completed')
+      same(waiting.labels['board.task'], 'waiting', "its root's board.task")
+      alike(waiting.task?.needs, [open.id], 'what it needs now')
+      await rejects(ctx.board.tasks.claim(root.id), 409, 'task_waiting', 'claiming a task that came to wait')
+      // For ones that have completed, it's ready in the same write, and the same set again changes nothing.
+      const ready = await ctx.board.tasks.needs(root.id, [done.id])
+      same(ready.task?.state, 'ready', 'the task, once it needs only what has completed')
+      alike(ready.task?.needs, [done.id], 'what it needs now')
+      same((await ctx.board.tasks.needs(root.id, [done.id, done.id])).task?.state, 'ready', 'the task, after the same needs again')
+      // With none it's ready at once.
+      await ctx.board.tasks.needs(root.id, [open.id])
+      const none = await ctx.board.tasks.needs(root.id, [])
+      same(none.task?.state, 'ready', 'the task, once it needs nothing')
+      alike(none.task?.needs, [], 'what it needs now')
+      // One held for a person stays held, and stands where what it needs now puts it once the hold is lifted.
+      await ctx.board.tasks.block(root.id, 'conformance: approve?')
+      same((await ctx.board.tasks.needs(root.id, [done.id])).task?.state, 'blocked', 'a held task, once what it needs changed')
+      same((await ctx.board.tasks.unblock(root.id)).task?.state, 'ready', 'the task, unblocked, once what it needs now has completed')
+      const seen: Awaited<ReturnType<Board['poll']>>['events'] = []
+      const changes = () => seen.filter((event) => event.type.startsWith('task.') && event.message?.id === root.id).map((event) => [event.type, event.message?.task?.state])
+      // Its second task.ready is the last of them written.
+      for (const deadline = Date.now() + 10_000; changes().filter(([type]) => type === 'task.ready').length < 2 && Date.now() < deadline; ) {
+        const page = await ctx.board.poll({ channel: ctx.channel, label, after: cursor, wait: 2 })
+        seen.push(...page.events)
+        cursor = page.cursor
+      }
+      alike(
+        changes(),
+        [
+          ['task.needs_changed', 'waiting'],
+          ['task.needs_changed', 'waiting'],
+          ['task.ready', 'ready'],
+          ['task.needs_changed', 'waiting'],
+          ['task.needs_changed', 'ready'],
+          ['task.blocked', 'blocked'],
+          ['task.needs_changed', 'blocked'],
+          ['task.unblocked', 'waiting'],
+          ['task.ready', 'ready'],
+        ],
+        "the changes of a task whose needs changed, with its state after each",
+      )
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'refuses a change of needs that would make a task wait for itself, straight back or through others',
+    run: async (ctx) => {
+      const { task: first } = await task(ctx, 'conformance: the first of a line')
+      const { task: second } = await task(ctx, 'conformance: waits for the first', { needs: [first.id] })
+      const { task: third } = await task(ctx, 'conformance: waits for the second', { needs: [second.id] })
+      await rejects(ctx.board.tasks.needs(first.id, [first.id]), 400, 'invalid_needs', 'a task that would need itself')
+      await rejects(ctx.board.tasks.needs(first.id, [second.id]), 400, 'invalid_needs', 'a task that would need one that waits for it')
+      await rejects(ctx.board.tasks.needs(first.id, [third.id]), 400, 'invalid_needs', 'a task that would need one that waits for it through another')
+      // What a new task can't need, a change can't either.
+      const { task: dropped } = await task(ctx, 'conformance: a prerequisite that was canceled, for a change')
+      await ctx.board.tasks.cancel(dropped.id, 'conformance: not wanted')
+      const plain = await post(ctx, 'conformance: not a task, for a change')
+      await rejects(ctx.board.tasks.needs(first.id, [dropped.id]), 400, 'invalid_needs', 'a task that would need a canceled one')
+      await rejects(ctx.board.tasks.needs(first.id, [plain.id]), 400, 'invalid_needs', "a task that would need a thread that isn't a task")
+      const left = (await ctx.board.thread(first.id)).message.task
+      same(left?.state, 'ready', 'the task, after the refused changes')
+      alike(left?.needs, [], 'what it needs, after the refused changes')
+      // Once the task between them waits for nothing, the same change closes no cycle.
+      await ctx.board.tasks.needs(second.id, [])
+      const moved = await ctx.board.tasks.needs(first.id, [third.id])
+      same(moved.task?.state, 'waiting', 'the task, once it needs one that no longer waits for it')
+      alike(moved.task?.needs, [third.id], 'what it needs now')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'changes what a task needs only while no one holds it and it has not finished',
+    run: async (ctx) => {
+      const { task: other } = await task(ctx, 'conformance: something to wait for')
+      const { task: root } = await task(ctx, 'conformance: a task someone holds, whose needs stay')
+      const claim = await ctx.board.tasks.claim(root.id, { lease: 60 })
+      await rejects(ctx.board.tasks.needs(root.id, [other.id]), 409, 'task_claimed', 'changing what a claimed task needs')
+      const held = (await ctx.board.thread(root.id)).message.task
+      same(held?.state, 'claimed', 'the task, after the refused change')
+      alike(held?.needs, [], 'what it needs, after the refused change')
+      // Released, it's no one's, and the change lands.
+      await claim.release()
+      same((await ctx.board.tasks.needs(root.id, [other.id])).task?.state, 'waiting', 'the task, once released and waiting for another')
+      await ctx.board.tasks.needs(root.id, [])
+      // A finished task's needs stay as they were: completed, failed, or canceled.
+      await (await ctx.board.tasks.claim(root.id, { lease: 60 })).complete()
+      await rejects(ctx.board.tasks.needs(root.id, [other.id]), 409, 'task_finished', 'changing what a completed task needs')
+      const { task: failed } = await task(ctx, 'conformance: a task that fails, whose needs stay')
+      await (await ctx.board.tasks.claim(failed.id, { lease: 60 })).fail('conformance: not this time')
+      await rejects(ctx.board.tasks.needs(failed.id, [other.id]), 409, 'task_finished', 'changing what a failed task needs')
+      const { task: dropped } = await task(ctx, 'conformance: a task that is canceled, whose needs stay')
+      await ctx.board.tasks.cancel(dropped.id, 'conformance: not wanted')
+      await rejects(ctx.board.tasks.needs(dropped.id, [other.id]), 409, 'task_finished', 'changing what a canceled task needs')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once',
+    run: async (ctx) => {
+      const { task: done } = await task(ctx, 'conformance: a prerequisite that has completed')
+      await (await ctx.board.tasks.claim(done.id, { lease: 60 })).complete()
+      const { task: open } = await task(ctx, 'conformance: a prerequisite that has not')
+      const id = `conformance-batch-${ctx.labels.conformance}`
+      const plan: TaskInBatch[] = [
+        { key: 'review', text: 'conformance: batched, waits for the one after it', needs: [{ key: 'fix' }] },
+        { key: 'fix', text: 'conformance: batched, waits for nothing' },
+        { text: 'conformance: batched, waits for one that has completed', needs: [done.id] },
+        { text: 'conformance: batched, waits for one that has not, and for one of the batch', needs: [open.id, { key: 'fix' }] },
+      ]
+      const made = await taskBatch(ctx, plan, { id })
+      alike(made.map((root) => root.text), plan.map((one) => one.text), "a batch's tasks, in the order it gave them")
+      const [review, fix, after, both] = made as [MessageView, MessageView, MessageView, MessageView]
+      for (const root of made) isRef(root.id, "a batched task's id")
+      same(new Set(made.map((root) => root.id)).size, made.length, "the batch's different IDs")
+      same(fix.task?.state, 'ready', 'a batched task that needs nothing')
+      same(fix.task?.owner, ctx.me.principal, "a batched task's owner")
+      same(fix.labels['board.task'], 'ready', "its root's board.task")
+      same(review.task?.state, 'waiting', 'a batched task that needs a later one of the batch')
+      alike(review.task?.needs, [fix.id], 'what it needs, by the ID the batch gave that task')
+      same(after.task?.state, 'ready', 'a batched task whose needs were all there and have completed')
+      alike(after.task?.needs, [done.id], 'what it needs')
+      same(both.task?.state, 'waiting', 'a batched task that needs one of the batch and one that has not completed')
+      alike(both.task?.needs?.slice().sort(), [open.id, fix.id].sort(), 'what it needs')
+      // Each is the thread it reads as, and they list in the order given.
+      same((await ctx.board.thread(review.id)).message.task?.state, 'waiting', 'a batched task, read as its thread')
+      const mine = async () => (await ctx.board.tasks.list({ channel: ctx.channel, label: ctx.labels, state: 'all', limit: 500 })).tasks.map((listed) => listed.message).filter((root) => root.text.startsWith('conformance: batched,'))
+      alike((await mine()).map((root) => root.id), made.map((root) => root.id), 'the batch, listed')
+      // The same id again answers the tasks it made, and makes none. With other tasks, it's another write's.
+      const again = await ctx.board.tasks.createMany(ctx.channel, plan.map((one) => ({ ...one, labels: ctx.labels, noSync: true })), { id })
+      alike(again.map((root) => root.id), made.map((root) => root.id), 'the tasks a retry with the same id answers')
+      await rejects(taskBatch(ctx, [...plan, { text: 'conformance: batched, one more under the same id' }], { id }), 409, 'duplicate_id', 'another batch under the same id')
+      // As many tasks but other ones is another request too: the id names what was asked for, not how much of it.
+      const others = plan.map((one, at) => (at === 1 ? { ...one, text: 'conformance: batched, another plan of the same size under the same id' } : one))
+      await rejects(taskBatch(ctx, others, { id }), 409, 'duplicate_id', 'another plan of the same size under the same id')
+      same((await mine()).length, made.length, 'the tasks made under that id')
+      // One of the batch that completes readies what waited only for it, as any task does.
+      await (await ctx.board.tasks.claim(fix.id, { lease: 60 })).complete()
+      await soon(async () => (await taskState(ctx, review.id)) === 'ready', 'a batched task should be ready once the one it waited for completed')
+      same(await taskState(ctx, both.id), 'waiting', 'the batched task that still waits for one that has not completed')
+    },
+  },
+  {
+    group: 'tasks',
+    name: 'makes none of a batch when one of its tasks can not be made, wherever it comes in it',
+    run: async (ctx) => {
+      const { task: gone } = await task(ctx, 'conformance: a prerequisite that was canceled')
+      await ctx.board.tasks.cancel(gone.id, 'conformance: not wanted')
+      const fine: TaskInBatch[] = [
+        { key: 'a', text: 'conformance: never made, first of a refused batch' },
+        { text: 'conformance: never made, second of a refused batch', needs: [{ key: 'a' }] },
+      ]
+      const refused = (last: TaskInBatch[], what: string) => rejects(taskBatch(ctx, [...fine, ...last]), 400, 'invalid_needs', what)
+      await refused([{ text: 'conformance: never made, waits for no one', needs: [{ key: 'nobody' }] }], 'a batch with a task that needs a key no task of it has')
+      await refused([{ key: 'a', text: 'conformance: never made, a second a' }], 'a batch with a key two of its tasks have')
+      await refused([{ key: 'itself', text: 'conformance: never made, waits for itself', needs: [{ key: 'itself' }] }], 'a batch with a task that needs itself')
+      await refused(
+        [
+          { key: 'x', text: 'conformance: never made, waits for y', needs: [{ key: 'y' }] },
+          { key: 'y', text: 'conformance: never made, waits for x', needs: [{ key: 'x' }] },
+        ],
+        'a batch with tasks that wait for each other',
+      )
+      await refused([{ text: 'conformance: never made, waits for a canceled one', needs: [gone.id] }], 'a batch whose last task needs one that was canceled')
+      // More than a batch makes is refused by the handle this runs through, before the board is asked: its own tests check that.
+      const { tasks } = await ctx.board.tasks.list({ channel: ctx.channel, label: ctx.labels, state: 'all', limit: 500 })
+      const left = tasks.filter((listed) => listed.message.text.startsWith('conformance: never made'))
+      check(left.length === 0, `a refused batch should make none of its tasks, and these are there: ${show(left.map((listed) => listed.message.text))}`)
+    },
+  },
+  {
+    group: 'tasks',
     name: 'holds a task for a person, by its owner or its claim, and gives it back when unblocked',
     run: async (ctx) => {
       const { task: root } = await task(ctx, 'conformance: a task to hold for a person')
@@ -1169,6 +1357,7 @@ const CHECKS: Check[] = [
       await rejects(profile.tasks.assign(principals.id, actor.actor), 403, 'task_not_owned', "assigning its principal's task to itself, by a profile")
       await rejects(profile.tasks.block(principals.id, 'conformance: not its own'), 403, 'task_not_owned', "holding its principal's task, by a profile")
       await rejects(profile.tasks.cancel(principals.id, 'conformance: not its own'), 403, 'task_not_owned', "canceling its principal's task, by a profile")
+      await rejects(profile.tasks.needs(principals.id, []), 403, 'task_not_owned', "changing what its principal's task needs, by a profile")
       // What it made is its own to change, and no other profile's, which shares its credential.
       const { task: own } = await profile.tasks.create(ctx.channel, { text: "conformance: a profile's own task", labels: ctx.labels, noSync: true })
       ctx.posted.push(own.id)

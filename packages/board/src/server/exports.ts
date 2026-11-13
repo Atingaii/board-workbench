@@ -26,10 +26,12 @@ export {
   type ReplyOptions,
   type ScheduleOptions,
   type ScheduleTiming,
+  type TaskInBatch,
   type TaskOptions,
   type UploadInput,
   type WaitOptions,
 } from '../client/client.ts'
+export { createTasksInChunks, TasksInChunksError, type TaskBatches } from '../client/chunks.ts'
 export type { Attachment } from '../contract/schemas.ts'
 export { block } from '../contract/blocks.ts'
 export type { EventsOptions, EventsState, ExplainPrincipal } from '../client/client.ts'

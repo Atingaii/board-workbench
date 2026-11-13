@@ -154,6 +154,12 @@ export const boardEvents = {
     'task.created': z.object({ ...Task, needs: z.array(MessageId).max(TASK_NEEDS_MAX), for: ActorId.nullable(), by: Author }),
     /** Only actor `for` claims it now, or with null, anyone who may. */
     'task.assigned': z.object({ ...Task, for: ActorId.nullable(), by: Author }),
+    /**
+     * It waits for `needs` now, in place of what it waited for. As from `task.created`, it waits
+     * while it has any, until `task.ready` says they've all completed, and with none it's ready. One
+     * that's held stays held.
+     */
+    'task.needs_changed': z.object({ ...Task, needs: z.array(MessageId).max(TASK_NEEDS_MAX), by: Author }),
     /** (server) Every task it needs has completed. */
     'task.ready': z.object(Task),
     /** (server) `by` holds it until `until`. `token` is the SHA-256 of the claim's secret, hex: no view shows it. */

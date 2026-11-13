@@ -120,6 +120,11 @@ describe('vercel()', () => {
       'tasks: refuses a prerequisite that was canceled, which can never complete, and takes one that failed': 'passed',
       'tasks: lists the tasks that wait for one in the channel a list names, or its subtree, and no other': 'passed',
       'tasks: says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed': 'passed',
+      'tasks: changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none': 'passed',
+      'tasks: refuses a change of needs that would make a task wait for itself, straight back or through others': 'passed',
+      'tasks: changes what a task needs only while no one holds it and it has not finished': 'passed',
+      'tasks: makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once': 'passed',
+      'tasks: makes none of a batch when one of its tasks can not be made, wherever it comes in it': 'passed',
       'tasks: holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'passed',
       'tasks: keeps a task assigned to a profile for that actor alone': 'passed',
       'tasks: lets a profile change only the tasks it made, and its principal all of them': 'passed',
@@ -233,10 +238,17 @@ describe('vercel()', () => {
     expect((await julian.thread(root)).replies.map((m) => m.id)).toEqual([landed.id])
   })
 
-  it('refuses text over the limit as text_too_long before it reaches the API, on a post, a reply, and an edit', async () => {
+  it("leaves a channel path's length to Vercel's API: a path the board takes but the API doesn't fails with the API's error", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
-    const tooLong = { status: 400, code: 'text_too_long', hint: expect.stringMatching(/attach it to a message/) }
+    await julian.post(`ops/${'a'.repeat(76)}`, 'fits')
+    await expect(julian.post(`ops/${'a'.repeat(77)}`, 'too long for the API')).rejects.toMatchObject({ status: 400, code: 'invalid_channel_name' })
+  })
+
+  it("leaves a message's length to Vercel's API: text over its limit fails with the API's error, on a post, a reply, and an edit", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const tooLong = { status: 400, code: 'invalid_message' }
     await expect(julian.post('dev', 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)
     const { id: root } = await julian.post('dev', 'hi')
     await expect(julian.reply(root, 'x'.repeat(10_001))).rejects.toMatchObject(tooLong)

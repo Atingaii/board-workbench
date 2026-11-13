@@ -107,8 +107,9 @@ function history(seed: number, length: number): BoardEvent[] {
       const stale = (root: { id: number; thread: string }) => {
         const about = { id: root.id, thread: root.thread }
         const epoch = r.pick([1, 2, 3])
-        const kind = r.pick(['created', 'ready', 'claimed', 'renewed', 'released', 'expired', 'completed', 'failed', 'blocked', 'unblocked', 'canceled', 'reopened', 'assigned'] as const)
+        const kind = r.pick(['created', 'ready', 'claimed', 'renewed', 'released', 'expired', 'completed', 'failed', 'blocked', 'unblocked', 'canceled', 'reopened', 'assigned', 'needs'] as const)
         if (kind === 'created') push('task.created', { ...about, needs: [], for: null, by: author })
+        else if (kind === 'needs') push('task.needs_changed', { ...about, needs: r.chance(0.5) ? [] : [r.pick(posted).id], by: author })
         else if (kind === 'ready') push('task.ready', about)
         else if (kind === 'claimed') push('task.claimed', { ...about, epoch, until, token: 'b'.repeat(64), by: author })
         else if (kind === 'renewed') push('task.renewed', { ...about, epoch, until, by: author })
@@ -129,24 +130,31 @@ function history(seed: number, length: number): BoardEvent[] {
         const root = known.length && r.chance(0.75) ? r.pick(known) : r.pick(roots)
         const about = { id: root.id, thread: root.thread }
         const task = tasks.get(root.id)
+        const others = known.filter((p) => p.id !== root.id)
+        /** What it waits for changes, to another task or to none: it waits again with any, as the fold has it, unless it's held. */
+        const rewire = (held = false) => {
+          const needs = others.length && r.chance(0.6) ? [r.pick(others).id] : []
+          push('task.needs_changed', { ...about, needs, by: author })
+          return held ? ('blocked' as const) : needs.length ? ('waiting' as const) : ('ready' as const)
+        }
         if (!task) {
-          const others = known.filter((p) => p.id !== root.id)
           const needs = others.length && r.chance(0.3) ? [r.pick(others).id] : []
           push('task.created', { ...about, needs, for: r.chance(0.2) ? r.pick(AUTHORS).actor : null, by: author })
           tasks.set(root.id, { state: needs.length ? 'waiting' : 'ready', epoch: 0 })
         } else if (task.state === 'waiting') {
-          const kind = r.pick(['ready', 'ready', 'blocked', 'canceled'] as const)
+          const kind = r.pick(['ready', 'ready', 'blocked', 'canceled', 'needs'] as const)
           if (kind === 'ready') push('task.ready', about)
           else if (kind === 'blocked') push('task.blocked', { ...about, kind: 'needs_input', reason: text(), by: author })
-          else push('task.canceled', { ...about, reason: text(), by: author })
-          task.state = kind
+          else if (kind === 'canceled') push('task.canceled', { ...about, reason: text(), by: author })
+          task.state = kind === 'needs' ? rewire() : kind
         } else if (task.state === 'ready') {
-          const kind = r.pick(['claimed', 'claimed', 'claimed', 'claimed', 'blocked', 'canceled', 'assigned'] as const)
+          const kind = r.pick(['claimed', 'claimed', 'claimed', 'claimed', 'blocked', 'canceled', 'assigned', 'needs'] as const)
           if (kind === 'claimed') push('task.claimed', { ...about, epoch: ++task.epoch, until, token: 'a'.repeat(64), by: author })
           else if (kind === 'blocked') push('task.blocked', { ...about, kind: null, reason: text(), by: author })
           else if (kind === 'canceled') push('task.canceled', { ...about, reason: text(), by: author })
-          else push('task.assigned', { ...about, for: r.chance(0.5) ? r.pick(AUTHORS).actor : null, by: author })
-          if (kind !== 'assigned') task.state = kind
+          else if (kind === 'assigned') push('task.assigned', { ...about, for: r.chance(0.5) ? r.pick(AUTHORS).actor : null, by: author })
+          if (kind === 'needs') task.state = rewire()
+          else if (kind !== 'assigned') task.state = kind
         } else if (task.state === 'claimed') {
           const { epoch } = task
           const kind = r.pick(['renewed', 'released', 'expired', 'completed', 'completed', 'failed', 'failed', 'blocked', 'canceled'] as const)
@@ -159,7 +167,8 @@ function history(seed: number, length: number): BoardEvent[] {
           else push('task.canceled', { ...about, reason: text(), by: author })
           if (kind !== 'renewed') task.state = kind === 'released' || kind === 'expired' ? 'ready' : kind
         } else if (task.state === 'blocked') {
-          if (r.chance(0.7)) {
+          if (r.chance(0.2)) task.state = rewire(true)
+          else if (r.chance(0.7)) {
             push('task.unblocked', { ...about, by: author })
             task.state = 'ready'
           } else {
@@ -351,7 +360,7 @@ function conformance(open: () => Promise<MessageTables>) {
   it('keep each task on its root as the full-state fold does, in every state a task has', async () => {
     const seen = new Set<string>()
     // Three histories that between them leave tasks in every state: one alone reaches five or six.
-    for (const seed of [2, 3, 7]) {
+    for (const seed of [2, 3, 13]) {
       const events = history(seed, 400)
       const tables = await applied(events)
       const { messages } = fold(events)
@@ -371,6 +380,9 @@ function conformance(open: () => Promise<MessageTables>) {
       expect(labeled).toEqual(tasks.filter((m) => !m.deleted).map((m) => m.id).sort((a, b) => a - b))
       // Some were claimed more than once, so a later epoch's writes were folded too.
       expect(Math.max(...tasks.map((m) => m.task!.epoch)), `history ${seed}`).toBeGreaterThanOrEqual(2)
+      // And some came to wait for other tasks than they were made with, or for none.
+      const made = new Map(events.flatMap((event) => (event.type === 'task.created' ? [[event.payload.id, JSON.stringify(event.payload.needs)] as const] : [])))
+      expect(tasks.filter((m) => made.get(m.id) !== JSON.stringify(m.task!.needs)).length, `history ${seed}`).toBeGreaterThanOrEqual(1)
       await tables.close()
     }
     expect([...seen].sort()).toEqual(['blocked', 'canceled', 'claimed', 'completed', 'failed', 'ready', 'waiting'])

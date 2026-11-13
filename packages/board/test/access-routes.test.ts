@@ -108,6 +108,17 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: '/tasks', body: { re: secret.root }, status: 404 },
     { method: 'POST', path: '/tasks', body: { re: open.root }, status: 403 },
   ],
+  createTasks: ({ secret }) => [
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'secret', tasks: [{ text: 'hi' }] }, status: 403 },
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'open', tasks: [{ text: 'hi' }, { text: 'and this' }] }, status: 403 },
+    // What it would wait for is checked only once it may post there: a task it can't read stays out of sight.
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'open', tasks: [{ text: 'hi', needs: [String(secret.task)] }] }, status: 403 },
+  ],
+  // Only your own batch, by the id you gave it.
+  createdTasks: () => [
+    { method: 'GET', path: '/tasks/batch/secret-plan', status: 404 },
+    { method: 'GET', path: '/tasks/batch/nothing', status: 404 },
+  ],
   claimReadyTask: () => [
     { method: 'POST', path: '/tasks/claim', body: { channel: 'secret' }, status: 403 },
     { method: 'POST', path: '/tasks/claim', body: { channel: 'secret/' }, status: 403 },
@@ -150,6 +161,12 @@ const WALK: Record<RouteName, Walk> = {
   assignTask: ({ secret, open }) => [
     { method: 'POST', path: `/tasks/${secret.task}/assign`, body: { for: null }, status: 404 },
     { method: 'POST', path: `/tasks/${open.task}/assign`, body: { for: null }, status: 403 },
+  ],
+  setTaskNeeds: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/needs`, body: { needs: [] }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/needs`, body: { needs: [] }, status: 403 },
+    // What it would wait for is checked only once it's the caller's to change: a task it can't read stays out of sight.
+    { method: 'POST', path: `/tasks/${open.task}/needs`, body: { needs: [secret.task] }, status: 403 },
   ],
   cancelTask: ({ secret, open }) => [
     { method: 'POST', path: `/tasks/${secret.task}/cancel`, body: { reason: 'mine now' }, status: 404 },
@@ -263,6 +280,9 @@ async function setup() {
   // A task in each, in a thread of its own, held by a claim: what the walker must neither see, take, nor settle.
   const task = (await keeper('POST', '/tasks', { channel: 'secret', text: 'hush, a task', labels: { private: 'yes' }, claim: true })).body.task.id
   const openTask = (await host('POST', '/tasks', { channel: 'open', text: 'hello, a task', claim: true })).body.task.id
+  // And a batch of them under an id, which finds it again for whoever made it, and no one else.
+  expect((await keeper('POST', '/tasks/batch', { channel: 'secret', id: 'secret-plan', tasks: [{ text: 'hush, a plan', labels: { private: 'yes' } }] })).status).toBe(201)
+  expect((await keeper('GET', '/tasks/batch/secret-plan')).body.tasks).toMatchObject([{ text: 'hush, a plan' }])
   const fixture: Fixture = { secret: { root, reply, schedule, file, task }, open: { root: openRoot, schedule: openSchedule, task: openTask } }
   return { board, fixture, outsider: caller(board.fetch, await workflowToken()) }
 }

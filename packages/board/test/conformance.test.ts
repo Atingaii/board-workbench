@@ -171,7 +171,7 @@ describe('the conformance kit', () => {
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
     expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
-    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 18 }, () => 'passed'))
+    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 23 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
     // Every task it made went with its root: none is left open, and none still wears a state.
@@ -227,6 +227,25 @@ describe('the conformance kit', () => {
     }
     expect(owns(await conformance(await clientOf(strict), { withHeaders: withHeaders(board.fetch) }))).toMatchObject({ status: 'failed', detail: expect.stringContaining('only the author can edit a message') })
   })
+
+  it('fails a board that takes a change of what a task needs and changes nothing', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    // It answers the task as it is, whatever it was asked to wait for.
+    const deaf: Fetch = async (request) => {
+      const { pathname } = new URL(request.url)
+      const changing = request.method === 'POST' ? /\/tasks\/([^/]+)\/needs$/.exec(pathname) : null
+      if (!changing) return board.fetch(request)
+      const read = await board.fetch(new Request(`${BOARD_URL}/messages/${changing[1]}`, { headers: request.headers }))
+      return Response.json({ task: (await read.json()).message })
+    }
+    const report = await conformance(await clientOf(deaf))
+    const failed = report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
+    expect(failed).toEqual([
+      ['changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none', 'a ready task, once it needs one that has not completed: expected "waiting", got "ready"'],
+      ['refuses a change of needs that would make a task wait for itself, straight back or through others', 'a task that would need itself: expected 400 invalid_needs, and it succeeded'],
+      ['changes what a task needs only while no one holds it and it has not finished', 'changing what a claimed task needs: expected 409 task_claimed, and it succeeded'],
+    ])
+  }, 60_000)
 
   it("fails a board that answers a create under a reply's ID with the task its thread is", async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
@@ -463,7 +482,7 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(taskless))
     expect(report.ok).toBe(true)
     const tasks = report.checks.filter((check) => check.group === 'tasks')
-    expect(tasks).toHaveLength(18)
+    expect(tasks).toHaveLength(23)
     // The one that needs no task route is about labels, which a board has either way.
     expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
     expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
@@ -493,6 +512,8 @@ describe('the conformance kit', () => {
         'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed',
         expect.stringContaining('got [["task.created","ready"],["task.claimed","claimed"],["task.blocked","blocked"],["task.unblocked","ready"]]'),
       ],
+      // Nothing was made to wait for another, so no change closes a cycle.
+      ['refuses a change of needs that would make a task wait for itself, straight back or through others', 'a task that would need one that waits for it: expected 400 invalid_needs, and it succeeded'],
       ['shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token', 'the feed should show the task become ready, within a few seconds'],
     ])
     // One that gives every claim its own default lease, whatever it asked for.
@@ -520,6 +541,101 @@ describe('the conformance kit', () => {
     // A board that takes a write under board. can't be played here: the handle the kit runs through
     // is a board() too, which refuses one before any request leaves it. The routes' own refusal is
     // checked where requests reach the board with no handle in front (test/tasks.test.ts).
+  }, 60_000)
+
+  it("fails a board that gets a batch of tasks wrong: one that makes them in turn, one that keeps part of a batch it refuses, one that forgets a batch's id, two that take an id for other tasks, one that drops what its tasks wait for, and one that answers out of order", async () => {
+    const BATCH = 'makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once'
+    const ATOMIC = 'makes none of a batch when one of its tasks can not be made, wherever it comes in it'
+    const failed = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
+    const batching = (request: Request) => request.method === 'POST' && new URL(request.url).pathname.endsWith('/tasks/batch')
+    type Sent = { channel: string; id?: string; tasks: { key?: string; text: string; needs?: (string | { key: string })[] }[] }
+    // A board that makes a batch's tasks in turn, each with what makes one task: a task that needs a later one can't be
+    // made, and it never looks at how the batch's tasks name each other.
+    const turns = testBoard({ scheduler: fakeQueue().scheduler })
+    const inTurn: Fetch = async (request) => {
+      if (!batching(request)) return turns.fetch(request)
+      const { channel, tasks } = (await request.json()) as Sent
+      const made = new Map<string, string>()
+      const roots: unknown[] = []
+      for (const { key, needs, ...task } of tasks) {
+        const waits = (needs ?? []).map((need) => (typeof need === 'string' ? need : (made.get(need.key) ?? '999999')))
+        const answer = await turns.fetch(new Request(`${BOARD_URL}/tasks`, { method: 'POST', headers: request.headers, body: JSON.stringify({ channel, ...task, ...(waits.length ? { needs: waits } : {}) }) }))
+        if (!answer.ok) return answer
+        const { task: root } = (await answer.json()) as { task: { id: string } }
+        if (key !== undefined) made.set(key, root.id)
+        roots.push(root)
+      }
+      return Response.json({ tasks: roots }, { status: 201 })
+    }
+    expect(failed(await conformance(await clientOf(inTurn)))).toEqual([
+      [BATCH, "needs: #999999 isn't a task"],
+      [ATOMIC, 'a batch with a key two of its tasks have: expected 400 invalid_needs, and it succeeded'],
+    ])
+    // One that refuses what it should, with the batch's first task already written.
+    const partly = testBoard({ scheduler: fakeQueue().scheduler })
+    const partial: Fetch = async (request) => {
+      if (!batching(request)) return partly.fetch(request)
+      const sent = (await request.clone().json()) as Sent
+      const response = await partly.fetch(request)
+      if (response.status === 400) {
+        const { key: _key, needs: _needs, ...first } = sent.tasks[0]!
+        await partly.fetch(new Request(`${BOARD_URL}/tasks`, { method: 'POST', headers: request.headers, body: JSON.stringify({ channel: sent.channel, ...first }) }))
+      }
+      return response
+    }
+    expect(failed(await conformance(await clientOf(partial)))).toEqual([
+      [ATOMIC, expect.stringMatching(/^a refused batch should make none of its tasks, and these are there: \["conformance: never made, first of a refused batch",/)],
+    ])
+    // One that drops a batch's id: a retry makes its tasks again.
+    const forgetful = testBoard({ scheduler: fakeQueue().scheduler })
+    const noId: Fetch = async (request) => {
+      if (!batching(request)) return forgetful.fetch(request)
+      const { id: _id, ...body } = (await request.json()) as Sent
+      return forgetful.fetch(new Request(request, { body: JSON.stringify(body) }))
+    }
+    expect(failed(await conformance(await clientOf(noId)))).toEqual([[BATCH, expect.stringMatching(/^the tasks a retry with the same id answers: expected \[.+\], got \[.+\]$/)]])
+    // One that finds a batch by its id whatever is asked under it: other tasks under the id get the first ones back.
+    const careless = testBoard({ scheduler: fakeQueue().scheduler })
+    const byIdAlone: Fetch = async (request) => {
+      const url = new URL(request.url)
+      if (request.method !== 'GET' || !/\/tasks\/batch\/[^/]+$/.test(url.pathname)) return careless.fetch(request)
+      url.searchParams.delete('request')
+      return careless.fetch(new Request(url, request))
+    }
+    expect(failed(await conformance(await clientOf(byIdAlone)))).toEqual([[BATCH, 'another batch under the same id: expected 409 duplicate_id, and it succeeded']])
+    // And one that knows a batch by its id and its size: as many other tasks under the id get the first ones back.
+    const counting = testBoard({ scheduler: fakeQueue().scheduler })
+    const first = new Map<string, Sent>()
+    const bySize: Fetch = async (request) => {
+      // It has no way to ask whether a batch landed: every batch is sent to be made.
+      if (request.method === 'GET' && /\/tasks\/batch\/[^/]+$/.test(new URL(request.url).pathname)) return Response.json({ error: { code: 'batch_not_found', message: 'no batch of yours has that id' } }, { status: 404 })
+      if (!batching(request)) return counting.fetch(request)
+      const body = (await request.json()) as Sent
+      const before = body.id !== undefined ? first.get(body.id) : undefined
+      if (body.id !== undefined && !before) first.set(body.id, body)
+      return counting.fetch(new Request(request, { body: JSON.stringify(before && before.tasks.length === body.tasks.length ? before : body) }))
+    }
+    expect(failed(await conformance(await clientOf(bySize)))).toEqual([[BATCH, 'another plan of the same size under the same id: expected 409 duplicate_id, and it succeeded']])
+    // One whose batches drop what each task waits for: every one is ready as it's made, and nothing about them is refused.
+    const flat = testBoard({ scheduler: fakeQueue().scheduler })
+    const noNeeds: Fetch = async (request) => {
+      if (!batching(request)) return flat.fetch(request)
+      const body = (await request.json()) as Sent
+      return flat.fetch(new Request(request, { body: JSON.stringify({ ...body, tasks: body.tasks.map(({ needs: _needs, ...task }) => task) }) }))
+    }
+    expect(failed(await conformance(await clientOf(noNeeds)))).toEqual([
+      [BATCH, 'a batched task that needs a later one of the batch: expected "waiting", got "ready"'],
+      [ATOMIC, 'a batch with a task that needs a key no task of it has: expected 400 invalid_needs, and it succeeded'],
+    ])
+    // One that answers them newest first.
+    const backwards = testBoard({ scheduler: fakeQueue().scheduler })
+    const reversed: Fetch = async (request) => {
+      const response = await backwards.fetch(request)
+      if (!batching(request) || !response.ok) return response
+      const body = (await response.json()) as { tasks: unknown[] }
+      return Response.json({ tasks: body.tasks.reverse() }, { status: response.status })
+    }
+    expect(failed(await conformance(await clientOf(reversed)))).toEqual([[BATCH, expect.stringMatching(/^a batch's tasks, in the order it gave them: expected \["conformance: batched, waits for the one after it",/)]])
   }, 60_000)
 
   it('leaves the grants as it found them as a project, which a grant keeps in what it closes, and as a run no grant could keep in, which skips closing', async () => {

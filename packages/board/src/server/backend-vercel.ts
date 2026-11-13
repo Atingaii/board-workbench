@@ -295,8 +295,9 @@ const SANDBOX_ROUTES: readonly SandboxRoute[] = [
 const SANDBOX_TASK_ROUTES: readonly SandboxRoute[] = [
   { method: 'GET', path: '/tasks' },
   { method: 'POST', path: '/tasks' },
+  { method: 'POST', path: '/tasks/batch' },
   { method: 'POST', path: '/tasks/claim' },
-  ...['claim', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'cancel'].map((change) => ({ method: 'POST', path: `/tasks/:task/${change}` })),
+  ...['claim', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'needs', 'cancel'].map((change) => ({ method: 'POST', path: `/tasks/:task/${change}` })),
 ]
 
 /**
@@ -453,6 +454,7 @@ const noTasks = () => new HttpError(501, 'no_tasks', 'this board keeps no tasks'
 const TASK_EVENTS: Record<string, BoardEventView['type']> = {
   'task.made': 'task.created',
   'task.assigned': 'task.assigned',
+  'task.needs_changed': 'task.needs_changed',
   'task.ready': 'task.ready',
   'task.claimed': 'task.claimed',
   'task.renewed': 'task.renewed',
@@ -2167,18 +2169,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }))
     const task = change.task ?? found?.message.task
     if (!found || !task || found.message.sequence !== 1) return null
-    // The root's labels as the change left them, and as it found them: a deleted root wears none.
-    const now = labelsOf(found.message)
-    const wearing = (state: string | undefined) => {
-      const { [TASK_LABEL]: _state, ...rest } = now
-      return found.message.deletedAt !== undefined || state === undefined ? rest : { ...rest, [TASK_LABEL]: state }
+    // The root's labels with `board.task` as `state`: its own as the API keeps them, a deleted root's too.
+    const wearing = (own: Labels, state: string | undefined) => {
+      const { [TASK_LABEL]: _state, ...rest } = own
+      return state === undefined ? rest : { ...rest, [TASK_LABEL]: state }
     }
     const moved = change.labels?.[TASK_LABEL]
     // The change is about the root, whose labels its thread carries too.
     const as = (labels: Labels) => ({ message: { ...found.message, task, labels }, thread: { ...found.thread, labels } })
-    const after = as(wearing(task.state))
+    // What it's shown as: the root as it is, and a deleted root wears no labels.
+    const after = as(found.message.deletedAt !== undefined ? {} : wearing(labelsOf(found.message), task.state))
+    // What it's matched as: the root as the change left it, and as it found it. The cancel a root's
+    // delete brings found it wearing its labels and its state, as on a board that writes the cancel first.
+    const kept: Labels = { ...found.message.labels }
+    const then = [as(wearing(kept, task.state)), ...(moved ? [as(wearing(kept, moved.from))] : [])]
     let matched = false
-    for (const { message, thread } of moved ? [after, as(wearing(moved.from))] : [after]) matched ||= await matches(filters, message, thread, narrow)
+    for (const { message, thread } of then) matched ||= await matches(filters, message, thread, narrow)
     if (!matched) return null
     const message = await view(who, after.message, channel)
     const by = authorOf(change.actor)
@@ -2191,6 +2197,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         break
       case 'task.assigned':
         payload = { ...base, for: task.for, by }
+        break
+      case 'task.needs_changed':
+        payload = { ...base, needs: message.task!.needs, by }
         break
       case 'task.claimed':
       case 'task.renewed':
@@ -2768,6 +2777,60 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (!token || made.claimed !== true || !task.claim) return { task: root }
       return { task: root, claim: { epoch: task.epoch, token, until: iso(task.claim.until) } }
     },
+    async createTasks(caller, input, signal) {
+      const who = await tasksAs(caller)
+      // A task waits for one that's there by its thread, and for another of the batch by its key, which the API resolves:
+      // each named once, the ones that were there first, as a board keeps them. The API tells a repeat by their order too.
+      const waits = input.tasks.map((task) => {
+        const keys = [...new Set((task.needs ?? []).flatMap((need) => (typeof need === 'string' ? [] : [need.key])))]
+        return { threads: needsOf((task.needs ?? []).filter((need) => typeof need === 'string')), keys }
+      })
+      const tasks = input.tasks.map((task, at) => {
+        const needs = [...waits[at]!.threads, ...waits[at]!.keys.map((key) => ({ key }))]
+        return {
+          ...(task.key !== undefined ? { key: task.key } : {}),
+          text: task.text,
+          ...(task.labels && Object.keys(task.labels).length ? { labels: task.labels } : {}),
+          ...(task.noSync ? { noSync: true } : {}),
+          ...(task.attachments?.length ? { attachments: task.attachments } : {}),
+          ...(needs.length ? { needs } : {}),
+          ...(task.for ? { for: task.for } : {}),
+        }
+      })
+      // The batch's `id` is its caller's own key for it: the API answers the key again, with the same request, with the
+      // tasks the first one made, and keeps it for good. The operation ID is this attempt's alone, and a time the API
+      // reads. The request is the same when its channel is named the same way and its tasks' fields are, so both go as given.
+      const body = { operationId: operationId(), channel: input.channel, ...(input.id !== undefined ? { idempotencyKey: input.id } : {}), tasks }
+      const made = await api<{ tasks: (ApiTaskOf | { id: string })[] }>(who, 'POST', await onBoard(who, '/tasks/batch'), { version: 2, body, signal }).catch((error: unknown) => {
+        // An `id` sent again with other tasks, or for another channel, is another write's, as on any board.
+        if (error instanceof HttpError && error.code === 'idempotency_key_reused') throw duplicateId()
+        // More bytes than one of the API's requests holds: none was made and less of it fits, as with more than it counts for one write.
+        if (error instanceof HttpError && error.code === 'entity_too_large') throw new HttpError(400, 'batch_too_large', error.message)
+        throw taskRefusal(error)
+      })
+      const threads = made.tasks.map((task) => task.id)
+      const places = new Map(input.tasks.flatMap((task, at) => (task.key !== undefined ? [[task.key, at] as const] : [])))
+      return {
+        tasks: await Promise.all(
+          made.tasks.map(async (task, at) => {
+            if ('message' in task) return view(who, firstOf(task), await landedIn(who, task.channelId, input.channel, undefined))
+            // To a caller that may post but not read, a retry answers each task's ID alone: the task is what it asked for, as far as it can say.
+            const asked = input.tasks[at]!
+            const needs = [...waits[at]!.threads, ...waits[at]!.keys.map((key) => threads[places.get(key)!]!)]
+            const { actor } = await self(who)
+            const stood: ApiTask = { state: needs.length ? 'waiting' : 'ready', owner: principalId(actor.principal), by: await actorOf(who), for: asked.for ?? null, needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
+            const first = { id: idAt(task.id, 1), threadId: task.id, sequence: 1 }
+            return view(who, { ...(await sent(who, first, { text: asked.text, labels: { ...asked.labels, [TASK_LABEL]: stood.state }, attachments: asked.attachments, noSync: asked.noSync })), task: stood }, input.channel)
+          }),
+        ),
+      }
+    },
+    async createdTasks(caller, { id }) {
+      await tasksAs(caller)
+      // Vercel's API has no read of a batch by its caller's key: only the write itself answers a repeat. So board() asks
+      // it to make the batch, and its key says whether it has: a retry goes through the middleware once more on the way.
+      throw notFound(`no batch of yours has id ${id}`, 'batch_not_found')
+    },
     async claimTask(caller, { id, lease }, signal) {
       const who = await tasksAs(caller)
       const token = newClaimToken()
@@ -2781,7 +2844,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       for (const owner of input.from ?? []) if (!isId(owner)) throw badRequest(`from: ${owner} is a handle, which several can share: name the owner by ID`, 'invalid_from')
       if (signal.aborted) return { task: null }
       const path = await onBoard(who, '/tasks/claim')
-      // The API holds a request up to 25 seconds, then answers that nothing was ready: whoever waits longer asks again, as the handle does.
+      // The API holds a request up to 25 seconds, and answers that it took nothing by then or sooner: it looks only so
+      // many times, so where many tasks change it answers before its wait is up. Nothing here says the wait ran out:
+      // whoever waits asks again until their own wait is up, as the handle does.
       const wait = Math.min(WAIT_MAX_S, Math.ceil(input.wait ?? 0))
       const token = newClaimToken()
       const body = {
@@ -2853,6 +2918,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async assignTask(caller, { id, for: actor }, signal) {
       const who = await tasksAs(caller)
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/assign`, { for: actor }, { id, signal })) }
+    },
+    async setTaskNeeds(caller, { id, needs }, signal) {
+      const who = await tasksAs(caller)
+      // What it waits for now, by their threads: the API checks each, and that none waits for this one.
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/needs`, { needs: needsOf(needs) }, { id, signal })) }
     },
     async cancelTask(caller, { id, reason }, signal) {
       const who = await tasksAs(caller)

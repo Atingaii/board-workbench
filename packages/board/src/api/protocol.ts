@@ -5,6 +5,7 @@ import type {
   AckBody,
   ActorView,
   AssignTaskBody,
+  TaskNeedsBody,
   BlockTaskBody,
   CancelTaskBody,
   ChannelView,
@@ -12,6 +13,8 @@ import type {
   ClaimTaskBody,
   CompleteTaskBody,
   CreateTaskBody,
+  CreateTasksBody,
+  CreatedTasksQuery,
   FailTaskBody,
   ReleaseTaskBody,
   RenewTaskBody,
@@ -106,6 +109,17 @@ export type Protocol = {
   tasks: { input: Input<typeof TasksQuery>; output: TasksPage }
   /** `task` is the task's root. `claim` comes with a task made with `claim`; a retry of one that landed gets the task without it. */
   createTask: { input: Input<typeof CreateTaskBody>; output: { task: MessageView; claim?: TaskClaim } }
+  /**
+   * `tasks` are the tasks' roots, in the body's order. 400 `invalid_needs` for a `key` two tasks go by, one no task has,
+   * or tasks that wait for each other; 400 `batch_too_large` for more than a board holds in one write. Nothing is made
+   * then, and a retry with the same `id` answers the tasks the first made.
+   */
+  createTasks: { input: Input<typeof CreateTasksBody>; output: { tasks: MessageView[] } }
+  /**
+   * The caller's own batch made under `id`, its tasks' roots as they are now, in order: 404 `batch_not_found` when
+   * there's none. With `request`, 409 `duplicate_id` when the batch was made for another one.
+   */
+  createdTasks: { input: Id & Input<typeof CreatedTasksQuery>; output: { tasks: MessageView[] } }
   /** The oldest ready task there, claimed, or `{ task: null }` when there's none, after waiting up to `wait` seconds. */
   claimReadyTask: { input: Input<typeof ClaimReadyTaskBody>; output: { task: MessageView; claim: TaskClaim } | { task: null } }
   /** 409 `task_claimed` while someone holds it, and of claims that race, for all but one. */
@@ -121,6 +135,8 @@ export type Protocol = {
   /** A failed task is ready again; one that's open is left as it is. */
   reopenTask: { input: Id; output: { task: MessageView } }
   assignTask: { input: Id & Input<typeof AssignTaskBody>; output: { task: MessageView } }
+  /** 400 `invalid_needs` for a prerequisite that isn't one, or that would make the task wait for itself. The same set is left as it is. */
+  setTaskNeeds: { input: Id & Input<typeof TaskNeedsBody>; output: { task: MessageView } }
   cancelTask: { input: Id & Input<typeof CancelTaskBody>; output: { task: MessageView } }
   /** The board's grants: needs `manage` at `*`, or a team owner. 501 `no_grants` where the board keeps none. */
   grants: { input: Nothing; output: { grants: GrantView[] } }

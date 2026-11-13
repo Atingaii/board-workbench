@@ -383,9 +383,131 @@ async function commitPost(
   const folded: MessagesState = { byId: {}, replies: {} }
   for (const row of [...rows].sort((a, b) => a.index - b.index)) foldMessages(folded, row as BoardEvent)
   const message = folded.byId[posted.index]!
-  // The author as the board now records them: a host's principal stays the host's.
-  const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: { ...identity.actor, ...(seen.payload.host ? { host: true as const } : {}), ...(seen.payload.verified ? { verified: true as const } : {}) } } } : actors
-  return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent)
+  return shownTo(view(message, knownWith(actors, identity, seen), await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent)
+}
+
+/** The actors with a write's author as the board now records them: a host's principal stays the host's. */
+const knownWith = (actors: ActorsState, identity: Identity, seen: ReturnType<typeof seenFor>): ActorsState =>
+  seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: { ...identity.actor, ...(seen.payload.host ? { host: true as const } : {}), ...(seen.payload.verified ? { verified: true as const } : {}) } } } : actors
+
+/** One of several new threads' roots, as a post's: `id` is its event's, and its thread's key. */
+export type RootInput = { id: string; text: string; labels?: Labels | undefined; noSync?: boolean | undefined; attachments?: Attachment[] | undefined }
+
+/**
+ * More events for several roots' one append, as `Along` is for one: it reads the tables, throws what
+ * refuses the write, and returns the index its reads reflect, how many events come with each root,
+ * which says where every root lands before any is written, and then each root's events, given all
+ * their IDs.
+ */
+export type AlongEach = () => Promise<{ position: number; counts: readonly number[]; events: (roots: readonly { id: number; thread: string }[]) => Events[] }>
+
+/**
+ * A batch made under an `id`, as its sender finds it again: the tasks' roots it landed with, as they
+ * are now, or why there are none for it. `made`: none landed. `yours`: someone else's did. `asked`:
+ * it landed for another request.
+ */
+export type LandedBatch = { tasks: MessageView[] } | { not: 'made' | 'yours' | 'asked' }
+
+/**
+ * Several new threads in `channel`, in one append: each root with what `with` makes of it right
+ * after it, in the order given, all of them or none. Answers the roots as the append left them.
+ * With `again`, the roots are a caller's own to send again: `again.landed` finds the ones the same
+ * request landed already, which are answered as they are with nothing written, and `again.asked`
+ * is the ID the event right after the first root carries, which says what was asked for.
+ */
+export async function writeRoots(
+  ctx: WriteContext,
+  input: { identity: Identity; proofs: PostProofs; channel: string; roots: readonly RootInput[]; with: AlongEach; again?: { asked: string; landed: () => Promise<LandedBatch> } | undefined },
+): Promise<MessageView[]> {
+  const { identity, channel, roots } = input
+  const { access } = identity.principal
+  spend(input.proofs.post, 'post', { channel })
+  if (roots.some((root) => hasLabels(root.labels))) spend(input.proofs.label, 'label', { channel })
+  const { state: actors } = await ctx.session.state(actorsReducer)
+  const seen = seenFor(identity, actors)
+  const blind = !access.readable(channel)
+  const read: { landed: MessageView[] | null } = { landed: null }
+  const rows = await appendFrom(ctx, async () => {
+    // A batch that landed stands, each time it looks: a retry of it, or the same one sent at the same time, which landed first.
+    const found = input.again ? await input.again.landed() : null
+    if (found && 'not' in found && found.not !== 'made') throw duplicateId()
+    read.landed = found && 'tasks' in found ? found.tasks : null
+    if (read.landed) return { position: 0, events: [] }
+    const { position, counts, events: more } = await input.with()
+    // The batch lands right after the index it read at, so every root's ID is known before any is written.
+    let next = position + 1 + (seen ? 1 : 0)
+    const placed = roots.map((root, at) => {
+      const here = { id: next, thread: root.id }
+      next += 1 + counts[at]!
+      return here
+    })
+    const came = more(placed)
+    // The event right after the first root says what the batch was asked for, by its ID: an `id` again is this batch only for that.
+    if (input.again && came[0]?.[0]) came[0][0] = { ...came[0][0], id: input.again.asked } as Events[number]
+    const events: Events = seen ? [seen] : []
+    for (const [at, root] of roots.entries()) {
+      if (came[at]!.length !== counts[at]) throw new Error(`a root's append carries the ${counts[at]} events it said, not ${came[at]!.length}`)
+      events.push(
+        {
+          type: 'message.posted',
+          id: root.id,
+          payload: {
+            channel,
+            text: root.text,
+            re: null,
+            replyTo: null,
+            thread: root.id,
+            labels: root.labels ?? {},
+            noSync: root.noSync ?? false,
+            by: identity.author,
+            origin: null,
+            from: null,
+            ...(root.attachments?.length ? { attachments: root.attachments } : {}),
+            ...(blind ? { blind: true as const } : {}),
+            // Each post says how many came with it, so a replay tells its own from what was written since.
+            ...(came[at]!.length > 0 ? { along: came[at]!.length } : {}),
+          },
+        },
+        ...came[at]!,
+      )
+    }
+    return { position, events }
+  })
+  if (read.landed) return read.landed
+  await untilApplied(ctx, rows)
+  const folded: MessagesState = { byId: {}, replies: {} }
+  const ordered = [...rows].sort((a, b) => a.index - b.index)
+  for (const row of ordered) foldMessages(folded, row as BoardEvent)
+  const known = knownWith(actors, identity, seen)
+  const posted = ordered.filter((row) => row.type === 'message.posted')
+  return Promise.all(
+    posted.map(async (row, at) => {
+      const message = folded.byId[row.index]!
+      return shownTo(view(message, known, await readerFor(ctx, access, message)), access, roots[at]!.text)
+    }),
+  )
+}
+
+/**
+ * The batch a caller made under an `id`, found by the IDs its events carry, as a post is by its
+ * own: `rootId` names each root's post in turn, and `asked`, when the caller says what it asks
+ * for, the event right after the first one. What's happened to its tasks since makes it no other
+ * batch, and neither does what the middleware made of it: `asked` is of the request as given.
+ */
+export async function landedBatch(ctx: WriteContext, identity: Identity, rootId: (at: number) => Promise<string>, asked: string | undefined): Promise<LandedBatch> {
+  const first = await ctx.reads.byEventId(await rootId(0))
+  if (!first) return { not: 'made' }
+  const tasks: MessageView[] = []
+  for (let at = 0, landed: Message | null = first; landed; landed = await ctx.reads.byEventId(await rootId(++at))) {
+    const mine = await landedFor(ctx, identity, landed)
+    if (!mine) return { not: 'yours' }
+    tasks.push(mine)
+  }
+  if (asked !== undefined) {
+    const [, made] = (await ctx.session.history({ gte: first.id, lte: first.id + 1 })) as BoardEvent[]
+    if (made?.id !== asked) return { not: 'asked' }
+  }
+  return { tasks }
 }
 
 /**

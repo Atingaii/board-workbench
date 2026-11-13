@@ -108,13 +108,19 @@ board and who, so `--url` doesn't apply, and the commands about
 your machine (`whoami`, `hooks`, `serve`, `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
 `writeFile` for `download`, `stdin` for `-`. Calls run one at a time, in
 order, so a running `tail` or `wait` holds every later call until it ends: they
-answer 2 without a `signal`, which stops them (0). It ends any other command
+answer 2 without a `signal`, which stops them (0), and so does
+`tasks claim --wait`. It ends any other command
 too, its requests included, whether or not the backend heeds it: 1 for
 `AbortSignal.timeout()`'s, 130 for any other, and a write it stopped may have
 landed. So `{ signal: AbortSignal.timeout(30_000) }` gives a call a deadline,
 and one that hangs holds nothing after it. `refuse`
 names commands a caller doesn't run at all, which answer 2: `['tail', 'wait']`
 for an agent's tool, which can't stream.
+
+[`tasks`](#tasks) works on a handle too. A claim one call makes is kept in
+memory for that handle and its `--as`, so a later call on it settles the task,
+and another handle holds none. `tasks run` answers 2: it runs a command on the CLI's
+machine.
 
 `commandWord(argv)` answers the command `argv` runs (`tail` for
 `['--as', 'triage', 'tail', 'dev']`), for a tool that keeps some commands to
@@ -222,7 +228,8 @@ for one to pass.
   (`msg_…`), which is taken as a message even where a channel has that name.
   Any other ID prints with its `#`, since it could also be a channel's name.
 - **Other writes say what they did**, in a line: `edited 812`, `deleted 812`,
-  `reacted 812`, `unreacted 812`, or `labeled 812`.
+  `reacted 812`, `unreacted 812`, or `labeled 812`. A task's do too:
+  `completed 812`, `blocked 813`, `unassigned 815`.
 - **IDs go in as they come out.** Output shows `#812`; pass `812`, or quote
   it as `'#812'`, since in a shell an unquoted `#` starts a comment.
 - **Text can come from a file or stdin.** `--text-file note.md` reads a file,
@@ -257,6 +264,9 @@ $ vb read 812
 | `post`, `reply` | `{ message, outcome: "posted" }` |
 | `edit`, `delete`, `react`, `label` | `{ message: { id }, outcome }`, `outcome` being `edited`, `deleted`, `reacted` or `unreacted`, or `labeled` |
 | `schedule` | `{ schedule, outcome: "scheduled" }`; `schedule cancel`'s outcome is `canceled`, or `unchanged` when it already wasn't pending |
+| `tasks [channel]` | `{ tasks, cursor }`: each task `{ message, replies, last }`, its root carrying `task`. `cursor` goes to `--after` for the next page |
+| `tasks claim`, `tasks renew`, `tasks create --claim` | `{ task, claim }`: the task's root, and `{ epoch, until }`. The claim's token stays with the CLI. `create --claim` adds `outcome: "created"` |
+| `tasks create`, and every other `tasks` write | `{ task, outcome }`, `outcome` being `created`, `released`, `completed`, `failed`, `blocked`, `unblocked`, `reopened`, `assigned` or `unassigned`, `set` for `needs`, or `canceled`; `unchanged` when an `unblock` or a `reopen` had nothing to change. `tasks run` adds the command's `code` when it failed |
 | `wait` | `{ event }`: `{ cursor, type, createdAt, payload, message, actor }` |
 | `tail` | one event per line, as they come |
 | `whoami` | `{ actor, name, handle, profile, expiresAt, can, board, source }` |
@@ -290,8 +300,10 @@ error document:
   `board_not_found`, `board_not_granted`, `board_name_taken`,
   `watchers_need_project`,
   `message_not_found`, `channel_not_found`,
-  `unknown_command`, `unknown_option`, `invalid_arguments`, `timeout`, and
-  the board's own codes, such as `already_synced` or `no_scheduler`.
+  `unknown_command`, `unknown_option`, `invalid_arguments`, `timeout`,
+  `nothing_ready`, `claim_not_held`, and
+  the board's own codes, such as `already_synced`, `no_scheduler`, or
+  `task_claimed`.
 - **`next` is what to run**, each `{ command, argv, when }`, and `hint` what
   to do when it isn't a command. `status` is `action_required` when the
   command lacked something before it did anything: a team, say.
@@ -303,9 +315,12 @@ error document:
 | Code | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | it failed: `error: Couldn't find message #9999.`, or `wait` timed out (`reason: "timeout"`) |
+| 1 | it failed: `error: Couldn't find message #9999.`, or `wait` or `tasks claim --wait` timed out (`reason: "timeout"`) |
 | 2 | misuse: an unknown command or option, a missing or malformed argument, or no board to use |
-| 130 | Ctrl-C stopped `tail` or `wait` |
+| 130 | Ctrl-C stopped `tail`, `wait`, `tasks claim --wait`, or `tasks run` |
+| 143 | SIGTERM stopped `tasks run`, which released its task |
+
+`tasks run` exits with its command's code.
 
 ## Setup
 
@@ -670,6 +685,8 @@ vb read <link>
 - **`read <id>`** prints one whole thread: the root and every reply, plus the
   thread's pending schedules. Any message in the thread works. With filters,
   it prints the root and only the replies that match: `vb read 812 --by ada`.
+  A [task](#tasks)'s root has its state under it: `task  claimed by claude via
+  julian · 15m left`.
 - **`read <link>`** reads the thread a platform link names: a Slack permalink,
   a GitHub PR, issue, or comment. The board answers from what its sync
   recorded and never asks the platform, so a link it didn't sync, or one in a
@@ -830,6 +847,10 @@ while the message has that label, and `--if-unset k` only while it has none
 for that key; otherwise nothing changes and it fails with `label_conflict`.
 See [Only if they're as you read them](../01-board/04-messages.md#only-if-theyre-as-you-read-them).
 
+Keys under `board.` are the board's own: writing one fails with
+`reserved_label`, exit 2. For `board.task`, the error names the
+[`tasks`](#tasks) command that makes the change.
+
 ### schedule
 
 ```text
@@ -857,6 +878,187 @@ with `manage` in its channel, and prints
 `canceled s12`. A board that keeps no schedules refuses, with 501
 `no_scheduler`. See [Scheduled messages](../01-board/07-schedules.md).
 
+### tasks
+
+```text
+vb tasks [channel] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
+vb tasks create (<channel> ["<text>" | --text-file <path>] | <id>) [--label k=v]... [--needs <id>]... [--for <profile>]
+                [--claim [--lease <duration>]] [--no-sync] [--idempotency-key <key>]
+vb tasks create <channel> --tasks-file <path> [--idempotency-key <key>]
+vb tasks claim (<id> | --ready <channel> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
+vb tasks run (<id> | --ready <channel> [--label k=v]... [--from <id>]... [--wait <duration>])
+             [--result "<text>"] [--lease <duration>] -- <cmd>...
+vb tasks renew <id> [--lease <duration>]
+vb tasks release <id>
+vb tasks complete <id> ["<result>"]
+vb tasks fail <id> "<reason>"
+vb tasks block <id> "<reason>" [--kind <kind>]
+vb tasks unblock <id>
+vb tasks reopen <id>
+vb tasks assign <id> (<profile> | --pool)
+vb tasks needs <id> (<id>... | --none)
+vb tasks cancel <id> "<reason>"
+```
+
+Threads agents are to do, each with a state the board keeps. See
+[Tasks](../01-board/11-tasks.md).
+
+| Command | Does | Prints |
+| --- | --- | --- |
+| `tasks [channel]` | lists open tasks, oldest first: `waiting`, `ready`, `claimed`, and `blocked` | a row per task: its ID, state, first line, and labels |
+| `tasks create` | starts a thread as a task, or with an ID makes that thread one. You own it | its ID, or with `--claim` the claim |
+| `tasks create --tasks-file` | starts a thread for each task a JSON file holds, in as many writes as the board needs | a row per task, as the list shows it |
+| `tasks claim` | holds a task for a lease: by its ID, or with `--ready` the oldest ready one in a channel | the claim: `#812  yours for 15m  fix CVE-123 in acme/web` |
+| `tasks run` | claims a task, runs a command on it, and settles it by how the command exits | what the command prints, then `completed 812` or `failed 812`. With `--json`, what the command prints goes to stderr, and stdout is the one document |
+| `tasks renew` | extends your lease, from now | the claim |
+| `tasks release` | gives a task you hold back, ready again | `released 812` |
+| `tasks complete` | finishes a task you hold, with a result if you give one | `completed 812` |
+| `tasks fail` | gives up on a task you hold | `failed 812` |
+| `tasks block` | holds a task for a person: with your claim, which it ends, or as its owner | `blocked 812` |
+| `tasks unblock` | lifts a hold, as its owner | `unblocked 812` |
+| `tasks reopen` | makes a failed task ready again, as its owner | `reopened 812` |
+| `tasks assign` | keeps a task for one of its owner's profiles, or with `--pool` for anyone | `assigned 812 to fixer`, `unassigned 812` |
+| `tasks needs` | sets what a task waits for, as its owner: the tasks named, in place of what it waited for | `814 needs #812 #813`, `814 needs nothing` |
+| `tasks cancel` | calls a task off, as its owner | `canceled 812` |
+
+```text
+$ vb tasks work/
+#812  ready      fix CVE-123 in acme/web         step=fix
+#814  waiting    review the fix for CVE-123      step=review  needs #812
+$ vb tasks claim --ready work/ --label step=fix --wait 10m
+#812  yours for 15m  fix CVE-123 in acme/web
+$ vb tasks complete 812 "fixed in a1b2c3, tests pass"
+completed 812
+$ vb tasks work/ --state all --limit 2
+#812  completed  fix CVE-123 in acme/web         fixed in a1b2c3, tests pass
+#814  completed  review the fix for CVE-123      tests pass
+(more not shown: vb tasks work/ --state all --limit 2 --after 814)
+```
+
+- **`channel` may be a subtree:** `work/` is `work` and everything under it,
+  for the list and for `--ready`. With no channel, the list is the whole
+  board's.
+- **A word after `tasks` that's one of its commands is that command.** A
+  channel named like one lists as a subtree: `vb tasks run/`.
+- **`--state`** is one state (`waiting`, `ready`, `claimed`, `blocked`,
+  `completed`, `failed`, `canceled`), `open`, or `all`. A finished or blocked
+  task's row says how it ended or what it's held for, where an open one has
+  its labels. `--limit` is 50 by default, and a full page prints the command
+  that reads the next.
+- **`--for <profile>`** names one of your own profiles (`fixer`), on `create`
+  and on the list. `assign <id> <profile>` names one of the task's owner's.
+- **`--ready`** takes a task assigned to you first, then the oldest unassigned
+  one you own, or whose owner `--from <id>` names. `--wait` holds until one is
+  ready.
+- **`--tasks-file <path>`** makes a plan: a JSON array of tasks, each `{ key?,
+  text, labels?, needs?, for?, noSync?, attachments? }`, from a file, or from
+  stdin for `-`. A task's `key` names it for the others of the file, and
+  `needs` takes `{ "key": "fix" }` for one of them or a task's ID for one
+  that's there. `for` takes a profile's name. A key a task doesn't take is
+  misuse, said with the task it's on and the key it's a letter from (`need`
+  for `needs`), before anything is made. Text, `--label`, `--needs`, `--for`,
+  `--claim`, and `--no-sync` are one task's, so they don't go with it.
+- **A plan of any length works.** Up to 100 tasks go in one write, all or
+  none. A longer plan goes in several, each task after the ones it waits for,
+  so a ready task of an earlier write can be claimed before a later one lands.
+  See [Several tasks at once](./02-board.md#several-tasks-at-once).
+- **`--idempotency-key` names the plan.** The same key and file again make
+  nothing and print the tasks as they are now. Without one the run makes its
+  own, so a plan that stops midway says what it made and the command that
+  makes the rest.
+- **What a key made stays as it is.** A plan that stopped can change in what
+  it hadn't made: fix the file and run the command it named. A task it made
+  can't change there, and a plan that finished takes no more: both are
+  `duplicate_id`, and nothing new is made.
+- **Durations** are a number and a unit: `30s`, `10m`, `1h`. `--lease` takes
+  `30s` to `1h`, and the board gives 15 minutes when it's left out.
+- **`run`** gives the command the task's ID in `BOARD_TASK`, renews the claim
+  at a third of its lease, and exits with the command's code. Exit 0 completes
+  the task with `--result`; any other fails it with `exited <code>`, or
+  `killed by <signal>`. Ctrl-C releases the task and exits 130. A renewal that
+  fails with `claim_lost` stops the command, and `run` exits 1.
+- **The CLI keeps your claim** in `~/.config/board/claims/` (under
+  `XDG_CONFIG_HOME` when it's set): one file per board, task, and profile,
+  mode 0600. `renew`, `release`, `complete`, `fail`, and `block` read it, and
+  it goes when the claim ends. The profile is the one the run writes as
+  (`--as`, or `BOARD_PROFILE`), or none as yourself: a task claimed as
+  `claude` is settled as `claude`.
+- **`unblock` and `reopen` that change nothing** exit 0 and say so: `812
+  wasn't blocked`.
+- **`needs`** names every task the task waits for now, by ID: what it waited
+  for and isn't named, it waits for no longer. `--none` says nothing, so the
+  task is ready. One of the two is required, so a command cut short changes
+  nothing. It's for a task no one holds that isn't finished.
+- **A board holds its own limits on a task:** how long a result or a reason
+  is, how many tasks one waits for, how many owners `--from` names. Past one,
+  the command says what it was doing, with the board's words under it, and
+  exits 2. A task's text over what a message holds is `payload_too_large`:
+  keep it short, and reply to the task with the long part in a file.
+
+What can go wrong, by `reason`:
+
+| `reason` | Means | Exit |
+| --- | --- | --- |
+| `nothing_ready` | `--ready` found no task to claim | 1 |
+| `timeout` | `--wait` ran out with none ready | 1 |
+| `claim_not_held` | you hold no claim on the task as who this run writes as, a profile or yourself: claim it | 1 |
+| `claim_lost` | your claim is over: its lease ran out, or the task was released, held, or canceled. The CLI forgets it | 1 |
+| `task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished` | the task can't be claimed or changed as it is: someone holds it, it's for another profile, it waits for a task, it's held for a person, or it ended | 1 |
+| `task_not_owned` | the change is its owner's to make, or `manage`'s in its channel. A profile owns only the tasks it made | 1 |
+| `not_a_task`, `already_a_task` | the thread isn't a task, or `create <id>` named one that is | 1 |
+| `invalid_needs` | `--needs` or `tasks needs` named something that isn't a task you can read, or `tasks needs` a task that waits for this one. In a plan, a `key` two tasks have or none has, or tasks that wait for each other | 2 |
+| `duplicate_id` | `--idempotency-key` was used for another task, or with `--tasks-file`, for another plan: other tasks where it made some, or more once it finished | 1 |
+| `invalid_from` | `--from` named an owner by handle: several can share one, so it takes IDs | 2 |
+| `command_not_found` | `run`'s command couldn't start. The task is released | 1 |
+| `claim_too_wide` | on Vercel's board, `--ready` with `--from` would look in more than 200 places, its channels times the owners it takes from: name fewer owners, or a smaller subtree | 1 |
+| `channel_tree_too_large` | on Vercel's board, `--ready` named a subtree with more than 50 channels you may claim in, or a list more than 50 for a caller that doesn't read the whole board: name a channel, or a smaller subtree | 1 |
+| `no_tasks` | the board keeps no tasks | 1 |
+
+```text
+$ vb tasks claim 832
+error: Can't claim task #832. Someone holds it.
+  #832 is claimed until 2026-11-10T23:01:31.312Z
+
+  See who holds it, and until when:
+    vb read 832
+$ vb tasks needs 814 812 813
+814 needs #812 #813
+$ vb tasks needs 814 --none
+814 needs nothing
+$ vb tasks needs 812 814
+812 needs #814
+$ vb tasks needs 814 812
+error: Can't change what task #814 needs. It waits for tasks you can read, and none that waits for it.
+  needs: #812 waits for #814 already: they would wait for each other
+
+  See what it waits for now:
+    vb read 814
+  Or see the tasks there are:
+    vb tasks --state all
+```
+
+```json plan.json
+[
+  { "key": "fix", "text": "fix CVE-123 in acme/web", "labels": { "step": "fix" } },
+  { "key": "review", "text": "review the fix for CVE-123", "labels": { "step": "review" }, "needs": [{ "key": "fix" }] },
+  { "text": "ship it", "needs": [{ "key": "review" }, { "key": "fix" }], "for": "shipper" }
+]
+```
+
+```text
+$ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
+#2  ready      fix CVE-123 in acme/web         step=fix
+#4  waiting    review the fix for CVE-123      step=review  needs #2
+#6  waiting    ship it                         needs #4 #2
+$ vb tasks create migration --tasks-file shards.json
+error: Can't create tasks in migration. A task's needs are tasks you can read, or keys of the plan's own.
+  needs: #999999 isn't a task
+  made 100 of 250: #214 to #412
+
+  Make the rest, under the same key: what was made stays as it is:
+    vb tasks create migration --tasks-file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
+```
+
 ### typing
 
 ```text
@@ -864,7 +1066,7 @@ vb typing <id> [status]
 ```
 
 Shows typing in every platform thread the message's thread is synced to,
-through the sync the board runs. Slack shows the status (up to 100 characters)
+through the sync the board runs. Slack shows the status (up to 50 characters)
 in place of "Typing…". Nothing is written to the log.
 `--json` prints the threads that took it.
 
@@ -994,6 +1196,12 @@ $ vb tail errors-www
 #817  errors-www ↳ #816  claude via julian: no, it's on the old env
 #816  errors-www  labels status=answered by claude
 ```
+
+What happens to a [task](#tasks) prints as `task` and the change: `#812  work
+task claimed by claude via julian`. A change of what it waits for prints
+what it waits for now: `#814  work  task needs #812 #813 by julian`, or
+`task needs nothing by julian`. A claim's renewals are bookkeeping, which
+`--all` adds.
 
 ### wait
 

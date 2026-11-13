@@ -327,10 +327,48 @@ describe('a claim', () => {
     expect((await read(ada, state.id)).task).toMatchObject({ epoch: 1, claim: { actor: BO } })
   })
 
+  it("holds its own limits on a task, which no request schema checks for it: a root's text and files, a note, a hold's kind, and the owners a claim takes from", async () => {
+    const { ada } = setup()
+    const refused = async (answer: { status: number; body: any }, words: string) => {
+      expect([...code(answer), answer.body.error?.message]).toEqual([400, 'invalid_request', words])
+    }
+    // A task's root is a message: its text is as long as one's, and it carries as many files.
+    const long = await ada('POST', '/tasks', { channel: 'work', text: 'x'.repeat(10_001) })
+    expect([...code(long), long.body.error.hint]).toEqual([400, 'text_too_long', expect.stringMatching(/attach it to a message/)])
+    expect((await ada('POST', '/tasks', { channel: 'work', text: 'x'.repeat(10_000) })).status).toBe(201)
+    const files = (count: number) => Array.from({ length: count }, (_, n) => `${'A'.repeat(21)}${String.fromCharCode(65 + n)}`)
+    await refused(await ada('POST', '/tasks', { channel: 'work', text: 'with a trace', attachments: files(11) }), 'attachments: a message carries at most 10')
+    // Ten are within it: they're looked up, and these aren't files.
+    expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'with a trace', attachments: files(10) }))).toEqual([404, 'attachment_not_found'])
+
+    // A result or a reason is a line or two, and a kind a short name.
+    const { id } = await task(ada, 'a long build')
+    const held = await claim(ada, id)
+    const note = 'x'.repeat(1001)
+    await refused(await ada('POST', `/tasks/${id}/complete`, { ...held, result: note }), "result: a task's result is at most 1,000 characters")
+    await refused(await ada('POST', `/tasks/${id}/fail`, { ...held, reason: note }), "reason: a task's reason is at most 1,000 characters")
+    await refused(await ada('POST', `/tasks/${id}/block`, { ...held, reason: note }), "reason: a task's reason is at most 1,000 characters")
+    await refused(await ada('POST', `/tasks/${id}/block`, { ...held, reason: 'approve the deploy?', kind: 'k'.repeat(65) }), 'kind: a kind is up to 64 lowercase letters, numbers, and _.-')
+    await refused(await ada('POST', `/tasks/${id}/cancel`, { reason: note }), "reason: a task's reason is at most 1,000 characters")
+    // None of them changed it, and what's within them does.
+    expect((await read(ada, id)).task).toMatchObject({ state: 'claimed', epoch: 1 })
+    expect((await ada('POST', `/tasks/${id}/block`, { ...held, reason: 'x'.repeat(1000), kind: 'k'.repeat(64) })).body.task.task).toMatchObject({ state: 'blocked', blocked: { kind: 'k'.repeat(64) } })
+
+    // A claim takes tasks from 32 owners beside its caller.
+    const owners = (count: number) => Array.from({ length: count }, (_, n) => `vercel:user:u_${n}`)
+    await refused(await ada('POST', '/tasks/claim', { channel: 'work', from: owners(33) }), 'from: a claim takes tasks from at most 32 owners')
+    expect((await ada('POST', '/tasks/claim', { channel: 'work', label: { step: 'none-has-this' }, from: owners(32) })).body).toEqual({ task: null })
+  })
+
   it('takes a lease of 30 seconds to an hour, says when it ends, and renews from now', async () => {
     const { ada } = setup()
     const { id } = await task(ada, 'a long build')
     for (const lease of [29, 3601, -1, '5m']) expect(code(await ada('POST', `/tasks/${id}/claim`, { lease })), String(lease)).toEqual([400, 'invalid_request'])
+    // The same for a claim of the next ready task, and for one a task is made with: nothing is claimed, and nothing made.
+    const next = await ada('POST', '/tasks/claim', { channel: 'work', lease: 3601 })
+    expect([...code(next), next.body.error.message]).toEqual([400, 'invalid_request', 'lease: a lease is 30 to 3600 seconds'])
+    expect(code(await ada('POST', '/tasks', { channel: 'work', text: 'made and claimed', claim: true, lease: 29 }))).toEqual([400, 'invalid_request'])
+    expect((await ada('GET', '/tasks?channel=work&state=all')).body.tasks.map((found: { message: MessageView }) => [found.message.id, found.message.task?.state])).toEqual([[id, 'ready']])
     const held = await claim(ada, id, { lease: 30 })
     expect(held.until).toBe(at(30 * SECOND))
     vi.setSystemTime(T0 + 20 * SECOND)
@@ -449,7 +487,7 @@ describe('a task that needs others', () => {
     expect(await read(ada, review.id)).toMatchObject({ labels: { 'board.task': 'ready' }, task: { state: 'ready' } })
     expect((await bo('POST', `/tasks/${review.id}/claim`, {})).status).toBe(200)
 
-    // A task waits for at most 20 others, as many as Vercel's board takes.
+    // A task waits for at most 20 others here: more is refused before any of them is looked up.
     const many = (count: number) => ({ channel: 'work', text: 'ship it all', needs: Array.from({ length: count }, (_, i) => String(1000 + i)) })
     expect(code(await ada('POST', '/tasks', many(21)))).toEqual([400, 'invalid_request'])
     expect(code(await ada('POST', '/tasks', many(20)))).toEqual([400, 'invalid_needs'])
@@ -546,6 +584,309 @@ describe('a task that needs others', () => {
     expect(code(await runner('POST', '/tasks', { re: plain.id, needs: [plain.id] }))).toEqual([400, 'invalid_needs'])
     expect((await runner('GET', '/messages?channel=work')).body.messages.map((m: MessageView) => m.text)).toEqual(['not a task', 'bump the lockfile'])
     expect((await runner('POST', '/tasks', { re: plain.id, needs: [mine.id] })).body.task.task).toMatchObject({ state: 'waiting', needs: [mine.id] })
+  })
+})
+
+describe('what a task needs, changed', () => {
+  const needs = (call: Call, id: string, ids: string[]) => call('POST', `/tasks/${id}/needs`, { needs: ids })
+  const changes = async (call: Call, after: string | number, id: string) => (await events(call, after)).filter((event) => event.message?.id === id).map((event) => [event.type, event.message?.task?.state])
+
+  it('waits for the new ones from that write, and is ready once they have completed, or at once with none', async () => {
+    const { ada, bo } = setup()
+    const fix = await task(ada, 'fix CVE-123')
+    const docs = await task(ada, 'write the advisory')
+    const review = await task(ada, 'review it', { needs: [fix.id] })
+    let { cursor } = (await ada('GET', '/events')).body
+    // It waits for another task in place of the one it waited for.
+    const moved = await needs(ada, review.id, [docs.id])
+    expect(moved.status).toBe(200)
+    expect(moved.body.task).toMatchObject({ id: review.id, labels: { 'board.task': 'waiting' }, task: { state: 'waiting', needs: [docs.id] } })
+    const [changed] = (await events(ada, cursor)).filter((event) => event.message?.id === review.id)
+    expect(changed).toMatchObject({ type: 'task.needs_changed', payload: { id: review.id, thread: review.thread, needs: [docs.id], by: { actor: ADA, principal: ADA, profile: null } }, actor: { id: ADA } })
+    // What it no longer waits for doesn't ready it, and what it waits for now does.
+    await bo('POST', `/tasks/${fix.id}/complete`, await claim(bo, fix.id))
+    expect(await stateOf(ada, review.id)).toBe('waiting')
+    expect((await ada('GET', `/tasks?needs=${fix.id}`)).body.tasks).toEqual([])
+    await bo('POST', `/tasks/${docs.id}/complete`, await claim(bo, docs.id))
+    expect(await stateOf(ada, review.id)).toBe('ready')
+
+    // A ready task waits again for one that hasn't completed.
+    const ship = await task(ada, 'ship it')
+    ;({ cursor } = (await ada('GET', '/events')).body)
+    expect((await needs(ada, review.id, [ship.id, docs.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [ship.id, docs.id] })
+    expect(code(await bo('POST', `/tasks/${review.id}/claim`, {}))).toEqual([409, 'task_waiting'])
+    expect(await changes(ada, cursor, review.id)).toEqual([['task.needs_changed', 'waiting']])
+    // For ones that have all completed, it waits in the change itself, and its task.ready follows in the same write.
+    ;({ cursor } = (await ada('GET', '/events')).body)
+    expect((await needs(ada, review.id, [fix.id, docs.id])).body.task.task).toMatchObject({ state: 'ready', needs: [fix.id, docs.id] })
+    const landed = (await events(ada, cursor)).filter((event) => event.message?.id === review.id)
+    expect(landed.map((event) => [event.type, event.message?.task?.state])).toEqual([['task.needs_changed', 'waiting'], ['task.ready', 'ready']])
+    expect(Number(landed[1]!.cursor)).toBe(Number(landed[0]!.cursor) + 1)
+    // The same set, in any order and said twice, changes nothing.
+    ;({ cursor } = (await ada('GET', '/events')).body)
+    expect((await needs(ada, review.id, [docs.id, fix.id, docs.id])).body.task.task).toMatchObject({ state: 'ready', needs: [fix.id, docs.id] })
+    expect(await events(ada, cursor)).toEqual([])
+    // With none, it's ready, and nothing says it became so but the change.
+    await needs(ada, review.id, [ship.id])
+    ;({ cursor } = (await ada('GET', '/events')).body)
+    expect((await needs(ada, review.id, [])).body.task.task).toMatchObject({ state: 'ready', needs: [] })
+    expect(await changes(ada, cursor, review.id)).toEqual([['task.needs_changed', 'ready']])
+    expect((await bo('POST', `/tasks/${review.id}/claim`, {})).status).toBe(200)
+  })
+
+  it('takes what a new task takes: tasks the caller reads, none canceled, at most 20, and never itself', async () => {
+    const { board, ada } = setup()
+    const root = await task(ada, 'ship it')
+    const failed = await task(ada, 'build the image')
+    await ada('POST', `/tasks/${failed.id}/fail`, { ...(await claim(ada, failed.id)), reason: 'registry is down' })
+    const dropped = await task(ada, 'migrate the old table')
+    await ada('POST', `/tasks/${dropped.id}/cancel`, { reason: 'not needed after all' })
+    const plain = (await ada('POST', '/messages', { channel: 'work', text: 'just a thread' })).body.message
+    const reply = (await ada('POST', '/messages', { re: root.id, text: 'a reply' })).body.message
+    const secret = await task(ada, 'rotate the keys', { channel: 'secret' })
+    for (const [refused, why] of [[dropped.id, 'canceled'], [plain.id, 'no task'], [reply.id, 'a reply'], ['99999', 'not there'], [root.id, 'itself']] as const)
+      expect(code(await needs(ada, root.id, [failed.id, refused])), why).toEqual([400, 'invalid_needs'])
+    // One the caller can't read is no task to it, as when it makes one.
+    const narrowed = person(board, 'ada', { 'x-board-can': '*=post;work=read,post,label' })
+    expect(code(await needs(narrowed, root.id, [secret.id]))).toEqual([400, 'invalid_needs'])
+    // It waits for at most 20 tasks here, a limit of this board's own: more is refused before any of them is looked up.
+    const many = await needs(ada, root.id, Array.from({ length: 21 }, (_, i) => String(1000 + i)))
+    expect([...code(many), many.body.error.message]).toEqual([400, 'invalid_request', 'needs: a task waits for at most 20 tasks'])
+    // Twenty of them, however often each is named, are within it: they're looked up, and these aren't tasks.
+    expect(code(await needs(ada, root.id, Array.from({ length: 40 }, (_, i) => String(1000 + (i % 20)))))).toEqual([400, 'invalid_needs'])
+    expect(code(await ada('POST', `/tasks/${root.id}/needs`, {}))).toEqual([400, 'invalid_request'])
+    expect((await read(ada, root.id)).task).toMatchObject({ state: 'ready', needs: [] })
+    // A failed one may be reopened, so it's something to wait for.
+    expect((await needs(ada, root.id, [failed.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [failed.id] })
+    // The set is checked as it's given before it's found to be the same: one canceled since, or out of this caller's sight, is refused.
+    const gone = await task(ada, 'needed for now')
+    const waits = await task(ada, 'waits for it, and for a secret', { needs: [gone.id, secret.id] })
+    expect(code(await needs(narrowed, waits.id, [secret.id, gone.id]))).toEqual([400, 'invalid_needs'])
+    await ada('POST', `/tasks/${gone.id}/cancel`, { reason: 'not needed after all' })
+    expect(code(await needs(ada, waits.id, [gone.id, secret.id]))).toEqual([400, 'invalid_needs'])
+    expect((await read(ada, waits.id)).task).toMatchObject({ state: 'waiting', needs: [gone.id, secret.id] })
+    // What names no task isn't one whose needs change.
+    expect(code(await needs(ada, plain.id, []))).toEqual([404, 'not_a_task'])
+    expect(code(await needs(ada, reply.id, []))).toEqual([404, 'not_a_task'])
+    expect(code(await needs(ada, '99999', []))).toEqual([404, 'message_not_found'])
+  })
+
+  it('never leaves a task waiting for itself: a change that would close a cycle is refused, however many tasks around', async () => {
+    const { ada } = setup()
+    const a = await task(ada, 'a')
+    const b = await task(ada, 'b', { needs: [a.id] })
+    const c = await task(ada, 'c', { needs: [b.id] })
+    const other = await task(ada, 'on its own')
+    // A new task can't be waited for, so only a change can close one: straight back, or around through others.
+    const back = await needs(ada, a.id, [b.id])
+    expect(code(back)).toEqual([400, 'invalid_needs'])
+    expect(back.body.error.message).toBe(`needs: #${b.id} waits for #${a.id} already: they would wait for each other`)
+    const around = await needs(ada, a.id, [other.id, c.id])
+    expect(code(around)).toEqual([400, 'invalid_needs'])
+    expect(around.body.error.message).toBe(`needs: #${c.id} waits for #${a.id} already: they would wait for each other`)
+    expect((await read(ada, a.id)).task).toMatchObject({ state: 'ready', needs: [] })
+    // Once what was in the way waits for something else, the same change lands.
+    expect((await needs(ada, b.id, [other.id])).status).toBe(200)
+    expect((await needs(ada, a.id, [other.id, c.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [other.id, c.id] })
+    // And the cycle it would now close the other way is refused too.
+    expect(code(await needs(ada, other.id, [a.id]))).toEqual([400, 'invalid_needs'])
+    expect(code(await needs(ada, b.id, [a.id]))).toEqual([400, 'invalid_needs'])
+  })
+
+  it('walks at most 500 tasks behind the ones a change adds to look for itself, and refuses a change it would have to walk further for', async () => {
+    const { ada } = setup()
+    // A line of 501 tasks, each waiting for the one before, and one that would wait for its end.
+    let last = await task(ada, 'the first')
+    const line = [last.id]
+    for (let n = 1; n <= 500; n++) line.push((last = await task(ada, `waits for #${last.id}`, { needs: [last.id] })).id)
+    const root = await task(ada, 'waits for the whole line')
+    const far = await needs(ada, root.id, [line[500]!])
+    expect(code(far)).toEqual([400, 'invalid_needs'])
+    expect(far.body.error.message).toContain('more than 500 tasks behind it')
+    // One task nearer, the walk gets to the end of it.
+    expect((await needs(ada, root.id, [line[499]!])).body.task.task).toMatchObject({ state: 'waiting', needs: [line[499]] })
+
+    // It walks only behind what a change adds: one the task keeps was looked behind when it was added, or the task was
+    // made with it, when nothing could wait for it yet. So a task made waiting for the whole line drops another
+    // prerequisite, or adds one, without the line being walked again.
+    const other = await task(ada, 'beside the line')
+    const made = await task(ada, 'made waiting for the whole line', { needs: [line[500]!, other.id] })
+    expect((await needs(ada, made.id, [line[500]!])).body.task.task).toMatchObject({ state: 'waiting', needs: [line[500]] })
+    expect((await needs(ada, made.id, [line[500]!, other.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [line[500], other.id] })
+    // What it adds is still looked behind: one that waits for the task is refused, whatever it keeps.
+    const waits = await task(ada, 'waits for the one made', { needs: [made.id] })
+    expect(code(await needs(ada, made.id, [line[500]!, other.id, waits.id]))).toEqual([400, 'invalid_needs'])
+    expect(code(await needs(ada, made.id, [waits.id]))).toEqual([400, 'invalid_needs'])
+    expect((await read(ada, made.id)).task).toMatchObject({ state: 'waiting', needs: [line[500], other.id] })
+  }, 60_000)
+
+  it("follows no completed task's needs looking for a cycle, so finished work behind a prerequisite is never too much to check, and a cycle through unfinished tasks is still refused", async () => {
+    const { ada } = setup()
+    const done = async (id: string) => expect((await ada('POST', `/tasks/${id}/complete`, await claim(ada, id))).status).toBe(200)
+    // A line of 511 tasks, each waiting for the one before, worked from its start to its end: more finished work than a walk goes through.
+    let last = await task(ada, 'the first')
+    const line = [last.id]
+    for (let n = 1; n <= 510; n++) line.push((last = await task(ada, `waits for #${last.id}`, { needs: [last.id] })).id)
+    for (const id of line) await done(id)
+    // A task that isn't finished waits for the end of it. Another comes to wait for that one: nothing behind the line's end is looked at.
+    const recent = await task(ada, 'the next release', { needs: [line[510]!] })
+    const root = await task(ada, 'ship it')
+    const waits = await needs(ada, root.id, [recent.id])
+    expect(code(waits), JSON.stringify(waits.body.error)).toEqual([200, undefined])
+    expect(waits.body.task.task).toMatchObject({ state: 'waiting', needs: [recent.id] })
+    // The end of the line itself is a prerequisite like any: it completed, so the task is ready.
+    const other = await task(ada, 'on its own')
+    const ready = await needs(ada, other.id, [line[510]!])
+    expect(code(ready), JSON.stringify(ready.body.error)).toEqual([200, undefined])
+    expect(ready.body.task.task).toMatchObject({ state: 'ready', needs: [line[510]] })
+
+    // A cycle through tasks that aren't finished is found, with finished ones on the way: the walk goes on past a
+    // completed prerequisite to the others beside it.
+    const a = await task(ada, 'a')
+    const b = await task(ada, 'b', { needs: [line[510]!, a.id] })
+    const c = await task(ada, 'c', { needs: [line[0]!, b.id] })
+    const around = await needs(ada, a.id, [line[510]!, c.id])
+    expect(code(around)).toEqual([400, 'invalid_needs'])
+    expect(around.body.error.message).toBe(`needs: #${c.id} waits for #${a.id} already: they would wait for each other`)
+    expect(code(await needs(ada, recent.id, [line[510]!, root.id]))).toEqual([400, 'invalid_needs'])
+    // Only a completed task's needs are left alone. A canceled one may have waited for anything, the task itself included.
+    const dropped = await task(ada, 'dropped while it waited', { needs: [a.id] })
+    const behind = await task(ada, 'waits for the dropped one', { needs: [dropped.id] })
+    expect((await ada('POST', `/tasks/${dropped.id}/cancel`, { reason: 'not needed after all' })).status).toBe(200)
+    expect(code(await needs(ada, a.id, [behind.id]))).toEqual([400, 'invalid_needs'])
+    expect((await read(ada, a.id)).task).toMatchObject({ state: 'ready', needs: [] })
+  }, 120_000)
+
+  it("is its owner's to change, or manage's, while no one holds the task and it isn't finished", async () => {
+    const { ada, bo, board } = setup()
+    const fix = await task(ada, 'fix CVE-123')
+    const review = await task(ada, 'review it')
+    // Someone else who may write there doesn't own it; neither does another of its owner's profiles, held to no manage.
+    const can = { 'x-board-can': '*=read,post,react,label' }
+    expect(code(await needs(web(board), review.id, [fix.id]))).toEqual([403, 'task_not_owned'])
+    expect(code(await needs(person(board, 'ada', { 'x-board-profile': 'triage', ...can }), review.id, [fix.id]))).toEqual([403, 'task_not_owned'])
+    // Its owner as itself does, narrowed the same way, and so does manage in its channel.
+    expect((await needs(person(board, 'ada', can), review.id, [fix.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [fix.id] })
+    expect((await needs(bo, review.id, [])).body.task.task).toMatchObject({ state: 'ready', needs: [], owner: ADA })
+
+    // While a claim holds it, what it needs stays: the claim was taken on what it was.
+    const held = await claim(bo, review.id, { lease: 60 })
+    expect(code(await needs(ada, review.id, [fix.id]))).toEqual([409, 'task_claimed'])
+    expect((await read(ada, review.id)).task).toMatchObject({ state: 'claimed', needs: [] })
+    await bo('POST', `/tasks/${review.id}/release`, held)
+
+    // A held task takes the change and stays held: lifted, it stands where what it needs now puts it.
+    await ada('POST', `/tasks/${review.id}/block`, { reason: 'which release?' })
+    expect((await needs(ada, review.id, [fix.id])).body.task.task).toMatchObject({ state: 'blocked', needs: [fix.id], blocked: { reason: 'which release?' } })
+    expect((await ada('POST', `/tasks/${review.id}/unblock`)).body.task.task.state).toBe('waiting')
+    await bo('POST', `/tasks/${fix.id}/complete`, await claim(bo, fix.id))
+    expect(await stateOf(ada, review.id)).toBe('ready')
+    await ada('POST', `/tasks/${review.id}/block`, { reason: 'one more look' })
+    const docs = await task(ada, 'write the advisory')
+    await bo('POST', `/tasks/${docs.id}/complete`, await claim(bo, docs.id))
+    const { cursor } = (await ada('GET', '/events')).body
+    await needs(ada, review.id, [docs.id])
+    expect(await changes(ada, cursor, review.id)).toEqual([['task.needs_changed', 'blocked']])
+    expect((await ada('POST', `/tasks/${review.id}/unblock`)).body.task.task.state).toBe('ready')
+
+    // A finished task's stay as they were: completed, failed, or canceled.
+    const done = await task(ada, 'done')
+    await ada('POST', `/tasks/${done.id}/complete`, await claim(ada, done.id))
+    const failed = await task(ada, 'failed')
+    await ada('POST', `/tasks/${failed.id}/fail`, { ...(await claim(ada, failed.id)), reason: 'no' })
+    const dropped = await task(ada, 'dropped')
+    await ada('POST', `/tasks/${dropped.id}/cancel`, { reason: 'no' })
+    for (const finished of [done, failed, dropped]) expect(code(await needs(ada, finished.id, [fix.id])), finished.text).toEqual([409, 'task_finished'])
+  })
+
+  /** A board where `race.between` runs once, just before the first append that carries a `type` event reaches the log. */
+  function meeting(type: string) {
+    const store = memory()
+    const append = store.log.append.bind(store.log)
+    const race: { between: (() => Promise<unknown>) | null; landed: boolean } = { between: null, landed: false }
+    store.log.append = async (session, appended, options) => {
+      if (race.between && !race.landed && appended.some((event) => event.type === type)) {
+        race.landed = true
+        await race.between()
+      }
+      return append(session, appended, options)
+    }
+    const board = testBoard({ store })
+    return { race, ada: person(board, 'ada'), bo: person(board, 'bo') }
+  }
+  const taskChanges = async (call: Call, id: string) => types((await events(call, 0)).filter((event) => event.message?.id === id && event.type.startsWith('task.')))
+
+  it('is what a claim goes by as it lands: one whose task came to wait under it is refused', async () => {
+    const { race, ada, bo } = meeting('task.claimed')
+    const other = await task(ada, 'not done yet')
+    const root = await task(ada, 'ready, for now')
+    // Between the claim's look at a ready task and its write, its owner has it wait for another.
+    race.between = () => needs(ada, root.id, [other.id])
+    expect(code(await bo('POST', `/tasks/${root.id}/claim`, {}))).toEqual([409, 'task_waiting'])
+    expect(race.landed).toBe(true)
+    expect((await read(ada, root.id)).task).toMatchObject({ state: 'waiting', needs: [other.id], epoch: 0, claim: null })
+  })
+
+  it('is what a completion goes by as it lands: it readies no task that came to wait for more under it', async () => {
+    const { race, ada, bo } = meeting('task.completed')
+    const first = await task(ada, 'the only one it waits for')
+    const other = await task(ada, 'not done yet')
+    const dependent = await task(ada, 'waits for the first', { needs: [first.id] })
+    const moved = await task(ada, 'waits for the first too', { needs: [first.id] })
+    const held = await claim(bo, first.id)
+    // Between the completion's look at what waits for it and its write, one comes to wait for another too, and one for another instead.
+    race.between = async () => {
+      await needs(ada, dependent.id, [first.id, other.id])
+      await needs(ada, moved.id, [other.id])
+    }
+    expect((await bo('POST', `/tasks/${first.id}/complete`, held)).body.task.task.state).toBe('completed')
+    expect(race.landed).toBe(true)
+    expect((await read(ada, dependent.id)).task).toMatchObject({ state: 'waiting', needs: [first.id, other.id] })
+    expect((await read(ada, moved.id)).task).toMatchObject({ state: 'waiting', needs: [other.id] })
+    expect(await taskChanges(ada, dependent.id)).toEqual(['task.created', 'task.needs_changed'])
+    // Once the other completes, the one that waits for both is ready: nothing was readied early, and nothing lost.
+    await bo('POST', `/tasks/${other.id}/complete`, await claim(bo, other.id))
+    expect(await taskChanges(ada, dependent.id)).toEqual(['task.created', 'task.needs_changed', 'task.ready'])
+  })
+
+  it('is what a lifted hold goes by as it lands: a task that came to wait under it waits, with no task.ready', async () => {
+    const { race, ada, bo } = meeting('task.unblocked')
+    const first = await task(ada, 'done')
+    await bo('POST', `/tasks/${first.id}/complete`, await claim(bo, first.id))
+    const other = await task(ada, 'not done yet')
+    const root = await task(ada, 'held', { needs: [first.id] })
+    await ada('POST', `/tasks/${root.id}/block`, { reason: 'which release?' })
+    // Between the unblock's look, which found everything it needs completed, and its write, it comes to wait for another.
+    race.between = () => needs(ada, root.id, [other.id])
+    expect((await ada('POST', `/tasks/${root.id}/unblock`)).body.task.task).toMatchObject({ state: 'waiting', needs: [other.id] })
+    expect(race.landed).toBe(true)
+    expect(await taskChanges(ada, root.id)).toEqual(['task.created', 'task.ready', 'task.blocked', 'task.needs_changed', 'task.unblocked'])
+  })
+
+  it('goes by what it would wait for as it lands: one that completes under the change readies the task in it', async () => {
+    const { race, ada, bo } = meeting('task.needs_changed')
+    const first = await task(ada, 'about to be done')
+    const root = await task(ada, 'will wait for it')
+    const held = await claim(bo, first.id)
+    // Between the change's look, which found it open, and its write, what the task would wait for completes: nothing
+    // waited for it then, so only the change can say the task is ready.
+    race.between = () => bo('POST', `/tasks/${first.id}/complete`, held)
+    expect((await needs(ada, root.id, [first.id])).body.task.task).toMatchObject({ state: 'ready', needs: [first.id] })
+    expect(race.landed).toBe(true)
+    expect(await taskChanges(ada, root.id)).toEqual(['task.created', 'task.needs_changed', 'task.ready'])
+  })
+
+  it("ends a claim whose lease ran out before it changes what the task needs, where no timer has", async () => {
+    // A board with no scheduler writes no expiry of its own: the claim is over all the same.
+    const board = testBoard()
+    const ada = person(board, 'ada')
+    const fix = await task(ada, 'fix CVE-123')
+    const review = await task(ada, 'review it')
+    await claim(ada, review.id, { lease: 30 })
+    vi.setSystemTime(T0 + 31 * SECOND)
+    const { cursor } = (await ada('GET', '/events')).body
+    expect((await needs(ada, review.id, [fix.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [fix.id], claim: null, epoch: 1 })
+    expect((await events(ada, cursor)).map((event) => [event.type, event.message?.task?.state])).toEqual([['task.expired', 'ready'], ['task.needs_changed', 'waiting']])
   })
 })
 
@@ -1312,6 +1653,19 @@ describe("the handle's tasks", () => {
     expect((await ada('GET', '/tasks?channel=work')).body.tasks).toHaveLength(2)
   })
 
+  it("claims the next task in a channel whose path is as long as a path may be, and in its subtree", async () => {
+    const { board } = setup()
+    const longest = `work/${'a'.repeat(2043)}`
+    const made = await board.tasks.create(longest, 'deep in the tree')
+    const claim = await board.tasks.claim({ channel: longest })
+    expect(claim?.task.id).toBe(made.task.id)
+    await claim!.release()
+    // With the `/` that names it and what's under it, one character more.
+    expect((await board.tasks.claim({ channel: `${longest}/` }))?.task.id).toBe(made.task.id)
+    // A path longer than any channel's names none.
+    await expect(board.tasks.claim({ channel: `${longest}b/` })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+  })
+
   it('waits for a task that becomes ready while it asks', async () => {
     const { board } = setup()
     vi.useRealTimers()
@@ -1423,6 +1777,22 @@ describe("the fold, for whoever folds the board's events themselves", () => {
     // Only a failed task reopens, and a thread is made a task once, by whoever did first.
     expect(folded(created, ['task.canceled', { ...about, reason: 'no', by }], ['task.reopened', { ...about, by }]).byId[1]!.task?.state).toBe('canceled')
     expect(folded(created, ['task.created', { ...about, needs: [], for: null, by: other }]).byId[1]!.task?.owner).toBe(ADA)
+  })
+
+  it("changes what a task needs only while no one holds it and it isn't finished, and leaves a held one held", () => {
+    const needsOf = (...payloads: [string, object][]) => folded(...payloads).byId[1]!.task
+    const rewired: [string, object] = ['task.needs_changed', { ...about, needs: [7, 8], by }]
+    expect(needsOf(created, rewired)).toMatchObject({ state: 'waiting', needs: [7, 8] })
+    expect(needsOf(created, rewired, ['task.ready', about], ['task.needs_changed', { ...about, needs: [], by }])).toMatchObject({ state: 'ready', needs: [] })
+    expect(needsOf(created, ['task.blocked', { ...about, kind: null, reason: 'hold', by }], rewired)).toMatchObject({ state: 'blocked', needs: [7, 8] })
+    // One a claim holds, or that's finished, has moved on from it.
+    expect(needsOf(created, claimed(1), rewired)).toMatchObject({ state: 'claimed', needs: [] })
+    expect(needsOf(created, claimed(1), ['task.completed', { ...about, epoch: 1, result: null, by }], rewired)).toMatchObject({ state: 'completed', needs: [] })
+    expect(needsOf(created, claimed(1), ['task.failed', { ...about, epoch: 1, reason: 'no', by }], rewired)).toMatchObject({ state: 'failed', needs: [] })
+    expect(needsOf(created, ['task.canceled', { ...about, reason: 'no', by }], rewired)).toMatchObject({ state: 'canceled', needs: [] })
+    // And it's no version of a task it didn't change, or of a reply.
+    expect(folded(created, claimed(1), rewired).byId[1]!.version).toBe(4)
+    expect(folded(['task.needs_changed', { id: 2, thread: 'root', needs: [7], by }]).byId[2]!.task).toBeUndefined()
   })
 
   it('keeps tasks on roots that are there: a reply is no task, and a deleted root wears no label', () => {

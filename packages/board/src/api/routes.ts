@@ -3,6 +3,7 @@ import {
   ActorId,
   AttachmentId,
   ATTACHMENTS_PER_MESSAGE_MAX,
+  CHANNEL_PATTERN_MAX,
   ChannelPath,
   DIRECT_UPLOAD_BYTES_MAX,
   Emoji,
@@ -11,16 +12,16 @@ import {
   LabelValue,
   MESSAGE_TEXT_MAX,
   MessageText,
+  SentText,
   platformAvatar,
   storable,
-  TASK_NEEDS_MAX,
+  TASK_BATCH_MAX,
   EDITED_HOLD,
-  TaskHoldKind,
-  TaskNote,
+  SentTaskHoldKind,
+  SentTaskNote,
   TaskState,
 } from '../contract/schemas.ts'
 import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
-import { SCHEMA_DESCRIPTION_MAX, SCHEMA_NAME, SCHEMA_VERSION_MAX } from '../contract/data-schemas.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message, Task } from '../contract/folds.ts'
@@ -99,7 +100,7 @@ export const PostBody = z
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     /** May be empty when the message has attachments. */
-    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
+    text: z.string().default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
     /**
@@ -109,7 +110,7 @@ export const PostBody = z
     sync: z.array(z.union([z.string().min(3).max(300), ResolvedSyncTarget])).max(10).optional(),
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** IDs from `POST /attachments`. */
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
     /**
      * A reply's precondition: a message in its thread, the newest as the caller read it. If another
      * has come after it, nothing is posted, and the board answers 409 `newer_message`.
@@ -145,10 +146,10 @@ export const ScheduleBody = z
   .object({
     channel: ChannelPath.optional(),
     re: Ref.optional(),
-    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
+    text: z.string().default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
     in: Duration.optional(),
     at: Instant.optional(),
     every: Duration.optional(),
@@ -184,15 +185,17 @@ export const SchedulesQuery = z.object({
   all: flag.optional(),
 })
 
-/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. */
-const ChannelOrSubtree = z.string().max(81).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
+/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. As long as a grant's pattern for either. */
+const ChannelOrSubtree = z.string().max(CHANNEL_PATTERN_MAX).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
 
-/** A lease's shortest and longest, in seconds, and what a claim gets when it asks for none. */
-export const LEASE_MIN_S = 30
-export const LEASE_MAX_S = 3600
+/** What a claim gets when it asks for no lease, in seconds. */
 export const LEASE_DEFAULT_S = 900
-/** How long a claim holds its task, in seconds: 30 to 3600, 900 when left out. A board gives what's asked up to its own cap, never under 300. */
-const Lease = z.number().min(LEASE_MIN_S).max(LEASE_MAX_S)
+/**
+ * How long a claim holds its task, in seconds, 900 when left out. How short and how long one may
+ * be is the backend's to say: the local board takes 30 to 3600, and a board gives what's asked up
+ * to its own cap, never under 300.
+ */
+const Lease = z.number()
 
 /** What a claim's own writes carry: the `epoch` and `token` its claim answered. */
 const Claimed = { epoch: z.number().int().positive(), token: z.string().min(1).max(128) }
@@ -207,12 +210,14 @@ export const CreateTaskBody = z
   .object({
     channel: ChannelPath.optional(),
     re: Ref.optional(),
-    text: z.string().max(MESSAGE_TEXT_MAX).optional(),
+    /** As long as a post's text may be: the backend says how long that is. */
+    text: z.string().optional(),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
     /** IDs from `POST /attachments`, as a post takes them. */
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
-    needs: z.array(Ref).max(TASK_NEEDS_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
+    /** How many tasks one may wait for is the backend's to say. */
+    needs: z.array(Ref).optional(),
     for: ActorId.nullable().optional(),
     claim: z.boolean().optional(),
     lease: Lease.optional(),
@@ -227,6 +232,57 @@ export const CreateTaskBody = z
     message: '`text`, `labels`, `noSync`, `attachments`, and `id` are a new thread\'s: `re` makes a task of a thread as it is',
   })
   .refine((body) => body.lease === undefined || body.claim === true, { message: '`lease` goes with `claim`', path: ['lease'] })
+
+/** A digest of what a batch asks for: what tells the same request under an `id` from another. */
+const BatchRequest = z.string().min(1).max(64)
+
+/** A task another task of the same batch waits for, by the `key` it goes by there. */
+const TaskKey = z.string().min(1).refine(storable, 'key has a NUL character or a lone surrogate')
+
+/**
+ * Several new threads in one channel, each a task, made in one write: all of them or none. A task is
+ * what `POST /tasks` starts a thread with, less `claim`. `key` names it for the batch's others, and
+ * `needs` takes a task's ID, or `{ key }` for one of the batch, before or after it. `id` names the
+ * batch: a retry with it answers the same tasks. At most `TASK_BATCH_MAX` tasks, 400
+ * `batch_too_large` past that, which a board that holds fewer in one write answers too.
+ */
+export const CreateTasksBody = z.object({
+  channel: ChannelPath,
+  tasks: z
+    .array(
+      z
+        .object({
+          key: TaskKey.optional(),
+          /** May be empty when the task's root has attachments. As long as a post's text may be: the backend says how long that is. */
+          text: z.string(),
+          labels: Labels.optional(),
+          noSync: z.boolean().optional(),
+          /** IDs from `POST /attachments`, as a post takes them. */
+          attachments: z.array(AttachmentId).optional(),
+          /** How many tasks one may wait for is the backend's to say. */
+          needs: z.array(z.union([Ref, z.object({ key: TaskKey }).strict()])).optional(),
+          for: ActorId.nullable().optional(),
+        })
+        .refine((task) => task.text.trim().length > 0 || (task.attachments?.length ?? 0) > 0, { message: 'message text is empty', path: ['text'] })
+        .refine((task) => storable(task.text), { message: 'message text has a NUL character or a lone surrogate', path: ['text'] }),
+    )
+    .min(1)
+    .max(TASK_BATCH_MAX),
+  id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
+  /**
+   * From a board in front of this one: its digest of what the batch asked for as it was given, before
+   * its own middleware changed anything, so both boards tell a repeat by the same request. A board
+   * with none in front makes its own. It says nothing of who writes or what: a caller that sends one
+   * changes only which of its own requests its own `id` answers.
+   */
+  request: BatchRequest.optional(),
+})
+
+/**
+ * `request` is a board's digest of what a batch asked for, as it was given: with it, the batch
+ * answers only that request, and any other under the `id` is 409 `duplicate_id`.
+ */
+export const CreatedTasksQuery = z.object({ request: BatchRequest.optional() })
 
 /** Which tasks to list: open ones unless `state` says `all` or names one. A claim whose lease has run out counts as `ready`. */
 export const TasksQuery = z.object({
@@ -256,27 +312,30 @@ export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()
 export const ClaimReadyTaskBody = z.object({
   channel: ChannelOrSubtree,
   label: Labels.optional(),
-  from: z.array(z.string().min(1).max(256)).max(32).optional(),
+  /** How many owners one claim takes from is the backend's to say. */
+  from: z.array(z.string().min(1).max(256)).optional(),
   lease: Lease.optional(),
   wait: z.number().min(0).max(300).optional(),
 })
 
 export const RenewTaskBody = z.object({ ...Claimed, lease: Lease.optional() })
 export const ReleaseTaskBody = z.object(Claimed)
-export const CompleteTaskBody = z.object({ ...Claimed, result: TaskNote.optional() })
-export const FailTaskBody = z.object({ ...Claimed, reason: TaskNote })
+export const CompleteTaskBody = z.object({ ...Claimed, result: SentTaskNote.optional() })
+export const FailTaskBody = z.object({ ...Claimed, reason: SentTaskNote })
 /** A hold for a person. A claimed task's comes from its claim, with the claim's `epoch` and `token`. Kind `edited` is the board's own, so none asks for it. */
 export const BlockTaskBody = z
   .object({
-    reason: TaskNote,
-    kind: TaskHoldKind.refine((kind) => kind !== EDITED_HOLD, "`edited` is the board's own kind, for a task whose root someone else edited: name another").optional(),
+    reason: SentTaskNote,
+    kind: SentTaskHoldKind.refine((kind) => kind !== EDITED_HOLD, "`edited` is the board's own kind, for a task whose root someone else edited: name another").optional(),
     epoch: Claimed.epoch.optional(),
     token: Claimed.token.optional(),
   })
   .refine((body) => (body.epoch === undefined) === (body.token === undefined), { message: 'a claim is its `epoch` and its `token`: pass both, or neither' })
 /** The one actor of its owner's that claims the task, or null for anyone who may. */
 export const AssignTaskBody = z.object({ for: ActorId.nullable() })
-export const CancelTaskBody = z.object({ reason: TaskNote })
+/** The tasks it waits for now, in place of what it waited for: none, for a task that waits for nothing. How many it may wait for is the backend's to say. */
+export const TaskNeedsBody = z.object({ needs: z.array(Ref) })
+export const CancelTaskBody = z.object({ reason: SentTaskNote })
 
 const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
 const ClaimValue = z.string().min(1).max(1000)
@@ -310,7 +369,7 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
 ])
 
 /** What a grant lets its principals do: a map from channel pattern to `'all'` or a list, `[]` for none. Kept as written. */
-export const GrantCan = z.record(z.string().min(1).max(300), CanGrant)
+export const GrantCan = z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), CanGrant)
 
 /** A grant: who it names, and one `can` for all of them. The same principals again are another grant. */
 export const GrantBody = z.strictObject({
@@ -358,9 +417,9 @@ export const UpdateGrantBody = z
  * Strict, so a board that doesn't know a field refuses it: what it kept could never be changed.
  */
 export const SchemaBody = z.strictObject({
-  name: z.string().regex(SCHEMA_NAME, 'a schema name is up to 80 lowercase letters, numbers, and ._-, starting with a letter'),
-  version: z.number().int().min(1).max(SCHEMA_VERSION_MAX),
-  description: z.string().min(1).max(SCHEMA_DESCRIPTION_MAX).refine(storable, 'a description has a NUL character or a lone surrogate').optional(),
+  name: z.string().regex(/^[a-z][a-z0-9._-]*$/, 'a schema name is lowercase letters, numbers, and ._-, starting with a letter'),
+  version: z.number().int().min(1),
+  description: z.string().min(1).refine(storable, 'a description has a NUL character or a lone surrogate').optional(),
   schema: z.record(z.string(), z.unknown()),
 })
 
@@ -584,10 +643,10 @@ export const UploadStartBody = z.object({
 /** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers` (its `content-type` included), before `expiresAt`, then finish it. */
 export type UploadTicket = { id: string; url: string; headers: Record<string, string>; expiresAt: string }
 
-export const EditBody = z.object({ text: MessageText, revision: Revision.optional() })
+export const EditBody = z.object({ text: SentText, revision: Revision.optional() })
 export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (other platforms ignore it). */
-export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
+export const TypingBody = z.object({ status: z.string().trim().min(1).max(50).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
 /**
  * A channel to make before anything posts to it, and nothing else: a key it doesn't know is a 400,
@@ -616,6 +675,7 @@ export const LabelBody = z
   })
 
 export type CreateTaskInput = z.input<typeof CreateTaskBody>
+export type CreateTasksInput = z.input<typeof CreateTasksBody>
 export type TasksQueryInput = z.input<typeof TasksQuery>
 export type ClaimReadyTaskInput = z.input<typeof ClaimReadyTaskBody>
 export type FiltersInput = z.input<typeof Filters>
@@ -1055,6 +1115,10 @@ export const routes = {
   tasks: { method: 'GET', path: '/tasks', query: TasksQuery },
   /** Starts a thread as a task (`post` there, and `label` for its labels), or makes the thread `re` roots one (`label` there). */
   createTask: { method: 'POST', path: '/tasks', body: CreateTaskBody },
+  /** Starts several threads in one channel as tasks, in one write: all of them or none, and nothing shows before all have landed. */
+  createTasks: { method: 'POST', path: '/tasks/batch', body: CreateTasksBody },
+  /** The caller's own batch made under the `id` it gave, its tasks as they are now: for telling a retry before making anything. */
+  createdTasks: { method: 'GET', path: '/tasks/batch/:id', query: CreatedTasksQuery },
   /** Claims the oldest ready task in a channel or subtree: `label` where it is. Answers `{ task: null }` when none is. */
   claimReadyTask: { method: 'POST', path: '/tasks/claim', body: ClaimReadyTaskBody },
   /** Claims a task: `label` in its channel. Its answer's `claim` goes on what the claim does next. */
@@ -1070,6 +1134,8 @@ export const routes = {
   unblockTask: { method: 'POST', path: '/tasks/:id/unblock' },
   reopenTask: { method: 'POST', path: '/tasks/:id/reopen' },
   assignTask: { method: 'POST', path: '/tasks/:id/assign', body: AssignTaskBody },
+  /** Replaces what a task waits for, while no one holds it and it isn't finished. */
+  setTaskNeeds: { method: 'POST', path: '/tasks/:id/needs', body: TaskNeedsBody },
   cancelTask: { method: 'POST', path: '/tasks/:id/cancel', body: CancelTaskBody },
   /** Listing grants needs manage at `*`; changing one, manage at each pattern its `can` names. Team owners always may. */
   grants: { method: 'GET', path: '/grants' },
