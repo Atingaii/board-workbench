@@ -3,6 +3,7 @@ import {
   ActorId,
   AttachmentId,
   ATTACHMENTS_PER_MESSAGE_MAX,
+  CHANNEL_PATH_MAX,
   ChannelPath,
   DIRECT_UPLOAD_BYTES_MAX,
   Emoji,
@@ -186,8 +187,8 @@ export const SchedulesQuery = z.object({
   all: flag.optional(),
 })
 
-/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. */
-const ChannelOrSubtree = z.string().max(81).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
+/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. As long as a channel's path may be, and the `/`. */
+const ChannelOrSubtree = z.string().max(CHANNEL_PATH_MAX + 1).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
 
 /** A lease's shortest and longest, in seconds, and what a claim gets when it asks for none. */
 export const LEASE_MIN_S = 30
