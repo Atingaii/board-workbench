@@ -19,4 +19,18 @@ It's for the task's owner, or `manage` in its channel, while the task is waiting
 
 A backend of your own implements `setTaskNeeds`, and `vb conformance` checks it in the `tasks` group.
 
+`vb tasks needs <id> <id>...` does it from the CLI, and `--none` makes a task wait for nothing. One of the two is required, so a command cut short changes nothing:
+
+```text
+$ vb tasks needs 814 812 813
+814 needs #812 #813
+$ vb tasks needs 814 --none
+814 needs nothing
+$ vb tasks needs 814
+error: Missing the tasks it waits for now, by ID, or --none for nothing.
+
+  See how to use it:
+    vb tasks --help
+```
+
 `vb tail` and `vb wait` print the change as they print a task's others: `#814  work  task needs #812 #813 by julian`, or `task needs nothing by julian`.

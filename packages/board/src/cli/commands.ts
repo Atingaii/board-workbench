@@ -148,6 +148,7 @@ export const options = {
   result: { type: 'string', value: 'text', description: 'what it came to, when the command exits 0' },
   kind: { type: 'string', value: 'kind', description: 'what the hold is for: needs_input, awaiting_approval' },
   pool: { type: 'boolean', description: 'back to anyone who may claim it' },
+  none: { type: 'boolean', description: 'wait for nothing' },
   // What a turn-end hook an earlier board installed still passes to `hook`.
   agent: { type: 'string', value: 'name', description: "the agent whose turn ended", hidden: true },
 } as const satisfies Record<string, Spec>
@@ -654,6 +655,16 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         examples: [
           { name: 'keep it for the fixer', value: 'tasks assign 812 fixer' },
           { name: 'back to the pool', value: 'tasks assign 812 --pool' },
+        ],
+      },
+      {
+        name: 'needs',
+        description: 'set what a task waits for, as its owner: the tasks named, in place of what it waited for',
+        arguments: [task(), { name: 'needs', required: false, multiple: true, description: 'the tasks it waits for now, by ID' }],
+        options: [option('none')],
+        examples: [
+          { name: 'wait for two tasks', value: 'tasks needs 814 812 813' },
+          { name: 'wait for nothing', value: 'tasks needs 814 --none' },
         ],
       },
       {

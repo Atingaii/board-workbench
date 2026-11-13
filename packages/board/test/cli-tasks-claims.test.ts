@@ -143,6 +143,55 @@ describe("vb tasks, with the claim it keeps", () => {
     expect((await vb(['tasks', 'assign', id, 'fixer', '--pool'])).code).toBe(2)
   }, 60_000)
 
+  it('sets what a task waits for, in place of what it waited for, and nothing with --none', async () => {
+    const fix = await create('needed', 'fix CVE-123')
+    const notes = await create('needed', 'update the changelog')
+    const review = await create('needed', 'review the fix')
+    const needs = async (id: string) => (await task(id)).task?.needs
+    // The tasks named, each once however it's written: it waits for them now.
+    expect(await ok(['tasks', 'needs', review, fix, `#${notes}`, fix])).toBe(`${review} needs #${fix} #${notes}\n`)
+    expect((await task(review)).task).toMatchObject({ state: 'waiting', needs: [fix, notes] })
+    // In place of what it waited for, not beside it.
+    expect(await ok(['tasks', 'needs', review, notes])).toBe(`${review} needs #${notes}\n`)
+    expect(await needs(review)).toEqual([notes])
+    // Nothing is said, not left out: a command cut short changes nothing.
+    const bare = await vb(['tasks', 'needs', review])
+    expect(bare).toEqual({ code: 2, stdout: '', stderr: 'error: Missing the tasks it waits for now, by ID, or --none for nothing.\n\n  See how to use it:\n    vb tasks --help\n' })
+    expect(failure(await vb(['tasks', 'needs', review, '--json'])).reason).toBe('missing_arguments')
+    const both = await vb(['tasks', 'needs', review, fix, '--none'])
+    expect([both.code, both.stdout, both.stderr.split('\n')[0]]).toEqual([2, '', `error: Tasks are what #${review} waits for, and --none for nothing: pass one of them.`])
+    expect(await needs(review)).toEqual([notes])
+    expect(await ok(['tasks', 'needs', review, '--none'])).toBe(`${review} needs nothing\n`)
+    expect((await task(review)).task).toMatchObject({ state: 'ready', needs: [] })
+    // For a program: the task as it is now, in one document.
+    const json = JSON.parse(await ok(['tasks', 'needs', review, fix, '--json'])) as { task: MessageView; outcome: string }
+    expect(Object.keys(json).sort()).toEqual(['outcome', 'task'])
+    expect(json).toMatchObject({ outcome: 'set', task: { id: review, task: { state: 'waiting', needs: [fix] } } })
+
+    // What the board refuses is said by what the command was doing, with the board's words under it.
+    const circle = await vb(['tasks', 'needs', fix, review])
+    expect(circle).toEqual({
+      code: 2,
+      stdout: '',
+      stderr: `error: Can't change what task #${fix} needs. It waits for tasks you can read, and none that waits for it.\n  needs: #${review} waits for #${fix} already: they would wait for each other\n\n  See what it waits for now:\n    vb read ${fix}\n  Or see the tasks there are:\n    vb tasks --state all\n`,
+    })
+    expect(failure(await vb(['tasks', 'needs', fix, '999999', '--json']))).toMatchObject({ reason: 'invalid_needs', data: { error: { code: 'invalid_needs', status: 400 } } })
+    expect(await needs(fix)).toEqual([])
+    // It's its owner's to change, while no one holds it and it isn't finished.
+    const theirs = await vb(['tasks', 'needs', review, '--none'], await deployment())
+    expect([theirs.code, theirs.stderr.split('\n')[0]]).toEqual([1, `error: You can't change what task #${review} needs. It's someone else's.`])
+    await ok(['tasks', 'claim', fix])
+    const held = await vb(['tasks', 'needs', fix, notes])
+    expect([held.code, held.stderr.split('\n')[0], held.stderr.split('\n').slice(2).join('\n')]).toEqual([1, `error: Can't change what task #${fix} needs. Someone holds it.`, `\n  See who holds it, and until when:\n    vb read ${fix}\n`])
+    await ok(['tasks', 'complete', fix, 'fixed in a1b2c3'])
+    const done = await vb(['tasks', 'needs', fix, notes])
+    expect([done.code, done.stderr.split('\n')[0]]).toEqual([1, `error: Can't change what task #${fix} needs. It's finished.`])
+    expect(await needs(review)).toEqual([fix])
+    // A thread that's no task says so, and how to make it one.
+    const thread = (await ok(['post', 'needed', 'export times out'])).trim()
+    expect((await vb(['tasks', 'needs', thread, notes])).stderr).toBe(`error: #${thread} isn't a task.\n\n  Make it one:\n    vb tasks create ${thread}\n`)
+  }, 60_000)
+
   it("cancels a task as its owner, and tells anyone else it isn't theirs", async () => {
     const id = await create('cancels', 'rebuild the index')
     const web = await deployment()

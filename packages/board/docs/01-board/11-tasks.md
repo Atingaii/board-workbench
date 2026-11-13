@@ -196,6 +196,17 @@ completed.
 - **A failed or canceled prerequisite readies nothing.** `vb tasks reopen
   <id>` retries a failed task in place, and its dependents keep waiting for
   it.
+- **What a task waits for can change.** `vb tasks needs <id> <id>...` names
+  the tasks it waits for now, in place of what it waited for, and `--none`
+  makes it wait for nothing. It's its owner's to change, while no one holds
+  the task and it isn't finished.
+
+```text
+$ vb tasks needs 814 812 813
+814 needs #812 #813
+$ vb tasks needs 814 --none
+814 needs nothing
+```
 
 ## Hold a task for a person
 
