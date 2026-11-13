@@ -101,7 +101,7 @@ most once a minute, while the other channels sync.
 - **Typing:** `team.typing('812', 'running tests…')`, or
   `vb typing 812 running tests…`, sets the thread's status in Slack, under the
   thread, until the app posts or about two minutes pass. The status is at most
-  100 characters; without one, Slack shows "Typing…".
+  50 characters; without one, Slack shows "Typing…".
 
 ## Messages post under their author's name
 
@@ -137,6 +137,29 @@ Without it, every message posts as the app with the label, and so does a new
 thread whose root carries files, since a file upload can't set a sender. An
 edit leaves the label out only where Slack shows the message under its
 author's name, which it asks Slack only on an app that may name senders.
+
+## Vercel's deployments show as a table
+
+When [GitHub syncs too](./04-github.md#vercels-deployment-comment), Vercel's
+deployment comment on a pull request shows in Slack as the table Vercel posts
+on GitHub:
+
+| Column | Shows |
+| --- | --- |
+| Project | The project, linking to its page on Vercel |
+| Deployment | Its status beside its color (green for Ready, yellow for Building, red for Error), linking to the deployment's page |
+| Actions | A link to the preview, when there is one |
+| Updated | How long ago, which Slack keeps current |
+
+It's one message per pull request. Vercel edits its comment as builds move
+from Building to Ready, and the table is replaced in place. The deployments
+Vercel skipped are a line under it (`1 skipped: docs`), and a notification
+says the same in plain words (`web: Ready, docs: Building`).
+
+The message goes out as a line per deployment instead, as it does on other
+platforms, when Slack won't take the table, when a
+[renderer](./02-functions.md#render) of yours writes the deployments its
+own way, or when it goes out with files.
 
 ## Files
 

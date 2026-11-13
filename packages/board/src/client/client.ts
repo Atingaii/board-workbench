@@ -214,6 +214,29 @@ const messageBody = (input: string | PostOptions | ReplyOptions) => {
   return attachments?.length ? { ...rest, attachments: attachments.map((a) => (typeof a === 'string' ? a : a.id)) } : rest
 }
 
+/** Whether live events are flowing: `live` once the board has answered a request for them, `retrying` once one failed and it's backing off. */
+export type EventsState = 'live' | 'retrying'
+
+/**
+ * What following events takes: a `signal` that stops it, and `onState`, told each time the feed
+ * goes live or starts retrying. It hears nothing before the first answer or failure.
+ */
+export type EventsOptions = {
+  signal?: AbortSignal
+  onState?: (state: EventsState) => void
+}
+
+/** Tells `onState` each change, once: `live` when the board answers, `retrying` when a request fails. It never guesses. */
+export function eventsState(onState: EventsOptions['onState']) {
+  let current: EventsState | null = null
+  const tell = (next: EventsState) => {
+    if (next === current) return
+    current = next
+    onState?.(next)
+  }
+  return { answered: () => tell('live'), failed: () => tell('retrying') }
+}
+
 export type WaitOptions = {
   /** `'30s'`, `'10m'`, `'1h'`, or milliseconds. Default `'30m'`. */
   timeout?: string | number
@@ -769,13 +792,14 @@ export function createBoardClient(options: ClientOptions) {
     inboxAck: (key: string, id: string, body: { lease: string; error?: string }) =>
       call<{ ok: true }>('POST', `/inbox/${path(key)}/${path(id)}/ack`, { body }),
 
-    /** Live events. Reconnects from the last seen index whenever the stream closes. */
+    /** Live events. Reconnects from the last seen index whenever the stream closes, and tells `onState` whether it's live or retrying. */
     async *events(
       query: Filters & { after?: string; all?: boolean } = {},
-      opts: { signal?: AbortSignal } = {},
+      opts: EventsOptions = {},
     ): AsyncGenerator<BoardEventView> {
       let after = query.after
       let failures = 0
+      const state = eventsState(opts.onState)
       while (!opts.signal?.aborted) {
         let response: Response
         try {
@@ -786,10 +810,12 @@ export function createBoardClient(options: ClientOptions) {
         } catch (error) {
           if (opts.signal?.aborted) return
           if (error instanceof BoardError && error.status >= 400 && error.status < 500) throw error
+          state.failed()
           await new Promise((r) => setTimeout(r, Math.min(30_000, 500 * 2 ** failures++)))
           continue
         }
         failures = 0
+        state.answered()
         try {
           for await (const message of parseSse(response.body!, opts.signal)) {
             if (message.id !== undefined) after = message.id
@@ -797,6 +823,7 @@ export function createBoardClient(options: ClientOptions) {
           }
         } catch (error) {
           if (opts.signal?.aborted) return
+          state.failed()
           await new Promise((r) => setTimeout(r, Math.min(30_000, 500 * 2 ** failures++)))
         }
       }

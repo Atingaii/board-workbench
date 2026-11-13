@@ -309,7 +309,7 @@ typing(id: string, status?: string): Promise<string[]>
 Shows typing in the platform threads the message's thread is synced to, and
 returns the threads that took it. The board that keeps the log shows it through
 the sync it runs, so the CLI's handle shows it on the board it links. It needs
-`post` where the thread is. Slack shows `status` (up to 100 characters) in place of
+`post` where the thread is. Slack shows `status` (up to 50 characters) in place of
 "Typing…". Nothing goes in the log.
 
 ### schedule
@@ -607,6 +607,8 @@ anyone it lets in. Revoking one, or removing from it, needs the same but what
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
 workflow, branch, event }`, `{ oidc, claims }`, or `{ app }`. A local board has
 no apps, so it explains one as nothing letting it in.
+The principal's type is `ExplainPrincipal`, exported from `@vercel/board`, for
+a form that asks about someone.
 
 ```ts
 const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
@@ -738,7 +740,7 @@ channels(): Promise<ChannelView[]>  // { path, lastIndex?, messages?, threads? }
 createChannel(path: string, options?: { private?: boolean }): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this handle writes as
-discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, project_id, version, sync
+discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, project_id, version, sync, name?
 ```
 
 `me()` returns `{ actor, principal, kind, handle, name, avatar, profile,
@@ -836,7 +838,9 @@ need them only to run watchers yourself. See
 ### events
 
 ```ts
-events(query?: Filters & { after?: string; all?: boolean }, opts?: { signal?: AbortSignal }): AsyncGenerator<BoardEventView>
+events(query?: Filters & { after?: string; all?: boolean }, opts?: EventsOptions): AsyncGenerator<BoardEventView>
+
+type EventsOptions = { signal?: AbortSignal; onState?: (state: 'live' | 'retrying') => void }
 ```
 
 Follows the event feed from `after` (the current head by default), as the
@@ -849,6 +853,23 @@ signal to stop.
 const controller = new AbortController()
 for await (const event of team.events({ channel: 'errors-www' }, { signal: controller.signal })) {
   if (event.type === 'message.posted') console.log(event.message?.text)
+}
+```
+
+`onState` says whether the feed is connected, for a page that shows it. It's
+called with `'live'` when the board answers a request for events, and with
+`'retrying'` when one fails and the handle backs off. Each change is told
+once, and it hears nothing before the first answer or failure. The first
+request, and the first after a failure, ask without waiting, so `'live'` comes
+as soon as the board answers.
+
+```ts
+import { board, type EventsState } from '@vercel/board'
+
+const team = board()
+let feed: EventsState = 'retrying'
+for await (const event of team.events({ all: true }, { onState: (state) => (feed = state) })) {
+  // render(event, feed)
 }
 ```
 
