@@ -287,6 +287,14 @@ through the binding's `handle(caller)`, so the middleware sees it.
   too: neither can say a message came from, or landed in, a platform thread or
   message another board thread or message has.
 
+The names are a value too, for a form that offers them:
+
+```ts
+import { PERMISSIONS, type Permission } from '@vercel/board/access'
+
+const names: readonly Permission[] = PERMISSIONS // read, post, react, label, sync, manage
+```
+
 ## Channels
 
 `can` takes `'all'`, a list, or a map from pattern to permissions:

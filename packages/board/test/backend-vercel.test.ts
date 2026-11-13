@@ -732,6 +732,35 @@ describe('vercel()', () => {
     expect(await team.discovery()).toMatchObject({ team_id: 'team_test' })
   })
 
+  it("says the board's name in its discovery, and none to a caller who may not read the board", async () => {
+    const api = fakeMessageboard({ boards: [{ name: 'Security', id: 'brd_sec' }] })
+    expect(await handleOn(api).discovery()).toMatchObject({ name: 'General' })
+    const security = board({ name: 'security', backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'user:u_jb') }) })
+    expect(await security.discovery()).toMatchObject({ name: 'Security' })
+    // Found as the team's default, by a caller who only posts: where it is, and no name.
+    const poster = await withHeadersOn(api)({ 'x-board-can': 'dev/=post' }).discovery()
+    expect(poster).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_test?teamId=team_test` })
+    expect(poster).not.toHaveProperty('name')
+    // A handle narrowed with a can asks as it's narrowed: the name is for one that reads somewhere.
+    const team = handleOn(api)
+    expect(await team.as('fixer', { can: { 'dev/': ['read'] } }).discovery()).toMatchObject({ name: 'General' })
+    // One that reads nowhere gets none, whatever the API would answer: the board isn't read for it.
+    const reads = () => api.requests.filter((made) => made === 'GET /boards/brd_test').length
+    const asked = reads()
+    expect(await team.as('fixer', { can: { 'dev/': ['post'] } }).discovery()).not.toHaveProperty('name')
+    expect(await team.as('fixer', { can: {} }).discovery()).not.toHaveProperty('name')
+    expect(reads()).toBe(asked)
+    // One on a board named by its ID still learns where it is, and no name it may not read.
+    const onSecurity = board({ backend: vercel({ team: 'team_test', board: 'brd_sec', api: API, fetch: as(api, 'user:u_jb') }) })
+    expect(await onSecurity.discovery()).toMatchObject({ name: 'Security' })
+    const posting = await onSecurity.as('fixer', { can: { 'dev/': ['post'] } }).discovery()
+    expect(posting).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_sec?teamId=team_test` })
+    expect(posting).not.toHaveProperty('name')
+    // Named by its ID, it's read either way, so a credential that's narrowed itself is told it can't.
+    const byId = board({ backend: vercel({ team: 'team_test', board: 'brd_sec', api: API, fetch: (input, init = {}) => as(api, 'user:u_jb')(input, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), 'x-board-can': 'dev/=post' } }) }) })
+    await expect(byId.discovery()).rejects.toMatchObject({ status: 403 })
+  })
+
   it("reads past the API's page of 100 after a cursor, as many as a read asks for", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)

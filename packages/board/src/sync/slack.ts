@@ -3,7 +3,7 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderFile, type ProviderSender, type SyncContext, type ReceivedEvent, type FetchedLink } from './provider.ts'
+import { opensBlock, UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderFile, type ProviderSender, type SyncContext, type ReceivedEvent, type FetchedLink } from './provider.ts'
 import type { SourceJoin, SourceMessage, SourceRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/external.ts'
@@ -11,6 +11,8 @@ import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { connectSlackAdapter } from '@vercel/connect/chat'
 import type { SyncFn } from './fn.ts'
+import { deploymentsLayout, type SlackBlock, type SlackText } from './slack-deployments.ts'
+import type { VercelDeployment } from '../contract/bots.ts'
 
 type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean; is_im?: boolean; is_mpim?: boolean; is_ext_shared?: boolean }
 export type SlackClient = {
@@ -41,6 +43,8 @@ export type SlackClient = {
   /** Posts an agent's message under its own name; needs `chat:write.customize` for `username` and `icon_url`. */
   chat?: {
     postMessage(args: SlackPost): Promise<{ ts?: string }>
+    /** Replaces a message's text and layout, for one board laid out itself. */
+    update?(args: { channel: string; ts: string; text: string; blocks: SlackBlock[] }): Promise<unknown>
     /** A message's link, with the workspace's own host and a reply's `thread_ts`. */
     getPermalink?(args: { channel: string; message_ts: string }): Promise<{ permalink?: string }>
   }
@@ -54,6 +58,7 @@ type SlackPost = {
   thread_ts?: string
   text?: string
   markdown_text?: string
+  blocks?: SlackBlock[]
   username?: string
   icon_url?: string
   unfurl_links?: boolean
@@ -91,9 +96,26 @@ export function slackUsername({ name, attribution = '' }: Pick<ProviderSender, '
   return `${cut.trimEnd()}…${attribution}`
 }
 
-/** The `**name**: ` a message's text opens with, taken out when Slack shows the name as the sender. */
+/**
+ * Text as the adapter gives it to Slack, so the text around a table reads as it does in any
+ * message (a bare `@name` a mention, an emoji by its Slack name): markdown as the adapter posts
+ * it, and its older mrkdwn, which a message's notification text is.
+ */
+const textOf = (adapter: SlackInternals): SlackText => ({
+  markdown: (markdown) => {
+    const payload = adapter.formatConverter?.toSlackPayload?.call(adapter.formatConverter, { markdown })
+    return payload && 'markdown_text' in payload ? payload.markdown_text : markdown
+  },
+  mrkdwn: (markdown) => adapter.formatConverter?.toResponseUrlText?.call(adapter.formatConverter, { markdown }) ?? markdown,
+})
+
+/** Slack's answers that mean "not this layout", before anything is sent or changed: the message goes out as markdown instead. */
+const LAYOUT_REFUSED = new Set(['invalid_blocks', 'invalid_blocks_format', 'msg_blocks_too_long', 'block_mismatch'])
+const layoutRefused = (error: unknown) => LAYOUT_REFUSED.has((error as { data?: { error?: string } } | null)?.data?.error ?? '')
+
+/** The `**name**: ` a message's text opens with (on a line of its own before a block), taken out when Slack shows the name as the sender. */
 export function withoutLabel(markdown: string, name: string): string {
-  const label = new RegExp(`^\\*\\*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\*\\*: `)
+  const label = new RegExp(`^\\*\\*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\*\\*:(?: |\n\n)`)
   return markdown.replace(label, '')
 }
 
@@ -255,8 +277,8 @@ export function forwardText(links: ExternalLink[]): string {
   return links.filter((link) => link.snapshot).map((link) => {
     const { author, text } = link.snapshot!
     const lines = text.trim() ? text.trim().split('\n') : ['']
-    // A first line that opens a block (a fence, a list, a heading, a quote) only works at a line's start.
-    const head = /^(```|~~~|[-*+] |\d+[.)] |#{1,6} |>)/.test(lines[0]!) ? [`> **${author}**:`, `> ${lines[0]}`] : [`> **${author}**: ${lines[0]}`]
+    // A first line that opens a block (a fence, a list, a heading, a quote, a table) only works at a line's start.
+    const head = opensBlock(lines[0]!) ? [`> **${author}**:`, `> ${lines[0]}`] : [`> **${author}**: ${lines[0]}`]
     return [...head, ...lines.slice(1).map((line) => `> ${line}`)].map((line) => line.trimEnd()).concat('', link.url).join('\n')
   }).join('\n\n')
 }
@@ -734,8 +756,12 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
    * the app, label and all.
    */
   override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
-    const { as, ...given } = body
+    const { as, deployments, ...given } = body
     const post = { ...given, markdown: withoutHtml(given.markdown) }
+    if (deployments && !post.files?.length) {
+      const laidOut = await this.postDeployments(target, as, post.markdown, deployments)
+      if (laidOut) return laidOut
+    }
     if (kind === 'channel' && post.files?.length && post.markdown.trim()) {
       const sent = await this.postWithFiles(target, post.markdown, post.files)
       if (sent) return sent
@@ -797,11 +823,67 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
 
   /** An edit keeps the label out only where the message went out under its author's name. */
   override async edit(thread: string, message: string, body: ProviderPost) {
-    const { as, ...given } = body
+    const { as, deployments, ...given } = body
     const post = { ...given, markdown: withoutHtml(given.markdown) }
     // Only an app that may name a message's sender ever sent one under a name.
     const named = as && (await this.web().then((web) => !!web && this.canCustomize(web), () => false)) ? await this.sentAs(thread, message, as) : false
-    await super.edit(thread, message, named && as ? { ...post, markdown: withoutLabel(post.markdown, as.name) } : post)
+    const edited = named && as ? { ...post, markdown: withoutLabel(post.markdown, as.name) } : post
+    if (deployments && !edited.files && (await this.editDeployments(thread, message, edited.markdown, deployments))) return
+    await super.edit(thread, message, edited)
+  }
+
+  /**
+   * Vercel's deployment comment goes out with its deployments as the table Vercel posts on a
+   * pull request, the text around them as markdown, under its author's name where the app may
+   * set one. Null, with nothing sent, when board has no client to post with, the markdown isn't
+   * one board can lay out, or Slack won't take the layout: it goes out as markdown, a line each.
+   */
+  private async postDeployments(target: string, as: ProviderSender | undefined, markdown: string, deployments: VercelDeployment[]): Promise<ProviderDelivery | null> {
+    if (!deploymentsLayout(markdown, deployments)) return null
+    const adapter = (await this.ready()) as SlackInternals
+    const web = await this.web().catch(() => undefined)
+    if (!web?.chat) return null
+    const username = as ? slackUsername(as) : null
+    const named = as && username !== null && (await this.canCustomize(web)) ? { username, icon: slackIcon(as.avatar), name: as.name } : null
+    const threadId = this.toChat(target)
+    const { channel, threadTs } = adapter.decodeThreadId(threadId)
+    const message = { markdown: named ? withoutLabel(markdown, named.name) : markdown }
+    const layout = deploymentsLayout(((await adapter.resolveMessageMentions?.(message, threadId)) ?? message).markdown, deployments, textOf(adapter))
+    if (!layout) return null
+    const sent = await web.chat
+      .postMessage({
+        channel,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+        ...layout,
+        unfurl_links: false,
+        unfurl_media: false,
+        ...(named ? { username: named.username, ...(named.icon ? { icon_url: named.icon } : {}) } : {}),
+      })
+      .catch((error: unknown) => {
+        if (layoutRefused(error)) return null
+        throw error
+      })
+    if (!sent) return null
+    if (!sent.ts) throw new Error('slack: chat.postMessage returned no ts')
+    return { thread: this.toNative(`${adapter.name}:${channel}:${threadTs || sent.ts}`), message: sent.ts }
+  }
+
+  /** An edit to that comment: its text and table, replaced. False, with nothing changed, where a post would be null, or board's client can't edit. */
+  private async editDeployments(thread: string, message: string, markdown: string, deployments: VercelDeployment[]): Promise<boolean> {
+    if (!deploymentsLayout(markdown, deployments)) return false
+    const adapter = (await this.ready()) as SlackInternals
+    const web = await this.web().catch(() => undefined)
+    if (!web?.chat?.update) return false
+    const threadId = this.toChat(thread)
+    const layout = deploymentsLayout(((await adapter.resolveMessageMentions?.({ markdown }, threadId)) ?? { markdown }).markdown, deployments, textOf(adapter))
+    if (!layout) return false
+    try {
+      await web.chat.update({ channel: adapter.decodeThreadId(threadId).channel, ts: message, ...layout })
+    } catch (error) {
+      if (layoutRefused(error)) return false
+      throw error
+    }
+    return true
   }
 
   private async postNamed(target: string, as: ProviderSender, markdown: string): Promise<ProviderDelivery | null> {

@@ -81,7 +81,7 @@ export const options = {
   'idempotency-key': { type: 'string', value: 'key', description: 'sending the same one again posts once' },
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
-  attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file' },
+  attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file, up to 10 per message' },
   'text-file': { type: 'string', value: 'path', description: 'the text, from a file: - reads stdin' },
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
   if: { type: 'string', multiple: true, value: 'k=v', description: 'only while the message has this label now' },
