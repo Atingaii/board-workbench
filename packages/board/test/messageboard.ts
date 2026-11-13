@@ -2181,7 +2181,11 @@ export function fakeMessageboard(
     const rest = onBoard[2] ?? ''
     // A narrowed caller is never its principal's integration: a narrowed register would replace its registration.
     if (actor.narrowed && /^\/(watchers|sync|inbox)(\/|$)/.test(rest)) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't use its principal's watchers or sync's records.")
-    if (method === 'GET' && rest === '') return { board: show(board) }
+    if (method === 'GET' && rest === '') {
+      // The board itself is read by a caller who reads somewhere on it.
+      if (actor.can && !Object.values(actor.can).some((grant) => grant === 'all' || grant.includes('read'))) throw new Refused(403, 'forbidden', 'This caller may not read on this board.')
+      return { board: show(board) }
+    }
     // The team's schemas, through a board: whoever it lets in reads them.
     if (method === 'GET' && (rest === '/schemas' || rest.startsWith('/schemas/'))) return schemas.read(rest)
     // A board's own me: what the team's says, within what this board's grants give the caller.
