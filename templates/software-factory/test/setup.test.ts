@@ -333,7 +333,8 @@ test("once it runs, the page shows what one check found: the factory's pull requ
     },
   });
   const where = { origin: "https://factory.acme.dev", team: "acme", board: null, repo: "acme/factory" };
-  const now = new Date("2026-11-12T12:00:00.000Z");
+  // The day after the thread the fake board holds.
+  const now = new Date("2026-11-04T12:00:00.000Z");
   const running = runningOf(await setup(deps), deps.synced, where, now);
   assert.ok(running);
   // GitHub's count of what the factory opened, as the checks read it.
@@ -343,8 +344,8 @@ test("once it runs, the page shows what one check found: the factory's pull requ
   assert.deepEqual(running.ask, { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 2, suggest: ["acme/api", "acme/web"], install: "https://github.com/apps/acme-factory/installations/new" });
   assert.ok(running.join.includes("vercel board read project-factory/ --scope acme"));
   assert.equal(running.first, null);
-  // The week is read from the same check: the thread the fake board holds, answered.
-  assert.deepEqual([running.overview.week.threads, running.overview.week.answered], [0, 0]);
+  // The week is read from the same check: the thread the fake board holds, which the agent answered.
+  assert.deepEqual([running.overview.week.threads, running.overview.week.messages, running.overview.week.answered], [1, 2, 1]);
   // A factory with a required step left shows its steps, not this: here, no GitHub connector.
   const unset = fake({ deps: { connect: (connector) => notFound(connector) } });
   assert.equal(runningOf(await setup(unset.deps), unset.deps.synced, where, now), null);
