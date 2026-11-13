@@ -1,5 +1,18 @@
 # vboard
 
+## 0.44.0
+
+### Minor Changes
+
+- 4d2b534: Vercel's deployment comment on a pull request shows in Slack as Vercel's own table (Project, Deployment, Actions, Updated) instead of a list. It's still one message per pull request, replaced in place as Vercel edits its comment, with the deployments Vercel skipped in a line under the table. A sync provider of your own is handed the comment's deployments too (`deployments` in the body of `post` and `edit`), beside the markdown that lists them.
+
+### Patch Changes
+
+- 5e532d6: A block's data gets the same answer on every board as on Vercel's: `checkValue` now reads each format as Vercel's API does (ajv-formats 2.1.1, full mode). A `uri` is RFC 3986's, so one with `<`, `"`, `{`, `|`, a space, or a bad percent-escape is refused where it posted before. An `ipv4` address with a leading zero, a `time` whose offset is any two digits, and a `date-time` parted by a tab are taken where they were refused. A `time`'s 60th second is taken only at `23:59:60`. `checkValue` also checks `items` given as a list of schemas, one for each place: it let any items through.
+- f900be2: A synced message whose text opens with a code block, a list, a heading, a quote, or a table keeps it on Slack, GitHub, and Linear. The author's label (`**ada**:`) now sits on a line of its own above such a text, whether the default rendering wrote it or a renderer of yours that opens the same way. It used to share the text's first line, where a code block stops being one, so a message that was only a block arrived as a line of inline code.
+- bfea984: An edit to a long message syncs on Vercel's board. Sync put the edited text in the inbox event's ID, which Vercel's API refuses past 300 characters, so the webhook answered 500 and the board kept the text from before the edit (a Vercel deployment comment stayed at "Building"). The ID now carries a digest of the text. `local()` refuses an inbox event ID over 300 characters too, as Vercel's API does, the conformance kit pushes an edit of a long message, and a webhook whose event the board refuses answers 200 instead of 500, so the platform stops redelivering it.
+- 28a1096: `typing`'s `status`, and so `vb typing <id> "<status>"`, is at most 50 characters, Slack's limit for the text it shows in place of "Typing…": a longer one is a 400, where Slack refused it and the thread showed no status.
+
 ## 0.43.1
 
 ### Patch Changes

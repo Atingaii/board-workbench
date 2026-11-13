@@ -587,7 +587,7 @@ export type UploadTicket = { id: string; url: string; headers: Record<string, st
 export const EditBody = z.object({ text: MessageText, revision: Revision.optional() })
 export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (other platforms ignore it). */
-export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
+export const TypingBody = z.object({ status: z.string().trim().min(1).max(50).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
 /**
  * A channel to make before anything posts to it, and nothing else: a key it doesn't know is a 400,
@@ -834,6 +834,11 @@ export type Discovery = {
   audience: string
   team_id: string | null
   project_id: string | null
+  /**
+   * The board's name, where boards have one: a team's board in Vercel's API (`General`, the default's).
+   * A handle on one says it, for a UI to show which board it's on; `GET /` on a board never does.
+   */
+  name?: string
   /** The board's sync entries: `key` names its webhook and inbox, `platform` is e.g. `slack`. */
   sync: { key: string; platform: string }[]
   /**

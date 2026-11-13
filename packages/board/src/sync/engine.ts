@@ -18,10 +18,10 @@ import { waitUntil } from '../server/wait-until.ts'
 import type { SyncProvider } from './provider.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
-import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderSender, type Renderer } from './provider.ts'
+import { channelMissing, opensBlock, routesFor, ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderSender, type Renderer } from './provider.ts'
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
-import { displayText } from '../contract/bots.ts'
+import { displayText, vercelDeployments, VERCEL_BOT, type VercelDeployment } from '../contract/bots.ts'
 import { actorParts, platformProfile, shownName, viaText } from '../contract/profiles.ts'
 
 /** An event as sync gets it: a board event's view, with the message as it was before for a label change. */
@@ -826,7 +826,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
-  async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as?: ProviderSender }> {
+  async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as?: ProviderSender; deployments?: VercelDeployment[] }> {
     const actor = actors.byId[message.by.actor]
     // Whose word it is: the principal an actor with a profile writes for, and the platform of the
     // sync key an import came through, which may be another board's. A deployment writing as itself
@@ -846,10 +846,14 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       target,
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    const markdown = await textFor(key, message, actors, body)
+    // A text that opens a block is one only at a line's start: under its label, whichever renderer wrote it, not beside it.
+    const labeled = `**${name}**: `
+    const markdown = await textFor(key, message, actors, body.startsWith(labeled) && opensBlock(body.slice(labeled.length)) ? `**${name}**:\n\n${body.slice(labeled.length)}` : body)
     // Where the platform shows a sender per message, it shows one the board checked: anyone else's
     // name is what they sent, so it stays a label in the text, under the app.
-    return actor?.verified ? { markdown, as: { name, avatar: senderAvatar(message, actor), attribution } } : { markdown }
+    // Vercel's deployment comment goes with its deployments, for a platform that lays them out itself.
+    const deployments = message.by.actor === VERCEL_BOT ? vercelDeployments(message.text) : null
+    return { markdown, ...(actor?.verified ? { as: { name, avatar: senderAvatar(message, actor), attribution } } : {}), ...(deployments ? { deployments } : {}) }
   }
 
   /** An author's own picture, or for one with none or the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
@@ -875,9 +879,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
    */
   const renderFor = async (target: string, message: MessageView, actors: Actors, noted = false, renderer?: Renderer) => {
     const key = keyOf(target)
-    const { markdown, as } = await render(key, target, message, actors, renderer)
+    const { markdown, ...rest } = await render(key, target, message, actors, renderer)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles)
-    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
+    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...rest }
   }
 
   async function postReply(message: MessageView, target: string, externalThread: string, actors: Actors, renderer?: Renderer) {
