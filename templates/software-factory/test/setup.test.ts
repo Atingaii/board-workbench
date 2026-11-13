@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { agentPrompt, joinPrompt, markdown } from "../lib/markdown.ts";
 import { channel } from "../lib/project.ts";
+import { runningOf } from "../lib/running.ts";
 import { boardDeps, hasApp, isDone, setup, stepsView, type Deps, type Step, type Task } from "../lib/setup.ts";
 
 // The launcher's steps, driven as the page drives them, against a fake network: what a person sees is
@@ -278,6 +279,79 @@ test("an app that's on no repo is known to be on none, so no repo is taken for o
   const empty = await setup(fake({ routes: { "https://api.github.com/installation/repositories": () => json({ total_count: 0, repositories: [] }) } }).deps);
   assert.equal(empty.open ? undefined : hasApp("acme/web", empty.found), false);
   assert.equal(empty.open ? undefined : empty.found.waiting, 0);
+});
+
+test("the checks count the pull requests the factory opened in its repos, as GitHub counts them, and say nothing when it doesn't", async () => {
+  // GitHub's GraphQL, faked: who the token is, and how many pull requests each search finds.
+  const searches: Record<string, string>[] = [];
+  const graphql = (counts: object | null) => (init?: RequestInit) => {
+    const { query, variables } = JSON.parse(String(init?.body)) as { query: string; variables?: Record<string, string> };
+    if (query.includes("viewer")) return json({ data: { viewer: { login: "acme-factory[bot]" } } });
+    searches.push(variables ?? {});
+    return json(counts ? { data: counts } : { errors: [{ message: "something went wrong" }] });
+  };
+  const base = fake().deps.synced;
+  const synced = { ...base, repoChannels: { ...base.repoChannels, "acme/web": "project-factory/web" } };
+  const counted = await setup(fake({ deps: { synced }, routes: { "https://api.github.com/graphql": graphql({ open: { issueCount: 2 }, merged: { issueCount: 1 }, closed: { issueCount: 0 } }) } }).deps);
+  assert.deepEqual(counted.open ? null : counted.found.pulls, { open: 2, merged: 1, closed: 0 });
+  // One request asked for all three, each for this app's pull requests in the factory's repos and no others: a team may use the app elsewhere.
+  assert.equal(searches.length, 1);
+  const repos = "is:pr author:app/acme-factory repo:acme/factory repo:acme/web";
+  assert.deepEqual(searches[0], { open: `${repos} is:open`, merged: `${repos} is:merged`, closed: `${repos} is:closed is:unmerged` });
+  // GitHub answered with an error: no count, and the step is as done as it was.
+  const failed = await setup(fake({ routes: { "https://api.github.com/graphql": graphql(null) } }).deps);
+  assert.equal(failed.open ? undefined : failed.found.pulls, null);
+  assert.equal(failed.open ? undefined : isDone(failed.steps[1]!), true);
+  // Half an answer is no count either.
+  const half = await setup(fake({ routes: { "https://api.github.com/graphql": graphql({ open: { issueCount: 2 }, merged: null }) } }).deps);
+  assert.equal(half.open ? undefined : half.found.pulls, null);
+  // And a search that never answers costs the count, not the step.
+  const answered = graphql(null);
+  const down = await setup(
+    fake({
+      routes: {
+        "https://api.github.com/graphql": (init) => {
+          if (String(init?.body).includes("viewer")) return answered(init);
+          throw new Error("socket hang up");
+        },
+      },
+    }).deps,
+  );
+  assert.equal(down.open ? undefined : down.found.pulls, null);
+  assert.equal(down.open ? undefined : isDone(down.steps[1]!), true);
+});
+
+test("once it runs, the page shows what one check found: the factory's pull requests, its repos, and what onboards another", async () => {
+  const graphql = (init?: RequestInit) =>
+    String(init?.body).includes("viewer")
+      ? json({ data: { viewer: { login: "acme-factory[bot]" } } })
+      : json({ data: { open: { issueCount: 2 }, merged: { issueCount: 1 }, closed: { issueCount: 0 } } });
+  const { deps } = fake({
+    routes: {
+      "https://api.github.com/graphql": graphql,
+      "https://api.github.com/installation/repositories": () => json({ total_count: 3, repositories: ["factory", "web", "api"].map((name) => ({ full_name: `acme/${name}` })) }),
+    },
+  });
+  const where = { origin: "https://factory.acme.dev", team: "acme", board: null, repo: "acme/factory" };
+  // The day after the thread the fake board holds.
+  const now = new Date("2026-11-04T12:00:00.000Z");
+  const running = runningOf(await setup(deps), deps.synced, where, now);
+  assert.ok(running);
+  // GitHub's count of what the factory opened, as the checks read it.
+  assert.deepEqual(running.overview.pulls, { open: 2, merged: 1, closed: 0 });
+  assert.deepEqual(running.repos, [{ repo: "acme/factory", channel: "project-factory/rsi", slack: "#factory-rsi" }]);
+  // Another repo is asked for where the factory changes itself, and the field suggests the ones with the app.
+  assert.deepEqual(running.ask, { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 2, suggest: ["acme/api", "acme/web"], install: "https://github.com/apps/acme-factory/installations/new" });
+  assert.ok(running.join.includes("vercel board read project-factory/ --scope acme"));
+  assert.equal(running.first, null);
+  // The week is read from the same check: the thread the fake board holds, which the agent answered.
+  assert.deepEqual([running.overview.week.threads, running.overview.week.messages, running.overview.week.answered], [1, 2, 1]);
+  // A factory with a required step left shows its steps, not this: here, no GitHub connector.
+  const unset = fake({ deps: { connect: (connector) => notFound(connector) } });
+  assert.equal(runningOf(await setup(unset.deps), unset.deps.synced, where, now), null);
+  // And one anyone can open shows only how to close it.
+  const open = fake({ routes: { "https://factory.acme.dev/icon.svg": () => new Response("", { status: 200 }) } });
+  assert.equal(runningOf(await setup(open.deps), open.deps.synced, where, now), null);
 });
 
 test("the checks find where the GitHub app is added to more repos, by the app's own name, and nowhere when GitHub doesn't say it", async () => {
@@ -836,7 +910,7 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
 
 ## Pull requests
 
-- 1 open, 3 merged, 1 closed
+- 1 open, 3 merged, 1 closed, opened by the factory
 
 ## Repos
 
@@ -861,6 +935,9 @@ Bring it issues, threads, and questions. 3 of 3 steps done, checked on this requ
   const started = markdown(await setup(fake().deps), INSPECT, { ...running, first: "started" });
   assert.ok(started.includes("## First task\n\n- The factory is making the README yours, in #factory-rsi.\n"), started);
   assert.ok(!markdown(await setup(fake().deps), INSPECT, running).includes("First task"));
+  // When GitHub didn't count the factory's pull requests, the week is followed by the repos.
+  const uncounted = markdown(await setup(fake().deps), INSPECT, { ...running, overview: { ...running.overview, pulls: null } }, new Date("2026-11-12T12:00:00.000Z"));
+  assert.ok(uncounted.includes("- Last reply 4m ago\n\n## Repos\n"), uncounted);
 });
 
 test("the prompt for an agent to join names the team's board, the factory's channels, and where its ways are written", () => {
@@ -879,8 +956,9 @@ test("the prompt for an agent to join names the team's board, the factory's chan
   assert.ok(named.includes("vercel board read project-factory/ --scope acme --name factory-dev"));
 });
 
-test("the pull requests the page reads are their threads' roots, however many replies bury them", async () => {
-  // A real board kept in memory, with one busy pull request: more replies than one read of messages brings.
+test("the threads the checks find by a label are their roots, however many replies bury them", async () => {
+  // A real board kept in memory, with one busy thread: more replies than one read of messages brings.
+  // The first task is found this way, by its label, once it's older than what one read brings.
   const { board } = await import("@vercel/board");
   const { local } = await import("@vercel/board/backend-local");
   const team = board({ backend: local({ memory: true }) });

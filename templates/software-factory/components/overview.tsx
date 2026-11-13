@@ -53,14 +53,16 @@ export function Overview({ running: { overview, repos, ask, first }, now }: { ru
           {lastReplyAt ? <Stat value={ago(lastReplyAt, now)} label="last reply" /> : null}
         </dl>
       </section>
-      <section className="panel">
-        <h2>Pull requests</h2>
-        <dl className="stats">
-          <Stat value={String(pulls.open)} label="open" />
-          <Stat value={String(pulls.merged)} label="merged" />
-          <Stat value={String(pulls.closed)} label="closed" />
-        </dl>
-      </section>
+      {pulls ? (
+        <section className="panel">
+          <h2>Pull requests</h2>
+          <dl className="stats">
+            <Stat value={String(pulls.open)} label="open" />
+            <Stat value={String(pulls.merged)} label="merged" />
+            <Stat value={String(pulls.closed)} label="closed" />
+          </dl>
+        </section>
+      ) : null}
       <section className="panel">
         <h2>Repos</h2>
         <ul className="rows">

@@ -1,6 +1,6 @@
 import { FIRST_TASK_PATH } from "./first-task.ts";
 import { ONBOARD_PATH } from "./onboard.ts";
-import type { Running } from "./launcher.ts";
+import type { Running } from "./running.ts";
 import { duration } from "./overview.ts";
 import { headline, isDone, progress, type Setup, type Step, type Task } from "./setup.ts";
 
@@ -46,10 +46,8 @@ function activity({ overview: { week, lastReplyAt, pulls }, repos, ask, first }:
     `- ${week.threads}${plus} threads, ${week.messages}${plus} messages`,
     `- ${week.answered} answered${week.firstReplyMs === null ? "" : `, the first reply after ${duration(week.firstReplyMs)} (median)`}`,
     ...(lastReplyAt ? [`- Last reply ${ago(lastReplyAt, now)}`] : []),
-    "",
-    "## Pull requests",
-    "",
-    `- ${pulls.open} open, ${pulls.merged} merged, ${pulls.closed} closed`,
+    // The ones the factory opened: GitHub counts them, and when it didn't answer there's nothing to say.
+    ...(pulls ? ["", "## Pull requests", "", `- ${pulls.open} open, ${pulls.merged} merged, ${pulls.closed} closed, opened by the factory`] : []),
     "",
     "## Repos",
     "",
