@@ -1950,6 +1950,12 @@ function fakeBoard(shared: Shared, boardId: string) {
       const readable = channels.filter((c) => mayRead(actor, c.id))
       return { channels: name === null ? readable : readable.filter((c) => c.name === name), cursor: null }
     }
+    if (method === 'GET' && (found = /^\/channels\/([^/]+)$/.exec(rest))) {
+      // One channel by its ID, to a caller who may read it: to anyone else it isn't there.
+      const channel = channelAt(decodeURIComponent(found[1]!))
+      if (!mayRead(actor, channel.id)) throw new Refused(404, 'channel_not_found')
+      return { channel }
+    }
     if (method === 'POST' && rest === '/channels') {
       tokenMayIn(actor, 'read', typeof body.name === 'string' ? body.name : '')
       return { channel: makeChannel(body.name) }

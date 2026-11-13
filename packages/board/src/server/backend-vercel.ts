@@ -842,7 +842,29 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
   /** Channels' names by ID, as posts without a client ID named them: a post's own channel, which it may not be able to list. */
   const posted = new Map<string, string>()
+  /**
+   * The channel with `id`, asked for by it: a message names its channel by ID, and the board's whole
+   * list, a page of the API's at a time, is a lot to read for one name. A list this process has
+   * already read answers first, and one the API won't show by ID is looked for in the list, as before.
+   */
+  const byChannelId = new Map<string, Promise<ApiChannel | null>>()
   async function channelById(who: Who, id: string): Promise<ApiChannel> {
+    const listed = channels ? (await loadChannels(who)).find((channel) => channel.id === id) : undefined
+    if (listed) return listed
+    let asked = byChannelId.get(id)
+    if (!asked) {
+      asked = onBoard(who, `/channels/${encodeURIComponent(id)}`)
+        .then((path) => api<{ channel: ApiChannel }>(who, 'GET', path))
+        .then(({ channel }) => channel)
+        .catch((error: unknown) => {
+          byChannelId.delete(id)
+          if (error instanceof HttpError && (error.status === 404 || error.status === 403)) return null
+          throw error
+        })
+      byChannelId.set(id, asked)
+    }
+    const one = await asked
+    if (one) return one
     const found = (await loadChannels(who)).find((channel) => channel.id === id) ?? (await loadChannels(who, true)).find((channel) => channel.id === id)
     if (!found) throw new HttpError(502, 'remote_error', `Vercel's API names a channel it doesn't list: ${id}`)
     return found
