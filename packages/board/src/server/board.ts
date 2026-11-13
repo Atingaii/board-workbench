@@ -1,5 +1,5 @@
 import type { BoardEventView } from '../api/routes.ts'
-import { BoardError, createBoardClient, type BoardClient, type PostOptions, type ProfileOption, type ReplyOptions } from '../client/client.ts'
+import { BoardError, createBoardClient, eventsState, type BoardClient, type EventsOptions, type PostOptions, type ProfileOption, type ReplyOptions } from '../client/client.ts'
 import { derivedId } from '../client/ids.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { SYNC, type Backend, type BoardBinding, type Caller, type SelfCaller, type Subscription, type SyncEntry } from './backend.ts'
@@ -439,26 +439,36 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
 
 /**
  * Live events for a handle, from the backend's long-poll: each page from the last cursor it saw,
- * waiting for the next. It backs off after a failure, up to 30 seconds; a 4xx throws.
+ * waiting for the next. It backs off after a failure, up to 30 seconds; a 4xx throws. `onState`
+ * hears `live` when a poll is answered and `retrying` when one failed. The first poll, and the
+ * first after a failure, ask without waiting, so it's `live` as soon as the board answers, not a
+ * quiet board's whole wait later.
  */
 async function* events(
   client: BoardClient,
   query: Parameters<BoardClient['events']>[0] = {},
-  opts: { signal?: AbortSignal } = {},
+  opts: EventsOptions = {},
 ): AsyncGenerator<BoardEventView> {
   let after = query.after
   let failures = 0
+  /** Whether the board has answered since the feed started, or since it last failed. */
+  let answered = false
+  const state = eventsState(opts.onState)
   while (!opts.signal?.aborted) {
     let page: Awaited<ReturnType<BoardClient['poll']>>
     try {
-      page = await client.poll({ ...query, ...(after !== undefined ? { after } : {}), wait: EVENTS_WAIT_S } as Parameters<BoardClient['poll']>[0], opts.signal)
+      page = await client.poll({ ...query, ...(after !== undefined ? { after } : {}), wait: answered ? EVENTS_WAIT_S : 0 } as Parameters<BoardClient['poll']>[0], opts.signal)
     } catch (error) {
       if (opts.signal?.aborted) return
       if (error instanceof BoardError && error.status >= 400 && error.status < 500) throw error
+      answered = false
+      state.failed()
       await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 500 * 2 ** failures++)))
       continue
     }
     failures = 0
+    answered = true
+    state.answered()
     for (const event of page.events) {
       yield event
       if (opts.signal?.aborted) return
