@@ -23,3 +23,5 @@ Labels under `board.` are the board's own now: a label write, or a post, schedul
 A root's edit or delete can now answer 503 `unavailable` when the board keeps changing under it, as a label write with `if` can: both check whether the thread is a task as of the write. Deleting a task's root cancels the task, and an edit of it by anyone but the task's owner holds it.
 
 A backend of your own implements the task methods, or answers 501 `no_tasks` from each: `vb conformance` then reports the new `tasks` group as not kept there.
+
+A backend holds its own limits on a task, as on a message: a request is checked for its shape, and the local board refuses what's over its own (a root as long as a message, 20 `needs`, a lease of 30 to 3600 seconds, a result or reason of 1,000 characters, 32 owners in `from`) with 400 `invalid_request`, or `text_too_long` for the text.

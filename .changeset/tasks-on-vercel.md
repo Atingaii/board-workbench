@@ -19,6 +19,7 @@ if (claim) {
 
 What differs from `local()` there:
 
+- The API's limits are the ones that apply, and its refusal is what you get: text over 10,000 characters is its `invalid_message`, and a lease, a result, or more `needs` than it takes is a 400 `invalid_request` in its words.
 - A lease is 5 minutes at most. A claim's `until` says what it got, so one that asked for 15 minutes, or for nothing, comes back with 5.
 - Nothing times a lease. A claim whose lease ran out is over at once: the task is claimable, its owner may hold it, and it lists as ready. It still reads `claimed`, with its `until` in the past, until the next task write or list that sees it writes `task.expired`.
 - `claim({ channel })` looks only at tasks you may take: in each channel you may claim in, your own unassigned tasks, those of each owner `from` names, and with a profile, what's assigned to it. That's 200 places at most, the channels times those owners: past it the claim fails with 400 `claim_too_wide`, and a subtree with more than 50 such channels with 400 `channel_tree_too_large`. Name fewer owners, or a smaller subtree.

@@ -726,6 +726,48 @@ describe("vercel()'s tasks", () => {
     expect(await stored(theirs.id)).toMatchObject({ state: 'claimed', epoch: 2, claim: { actor: JULIAN } })
   })
 
+  it("leaves a task's limits to Vercel's API: what's over one reaches it, and its refusal is the one a caller gets", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    /** What `write` is refused with, once it reached the API: the request it sent there, and the API's own words. */
+    const refused = async (write: () => Promise<unknown>, path: RegExp, error: { code: string; message: string }) => {
+      const before = julian.sent.length
+      await expect(write()).rejects.toMatchObject({ status: 400, ...error })
+      expect(julian.sent.slice(before).filter((request) => request.method === 'POST').map((request) => request.path)).toEqual([expect.stringMatching(path)])
+    }
+    const shape = (message: string) => ({ code: 'invalid_request', message })
+    // A root's text and files, as a post's.
+    await refused(() => julian.tasks.create('work', { text: 'x'.repeat(10_001) }), /^\/tasks$/, { code: 'invalid_message', message: 'A message is 1 to 10000 characters.' })
+    const files = Array.from({ length: 11 }, (_, n) => `att_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`)
+    await refused(() => julian.tasks.create('work', { text: 'with traces', attachments: files }), /^\/tasks$/, shape('A message carries up to 10 different attachments.'))
+    // How many tasks one waits for.
+    const others: string[] = []
+    for (let n = 0; n < 21; n++) others.push((await julian.tasks.create('work', { text: `step ${n}` })).task.id)
+    await refused(() => julian.tasks.create('work', { text: 'after them all', needs: others }), /^\/tasks$/, shape('needs is at most 20 thread IDs, with no repeats.'))
+    expect((await julian.tasks.create('work', { text: 'after twenty', needs: others.slice(0, 20) })).task.task?.needs).toHaveLength(20)
+    // A lease, wherever one is asked for.
+    const { task } = await julian.tasks.create('leases', { text: 'a long build' })
+    const lease = shape('leaseSeconds is 30 to 3,600.')
+    await refused(() => julian.tasks.claim(task.id, { lease: 29 }), /\/claim$/, lease)
+    await refused(() => julian.tasks.claim({ channel: 'leases', lease: 3601 }), /^\/tasks\/claim$/, lease)
+    await refused(() => julian.tasks.create('leases', { text: 'made and claimed', claim: true, lease: 7200 }), /^\/tasks$/, lease)
+    const claim = await julian.tasks.claim(task.id, { lease: 30 })
+    await refused(() => claim.renew(3601), /\/renew$/, lease)
+    // A result or a reason, and a hold's kind.
+    const note = 'x'.repeat(1001)
+    await refused(() => claim.complete(note), /\/complete$/, shape('result is 1 to 1,000 characters, not blank.'))
+    await refused(() => claim.fail(note), /\/fail$/, shape('reason is 1 to 1,000 characters, not blank.'))
+    await refused(() => claim.block(note), /\/block$/, shape('reason is 1 to 1,000 characters, not blank.'))
+    await refused(() => claim.block('approve the deploy?', { kind: 'k'.repeat(65) }), /\/block$/, shape('kind is up to 64 lowercase letters, numbers, and _.-'))
+    await refused(() => julian.tasks.cancel(task.id, note), /\/cancel$/, shape('reason is 1 to 1,000 characters, not blank.'))
+    // The owners a claim takes from.
+    const owners = Array.from({ length: 33 }, (_, n) => `vercel:user:u_${n}`)
+    await refused(() => julian.tasks.claim({ channel: 'leases', from: owners }), /^\/tasks\/claim$/, shape('from is at most 32 owner IDs.'))
+    // None of it changed the task, and what's within the API's limits lands.
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'claimed', epoch: 1 })
+    expect((await claim.complete('x'.repeat(1000))).task?.state).toBe('completed')
+  })
+
   it('holds a wait as long as the API holds one request, 25 seconds, and the handle asks again until its wait runs out', async () => {
     vi.useFakeTimers()
     const api = fakeMessageboard()

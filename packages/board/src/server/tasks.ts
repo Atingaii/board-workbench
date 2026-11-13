@@ -6,15 +6,41 @@ import { LEASES_SESSION, leasesContract, type LeaseEvents } from '../contract/co
 import type { BoardEvent } from '../contract/events.ts'
 import { foldMessages, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
-import { OPEN_TASK_STATES, TASK_LABEL, type TaskState } from '../contract/schemas.ts'
+import { OPEN_TASK_STATES, TASK_LABEL, TASK_NEEDS_MAX, TASK_NOTE_MAX, TaskHoldKind, type TaskState } from '../contract/schemas.ts'
 import { authorize, type Access, type Permission } from './access.ts'
 import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
 import { indexOf, ref, toMessageFilter, view, whoIs } from './feed.ts'
 import type { MessageFilter, ThreadSummary } from '../store/types.ts'
 import { appendFrom, authorizeMessage, movedOn, ownedBy, seenFor, untilApplied, type Along, type Events, type Identity, type WriteContext } from './writes.ts'
 
-/** The longest lease this board gives, in seconds: what a claim asks for past it comes back as this. */
+/** The shortest and the longest lease this board gives, in seconds. */
+export const LEASE_MIN_S = 30
 export const LEASE_CAP_S = 3600
+/** How many owners one claim takes tasks from on this board, beside its caller. */
+const FROM_MAX = 32
+
+/**
+ * This board's own limits on a task. board() checks a request's shape and leaves how much a
+ * backend holds to the backend, so these are checked here: what's over one is refused as a
+ * misshapen request is, 400 `invalid_request`, before anything is read or written.
+ */
+export const taskLimits = {
+  lease(seconds: number | undefined) {
+    if (seconds !== undefined && !(seconds >= LEASE_MIN_S && seconds <= LEASE_CAP_S)) throw badRequest(`lease: a lease is ${LEASE_MIN_S} to ${LEASE_CAP_S} seconds`)
+  },
+  needs(refs: readonly string[] | undefined) {
+    if (new Set(refs).size > TASK_NEEDS_MAX) throw badRequest(`needs: a task waits for at most ${TASK_NEEDS_MAX} tasks`)
+  },
+  note(what: 'result' | 'reason', note: string | null | undefined) {
+    if (typeof note === 'string' && note.length > TASK_NOTE_MAX) throw badRequest(`${what}: a task's ${what} is at most ${TASK_NOTE_MAX.toLocaleString('en-US')} characters`)
+  },
+  kind(kind: string | undefined) {
+    if (kind !== undefined && !TaskHoldKind.safeParse(kind).success) throw badRequest('kind: a kind is up to 64 lowercase letters, numbers, and _.-')
+  },
+  from(owners: readonly string[] | undefined) {
+    if ((owners?.length ?? 0) > FROM_MAX) throw badRequest(`from: a claim takes tasks from at most ${FROM_MAX} owners`)
+  },
+}
 /** A timer that fires this early waits again; any closer counts as on time. */
 const EARLY_MS = 1000
 /** Roots a scan of tasks reads at a time. */
