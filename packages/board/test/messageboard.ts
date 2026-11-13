@@ -771,7 +771,7 @@ function fakeBoard(shared: Shared, boardId: string) {
    * Refuses prerequisites that would make task `self` wait for itself: one that waits for it already, through however
    * many tasks. Only one the change adds can close a cycle, so it walks what those need, and what those need, and
    * gives up past `NEEDS_WALKED` tasks: a change that only drops some walks nothing. A completed task's needs
-   * aren't followed: they have all completed, and this task hasn't.
+   * aren't followed: they have all completed, and this task hasn't. The task itself counts like any it reaches.
    */
   function acyclic(self: string, needs: readonly string[]) {
     const from = new Map(needs.map((id) => [id, id]))
@@ -1158,7 +1158,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         }
       } else if (verb === 'needs') {
         ownerOrManage(actor, thread)
-        if (finishedFor(task) || task.state === 'failed') throw new Refused(409, 'task_finished', `The task is ${task.state}.`)
+        if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
         if (task.state === 'claimed' && task.claim!.until > now()) throw new Refused(409, 'task_claimed', 'Someone holds the task: what it needs changes once no one does.', undefined, task.claim!.until)
         const needs = checkedNeeds(actor, body.needs, thread.id)
         // The same set changes nothing: not even a lapsed claim's expiry is written for it.
