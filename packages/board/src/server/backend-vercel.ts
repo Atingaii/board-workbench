@@ -1373,9 +1373,31 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return first && (first[1] === null ? first[0] : `${first[0]}=${first[1][0]}`)
   }
 
-  async function threadsOf(who: Who, channel: ApiChannel, filters: Filters, signal?: AbortSignal): Promise<ApiThread[]> {
+  /** Every thread of a channel, each with its first and newest message where the API sends them (`threadPage`). */
+  async function threadsOf(who: Who, channel: ApiChannel, filters: Filters, signal: AbortSignal): Promise<ApiThread[]> {
     const label = indexed(filters)
-    return all<ApiThread>(who, await onBoard(who, '/threads'), 'threads', { channelId: channel.id, label }, signal)
+    const path = await onBoard(who, '/threads')
+    const out: ApiThread[] = []
+    let cursor: string | undefined
+    do {
+      const page = await threadPage(who, path, { channelId: channel.id, label, cursor }, signal)
+      out.push(...page.threads)
+      cursor = page.cursor ?? undefined
+    } while (cursor)
+    return out
+  }
+
+  /**
+   * A thread's messages when its list brought them all: its first, and its newest when that's its
+   * second. Most threads are a post or a post and a reply, and reading one of those costs nothing
+   * more. Null for a longer one, or from an API that lists threads without their messages.
+   */
+  function whole(thread: ApiThread): ApiMessage[] | null {
+    const root = thread.rootMessage
+    if (!root || root.sequence !== 1) return null
+    if (thread.messageCount === 1) return [root]
+    const latest = thread.latestMessage
+    return thread.messageCount === 2 && latest?.sequence === 2 ? [root, latest] : null
   }
 
   /** Whether the API lists threads with their first and newest messages (`include=messages`): until it refuses the parameter, it's asked. */
@@ -1569,7 +1591,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     let newest = 0
     const messages: { message: ApiMessage; thread: ApiThread; channel: ApiChannel }[] = []
     for (const { thread, channel } of threads) {
-      const all = await threadMessages(who, thread.id, signal)
+      const all = whole(thread) ?? (await threadMessages(who, thread.id, signal))
       const labeled = labeledBy(thread, all.find((message) => message.sequence === 1))
       for (const message of all) {
         newest = Math.max(newest, message.createdAt)
