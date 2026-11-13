@@ -1673,6 +1673,14 @@ async function createPlan(target: string, text: string | undefined, path: string
     if (!(error instanceof TasksInChunksError)) throw error
     const there = error.created.filter((task) => task !== undefined)
     const failed = failureOf(error)
+    // The key made another plan: other tasks, or these and no more. What it found of this one was there before, and
+    // the same command again would end the same way.
+    if (error.code === 'duplicate_id')
+      throw new Failed({
+        ...failed,
+        message: `${failed.message} That key made another plan.`,
+        next: [{ instruction: 'Leave what the key made as it was, or make new tasks under another key' }],
+      })
     // Nothing made is the failure alone. Some made: which, and the command that makes the rest, under the same key.
     if (there.length === 0) throw new Failed(failed)
     throw new Failed({

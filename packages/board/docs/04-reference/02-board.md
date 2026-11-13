@@ -497,8 +497,8 @@ tasks' roots in the order given.
   tasks made before it. A task an earlier chunk made is named by the ID it
   got. Tasks that can't be ordered are 400 `invalid_needs`, and nothing is
   sent.
-- **It halves a chunk a board answers `batch_too_large` for,** and goes on
-  with chunks that size.
+- **It sends fewer when a board answers `batch_too_large`:** 50 tasks, then
+  25, down to one, and goes on with chunks that size.
 - **It isn't one write.** Each chunk is all or nothing, and the chunks land
   one after another. A ready task of an earlier chunk can be claimed before a
   later chunk lands, and a chunk that fails leaves the ones before it made.
@@ -506,9 +506,16 @@ tasks' roots in the order given.
   own `code`, `status`, and `message`, and `created`: the task made for each
   of `tasks`, at its place, or `undefined`.
 - **With `id`, call it again.** Each chunk goes under an ID made from `id` and
-  where the chunk starts, so the same call again, with the same tasks, answers
-  the chunks that landed and makes the rest. Other tasks under that `id` are
-  409 `duplicate_id`: a plan that changed is never made beside the first one.
+  where the chunk starts, so the same call again answers the chunks that
+  landed and makes the rest.
+- **What an `id` made stays as it is.** A task that landed can't change, and
+  a plan that finished takes no more tasks, wherever its chunks ended: both
+  are 409 `duplicate_id`, and nothing new is made. What a call that stopped
+  didn't make can still change, so a plan is fixed and finished under the
+  same `id`.
+- **A chunk's keys are the function's own.** A `key` lasts no longer than a
+  call, so it sends each task under its place in the chunk, and the plan's
+  last task as `end`: that's what tells a board the plan ends there.
 
 A plan that must not start before all of it is there waits for a task of your
 own, in a channel no worker claims in. Nothing in `createTasksInChunks` does

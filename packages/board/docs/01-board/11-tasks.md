@@ -241,7 +241,8 @@ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
   write can be claimed before a later one lands.
 - **`--idempotency-key` names the plan.** The same key and file again make
   nothing. A plan that stops midway says what it made, and the command that
-  makes the rest under the same key.
+  makes the rest under the same key, once the file is fixed. What the key
+  made stays as it is, and a plan that finished takes no more tasks.
 - **In code** it's `team.tasks.createMany` for one write and
   `createTasksInChunks` for a plan of any length. See
   [Several tasks at once](../04-reference/02-board.md#several-tasks-at-once).

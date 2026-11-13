@@ -92,6 +92,32 @@ describe('vb tasks create --tasks-file', () => {
     expect(refused.stderr.split('\n').slice(0, 2)).toEqual(["error: Can't create tasks in none. A task's needs are tasks you can read, or keys of the plan's own.", '  needs: the tasks with the keys "a", "b" wait for each other'])
   }, 60_000)
 
+  it('takes no more tasks under the key of a plan that finished, and names no command that would end the same way', async () => {
+    // Two full writes: the plan ends where the second one does.
+    const full = Array.from({ length: 200 }, (_, n) => ({ text: `task ${n}` }))
+    const path = await planFile(full, 'full.json')
+    const made = rows(await ok(['tasks', 'create', 'full', '--tasks-file', path, '--idempotency-key', 'full-1']))
+    expect(made).toHaveLength(200)
+    const grown = await planFile([...full, { text: 'one more' }], 'grown.json')
+    const refused = await vb(['tasks', 'create', 'full', '--tasks-file', grown, '--idempotency-key', 'full-1'])
+    expect(refused).toMatchObject({ code: 1, stdout: '' })
+    const lines = refused.stderr.split('\n')
+    // The board's words under what the command was doing, and what to do in place of the same command again.
+    expect([lines[0], ...lines.slice(2)]).toEqual([
+      "error: Can't create tasks in full. That key made another plan.",
+      '',
+      '  Leave what the key made as it was, or make new tasks under another key',
+      '',
+    ])
+    expect(rows(await ok(['tasks', 'full', '--limit', '500']))).toEqual(made)
+    const document = failure(await vb(['tasks', 'create', 'full', '--tasks-file', grown, '--idempotency-key', 'full-1', '--json'])) as ReturnType<typeof failure> & { hint?: string }
+    expect(document).toMatchObject({ reason: 'duplicate_id', hint: 'Leave what the key made as it was, or make new tasks under another key' })
+    expect(document.next).toBeUndefined()
+    // The file it was made from is still the plan: its tasks, as they are, and none more.
+    expect(rows(await ok(['tasks', 'create', 'full', '--tasks-file', path, '--idempotency-key', 'full-1']))).toEqual(made)
+    expect(rows(await ok(['tasks', 'full', '--limit', '500']))).toHaveLength(200)
+  }, 60_000)
+
   it('refuses a key no task takes, and a need that is neither an ID nor a key, before anything is made', async () => {
     const refused = async (plan: unknown, extra: NodeJS.ProcessEnv = {}) => {
       const path = await planFile(plan)
@@ -148,13 +174,13 @@ describe('vb tasks create --tasks-file', () => {
     const again = await vb(['tasks', 'create', 'shards', '--tasks-file', broken, '--idempotency-key', key!])
     expect(again.stderr.split('\n').slice(2, 6)).toEqual([lines[2], '', lines[4], lines[5]])
     expect(rows(await ok(['tasks', 'shards', '--state', 'all', '--limit', '500']))).toHaveLength(100)
-    // Fixed, the command it named makes the rest: the first hundred stay the tasks they were.
-    const fixed = await planFile(steps, 'shards.json')
+    // Fixed, and a step longer, the command it named makes the rest: the first hundred stay the tasks they were.
+    const fixed = await planFile([...steps, { text: 'check the shards', needs: [{ key: 'step-119' }] }], 'shards.json')
     const finished = await vb(['tasks', 'create', 'shards', '--tasks-file', fixed, '--idempotency-key', key!])
     expect(finished).toMatchObject({ code: 0, stderr: '' })
     expect(rows(finished.stdout).map(idOf).slice(0, 100)).toEqual(made)
-    expect(rows(finished.stdout)).toHaveLength(120)
-    expect(rows(await ok(['tasks', 'shards', '--state', 'all', '--limit', '500']))).toHaveLength(120)
+    expect(rows(finished.stdout)).toHaveLength(121)
+    expect(rows(await ok(['tasks', 'shards', '--state', 'all', '--limit', '500']))).toHaveLength(121)
     // For a program: the failure as one document, with what was made and the command in it.
     const json = await vb(['tasks', 'create', 'shards-again', '--tasks-file', broken, '--idempotency-key', 'shards-again-1', '--json'])
     expect(json).toMatchObject({ code: 2, stdout: '' })

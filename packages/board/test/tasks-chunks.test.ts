@@ -63,10 +63,12 @@ describe('createTasksInChunks', () => {
     // Three batches, none over what one holds. The first step waits for the last, so it's made last, after it.
     expect(sent.map((batch) => batch.tasks.length)).toEqual([100, 100, 30])
     expect([sent[0]!.tasks[0]!.text, sent[2]!.tasks.at(-1)!.text]).toEqual(['step 1', 'step 0'])
-    // Within a batch a task names another by its key; across batches, by the ID that one got.
-    expect(sent[0]!.tasks[1]).toEqual({ key: 'step-2', text: 'step 2', needs: [{ key: 'step-1' }] })
-    expect(sent[1]!.tasks[0]).toEqual({ key: 'step-101', text: 'step 101', needs: [made[100]!.id] })
-    expect(sent[2]!.tasks.at(-1)).toEqual({ key: 'step-0', text: 'step 0', needs: [{ key: 'step-229' }] })
+    // Within a batch a task names another by its place there; across batches, by the ID that one got. The plan's
+    // last task says the plan ends with it.
+    expect(sent[0]!.tasks[1]).toEqual({ key: '1', text: 'step 2', needs: [{ key: '0' }] })
+    expect(sent[1]!.tasks[0]).toEqual({ key: '0', text: 'step 101', needs: [made[100]!.id] })
+    expect(sent[2]!.tasks.at(-1)).toEqual({ key: 'end', text: 'step 0', needs: [{ key: '28' }] })
+    expect(sent.flatMap((batch) => batch.tasks.map((task) => task.key)).filter((key) => key === 'end')).toHaveLength(1)
     // A task waits for what was there by its ID, as it's given.
     const [after] = await createTasksInChunks(team, 'work', [{ text: 'after the plan', needs: [made[0]!.id] }])
     expect(after!.task).toMatchObject({ state: 'waiting', needs: [made[0]!.id] })
@@ -91,8 +93,9 @@ describe('createTasksInChunks', () => {
     const made = await createTasksInChunks(team, 'plans', plan)
     expect(made.map((root) => root.text)).toEqual(plan.map((task) => task.text))
     expect(made.map((root) => root.task?.needs)).toEqual(made.map((_, n) => (n > 1 ? [made[n - 1]!.id] : n === 1 ? [] : [made[39]!.id])))
-    // 40 and 20 were more than one of the API's writes holds: it made none of them, and took them ten at a time.
-    expect(sent.map((batch) => batch.tasks.length)).toEqual([40, 20, 10, 10, 10, 10])
+    // 40 and 25 were more than one of the API's writes holds, and so was a second 13, whose first task waits for one
+    // that's there: it made none of those, and took the rest seven at a time.
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([40, 25, 13, 13, 7, 7, 7, 6])
     expect((await team.tasks.list({ channel: 'plans', state: 'all', limit: 100 })).tasks).toHaveLength(40)
     // Long texts are more bytes than one of its requests holds before they're more than it counts: the same refusal, halved the same way.
     sent.length = 0
@@ -100,7 +103,60 @@ describe('createTasksInChunks', () => {
     const texts = await createTasksInChunks(team, 'long', long)
     expect(texts.map((root) => root.text.length)).toEqual(long.map((task) => task.text.length))
     expect(texts.map((root) => root.task?.needs)).toEqual(texts.map((_, n) => (n > 0 ? [texts[n - 1]!.id] : [])))
-    expect(sent.map((batch) => batch.tasks.length)).toEqual([12, 6, 6])
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([12, 7, 4, 4, 4])
+  })
+
+  it("keeps a plan's id to its tasks on Vercel's board, where the API tells one request from another: none more once it finished, and the rest of one that stopped", async () => {
+    const api = fakeMessageboard()
+    const sent: Batch[] = []
+    const down = { at: 0 }
+    const team = board({
+      backend: vercel({
+        team: 'team_test',
+        api: 'http://localhost',
+        files: api.files,
+        fetch: async (input, init) => {
+          const request = new Request(input, init)
+          if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/tasks/batch')) {
+            sent.push((await request.clone().json()) as Batch)
+            if (sent.length === down.at) return Response.json({ error: { code: 'internal_server_error', message: 'try again' } }, { status: 500 })
+          }
+          return as(api, 'user:u_jb')(input, init)
+        },
+      }),
+    })
+    const ids = async (channel: string) => (await team.tasks.list({ channel, state: 'all', limit: 100 })).tasks.map((task) => task.message.id).sort()
+    // 26 plain tasks are two of the API's writes there, 13 each: the plan ends where the second one does.
+    const plain = Array.from({ length: 26 }, (_, n): TaskInBatch => ({ text: `plain ${n}` }))
+    const whole = await createTasksInChunks(team, 'plain', plain, { id: 'plain-1' })
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([26, 25, 13, 13])
+    // One more, or as many again: neither is the plan that finished, and none of them is made.
+    for (const more of [1, 26])
+      await expect(createTasksInChunks(team, 'plain', [...plain, ...Array.from({ length: more }, (_, n) => ({ text: `more ${n}` }))], { id: 'plain-1' })).rejects.toMatchObject({ name: 'TasksInChunksError', code: 'duplicate_id', status: 409 })
+    expect(await ids('plain')).toEqual(whole.map((root) => root.id).sort())
+    expect((await createTasksInChunks(team, 'plain', plain, { id: 'plain-1' })).map((root) => root.id)).toEqual(whole.map((root) => root.id))
+    expect(await ids('plain')).toHaveLength(26)
+
+    // A plan that stops at its second write: the API is down for it, after 40 and 25 were too many and 13 landed.
+    const plan = Array.from({ length: 40 }, (_, n): TaskInBatch => ({ text: `step ${n}` }))
+    sent.length = 0
+    down.at = 4
+    const stopped = await createTasksInChunks(team, 'steps', plan, { id: 'steps-1' }).then(
+      () => null,
+      (error: unknown) => error as TasksInChunksError,
+    )
+    down.at = 0
+    expect(stopped).toMatchObject({ name: 'TasksInChunksError', status: 500 })
+    const first = stopped!.created.filter((root) => root !== undefined).map((root) => root.id)
+    expect(first).toHaveLength(13)
+    expect(await ids('steps')).toEqual([...first].sort())
+    // A step it hadn't reached reworded, and a task longer: the write that landed is found by the size it had, whatever
+    // the plan's length now, and the rest are made.
+    const changed: TaskInBatch[] = [...plan.map((task, n) => (n === 20 ? { text: 'step 20, reworded' } : task)), { text: 'and one more' }]
+    const made = await createTasksInChunks(team, 'steps', changed, { id: 'steps-1' })
+    expect(made.slice(0, 13).map((root) => root.id)).toEqual(first)
+    expect(made.map((root) => root.text)).toEqual(changed.map((task) => task.text))
+    expect(await ids('steps')).toEqual(made.map((root) => root.id).sort())
   })
 
   it("sends each batch under an id made from the caller's and its place, so calling again answers what landed and makes the rest", async () => {
@@ -157,6 +213,79 @@ describe('createTasksInChunks', () => {
     expect((await all(team)).map((root) => root.id).sort()).toEqual(made.map((root) => root.id).sort())
   })
 
+  it('takes no more tasks under the id of a plan that finished, wherever its batches happened to end', async () => {
+    const { team, sent, front } = localTeam()
+    const refused = async (channel: string, tasks: TaskInBatch[], id: string) =>
+      createTasksInChunks(team, channel, tasks, { id }).then(
+        () => null,
+        (error: unknown) => error as TasksInChunksError,
+      )
+    const ids = async (channel: string) => (await all(team, channel)).map((root) => root.id).sort()
+    // Two full batches: the plan ends where the second one does. One task more starts where no batch of the first call did.
+    const plan = steps(200)
+    const made = await createTasksInChunks(team, 'work', plan, { id: 'release-42' })
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([100, 100])
+    const longer = await refused('work', [...plan, { text: 'one more' }], 'release-42')
+    expect(longer).toMatchObject({ name: 'TasksInChunksError', code: 'duplicate_id', status: 409 })
+    expect(await ids('work')).toEqual(made.map((root) => root.id).sort())
+    // The first batch is still the plan's, found as it landed: what it answered is what the first call made.
+    expect(longer!.created.filter((root) => root !== undefined).map((root) => root.id)).toEqual(made.slice(1, 101).map((root) => root.id))
+    // One full batch, and a plan that grew by more than one.
+    const one = Array.from({ length: 100 }, (_, n): TaskInBatch => ({ text: `task ${n}` }))
+    const whole = await createTasksInChunks(team, 'one', one, { id: 'one-batch' })
+    expect(await refused('one', [...one, { text: 'one more' }, { text: 'and another', needs: [whole[0]!.id] }], 'one-batch')).toMatchObject({ code: 'duplicate_id', status: 409 })
+    expect(await ids('one')).toEqual(whole.map((root) => root.id).sort())
+    // Batches an earlier call halved, on a board that held 50 then: the plan ends where the second of them does.
+    front.fail = async (request) => (((await request.clone().json()) as Batch).tasks.length > 50 ? Response.json({ error: { code: 'batch_too_large', message: 'this board holds 50 tasks in a write' } }, { status: 400 }) : null)
+    const halved = await createTasksInChunks(team, 'halved', one, { id: 'halved-1' })
+    front.fail = null
+    expect(await refused('halved', [...one, { text: 'one more' }], 'halved-1')).toMatchObject({ code: 'duplicate_id', status: 409 })
+    expect(await ids('halved')).toEqual(halved.map((root) => root.id).sort())
+    // A plan a task shorter isn't the one that finished either.
+    expect(await refused('one', one.slice(0, 99), 'one-batch')).toMatchObject({ code: 'duplicate_id', status: 409 })
+    // The same plans again are still answered, as they stand, and nothing is sent.
+    sent.length = 0
+    expect((await createTasksInChunks(team, 'work', plan, { id: 'release-42' })).map((root) => root.id)).toEqual(made.map((root) => root.id))
+    expect((await createTasksInChunks(team, 'one', one, { id: 'one-batch' })).map((root) => root.id)).toEqual(whole.map((root) => root.id))
+    expect((await createTasksInChunks(team, 'halved', one, { id: 'halved-1' })).map((root) => root.id)).toEqual(halved.map((root) => root.id))
+    expect(sent).toEqual([])
+    expect([await ids('work'), await ids('one'), await ids('halved')].map((found) => found.length)).toEqual([200, 100, 100])
+  })
+
+  it("makes the rest of a plan that stopped midway, with what wasn't made changed: what landed stays as it is", async () => {
+    const { team } = localTeam()
+    const refused = async (tasks: TaskInBatch[]) =>
+      createTasksInChunks(team, 'work', tasks, { id: 'release-42' }).then(
+        () => null,
+        (error: unknown) => error as TasksInChunksError,
+      )
+    // Step 150 also waits for a task that isn't there: the first batch lands, steps 1 to 100, and the board refuses the second, whole.
+    const plan = steps(230).map((task, n) => (n === 150 ? { ...task, needs: [...task.needs!, '999999'] } : task))
+    const stopped = await refused(plan)
+    expect(stopped).toMatchObject({ code: 'invalid_needs', status: 400 })
+    const first = stopped!.created.slice(1, 101).map((root) => root!.id)
+    expect((await all(team)).map((root) => root.id)).toEqual(first)
+    // What landed can't change, even while the plan isn't finished: nothing is made of a plan that rewords step 70.
+    expect(await refused(plan.map((task, n) => (n === 150 ? steps(230)[150]! : n === 70 ? { ...task, text: 'another step 70' } : task)))).toMatchObject({ code: 'duplicate_id', status: 409 })
+    expect(await all(team)).toHaveLength(100)
+    // The plan fixed, with a step it hadn't reached reworded, a task more at its end, and one at its start that's made
+    // after the steps it waits for: the first hundred are found, and the rest made.
+    const fixed: TaskInBatch[] = [
+      { key: 'audit', text: 'audit the release', needs: [{ key: 'step-229' }] },
+      ...steps(230).map((task, n) => (n === 180 ? { ...task, text: 'step 180, reworded' } : task)),
+      { text: 'and one more', needs: [{ key: 'audit' }, first[0]!] },
+    ]
+    const made = await createTasksInChunks(team, 'work', fixed, { id: 'release-42' })
+    expect(made.slice(2, 102).map((root) => root.id)).toEqual(first)
+    expect(made.map((root) => root.text)).toEqual(fixed.map((task) => task.text))
+    expect(made[0]!.task?.needs).toEqual([made[230]!.id])
+    expect([...made[231]!.task!.needs].sort()).toEqual([first[0]!, made[0]!.id].sort())
+    expect((await all(team)).map((root) => root.id).sort()).toEqual(made.map((root) => root.id).sort())
+    // It finished: now it takes no more.
+    expect(await refused([...fixed, { text: 'yet another' }])).toMatchObject({ code: 'duplicate_id', status: 409 })
+    expect(await all(team)).toHaveLength(232)
+  })
+
   it('finds the batches an earlier call halved, when the board would now take them whole', async () => {
     const { team, sent, front } = localTeam()
     const plan = steps(230)
@@ -206,7 +335,7 @@ describe('createTasksInChunks', () => {
     )
     expect(failed).toMatchObject({ name: 'TasksInChunksError', code: 'batch_too_large', status: 400 })
     expect(failed!.created).toEqual([undefined, undefined, undefined, undefined, undefined])
-    expect(sent.map((batch) => batch.tasks.length)).toEqual([5, 3, 2, 1])
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([5, 4, 2, 1])
   })
 
   it("is not one write: a ready task of an earlier batch can be claimed before a later batch lands, unless the plan waits for a task of the caller's own", async () => {

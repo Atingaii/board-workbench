@@ -3697,10 +3697,14 @@ that task, a `claim --ready` that found nothing ready there, or a list.
 - **A plan longer than a batch is several batches.** `createTasksInChunks(
   team, channel, tasks, { id? })`, a plain function on `tasks.createMany`,
   makes each task after the ones it waits for, names a task an earlier batch
-  made by its ID, halves a batch a board answers `batch_too_large` for, and
-  sends each under an ID made from the caller's and where the batch starts,
-  so other tasks under the caller's `id` are refused, never made beside the
-  first ones. `vb tasks create <channel> --tasks-file <path>` is that
+  made by its ID, sends fewer when a board answers `batch_too_large` (50,
+  25, down to one, whatever the plan's length), and sends each batch under an
+  ID made from the caller's and where the batch starts. A task's `key` lasts
+  no longer than a call, so each batch's are the function's own: a task's
+  place in the batch, and `end` for the plan's last task. So a task that
+  landed can't change and a plan that finished takes no more, wherever its
+  batches ended (409 `duplicate_id`, nothing new made), and what a call that
+  stopped didn't make can still change. `vb tasks create <channel> --tasks-file <path>` is that
   function on a JSON array of tasks: it prints a row per task, and when a
   plan stops midway, what it made and the command that makes the rest under
   the same key, which is `--idempotency-key`'s or the run's own. It isn't one write: a ready

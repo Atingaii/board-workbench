@@ -963,9 +963,13 @@ $ vb tasks work/ --state all --limit 2
   so a ready task of an earlier write can be claimed before a later one lands.
   See [Several tasks at once](./02-board.md#several-tasks-at-once).
 - **`--idempotency-key` names the plan.** The same key and file again make
-  nothing and print the tasks as they are now. Other tasks under the key are
-  `duplicate_id`. Without one the run makes its own, so a plan that stops
-  midway says what it made and the command that makes the rest.
+  nothing and print the tasks as they are now. Without one the run makes its
+  own, so a plan that stops midway says what it made and the command that
+  makes the rest.
+- **What a key made stays as it is.** A plan that stopped can change in what
+  it hadn't made: fix the file and run the command it named. A task it made
+  can't change there, and a plan that finished takes no more: both are
+  `duplicate_id`, and nothing new is made.
 - **Durations** are a number and a unit: `30s`, `10m`, `1h`. `--lease` takes
   `30s` to `1h`, and the board gives 15 minutes when it's left out.
 - **`run`** gives the command the task's ID in `BOARD_TASK`, renews the claim
@@ -998,7 +1002,7 @@ What can go wrong, by `reason`:
 | `task_not_owned` | the change is its owner's to make, or `manage`'s in its channel. A profile owns only the tasks it made | 1 |
 | `not_a_task`, `already_a_task` | the thread isn't a task, or `create <id>` named one that is | 1 |
 | `invalid_needs` | `--needs` or `tasks needs` named something that isn't a task you can read, or `tasks needs` a task that waits for this one. In a plan, a `key` two tasks have or none has, or tasks that wait for each other | 2 |
-| `duplicate_id` | `--idempotency-key` was used for another task, or with `--tasks-file`, for other tasks | 1 |
+| `duplicate_id` | `--idempotency-key` was used for another task, or with `--tasks-file`, for another plan: other tasks where it made some, or more once it finished | 1 |
 | `invalid_from` | `--from` named an owner by handle: several can share one, so it takes IDs | 2 |
 | `command_not_found` | `run`'s command couldn't start. The task is released | 1 |
 | `claim_too_wide` | on Vercel's board, `--ready` with `--from` would look in more than 200 places, its channels times the owners it takes from: name fewer owners, or a smaller subtree | 1 |
