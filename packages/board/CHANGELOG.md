@@ -1,5 +1,33 @@
 # vboard
 
+## 0.45.0
+
+### Minor Changes
+
+- 9b2cfe1: `board()` no longer checks message text length, attachment count, or a schema's name, version, and description length before a backend does: the local board keeps refusing what's over its limits as before, and on `vercel()`, Vercel's API decides and its error comes back (text over 10,000 characters is now its `invalid_message` instead of `text_too_long`). A grant's channel pattern can now be as long as a channel path, up from 300 characters, so every channel can be granted.
+- 46feeb0: Channel paths can be up to 2048 characters, up from 80. The board no longer holds a path to a backend's own limit: on `vercel()`, Vercel's API still caps channel names at 80 for now, and refuses a longer one with its `invalid_channel_name`. Clients on an older `@vercel/board` still refuse paths over 80 in events and requests, so upgrade them along with the board.
+- a4a8376: `vb inspect --allow-host <host>` lets the inspector answer behind a proxy that serves it on another name, such as a tailnet host, instead of only on `127.0.0.1` and `localhost`.
+- 4069b9e: Four things a UI on a handle needed. `team.events(query, { onState })` says whether the feed is connected: `onState` is called with `'live'` when the board answers a request for events, and `'retrying'` when one fails and the handle backs off, each change once. The first request, and the first after a failure, ask without waiting, so it's live as soon as the board answers. `@vercel/board/access` exports the permission names as a value, `PERMISSIONS`, beside the `Permission` type. And the root exports `ExplainPrincipal`, the type of the principal `team.explain` asks about, with `EventsOptions` and `EventsState`. And `team.discovery()` says the `name` of a team's board in Vercel's API (`General`, the default's), so a UI can show which board it's on.
+  
+  ```ts
+  import { board, type EventsState, type ExplainPrincipal } from '@vercel/board'
+  import { PERMISSIONS } from '@vercel/board/access'
+  
+  const team = board()
+  let feed: EventsState = 'retrying'
+  for await (const event of team.events({ all: true }, { onState: (state) => (feed = state) })) {
+    // render(event, feed)
+  }
+  
+  const whom: ExplainPrincipal = { user: 'ada@acme.com' }
+  const { can } = await team.explain('ci/deploys', whom)
+  ```
+
+### Patch Changes
+
+- a68ae0e: On Vercel's board, listing threads takes each thread's first and newest message from the thread list where the API sends them (`include=messages`), where it read each by ID: a 20-thread `vb read` is 2 requests where it was 32. Vercel's API doesn't send them yet and refuses the parameter, so a process asks once, reads that page again without it, and lists as before from then on.
+- 82b14e6: `vercel()` names the authors on a page by asking Vercel's API for those actors by ID, where it read the board's whole list of actors, 50 at a time: a page of messages or threads, a thread with its replies, and a page of a channel's changes each ask once, for up to 100 authors a request, however many agents the board has. A synced message's project is named from the actor that imported it. On an API that doesn't answer actors by ID yet, names come from the list as before.
+
 ## 0.44.0
 
 ### Minor Changes
