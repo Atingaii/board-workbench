@@ -292,6 +292,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     return posted.get(key) as T
   }
   const feeds = new Map<string, Change[]>()
+  /** How many changes in each channel could have made a task claimable: what wakes a claim-next that waits there. */
+  const wakes = new Map<string, number>()
   const actors = new Map<string, ActorView>()
   const attachments = new Map<string, Attachment>()
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
@@ -390,6 +392,10 @@ function fakeBoard(shared: Shared, boardId: string) {
     feeds.set(channelId, feed)
     const made = { id: `evt_${randomUUID()}`, channelId, actor, createdAt: now(), shard: 0, sequence: feed.length + 1, ...change } as Change
     feed.push(made)
+    // A change to a task, or to a first message's labels, wakes a claim-next that waits in the channel. A post, a
+    // reply, a reaction, an edit, and a label on a reply wake nobody.
+    const { type, message } = change as { type: string; message?: number }
+    if (type.startsWith('task.') || (type === 'message.labeled' && message === 1)) wakes.set(channelId, (wakes.get(channelId) ?? 0) + 1)
     seen(actor)
     match(made)
     return feed.length
@@ -610,6 +616,10 @@ function fakeBoard(shared: Shared, boardId: string) {
   const REPAIRS = 10
   /** The places a claim-next looks in at most: the channels it may claim in, times the owners it takes from. */
   const PLACES = 200
+  /** How many times one claim-next looks at most: the look it starts with, the one before it waits, and up to three for each wake-up. */
+  const LOOKS = 12
+  /** How long after a look that a wake-up brought and that found nothing it looks again, and again: the event can come before the index has the task. */
+  const LOOKS_AGAIN_MS = [200, 800]
   /** What it reads of each place, of ready tasks and of lapsed claims, and of all of them. */
   const PLACE_READS = 25
   const READY_IN_ALL = 200
@@ -835,7 +845,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   const oldestFirst = (a: Thread, b: Thread) => a.createdAt - b.createdAt
 
   /** The oldest ready task there the caller takes: one assigned to its actor first, then an unassigned one it owns or `from` names. */
-  function claimNext(actor: Actor, body: Record<string, any>, claim: { hash: string; lease: number }, share: { expiries: number; goneOver: number }): Thread | null {
+  function claimNext(actor: Actor, body: Record<string, any>, claim: { hash: string; lease: number }, share: { expiries: number; goneOver: number; looks: number; first: boolean }): Thread | null {
     const named = channelsNamed(String(body.channel))
     // Channels where the caller lacks `label` are skipped: with it in none, there's nothing it claims. The limit counts those it may claim in.
     const labeled = named.filter((channel) => may(actor, 'label', channel.id))
@@ -856,6 +866,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     /** What's assigned to the caller's actor first, then in `order`. */
     const assignedFirst = (order: (a: Thread, b: Thread) => number) => (a: Thread, b: Thread) => Number(assignedTo(b.task!, actor)) - Number(assignedTo(a.task!, actor)) || order(a, b)
     const look = () => {
+      share.looks++
       // From each place, its oldest ready tasks and its claims whose lease ran out longest ago, a few of each, and of
       // all those a bounded number, the assigned ones first. Each is the caller's to take, so only `labels` narrow them.
       const ready = places.flatMap((tasks) => tasks.filter((t) => t.task!.state === 'ready').sort(oldestFirst).slice(0, PLACE_READS)).sort(assignedFirst(oldestFirst)).slice(0, READY_IN_ALL)
@@ -864,9 +875,12 @@ function fakeBoard(shared: Shared, boardId: string) {
       return { found: mine[0] ?? null, over }
     }
     let { found, over } = look()
-    if (!found && share.goneOver > 0) {
-      // Nothing to take: it goes on with the completions on the board that haven't readied everything that waited for
-      // them, the oldest few, wherever they and what waited are, and looks again. It looks through no waiting task itself.
+    const first = share.first
+    share.first = false
+    if (!found && first) {
+      // Nothing to take: once a request, it goes on with the completions on the board that haven't readied everything
+      // that waited for them, the oldest few, wherever they and what waited are, and looks again. It looks through no
+      // waiting task itself.
       const marked = [...threads.values()].filter((t) => t.task?.marked).sort((a, b) => a.task!.completed!.at - b.task!.completed!.at).slice(0, MARKED_SEEN)
       for (const completed of marked) share.goneOver = goOn(completed, share.goneOver, undefined)
       ;({ found, over } = look())
@@ -924,25 +938,48 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (body.from !== undefined && !(Array.isArray(body.from) && body.from.length <= 32 && body.from.every((id: unknown) => typeof id === 'string'))) throw bad('from is at most 32 owner IDs.')
       if (body.wait !== undefined && !(typeof body.wait === 'number' && body.wait >= 0 && body.wait <= 25)) throw bad('wait is 0 to 25 seconds.')
       const until = Date.now() + (body.wait ?? 0) * 1000
-      // What one request spends on what it finds undone, however many times it looks.
-      const share = { expiries: REPAIRS, goneOver: GONE_OVER }
+      // What one request spends on what it finds undone, and how often it has looked.
+      const share = { expiries: REPAIRS, goneOver: GONE_OVER, looks: 0, first: true }
+      const nothing = { task: null }
+      const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+      /** How many changes that could make a task claimable the channels it names have seen. */
+      const woken = () => channelsNamed(body.channel).reduce((sum, channel) => sum + (wakes.get(channel.id) ?? 0), 0)
+      /** One look, and the claim it took: its answer, or undefined for nothing to take. */
+      const look = () => {
+        // Once the operation claimed, a retry with its token answers that claim, as it was made, and any other token is
+        // refused. It answers it only while the caller may still claim in the task's channel, one the request names:
+        // otherwise nothing, as for a channel it can't claim in.
+        const prior = claimed.get(key)
+        if (prior && prior.hash !== claim.hash) throw new Refused(409, 'operation_conflict', 'That operation claimed with another token.')
+        if (prior) return may(actor, 'label', prior.thread.channelId) && channelsNamed(body.channel).some((channel) => channel.id === prior.thread.channelId) ? answer(prior.thread) : nothing
+        // A client that went away is claimed nothing new for: it looks at that before each look.
+        if (signal?.aborted) return nothing
+        const found = claimNext(actor, body, claim, share)
+        if (!found) return undefined
+        claimed.set(key, { thread: found, hash: claim.hash })
+        return answer(found)
+      }
       return (async () => {
+        // The look it starts with, and the one before it waits.
+        let seen = woken()
+        const started = look()
+        if (started) return started
+        if (!(body.wait > 0)) return nothing
         for (;;) {
-          // Once the operation claimed, a retry with its token answers that claim, as it was made, and any other token is
-          // refused. It answers it only while the caller may still claim in the task's channel, one the request names:
-          // otherwise nothing, as for a channel it can't claim in.
-          const prior = claimed.get(key)
-          if (prior && prior.hash !== claim.hash) throw new Refused(409, 'operation_conflict', 'That operation claimed with another token.')
-          if (prior) return may(actor, 'label', prior.thread.channelId) && channelsNamed(body.channel).some((channel) => channel.id === prior.thread.channelId) ? answer(prior.thread) : { task: null }
-          // A client that went away is claimed nothing new for: it looks at that before each look.
-          if (signal?.aborted) return { task: null }
-          const found = claimNext(actor, body, claim, share)
-          if (found) {
-            claimed.set(key, { thread: found, hash: claim.hash })
-            return answer(found)
+          // It waits for a change in a channel it names that can make a task claimable, or for its wait to run out.
+          while (woken() === seen && Date.now() < until && !signal?.aborted) await pause(10)
+          const woke = woken() !== seen
+          seen = woken()
+          // Woken, it looks up to three times, a little apart. With its wait run out it looks once more: a lease that
+          // ran out, or a grant, makes a task claimable with no event. Either way it has only so many looks: with those
+          // spent it answers nothing, though its wait isn't up.
+          for (const after of woke ? [0, ...LOOKS_AGAIN_MS] : [0]) {
+            if (after > 0) await pause(Math.min(after, Math.max(0, until - Date.now())))
+            if (share.looks >= LOOKS) return nothing
+            const answered = look()
+            if (answered) return answered
           }
-          if (Date.now() >= until) return { task: null }
-          await new Promise((resolve) => setTimeout(resolve, 10))
+          if (!woke || share.looks >= LOOKS) return nothing
         }
       })()
     }
