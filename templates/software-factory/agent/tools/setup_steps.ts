@@ -4,7 +4,7 @@ import { ORIGIN, ownToken } from "../lib/identity.ts";
 
 export default defineTool({
   description:
-    "The factory's setup, checked now. `steps`: each step the setup page shows (Vercel, GitHub, Slack, Try it) and its tasks, done or not, with the exact commands and links. `repos`: the ones onboarded and where each shows, and how many more the GitHub app is on (`waiting`). With `repo`, `asked` says whether that repo is onboarded already, or whether the GitHub app is on it (`app`: true, false, or null when that couldn't be told), which your own GitHub access can't tell. Use it whenever someone asks about setting the factory up, and quote its commands as they are.",
+    "The factory's setup, checked now. `steps`: each step the setup page shows (Vercel, GitHub, Slack, Try it) and its tasks, done or not, with the exact commands and links. `repos`: how many are onboarded, and how many more the GitHub app is on (`waiting`). With `repo`, `asked` says where that repo shows when it's onboarded already, or whether the GitHub app is on it (`app`: true, false, or null when that couldn't be told), which your own GitHub access can't tell. Use it whenever someone asks about setting the factory up, and quote its commands as they are.",
   inputSchema: z.object({
     repo: z.string().optional().describe("A repo to ask about, as owner/name: whether it's onboarded, or whether the GitHub app is on it."),
   }),

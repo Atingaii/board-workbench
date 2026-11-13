@@ -253,14 +253,14 @@ test("the agent's tool reads the page's steps and the factory's repos, and about
   // A task keeps what helps do it: the agent quotes the command.
   assert.deepEqual(view.steps[2]!.tasks[0], result.steps[2]!.tasks[0]);
   assert.match(view.steps[2]!.tasks[0]!.commands![0]!, /^vercel connect create slack /);
-  // The repos it works on, and how many more have the app: not which. The agent answers people who
-  // aren't on the team, and a thread about one repo has no business with the others' names.
-  assert.deepEqual(view.repos, { onboarded: [{ repo: "acme/factory", channel: "project-factory/rsi", slack: "#factory-rsi" }], waiting: 2 });
-  assert.ok(!JSON.stringify(view).includes("acme/api"), JSON.stringify(view.repos));
+  // How many repos it works on, and how many more have the app: not which. The agent answers people
+  // who aren't on the team, and a thread about one repo has no business with the others' names.
+  assert.deepEqual(view.repos, { onboarded: 1, waiting: 2 });
+  for (const name of ["acme/api", "acme/web", "acme/factory", "project-factory/rsi"]) assert.ok(!JSON.stringify(view.repos).includes(name), name);
   assert.equal("asked" in view, false);
   // Asked about one repo, it says what its own GitHub access can't: the app is on it, as GitHub writes its name.
   assert.deepEqual(stepsView(result, deps.synced, "ACME/Web").asked, { repo: "acme/web", onboarded: false, app: true });
-  assert.ok(!JSON.stringify(stepsView(result, deps.synced, "acme/web")).includes("acme/api"));
+  for (const other of ["acme/api", "acme/factory"]) assert.ok(!JSON.stringify([stepsView(result, deps.synced, "acme/web").repos, stepsView(result, deps.synced, "acme/web").asked]).includes(other), other);
   // Or it isn't, or the repo is already in, with where it shows.
   assert.deepEqual(stepsView(result, deps.synced, "acme/elsewhere").asked, { repo: "acme/elsewhere", onboarded: false, app: false });
   assert.deepEqual(stepsView(result, deps.synced, "Acme/Factory").asked, { onboarded: true, repo: "acme/factory", channel: "project-factory/rsi", slack: "#factory-rsi" });
