@@ -227,6 +227,8 @@ let typed: string[] = []
 let warnings: Warning[] = []
 /** The board this run reached by its URL, for a failure to name. */
 let reached: string | null = null
+/** How long the message text this run sends is, for a backend's refusal of it to say what to do instead. */
+let sentLength = 0
 
 /** The help `words` ask for: a command's page when they name one (`read`, `sources read`), or else every command. */
 function help(words: readonly string[] = []): string {
@@ -584,6 +586,12 @@ function configuredUrl(): string | null {
  * JSON the text is, from wherever text comes (the argument, stdin, `--text-file`).
  */
 async function content(value: string | undefined, options: { optional?: boolean } = {}): Promise<string> {
+  const said = await given(value, options)
+  sentLength = said.length
+  return said
+}
+
+async function given(value: string | undefined, options: { optional?: boolean }): Promise<string> {
   const schema = flags.schema
   if (schema === undefined) return text(value, options)
   if (!parseSchemaId(schema)) throw usage(`${schema} doesn't name a schema. One is name@version, like sandbox@1.`)
@@ -805,10 +813,19 @@ function failureOf(error: unknown): Failure {
   if (status === 400 && code === 'schema_not_found' && current.command !== 'schemas')
     return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: 'See the schemas this board has', argv: [...cli(), 'schemas'] }])
   // Too much text: what it can't hold goes in a file, on a message that can take one (an edit can't).
-  if (status === 400 && code === 'text_too_long')
+  // Vercel's API says it as `invalid_message`, which also means empty text: only text over the limit is too long.
+  if (status === 400 && (code === 'text_too_long' || (code === 'invalid_message' && sentLength > MESSAGE_TEXT_MAX)))
     return {
       ...theirs('limit', 'payload_too_large', `Can't ${doing()}. A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.`, [
-        { instruction: current.command === 'edit' ? 'Keep the edit short, and reply with the long part in a file with --attach' : 'Put the long part in a file and --attach it, with a short summary as the text' },
+        // A task's root takes no file, and neither does an edit: the long part goes in a reply that does.
+        {
+          instruction:
+            current.command === 'edit'
+              ? 'Keep the edit short, and reply with the long part in a file with --attach'
+              : current.command === 'tasks'
+                ? 'Keep it short, and reply to the task with the long part in a file with --attach'
+                : 'Put the long part in a file and --attach it, with a short summary as the text',
+        },
       ]),
       details: [],
     }
@@ -1974,8 +1991,11 @@ async function tasks(args: string[]): Promise<number> {
         })
       made = await board.tasks.create({ re: messageId(target) }, about)
     } else {
+      // A task's root is a message: how long its text is says what a backend's refusal of it means, as for a post.
+      const said = await text(body)
+      sentLength = said.length
       made = await board.tasks.create(target, {
-        text: await text(body),
+        text: said,
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
@@ -2344,6 +2364,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
   positionals = []
   warnings = []
   reached = null
+  sentLength = 0
   try {
     parse(argv)
     if (flags.version) {

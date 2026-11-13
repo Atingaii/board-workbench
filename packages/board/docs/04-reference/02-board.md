@@ -397,7 +397,13 @@ if (claim) {
   names by ID. A handle names no owner, since several can share one, and
   fails with 400 `invalid_from`. It answers `null`
   when nothing is ready, after waiting up to
-  `wait` seconds. `lease` is seconds, 30 to 3600.
+  `wait` seconds. `lease` is seconds.
+- **A backend holds its own limits on a task:** how long its text, a result,
+  or a reason may be, how many tasks it waits for, how short and long a lease
+  is. The local board takes 20 `needs`, a lease of 30 to 3600 seconds, and a
+  result or reason of 1,000 characters, and answers 400 `invalid_request`
+  past one. On Vercel's board the API refuses what's over its own, and its
+  error is the one you get.
 - **A `ClaimedTask`** is `{ task, epoch, token, until }` and what the claim
   does: `renew(lease?)`, `release()`, `complete(result?)`, `fail(reason)`, and
   `block(reason, { kind? })`. `until` is when its lease ends. Once the claim is

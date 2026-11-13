@@ -1219,7 +1219,10 @@ through the sync that speaks for them, under the key it imported them through.
   holds one folds like any other name, and a handle or channel named
   `constructor` is like any other.
 - **Limits:** message text is at most 10,000 characters. It may be empty only
-  when the message has attachments.
+  when the message has attachments. A backend holds its own limits: board()
+  checks a request's shape, and leaves lengths and counts a backend enforces
+  to it, so on `vercel()` Vercel's API refuses what's over and its error is
+  the one callers get.
 - **Text is markdown (GFM).** Sync stores what platforms send as markdown:
   GitHub's own (tables and all), and Slack's through Chat SDK's parser. It posts
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
@@ -3839,7 +3842,10 @@ Task changes are board facts, in the board log:
   when they already have gets it in the same write, and so does one unblocked
   once they have, and one whose needs change to ones that have: from
   `task.needs_changed` it waits again while it has any, and with none it's
-  ready. A task needs at most 20 others.
+  ready. A task needs at most 20 others on the local board: how many is the
+  backend's to say, as every length and count of a task is. A request's
+  schema checks its shape, and a backend refuses what's over its own limits,
+  so on `vercel()` the refusal is Vercel's API's.
 - **A write a task has moved on from changes nothing in the fold:** an older
   epoch, a finished task, a second `task.created`. The writes refuse first;
   the fold is what holds for whoever folds the log themselves.
@@ -3874,8 +3880,8 @@ Task changes are board facts, in the board log:
 | POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled; a claimed one's claim ends |
 
 A task reads like the thread it is: `GET /messages/:id`. `lease` and `wait`
-are seconds, as `/events`'s `wait` is: a lease of 30 to 3600, and a `wait` of
-at most 300. Errors: 404
+are seconds, as `/events`'s `wait` is: a `wait` of at most 300, and a lease as
+long as the backend gives (the local board takes 30 to 3600). Errors: 404
 `not_a_task` for a thread that isn't one; 403 `forbidden` (a claim without `label`) and `task_not_owned`; 409
 `task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished`,
 `already_a_task`, and

@@ -3,7 +3,7 @@ import {
   ActorId,
   AttachmentId,
   ATTACHMENTS_PER_MESSAGE_MAX,
-  CHANNEL_PATH_MAX,
+  CHANNEL_PATTERN_MAX,
   ChannelPath,
   DIRECT_UPLOAD_BYTES_MAX,
   Emoji,
@@ -12,18 +12,18 @@ import {
   LabelValue,
   MESSAGE_TEXT_MAX,
   MessageText,
+  SentText,
   platformAvatar,
   storable,
   TASK_BATCH_MAX,
   TASK_NEEDS_MAX,
   TASK_KEY_MAX,
   EDITED_HOLD,
-  TaskHoldKind,
-  TaskNote,
+  SentTaskHoldKind,
+  SentTaskNote,
   TaskState,
 } from '../contract/schemas.ts'
 import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
-import { SCHEMA_DESCRIPTION_MAX, SCHEMA_NAME, SCHEMA_VERSION_MAX } from '../contract/data-schemas.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message, Task } from '../contract/folds.ts'
@@ -102,7 +102,7 @@ export const PostBody = z
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     /** May be empty when the message has attachments. */
-    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
+    text: z.string().default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
     /**
@@ -112,7 +112,7 @@ export const PostBody = z
     sync: z.array(z.union([z.string().min(3).max(300), ResolvedSyncTarget])).max(10).optional(),
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** IDs from `POST /attachments`. */
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
     /**
      * A reply's precondition: a message in its thread, the newest as the caller read it. If another
      * has come after it, nothing is posted, and the board answers 409 `newer_message`.
@@ -148,10 +148,10 @@ export const ScheduleBody = z
   .object({
     channel: ChannelPath.optional(),
     re: Ref.optional(),
-    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
+    text: z.string().default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
     in: Duration.optional(),
     at: Instant.optional(),
     every: Duration.optional(),
@@ -187,15 +187,17 @@ export const SchedulesQuery = z.object({
   all: flag.optional(),
 })
 
-/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. As long as a channel's path may be, and the `/`. */
-const ChannelOrSubtree = z.string().max(CHANNEL_PATH_MAX + 1).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
+/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. As long as a grant's pattern for either. */
+const ChannelOrSubtree = z.string().max(CHANNEL_PATTERN_MAX).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
 
-/** A lease's shortest and longest, in seconds, and what a claim gets when it asks for none. */
-export const LEASE_MIN_S = 30
-export const LEASE_MAX_S = 3600
+/** What a claim gets when it asks for no lease, in seconds. */
 export const LEASE_DEFAULT_S = 900
-/** How long a claim holds its task, in seconds: 30 to 3600, 900 when left out. A board gives what's asked up to its own cap, never under 300. */
-const Lease = z.number().min(LEASE_MIN_S).max(LEASE_MAX_S)
+/**
+ * How long a claim holds its task, in seconds, 900 when left out. How short and how long one may
+ * be is the backend's to say: the local board takes 30 to 3600, and a board gives what's asked up
+ * to its own cap, never under 300.
+ */
+const Lease = z.number()
 
 /** What a claim's own writes carry: the `epoch` and `token` its claim answered. */
 const Claimed = { epoch: z.number().int().positive(), token: z.string().min(1).max(128) }
@@ -210,12 +212,14 @@ export const CreateTaskBody = z
   .object({
     channel: ChannelPath.optional(),
     re: Ref.optional(),
-    text: z.string().max(MESSAGE_TEXT_MAX).optional(),
+    /** As long as a post's text may be: the backend says how long that is. */
+    text: z.string().optional(),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
     /** IDs from `POST /attachments`, as a post takes them. */
-    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
-    needs: z.array(Ref).max(TASK_NEEDS_MAX).optional(),
+    attachments: z.array(AttachmentId).optional(),
+    /** How many tasks one may wait for is the backend's to say. */
+    needs: z.array(Ref).optional(),
     for: ActorId.nullable().optional(),
     claim: z.boolean().optional(),
     lease: Lease.optional(),
@@ -309,29 +313,30 @@ export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()
 export const ClaimReadyTaskBody = z.object({
   channel: ChannelOrSubtree,
   label: Labels.optional(),
-  from: z.array(z.string().min(1).max(256)).max(32).optional(),
+  /** How many owners one claim takes from is the backend's to say. */
+  from: z.array(z.string().min(1).max(256)).optional(),
   lease: Lease.optional(),
   wait: z.number().min(0).max(300).optional(),
 })
 
 export const RenewTaskBody = z.object({ ...Claimed, lease: Lease.optional() })
 export const ReleaseTaskBody = z.object(Claimed)
-export const CompleteTaskBody = z.object({ ...Claimed, result: TaskNote.optional() })
-export const FailTaskBody = z.object({ ...Claimed, reason: TaskNote })
+export const CompleteTaskBody = z.object({ ...Claimed, result: SentTaskNote.optional() })
+export const FailTaskBody = z.object({ ...Claimed, reason: SentTaskNote })
 /** A hold for a person. A claimed task's comes from its claim, with the claim's `epoch` and `token`. Kind `edited` is the board's own, so none asks for it. */
 export const BlockTaskBody = z
   .object({
-    reason: TaskNote,
-    kind: TaskHoldKind.refine((kind) => kind !== EDITED_HOLD, "`edited` is the board's own kind, for a task whose root someone else edited: name another").optional(),
+    reason: SentTaskNote,
+    kind: SentTaskHoldKind.refine((kind) => kind !== EDITED_HOLD, "`edited` is the board's own kind, for a task whose root someone else edited: name another").optional(),
     epoch: Claimed.epoch.optional(),
     token: Claimed.token.optional(),
   })
   .refine((body) => (body.epoch === undefined) === (body.token === undefined), { message: 'a claim is its `epoch` and its `token`: pass both, or neither' })
 /** The one actor of its owner's that claims the task, or null for anyone who may. */
 export const AssignTaskBody = z.object({ for: ActorId.nullable() })
-/** The tasks it waits for now, in place of what it waited for: none, for a task that waits for nothing. */
-export const TaskNeedsBody = z.object({ needs: z.array(Ref).max(TASK_NEEDS_MAX) })
-export const CancelTaskBody = z.object({ reason: TaskNote })
+/** The tasks it waits for now, in place of what it waited for: none, for a task that waits for nothing. How many it may wait for is the backend's to say. */
+export const TaskNeedsBody = z.object({ needs: z.array(Ref) })
+export const CancelTaskBody = z.object({ reason: SentTaskNote })
 
 const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
 const ClaimValue = z.string().min(1).max(1000)
@@ -365,7 +370,7 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
 ])
 
 /** What a grant lets its principals do: a map from channel pattern to `'all'` or a list, `[]` for none. Kept as written. */
-export const GrantCan = z.record(z.string().min(1).max(300), CanGrant)
+export const GrantCan = z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), CanGrant)
 
 /** A grant: who it names, and one `can` for all of them. The same principals again are another grant. */
 export const GrantBody = z.strictObject({
@@ -413,9 +418,9 @@ export const UpdateGrantBody = z
  * Strict, so a board that doesn't know a field refuses it: what it kept could never be changed.
  */
 export const SchemaBody = z.strictObject({
-  name: z.string().regex(SCHEMA_NAME, 'a schema name is up to 80 lowercase letters, numbers, and ._-, starting with a letter'),
-  version: z.number().int().min(1).max(SCHEMA_VERSION_MAX),
-  description: z.string().min(1).max(SCHEMA_DESCRIPTION_MAX).refine(storable, 'a description has a NUL character or a lone surrogate').optional(),
+  name: z.string().regex(/^[a-z][a-z0-9._-]*$/, 'a schema name is lowercase letters, numbers, and ._-, starting with a letter'),
+  version: z.number().int().min(1),
+  description: z.string().min(1).refine(storable, 'a description has a NUL character or a lone surrogate').optional(),
   schema: z.record(z.string(), z.unknown()),
 })
 
@@ -639,7 +644,7 @@ export const UploadStartBody = z.object({
 /** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers` (its `content-type` included), before `expiresAt`, then finish it. */
 export type UploadTicket = { id: string; url: string; headers: Record<string, string>; expiresAt: string }
 
-export const EditBody = z.object({ text: MessageText, revision: Revision.optional() })
+export const EditBody = z.object({ text: SentText, revision: Revision.optional() })
 export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (other platforms ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(50).optional() }).optional()

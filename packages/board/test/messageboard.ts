@@ -520,6 +520,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     // A reply's precondition, checked with the post: the thread's newest is still the one it names.
     if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
     if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
+    // A message carries so many files, each once: the body's shape, refused before any is looked up.
+    if ((body.attachments?.length ?? 0) > 10 || new Set(body.attachments).size !== (body.attachments?.length ?? 0)) throw bad('A message carries up to 10 different attachments.')
     const files = (body.attachments ?? []).map((id) => {
       const attachment = attachments.get(id)
       if (!attachment || !samePrincipal(attachment.createdBy.principal, uploader.principal)) throw new Refused(404, 'attachment_not_found')
@@ -528,7 +530,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       return attachment
     })
     // A post with attachments may have no text.
-    if (typeof body.text !== 'string' || (!body.text.trim() && !(files.length && body.text === '')) || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
+    if (typeof body.text !== 'string' || (!body.text.trim() && !(files.length && body.text === '')) || body.text.length > 10_000) throw new Refused(400, 'invalid_message', 'A message is 1 to 10000 characters.')
     if (body.replyTo !== undefined && (body.replyTo < 1 || body.replyTo > thread.messageCount)) throw new Refused(400, 'invalid_reply')
     const sequence = thread.messageCount + 1
     const createdAt = now()
@@ -1243,6 +1245,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     let wrote = false
     const answered = once(actor, body.operationId, () => {
       wrote = true
+      // A change of needs is refused for its body's shape before anything about the task: up to 100 thread IDs, repeats among them.
+      if (verb === 'needs' && (!Array.isArray(body.needs) || body.needs.length > 100 || body.needs.some((id: unknown) => typeof id !== 'string' || !THREAD_ID.test(id)))) throw bad('needs is up to 100 thread IDs.')
       const thread = taskThread(actor, decodeURIComponent(worked[1]!))
       const { task } = thread
       let from = task.state
@@ -1339,9 +1343,15 @@ function fakeBoard(shared: Shared, boardId: string) {
         ownerOrManage(actor, thread)
         if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
         if (task.state === 'claimed' && task.claim!.until > now()) throw new Refused(409, 'task_claimed', 'Someone holds the task: what it needs changes once no one does.', undefined, task.claim!.until)
-        const needs = checkedNeeds(actor, body.needs, thread.id)
+        // The set as given, however often each task is named: 20 different tasks at most, each one the caller can wait for.
+        const named = body.needs as string[]
+        const set = [...new Set(named)]
+        if (set.length > 20) throw new Refused(400, 'invalid_needs', 'A task waits for 20 tasks at most.')
+        const needs = checkedNeeds(actor, set, thread.id)
         // The same set changes nothing: not even a lapsed claim's expiry is written for it.
         if (needs.length !== task.needs.length || needs.some((id) => !task.needs.includes(id))) {
+          // Another set names each task once.
+          if (set.length !== named.length) throw new Refused(400, 'invalid_needs', 'A task is named once among what another waits for.')
           acyclic(thread.id, needs.filter((id) => !task.needs.includes(id)))
           lapse()
           // It waits for them from this write, and its `task.ready` follows in it when they have all completed: with
@@ -1541,7 +1551,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (actor.principal.type === 'app') throw new Refused(403, 'principal_cannot_schedule')
     if ((body.channelId === undefined) === (body.threadId === undefined)) throw invalid()
     if (body.labels !== undefined && body.threadId !== undefined) throw invalid()
-    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
+    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message', 'A message is 1 to 10000 characters.')
     const at = Date.now()
     const time = (value: unknown) => Number.isInteger(value) && (value as number) > 0 && (value as number) <= at + 365 * 86_400_000
     if (!time(body.firstAt) || body.firstAt < at - 60_000) throw invalid()
@@ -2074,6 +2084,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (method !== 'GET') tokenMay(actor, action === '/reactions' ? 'react' : action === '/labels' ? 'label' : 'post', thread.channelId)
       if (method === 'PATCH' && action === '') {
         if (!owns(actor, message.createdBy)) throw new Refused(403, 'message_not_owned')
+        if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message', 'A message is 1 to 10000 characters.')
         if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
         if (message.deletedAt !== undefined) throw new Refused(409, 'message_deleted')
         if (message.text !== body.text) {

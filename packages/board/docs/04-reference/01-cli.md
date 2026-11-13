@@ -989,6 +989,11 @@ $ vb tasks work/ --state all --limit 2
   for and isn't named, it waits for no longer. `--none` says nothing, so the
   task is ready. One of the two is required, so a command cut short changes
   nothing. It's for a task no one holds that isn't finished.
+- **A board holds its own limits on a task:** how long a result or a reason
+  is, how many tasks one waits for, how many owners `--from` names. Past one,
+  the command says what it was doing, with the board's words under it, and
+  exits 2. A task's text over what a message holds is `payload_too_large`:
+  keep it short, and reply to the task with the long part in a file.
 
 What can go wrong, by `reason`:
 

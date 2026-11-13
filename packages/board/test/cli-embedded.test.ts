@@ -337,6 +337,77 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("says to attach text over the limit when Vercel's API refuses it, on a post and an edit", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const long = 'x'.repeat(10_001)
+      expect(await capture(() => app.run(['post', 'dev', long, '--scope', 'acme']))).toMatchObject({
+        code: 1,
+        stderr: expect.stringMatching(/^error: Can't post to dev\. A message's text is at most 10,000 characters\.\n\n {2}Put the long part in a file and --attach it, with a short summary as the text\n/),
+      })
+      const id = (await capture(() => app.run(['post', 'dev', 'short', '--scope', 'acme']))).stdout.trim()
+      expect(await capture(() => app.run(['edit', id, long, '--scope', 'acme']))).toMatchObject({
+        code: 1,
+        stderr: expect.stringMatching(/A message's text is at most 10,000 characters\.\n\n {2}Keep the edit short, and reply with the long part in a file with --attach\n/),
+      })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("says what a task command was doing when Vercel's API refuses it for a limit of its own, with the API's words under it", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const run = (...args: string[]) => capture(() => app.run([...args, '--scope', 'acme']))
+      // A root's text is a message's: what to do with the long part, as for a post, where a task takes it.
+      expect(await run('tasks', 'create', 'dev', 'x'.repeat(10_001))).toEqual({
+        code: 1,
+        stdout: '',
+        stderr: "error: Can't create a task in dev. A message's text is at most 10,000 characters.\n\n  Keep it short, and reply to the task with the long part in a file with --attach\n",
+      })
+      const id = (await run('tasks', 'create', 'dev', 'a long build')).stdout.trim()
+      const refused = async (args: string[], lines: string[]) => expect(await run(...args), args.slice(0, 2).join(' ')).toEqual({ code: 2, stdout: '', stderr: `${lines.join('\n')}\n` })
+      // What it waits for, and whose tasks a claim takes: the API says how many.
+      const others: string[] = []
+      for (let n = 0; n < 21; n++) others.push((await run('tasks', 'create', 'dev', `step ${n}`)).stdout.trim())
+      await refused(['tasks', 'create', 'dev', 'after them all', ...others.flatMap((other) => ['--needs', other])], ["error: Can't create a task in dev.", '  needs is at most 20 thread IDs, with no repeats.'])
+      await refused(['tasks', 'claim', '--ready', 'dev', ...Array.from({ length: 33 }, (_, n) => ['--from', `vercel:user:u_${n}`]).flat()], ["error: Can't claim a task in dev.", '  from is at most 32 owner IDs.'])
+      // A result, a reason, and a hold's kind: how long each may be.
+      expect((await run('tasks', 'claim', id)).code).toBe(0)
+      const note = 'x'.repeat(1001)
+      await refused(['tasks', 'complete', id, note], [`error: Can't complete task #${id}.`, '  result is 1 to 1,000 characters, not blank.'])
+      await refused(['tasks', 'fail', id, note], [`error: Can't fail task #${id}.`, '  reason is 1 to 1,000 characters, not blank.'])
+      await refused(['tasks', 'block', id, 'approve the deploy?', '--kind', 'k'.repeat(65)], [`error: Can't block task #${id}.`, '  kind is up to 64 lowercase letters, numbers, and _.-'])
+      await refused(['tasks', 'cancel', id, note], [`error: Can't cancel task #${id}.`, '  reason is 1 to 1,000 characters, not blank.'])
+      // What a task waits for, changed: the API's own code for too many, said as the command says a set it can't take.
+      expect(await run('tasks', 'needs', others[0]!, ...others.slice(1), id)).toEqual({
+        code: 2,
+        stdout: '',
+        stderr: `error: Can't change what task #${others[0]} needs. It waits for tasks you can read, and none that waits for it.\n  A task waits for 20 tasks at most.\n\n  See what it waits for now:\n    vercel board read ${others[0]}\n  Or see the tasks there are:\n    vercel board tasks --state all\n`,
+      })
+      // The task is as it was, and what's within the API's limits lands.
+      expect(await run('tasks', 'complete', id, 'x'.repeat(1000))).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it("names where another project's import came from by that project, and takes it to --source by its name or its ID", async () => {
     const home = await isolated()
     const api = fakeMessageboard({ slug: 'acme', projects: { prj_www: 'www' } })

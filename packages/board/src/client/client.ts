@@ -430,8 +430,8 @@ export function createBoardClient(options: ClientOptions) {
    * which several can share). It needs `label` where the task
    * is. A task by ID that can't be claimed throws a 409 (`task_claimed`, `task_waiting`, ...); a
    * channel with nothing ready answers null, after waiting up to `wait` seconds for one. `lease`
-   * is how long you hold it, in seconds: 30 to 3600, the board's default without one. The claim's
-   * `until` says what the board gave.
+   * is how long you hold it, in seconds, the board's default without one: a board says how short
+   * and how long one may be, and the claim's `until` says what it gave.
    */
   async function claimTask(target: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
   async function claimTask(target: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>

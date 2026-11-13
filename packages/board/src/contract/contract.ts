@@ -4,6 +4,7 @@ import {
   ActorId,
   Attachment,
   ATTACHMENTS_PER_MESSAGE_MAX,
+  CHANNEL_PATTERN_MAX,
   SeenActorKind,
   Author,
   ChannelPath,
@@ -272,7 +273,7 @@ export const LEASES_SESSION = 'leases'
 
 const Grant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
 /** A `can`, as config writes it: board() checks it before it's kept. */
-const Can = z.union([Grant, z.record(z.string().min(1).max(300), Grant)])
+const Can = z.union([Grant, z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), Grant)])
 const ClaimValue = z.string().min(1).max(1000)
 
 const Environments = z.array(z.string().min(1).max(100)).max(16)
@@ -298,7 +299,7 @@ const GrantPrincipal = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('everyone') }),
 ])
 /** A grant's `can`, as written: each pattern and `'all'` or its permissions. */
-const GrantCan = z.record(z.string().min(1).max(300), Grant)
+const GrantCan = z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), Grant)
 
 /**
  * Who the board trusts beside its code's rules, outside the board log: its grants. Session
