@@ -855,6 +855,26 @@ describe('vercel()', () => {
     expect(count().byId).toBe(0)
   }, 15_000)
 
+  it('waits after a message for what comes after it: not its own posting, and nothing older from a feed that runs past a page', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    // In its thread, from the message itself, as `vb wait --re 812 --after 812` asks.
+    const root = await team.post('questions', { text: 'anyone?' })
+    expect((await team.poll({ re: root.id, after: root.id, wait: 1 })).events).toEqual([])
+    const waiting = team.poll({ re: root.id, after: root.id, wait: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await team.reply(root.id, { text: 'me!' })
+    expect((await waiting).events.map((event) => event.message?.text)).toEqual(['me!'])
+    // The API's feed comes a page at a time from its oldest change: 60 older posts are two pages before it.
+    for (let i = 0; i < 60; i++) await team.post('busy', { text: `old ${i}` })
+    const newest = await team.post('busy', { text: 'newest' })
+    expect((await team.poll({ channel: 'busy', after: newest.id, wait: 2 })).events).toEqual([])
+    const later = team.poll({ channel: 'busy', after: newest.id, wait: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await team.post('busy', { text: 'after it' })
+    expect((await later).events.map((event) => event.message?.text)).toEqual(['after it'])
+  }, 20_000)
+
   it('finds an older thread by labels the API can only filter after it lists, and refuses a cursor it can’t read', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
