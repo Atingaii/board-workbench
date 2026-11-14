@@ -455,9 +455,9 @@ describe('vercel()', () => {
     expect(api.requests.filter((r) => /\/threads$/.test(r))).toHaveLength(1)
   })
 
-  it("pages a channel's threads back with the API's own cursor, each of its pages in one read", async () => {
-    const api = fakeMessageboard({ inlineThreadMessages: true })
-    const listed: URLSearchParams[] = []
+  /** A handle on the fake through vercel(), with every request it sends to the API, in order: `METHOD /path?query`. */
+  const recording = (api: ReturnType<typeof fakeMessageboard>, before?: (url: URL) => Promise<void>) => {
+    const sent: URL[] = []
     const fetch = as(api, 'user:u_jb')
     const team = board({
       backend: vercel({
@@ -466,30 +466,80 @@ describe('vercel()', () => {
         files: api.files,
         fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = new URL(String(input instanceof Request ? input.url : input))
-          if (url.pathname.endsWith('/threads') && (init?.method ?? 'GET') === 'GET') listed.push(url.searchParams)
+          if ((init?.method ?? 'GET') === 'GET') {
+            sent.push(url)
+            await before?.(url)
+          }
           return fetch(input, init)
         }) as typeof globalThis.fetch,
       }),
     })
+    return { team, sent }
+  }
+
+  it("pages a channel's threads back with the API's own cursor, each of its pages in one read", async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true })
+    const { team, sent } = recording(api)
     for (let i = 0; i < 60; i++) await team.post('busy', { text: `thread ${i}` })
+    const listed = () => sent.filter((url) => url.pathname.endsWith('/threads'))
     const read = async (query: { before?: string; limit?: number }) => {
-      listed.length = 0
+      sent.length = 0
       const page = await team.threads({ channel: 'busy', ...query })
-      return { texts: page.threads.map((t) => t.message.text), older: page.older, sent: listed.map((params) => params.get('cursor')) }
+      return { texts: page.threads.map((t) => t.message.text), older: page.older, sent: listed().map((url) => url.searchParams.get('cursor')) }
     }
     const texts = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `thread ${from + i}`)
     // The API's cursor goes out as it came: 25 threads a page, the newest first.
-    expect(await read({ limit: 25 })).toEqual({ texts: texts(35, 60), older: '25', sent: [null] })
-    expect(await read({ before: '25', limit: 25 })).toEqual({ texts: texts(10, 35), older: '50', sent: ['25'] })
+    const first = await read({ limit: 25 })
+    expect(first).toEqual({ texts: texts(35, 60), older: expect.any(String), sent: [null] })
+    const second = await read({ before: first.older!, limit: 25 })
+    expect(second).toEqual({ texts: texts(10, 35), older: expect.any(String), sent: [first.older] })
     // One of its pages with `before`, whatever the limit.
-    expect(await read({ before: '50', limit: 100 })).toEqual({ texts: texts(0, 10), older: null, sent: ['50'] })
+    expect(await read({ before: second.older!, limit: 100 })).toEqual({ texts: texts(0, 10), older: null, sent: [second.older] })
     // A page cut short at `limit` says how far into the API's it got, and the next starts there.
     expect(await read({ limit: 4 })).toEqual({ texts: texts(56, 60), older: '~4', sent: [null] })
-    expect(await read({ before: '~4', limit: 25 })).toEqual({ texts: texts(35, 56), older: '25', sent: [null] })
-    expect(listed.every((params) => params.get('include') === 'messages')).toBe(true)
+    expect(await read({ before: '~4', limit: 25 })).toEqual({ texts: texts(35, 56), older: first.older, sent: [null] })
+    expect(listed().every((url) => url.searchParams.get('include') === 'messages')).toBe(true)
     // Only one channel's threads, unfiltered, page this way.
-    await expect(team.threads({ channel: 'busy', label: ['kind'], before: '25' })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    await expect(team.threads({ channel: 'busy', label: ['kind'], before: first.older! })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
     expect(await team.threads({ channel: 'busy/' })).not.toHaveProperty('older')
+  })
+
+  it("refuses a before that was never one of the channel's pages, as invalid_cursor, without asking the API with it", async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true })
+    const { team, sent } = recording(api)
+    for (let i = 0; i < 30; i++) for (const channel of ['busy', 'quiet']) await team.post(channel, { text: `thread ${i}` })
+    const busy = (await team.threads({ channel: 'busy', limit: 25 })).older!
+    const quiet = (await team.threads({ channel: 'quiet', limit: 25 })).older!
+    // The busy channel's own cursor, at a place the API never gave.
+    const { scope } = JSON.parse(Buffer.from(busy, 'base64url').toString()) as { scope: string }
+    const stale = Buffer.from(JSON.stringify({ scope, value: 'x' })).toString('base64url')
+    sent.length = 0
+    for (const before of ['not-a-page', '~', 'abc~', `${busy}~x`, quiet])
+      await expect(team.threads({ channel: 'busy', before }), before).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+    expect(sent.filter((url) => url.pathname.endsWith('/threads'))).toEqual([])
+    // One the API refuses itself is refused the same way.
+    await expect(team.threads({ channel: 'busy', before: stale })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+  })
+
+  it("answers a page's cursor at or behind what its threads saw, so a poll after it gets a post that landed while it read", async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true })
+    const other = handleOn(api)
+    let landing = false
+    const { team, sent } = recording(api, async (url) => {
+      if (landing && url.pathname.endsWith('/threads')) {
+        landing = false
+        await other.post('busy', { text: 'landed in between' })
+      }
+    })
+    await team.post('busy', { text: 'before' })
+    sent.length = 0
+    landing = true
+    const page = await team.threads({ channel: 'busy', limit: 25 })
+    const order = sent.map((url) => url.pathname.split('/').at(-1)).filter((last) => last === 'changes' || last === 'threads')
+    expect(order).toEqual(['changes', 'threads'])
+    // The page may show it too: a cursor behind the page reads it again rather than past it.
+    const { events } = await team.poll({ channel: 'busy', after: page.cursor })
+    expect(events.filter((event) => event.type === 'message.posted').map((event) => event.message?.text)).toEqual(['landed in between'])
   })
 
   it("uploads its own code's files, one bigger than a request straight to Vercel's storage, and posts them through board()'s middleware", async () => {

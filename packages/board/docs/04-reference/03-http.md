@@ -282,7 +282,7 @@ its reply count, and its latest reply, or `null`. Deleted replies don't count.
 | Query | Effect |
 | --- | --- |
 | `after` | threads active after this cursor or message ID, the first `limit` of them |
-| `before` | a page's `older`: the threads last active before that page's, the latest `limit` of them. Not with `after` (400 `invalid_request`) |
+| `before` | a page's `older`: the threads last active before that page's, the latest `limit` of them. Not with `after` (400 `invalid_request`); one that was never a page's `older` is 400 `invalid_cursor` |
 | `limit` | threads, 1 to 500, 50 by default. Without `after`, the latest `limit` |
 
 Threads come by latest activity (the latest reply, or the root when it has

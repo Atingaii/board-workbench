@@ -1277,6 +1277,27 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /**
+   * A page's `older` on this board, for `channel`: the API's thread cursor, base64url JSON whose `scope` names the
+   * channel, then `~<shown>` when the page stopped inside the API's. Anything else was never one: 400 `invalid_cursor`.
+   */
+  function olderIn(before: string, channel: ApiChannel): { cursor: string | undefined; skip: number } {
+    const refused = new HttpError(400, 'invalid_cursor', `before isn't a page of #${channel.name}'s threads: pass a page's older as it came`)
+    const found = /^([A-Za-z0-9_-]*)(?:~(\d{1,6}))?$/.exec(before)
+    if (!found || (!found[1] && found[2] === undefined)) throw refused
+    if (found[1]) {
+      let scope: unknown
+      try {
+        const bytes = Uint8Array.from(atob(found[1].replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
+        scope = (JSON.parse(new TextDecoder().decode(bytes)) as { scope?: unknown } | null)?.scope
+      } catch {
+        throw refused
+      }
+      if (typeof scope !== 'string' || !scope.split('#').includes(channel.id)) throw refused
+    }
+    return { cursor: found[1] || undefined, skip: Number(found[2] ?? 0) }
+  }
+
+  /**
    * A channel's threads last active before `before`, a page's `older` (from the newest without it), newest first:
    * at most `limit`, and with `before` at most one of the API's pages, whose cursor is the `older` it answers.
    * A page cut short at `limit` answers its own cursor with how many of its threads were shown (`<cursor>~4`), so
@@ -1284,12 +1305,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    */
   async function threadsBefore(who: Who, channel: ApiChannel, before: string | undefined, limit: number, signal: AbortSignal): Promise<{ threads: ApiThread[]; older: string | null }> {
     const path = await onBoard(who, '/threads')
-    const at = before?.match(/^(.*)~(\d+)$/)
-    let cursor = (at ? at[1] : before) || undefined
-    let skip = at ? Number(at[2]) : 0
+    let { cursor, skip } = before === undefined ? { cursor: undefined, skip: 0 } : olderIn(before, channel)
     const out: ApiThread[] = []
     do {
-      const found = await threadPage(who, path, { channelId: channel.id, label: undefined, cursor }, signal)
+      const found = await threadPage(who, path, { channelId: channel.id, label: undefined, cursor }, signal).catch((error: unknown) => {
+        // A cursor of the right shape the API still refuses: one it no longer takes.
+        if (error instanceof HttpError && error.status === 400 && error.code === 'invalid_cursor') throw new HttpError(400, 'invalid_cursor', `before isn't a page of #${channel.name}'s threads: pass a page's older as it came`)
+        throw error
+      })
       const fresh = found.threads.slice(skip)
       const room = limit - out.length
       if (fresh.length > room) {
@@ -2223,11 +2246,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // One channel's threads, as the API lists them, page for page.
       if (query.channel !== undefined && !query.channel.endsWith('/') && !byMessage && !query.label?.length && after === undefined) {
         const listed = await channelsFor(who, query.channel)
+        // Heads first: the cursor is then at or behind what the page saw, and a poll after it misses nothing.
+        const feeds = await heads(who, listed)
         const found = await Promise.all(listed.map((channel) => threadsBefore(who, channel, query.before, limit, signal)))
         const page = listed.flatMap((channel, i) => found[i]!.threads.map((thread) => ({ thread, channel, at: thread.lastActivityAt }))).reverse()
         return {
           threads: await summaries(who, page, signal),
-          cursor: cursorOf({ t: page.reduce((max, { at }) => Math.max(max, at), 0), feeds: await heads(who, listed) }),
+          cursor: cursorOf({ t: page.reduce((max, { at }) => Math.max(max, at), 0), feeds }),
           older: found[0]?.older ?? null,
         }
       }

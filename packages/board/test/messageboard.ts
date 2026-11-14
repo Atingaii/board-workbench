@@ -1029,7 +1029,23 @@ function fakeBoard(shared: Shared, boardId: string) {
         listed = listed.filter((t) => Object.hasOwn(t.messages[0]!.labels, key) && (value === undefined || t.messages[0]!.labels[key] === value))
         listed.sort((a, b) => a.createdAt - b.createdAt)
       } else listed.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
-      const { items, cursor } = page(listed, url.searchParams.get('cursor'), 25)
+      // A cursor as the API makes one: base64url JSON whose scope names the channel's thread list.
+      const scope = `${teamId}#${boardId}#${channelId}#threads`
+      const sent = url.searchParams.get('cursor')
+      let from: string | null = null
+      if (sent !== null) {
+        const read = (() => {
+          try {
+            return JSON.parse(Buffer.from(sent, 'base64url').toString()) as { scope?: unknown; value?: unknown }
+          } catch {
+            return null
+          }
+        })()
+        if (read?.scope !== scope || typeof read.value !== 'string' || !/^\d+$/.test(read.value)) throw new Refused(400, 'invalid_cursor', 'Invalid cursor.')
+        from = read.value
+      }
+      const { items, cursor: next } = page(listed, from, 25)
+      const cursor = next === null ? null : Buffer.from(JSON.stringify({ scope, value: next })).toString('base64url')
       const include = url.searchParams.get('include')
       // An API from before `include=messages` takes no `include`, as it takes no other parameter it doesn't know.
       if (include !== null && !shared.inlineThreadMessages) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `include`.')
