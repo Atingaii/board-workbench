@@ -28,7 +28,11 @@ export function listing(client: ListingClient, get: () => store.State, set: (nex
 
   /** The channel's first page of threads, or on a board from before `older`, its latest messages. */
   async function load(channel: string) {
-    const page = await client.threads({ channel, limit })
+    set((s) => store.listing(s, channel))
+    const page = await client.threads({ channel, limit }).catch((error: unknown) => {
+      set((s) => store.unlisted(s, channel))
+      throw error
+    })
     if (!('older' in page)) {
       set((s) => store.unpaged(s, channel))
       return messages(channel)
@@ -38,8 +42,10 @@ export function listing(client: ListingClient, get: () => store.State, set: (nex
 
   /** The next older page, from where the last one said it starts. Whether there's more. */
   async function older(channel: string): Promise<boolean> {
-    const listed = get().listings[channel]
+    const listed = store.listingOf(get(), channel)
     if (listed) {
+      // Its first page is still on its way: try again once it's in.
+      if (!listed.loaded) return true
       if (listed.older === null) return false
       const page = await client.threads({ channel, before: listed.older, limit })
       set((s) => store.mergeThreads(s, channel, page, 'older'))
@@ -54,8 +60,8 @@ export function listing(client: ListingClient, get: () => store.State, set: (nex
   }
 
   const hasOlder = (channel: string) => {
-    const listed = get().listings[channel]
-    return listed ? listed.older !== null : !exhausted.has(channel)
+    const listed = store.listingOf(get(), channel)
+    return listed ? !listed.loaded || listed.older !== null : !exhausted.has(channel)
   }
 
   /** Reads a channel's first page again, once for every burst that asks while it waits or reads. */
@@ -89,7 +95,7 @@ export function listing(client: ListingClient, get: () => store.State, set: (nex
     set((s) => events.reduce(store.applyEvent, s))
     const state = get()
     for (const event of events) {
-      const channel = store.unlisted(state, event)
+      const channel = store.unlistedReply(state, event)
       if (channel !== null) refresh(channel)
     }
   }

@@ -48,7 +48,7 @@ const posted = (m: MessageView): BoardEventView => ({
  * A board's `ops` channel as `/threads` lists it: `threads`, each with its replies, by latest activity, a page's
  * `older` where its least recently active thread stands. `paged: false` is a board from before `older`.
  */
-function fakeBoard(threads: () => { root: MessageView; replies: MessageView[] }[], options: { paged?: boolean; messages?: MessageView[] } = {}) {
+function fakeBoard(threads: () => { root: MessageView; replies: MessageView[] }[], options: { paged?: boolean; messages?: MessageView[]; answered?: Promise<void> } = {}) {
   const reads = { threads: [] as (string | undefined)[], messages: 0, thread: 0 }
   const summary = ({ root, replies }: { root: MessageView; replies: MessageView[] }): ThreadSummaryView => ({ message: root, replies: replies.length, last: replies.at(-1) ?? null })
   const client: ListingClient & { thread(): Promise<never> } = {
@@ -60,6 +60,8 @@ function fakeBoard(threads: () => { root: MessageView; replies: MessageView[] }[
         .filter((t) => before === undefined || store.byWritten(active(t), JSON.parse(before)) < 0)
       const shown = listed.slice(0, limit)
       const page: ThreadsPage = { threads: shown.toReversed().map(summary), cursor: 'c' }
+      // A page read now that reaches the page later.
+      await options.answered
       const { createdAt, id } = active(shown.at(-1) ?? listed[0] ?? { root: message(0), replies: [] })
       return options.paged === false ? page : { ...page, older: listed.length > limit ? JSON.stringify({ createdAt, id }) : null }
     },
@@ -166,7 +168,7 @@ describe("the inspector's channel view", () => {
   it('says a channel with no threads is empty, and loads one on a board from before `older` by its messages', async () => {
     const empty = fakeBoard(() => [])
     await empty.view.load('ops')
-    expect(empty.state().listings.ops).toEqual({ rows: {}, older: null })
+    expect(empty.state().listings.ops).toEqual({ rows: {}, older: null, loaded: true })
     expect(empty.shown()).toEqual([])
     expect(empty.reads).toEqual({ threads: [undefined], messages: 0, thread: 0 })
 
@@ -179,5 +181,41 @@ describe("the inspector's channel view", () => {
       ['1', ['2']],
       ['3', []],
     ])
+  })
+
+  it('keeps a live post in a channel named like a built-in, and the rest of its batch', async () => {
+    const roots = [message(1)]
+    const board = fakeBoard(() => roots.map((root) => ({ root, replies: [] })))
+    await board.view.load('ops')
+    const built = message(2, { channel: 'constructor' })
+    board.set(store.mergeThreads(board.state(), 'constructor', { threads: [{ message: built, replies: 0, last: null }], cursor: 'c', older: null }, 'first'))
+    board.view.apply([posted(reply(3, 2)), posted(message(4, { channel: 'constructor' })), posted(message(5))])
+    expect(store.channelRows(board.state(), 'constructor').threads.map((t) => [t.root.id, t.summary.count])).toEqual([
+      ['2', 1],
+      ['4', 0],
+    ])
+    expect(board.shown().map(([id]) => id)).toEqual(['1', '5'])
+    // A channel no one opened, named so, is no listing either.
+    const fresh = fakeBoard(() => [])
+    fresh.view.apply([posted(reply(6, 1)), posted(message(7))])
+    expect(fresh.state().messages['7']).toBeDefined()
+    fresh.view.apply([posted(message(8, { channel: 'constructor' })), posted(reply(9, 8))])
+    expect(fresh.state().messages['9']).toBeDefined()
+  })
+
+  it('keeps a thread started while the first page is on its way, when that page was read before it', async () => {
+    let answer!: () => void
+    const roots = [message(1), message(2)]
+    const board = fakeBoard(() => roots.map((root) => ({ root, replies: [] })), { answered: new Promise((resolve) => (answer = resolve)) })
+    const loading = board.view.load('ops')
+    board.view.apply([posted(message(3))])
+    answer()
+    await loading
+    expect(board.shown()).toEqual([
+      ['1', 0, null],
+      ['2', 0, null],
+      ['3', 0, null],
+    ])
+    expect(board.view.hasOlder('ops')).toBe(false)
   })
 })

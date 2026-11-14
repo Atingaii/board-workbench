@@ -8,7 +8,7 @@ import { Feed, Toasts } from './feed.tsx'
 import { Avatar, Messages, Pendings, type RowOptions } from './message.tsx'
 import { Ago, here, Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
-import { byWritten, channelRows, channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, type Filter, type State } from './store.ts'
+import { byWritten, channelRows, channelThreads, filtering, knownLabels, listingOf, matches, recent, thread as threadOf, type Filter, type State } from './store.ts'
 import { ContextMenuArea, Menu, MenuItem, MenuSeparator, ResizeHandle, type KnownLabels } from './ui.tsx'
 
 type Route = { view: 'activity' } | { view: 'channel'; channel: string } | { view: 'inbox'; key: string } | { view: 'missing' }
@@ -484,7 +484,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
     if (filtering(filter)) void board.loadFiltered(channel, filter)
   }, [channel, key])
   // The board's thread list, by latest activity; a filter, or a board from before `older`, the messages loaded.
-  const listed = !!state.listings[channel] && !filtering(filter)
+  const listed = !!listingOf(state, channel) && !filtering(filter)
   const { threads: all, pending: posts } = useMemo(
     () => (listed ? channelRows(state, channel) : channelThreads(state, channel)),
     [state.messages, state.ops, state.pending, state.actors, state.listings, listed, channel],

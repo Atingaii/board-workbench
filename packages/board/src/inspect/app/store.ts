@@ -32,9 +32,16 @@ export type Row = { replies: number; last: string | null }
 
 /**
  * A channel's threads as the board lists them, by latest activity: a row per thread, by its root's ID, and the
- * `older` of the last page read, where the next older page starts (null when the oldest is here).
+ * `older` of the last page read, where the next older page starts (null when the oldest is here). Until its first
+ * page is in (`loaded: false`), it keeps the posts the stream brings, for the page to merge into.
  */
-export type Listing = { rows: Record<string, Row>; older: string | null }
+export type Listing = { rows: Record<string, Row>; older: string | null; loaded: boolean }
+
+/** A channel's listing, by its own key only: a channel can be named like an object's built-ins (`constructor`). */
+export const listingOf = (state: State, channel: string): Listing | null | undefined =>
+  Object.hasOwn(state.listings, channel) ? state.listings[channel] : undefined
+
+const rowOf = (listing: Listing, root: string): Row | undefined => (Object.hasOwn(listing.rows, root) ? listing.rows[root] : undefined)
 
 export type State = {
   me: Me | null
@@ -151,15 +158,27 @@ function activity(state: State, root: string, row: Row): Pick<MessageView, 'crea
  */
 export function mergeThreads(state: State, channel: string, page: ThreadsPage, which: 'first' | 'older'): State {
   const next = merge(state, page.threads.flatMap((t) => (t.last ? [t.message, t.last] : [t.message])))
-  const listing = next.listings[channel]
+  const listing = listingOf(next, channel)
   const rows = { ...listing?.rows }
   for (const { message, replies, last } of page.threads) {
     const row = { replies, last: last?.id ?? null }
-    const kept = rows[message.id]
+    const kept = Object.hasOwn(rows, message.id) ? rows[message.id] : undefined
     if (!kept || byWritten(activity(next, message.id, kept), activity(next, message.id, row)) <= 0) rows[message.id] = row
   }
-  const older = which === 'first' && listing ? listing.older : (page.older ?? null)
-  return { ...next, listings: { ...next.listings, [channel]: { rows, older } } }
+  const older = which === 'first' && listing?.loaded ? listing.older : (page.older ?? null)
+  return { ...next, listings: { ...next.listings, [channel]: { rows, older, loaded: true } } }
+}
+
+/** A channel whose first page is on its way: from now, the stream's posts in it are kept for that page. */
+export const listing = (state: State, channel: string): State =>
+  listingOf(state, channel) ? state : { ...state, listings: { ...state.listings, [channel]: { rows: {}, older: null, loaded: false } } }
+
+/** A channel whose first page didn't come: it's listed again when it's opened again. */
+export function unlisted(state: State, channel: string): State {
+  if (listingOf(state, channel)?.loaded !== false) return state
+  const listings = { ...state.listings }
+  delete listings[channel]
+  return { ...state, listings }
 }
 
 /** A channel on a board whose thread pages have no `older`: it loads by messages. */
@@ -167,10 +186,10 @@ export const unpaged = (state: State, channel: string): State => ({ ...state, li
 
 /** A post in a listed channel: a new thread gets a row, and a reply moves its thread's on, once. */
 function listed(state: State, message: MessageView): State {
-  const listing = state.listings[message.channel]
+  const listing = listingOf(state, message.channel)
   if (!listing) return state
   const root = message.re ?? message.id
-  const row = listing.rows[root]
+  const row = rowOf(listing, root)
   let next: Row
   if (message.re === null) {
     if (row) return state
@@ -183,11 +202,11 @@ function listed(state: State, message: MessageView): State {
 }
 
 /** The channel of a live reply whose thread its listing doesn't have, so its first page is read again; else null. */
-export function unlisted(state: State, event: BoardEventView): string | null {
+export function unlistedReply(state: State, event: BoardEventView): string | null {
   const message = event.message
   if (event.type !== 'message.posted' || !message || message.re === null) return null
-  const listing = state.listings[message.channel]
-  return listing && !listing.rows[message.re] ? message.channel : null
+  const listing = listingOf(state, message.channel)
+  return listing?.loaded && !rowOf(listing, message.re) ? message.channel : null
 }
 
 /** Folds one live event in: the message it concerns, channel counts, listed threads, and actor details. */
@@ -304,10 +323,10 @@ export function channelThreads(state: State, channel: string): { threads: Channe
  * and the replies loaded so far, from an opened thread or the stream.
  */
 export function channelRows(state: State, channel: string): { threads: ChannelThread[]; pending: Pending[] } {
-  const rows = state.listings[channel]?.rows ?? {}
+  const rows = listingOf(state, channel)?.rows ?? {}
   const replies = new Map<string, MessageView[]>()
   for (const message of Object.values(state.messages))
-    if (message.re !== null && rows[message.re]) replies.set(message.re, [...(replies.get(message.re) ?? []), shown(state, message.id)!])
+    if (message.re !== null && Object.hasOwn(rows, message.re)) replies.set(message.re, [...(replies.get(message.re) ?? []), shown(state, message.id)!])
   const threads = Object.entries(rows).flatMap(([id, row]) => {
     const root = shown(state, id)
     if (!root) return []
