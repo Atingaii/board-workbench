@@ -3,6 +3,7 @@ import type { BoardEventView, InboxEntry } from '../../api/routes.ts'
 import type { Attachment } from '../../contract/schemas.ts'
 import { http } from '../../backend-http/index.default.ts'
 import { board } from '../../server/index.default.ts'
+import { listing } from './listing.ts'
 import * as store from './store.ts'
 
 // The page's connection to the board: a handle like any other, on the inspector's
@@ -83,6 +84,8 @@ const client = board({
     },
   }),
 })
+
+const channels = listing(client, () => state, set)
 
 /** Switches who you post as, then learns the identity that is, and remembers it once the board takes it. */
 export async function setProfile(next: Profile | null | undefined) {
@@ -196,7 +199,7 @@ async function stream(after: string) {
     scheduled = false
     const events = queue
     queue = []
-    set((s) => events.reduce(store.applyEvent, s))
+    channels.apply(events)
   }
   try {
     for await (const event of client.events({ all: true, after })) {
@@ -215,33 +218,18 @@ async function stream(after: string) {
 
 const PAGE = 200
 
-/** Whether older messages exist past what's loaded, per channel. */
-const exhausted = new Set<string>()
-
-export const loadChannel = (channel: string) =>
-  once(`channel:${channel}`, async () => {
-    const page = await client.messages({ channel, limit: PAGE })
-    if (page.messages.length < PAGE) exhausted.add(channel)
-    set((s) => store.merge(s, page.messages))
-  })
+export const loadChannel = (channel: string) => once(`channel:${channel}`, () => channels.load(channel))
 
 export async function loadOlder(channel: string): Promise<boolean> {
-  const oldest = Object.values(state.messages)
-    .filter((m) => m.channel === channel)
-    .sort(store.byWritten)[0]
-  if (exhausted.has(channel) || !oldest) return false
   try {
-    const page = await client.messages({ channel, before: oldest.id, limit: PAGE })
-    if (page.messages.length < PAGE) exhausted.add(channel)
-    set((s) => store.merge(s, page.messages))
-    return !exhausted.has(channel)
+    return await channels.older(channel)
   } catch (error) {
     toast(message(error))
     return true
   }
 }
 
-export const hasOlder = (channel: string) => !exhausted.has(channel)
+export const hasOlder = (channel: string) => channels.hasOlder(channel)
 
 export const loadThread = (id: string) =>
   once(`thread:${id}`, async () => {

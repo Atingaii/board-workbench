@@ -1,4 +1,4 @@
-import type { ActorView, BoardEventView, ChannelView, Discovery, Me, MessageView } from '../../api/routes.ts'
+import type { ActorView, BoardEventView, ChannelView, Discovery, Me, MessageView, ThreadsPage } from '../../api/routes.ts'
 import { canonicalEmoji } from '../../contract/emoji.ts'
 import { actorKind } from '../../contract/schemas.ts'
 
@@ -27,6 +27,15 @@ export type Pending = {
   error: string | null
 }
 
+/** A listed thread: how many replies it has and its latest, by ID, as the board listed it or the stream has moved it since. */
+export type Row = { replies: number; last: string | null }
+
+/**
+ * A channel's threads as the board lists them, by latest activity: a row per thread, by its root's ID, and the
+ * `older` of the last page read, where the next older page starts (null when the oldest is here).
+ */
+export type Listing = { rows: Record<string, Row>; older: string | null }
+
 export type State = {
   me: Me | null
   discovery: Discovery | null
@@ -39,6 +48,8 @@ export type State = {
   /** The stream's position: the last event's cursor, to resume from. */
   cursor: string | null
   live: 'connecting' | 'live' | 'reconnecting'
+  /** Each opened channel's listing, or null on a board whose thread pages have no `older`: it loads by messages. */
+  listings: Record<string, Listing | null>
 }
 
 export const initialState: State = {
@@ -51,6 +62,7 @@ export const initialState: State = {
   actors: {},
   cursor: null,
   live: 'connecting',
+  listings: {},
 }
 
 /** Whether a message as the board shows it already reflects a change you made. */
@@ -128,10 +140,61 @@ function landed(state: State, message: MessageView): Pending | undefined {
   )
 }
 
-/** Folds one live event in: the message it concerns, channel counts, and actor details. */
+/** When a listed thread was last active: its latest reply, or its root. */
+function activity(state: State, root: string, row: Row): Pick<MessageView, 'createdAt' | 'id'> {
+  return (row.last === null ? undefined : state.messages[row.last]) ?? state.messages[root] ?? { createdAt: '', id: root }
+}
+
+/**
+ * Takes in a page of a channel's threads: one row per thread, the newer where a thread is listed already. The first
+ * page read and every older one set where the next older page starts; the first page read again leaves it.
+ */
+export function mergeThreads(state: State, channel: string, page: ThreadsPage, which: 'first' | 'older'): State {
+  const next = merge(state, page.threads.flatMap((t) => (t.last ? [t.message, t.last] : [t.message])))
+  const listing = next.listings[channel]
+  const rows = { ...listing?.rows }
+  for (const { message, replies, last } of page.threads) {
+    const row = { replies, last: last?.id ?? null }
+    const kept = rows[message.id]
+    if (!kept || byWritten(activity(next, message.id, kept), activity(next, message.id, row)) <= 0) rows[message.id] = row
+  }
+  const older = which === 'first' && listing ? listing.older : (page.older ?? null)
+  return { ...next, listings: { ...next.listings, [channel]: { rows, older } } }
+}
+
+/** A channel on a board whose thread pages have no `older`: it loads by messages. */
+export const unpaged = (state: State, channel: string): State => ({ ...state, listings: { ...state.listings, [channel]: null } })
+
+/** A post in a listed channel: a new thread gets a row, and a reply moves its thread's on, once. */
+function listed(state: State, message: MessageView): State {
+  const listing = state.listings[message.channel]
+  if (!listing) return state
+  const root = message.re ?? message.id
+  const row = listing.rows[root]
+  let next: Row
+  if (message.re === null) {
+    if (row) return state
+    next = { replies: 0, last: null }
+  } else {
+    if (!row || byWritten(activity(state, root, row), message) >= 0) return state
+    next = { replies: row.replies + 1, last: message.id }
+  }
+  return { ...state, listings: { ...state.listings, [message.channel]: { ...listing, rows: { ...listing.rows, [root]: next } } } }
+}
+
+/** The channel of a live reply whose thread its listing doesn't have, so its first page is read again; else null. */
+export function unlisted(state: State, event: BoardEventView): string | null {
+  const message = event.message
+  if (event.type !== 'message.posted' || !message || message.re === null) return null
+  const listing = state.listings[message.channel]
+  return listing && !listing.rows[message.re] ? message.channel : null
+}
+
+/** Folds one live event in: the message it concerns, channel counts, listed threads, and actor details. */
 export function applyEvent(state: State, event: BoardEventView): State {
   let next = event.message ? merge(state, [event.message]) : state
   if (event.type === 'message.posted' && event.message) {
+    next = listed(next, event.message)
     const post = landed(next, event.message)
     if (post) next = { ...next, pending: next.pending.filter((p) => p !== post) }
     const { channel, re } = event.message
@@ -197,6 +260,18 @@ export function shown(state: State, id: string, now = new Date().toISOString()):
 
 export type Thread = { root: MessageView; replies: MessageView[]; pending: Pending[] }
 
+/** A root's replies at a glance: how many, the latest, and the last three people who wrote one. */
+export type ReplySummary = { count: number; last: MessageView | null; faces: MessageView[] }
+
+/** A thread in a channel, with its replies summarized. */
+export type ChannelThread = Thread & { summary: ReplySummary }
+
+function summarize(replies: MessageView[], count = replies.length, last: MessageView | null = replies.at(-1) ?? null): ReplySummary {
+  const newest = last && replies.length > 0 && byWritten(replies.at(-1)!, last) > 0 ? replies.at(-1)! : last
+  const faces = [...new Map([...replies, ...(newest && !replies.includes(newest) ? [newest] : [])].map((r) => [r.by.actor, r])).values()].slice(-3)
+  return { count: Math.max(count, replies.filter((r) => !r.deleted).length), last: newest, faces }
+}
+
 /**
  * Messages in the order they were written: by when, and between two in the same millisecond, by
  * ID, digits compared as numbers. IDs are the board's to choose, so this is only a tiebreak.
@@ -205,7 +280,7 @@ export const byWritten = (a: Pick<MessageView, 'createdAt' | 'id'>, b: Pick<Mess
   a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id.localeCompare(b.id, undefined, { numeric: true })
 
 /** A channel's threads, oldest first, from the messages loaded so far. */
-export function channelThreads(state: State, channel: string): { threads: Thread[]; pending: Pending[] } {
+export function channelThreads(state: State, channel: string): { threads: ChannelThread[]; pending: Pending[] } {
   const roots: MessageView[] = []
   const replies = new Map<string, MessageView[]>()
   for (const message of Object.values(state.messages)) {
@@ -216,13 +291,32 @@ export function channelThreads(state: State, channel: string): { threads: Thread
   }
   roots.sort(byWritten)
   return {
-    threads: roots.map((root) => ({
-      root,
-      replies: (replies.get(root.id) ?? []).sort(byWritten),
-      pending: state.pending.filter((post) => post.re === root.id),
-    })),
+    threads: roots.map((root) => {
+      const loaded = (replies.get(root.id) ?? []).sort(byWritten)
+      return { root, replies: loaded, pending: state.pending.filter((post) => post.re === root.id), summary: summarize(loaded) }
+    }),
     pending: state.pending.filter((post) => post.channel === channel && post.re === null),
   }
+}
+
+/**
+ * A channel's listed threads by latest activity, the latest last: each with its row's reply count and latest reply,
+ * and the replies loaded so far, from an opened thread or the stream.
+ */
+export function channelRows(state: State, channel: string): { threads: ChannelThread[]; pending: Pending[] } {
+  const rows = state.listings[channel]?.rows ?? {}
+  const replies = new Map<string, MessageView[]>()
+  for (const message of Object.values(state.messages))
+    if (message.re !== null && rows[message.re]) replies.set(message.re, [...(replies.get(message.re) ?? []), shown(state, message.id)!])
+  const threads = Object.entries(rows).flatMap(([id, row]) => {
+    const root = shown(state, id)
+    if (!root) return []
+    const loaded = (replies.get(id) ?? []).sort(byWritten)
+    const last = row.last === null ? null : (shown(state, row.last) ?? null)
+    return [{ root, replies: loaded, pending: state.pending.filter((post) => post.re === id), summary: summarize(loaded, row.replies, last) }]
+  })
+  threads.sort((a, b) => byWritten(a.summary.last ?? a.root, b.summary.last ?? b.root))
+  return { threads, pending: state.pending.filter((post) => post.channel === channel && post.re === null) }
 }
 
 export function thread(state: State, root: string): Thread | null {
