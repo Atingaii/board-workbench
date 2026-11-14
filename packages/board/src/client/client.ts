@@ -427,7 +427,7 @@ export function createBoardClient(options: ClientOptions) {
     thread: (id: string) => call<ThreadView>('GET', `/messages/${path(id)}`),
     /** Your own post with the client ID you gave it, as posting it answered: 404 `post_not_found` when there's none. */
     posted: async (id: string) => (await call<{ message: MessageView }>('GET', `/posts/${path(id)}`)).message,
-    /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads. */
+    /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads; `before` takes a page's `older`. */
     threads: (query: Filters & Omit<ThreadsQueryInput, keyof FiltersInput> = {}) =>
       call<ThreadsPage>('GET', `/threads${queryString(query)}`),
 

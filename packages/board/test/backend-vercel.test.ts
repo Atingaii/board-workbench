@@ -118,6 +118,8 @@ describe('vercel()', () => {
       'grants: caps a person by their team role, so a viewer reads but neither posts nor manages': 'passed',
       'grants: names an app by its slug or client ID, keeps it by client ID, and every app as a group': 'passed',
       'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'passed',
+      "paging: pages back through a channel's threads by their `older`, each thread once": 'passed',
+      'paging: refuses to page threads back and forward at once': 'passed',
       "grants: lets no caller narrowed with x-board-can grant past its can, even where everyone's grant closes it": 'passed',
       'grants: lets no caller narrowed with x-board-can let anyone in where everyone gets more than it has': 'passed',
       'grants: lets a member grant on a pattern after a lock under it': 'skipped',
@@ -451,6 +453,43 @@ describe('vercel()', () => {
     api.requests.length = 0
     expect((await team.threads({ channel: 'busy', after: cursor })).threads.map((t) => t.message.id)).toEqual([later.id])
     expect(api.requests.filter((r) => /\/threads$/.test(r))).toHaveLength(1)
+  })
+
+  it("pages a channel's threads back with the API's own cursor, each of its pages in one read", async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true })
+    const listed: URLSearchParams[] = []
+    const fetch = as(api, 'user:u_jb')
+    const team = board({
+      backend: vercel({
+        team: 'team_test',
+        api: API,
+        files: api.files,
+        fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(String(input instanceof Request ? input.url : input))
+          if (url.pathname.endsWith('/threads') && (init?.method ?? 'GET') === 'GET') listed.push(url.searchParams)
+          return fetch(input, init)
+        }) as typeof globalThis.fetch,
+      }),
+    })
+    for (let i = 0; i < 60; i++) await team.post('busy', { text: `thread ${i}` })
+    const read = async (query: { before?: string; limit?: number }) => {
+      listed.length = 0
+      const page = await team.threads({ channel: 'busy', ...query })
+      return { texts: page.threads.map((t) => t.message.text), older: page.older, sent: listed.map((params) => params.get('cursor')) }
+    }
+    const texts = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `thread ${from + i}`)
+    // The API's cursor goes out as it came: 25 threads a page, the newest first.
+    expect(await read({ limit: 25 })).toEqual({ texts: texts(35, 60), older: '25', sent: [null] })
+    expect(await read({ before: '25', limit: 25 })).toEqual({ texts: texts(10, 35), older: '50', sent: ['25'] })
+    // One of its pages with `before`, whatever the limit.
+    expect(await read({ before: '50', limit: 100 })).toEqual({ texts: texts(0, 10), older: null, sent: ['50'] })
+    // A page cut short at `limit` says how far into the API's it got, and the next starts there.
+    expect(await read({ limit: 4 })).toEqual({ texts: texts(56, 60), older: '~4', sent: [null] })
+    expect(await read({ before: '~4', limit: 25 })).toEqual({ texts: texts(35, 56), older: '25', sent: [null] })
+    expect(listed.every((params) => params.get('include') === 'messages')).toBe(true)
+    // Only one channel's threads, unfiltered, page this way.
+    await expect(team.threads({ channel: 'busy', label: ['kind'], before: '25' })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    expect(await team.threads({ channel: 'busy/' })).not.toHaveProperty('older')
   })
 
   it("uploads its own code's files, one bigger than a request straight to Vercel's storage, and posts them through board()'s middleware", async () => {

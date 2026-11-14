@@ -464,19 +464,31 @@ const page = await team.messages({ channel: 'errors-www', label: { status: 'open
 ### threads
 
 ```ts
-threads(query?: Filters & { after?: string; limit?: number }): Promise<ThreadsPage>
+threads(query?: Filters & { after?: string; before?: string; limit?: number }): Promise<ThreadsPage>
 ```
 
-Returns `{ threads, cursor }`: one summary per thread with a matching message,
+Returns `{ threads, cursor, older }`: one summary per thread with a matching message,
 by latest activity, newest last. Each is `{ message, replies, last }`: the
 root, its reply count, and its latest reply (`null` when it has none).
 Deleted replies don't count. `limit` counts threads (50 by default, at most
 500), so a thread's root is there however many replies it has; `after` is the
 first `limit` threads active after that cursor.
 
+`older` is the `before` for the threads last active before the page's, or
+`null` when none are: pass it back to page back through every thread once. A
+page read with `after`, or from a board before `older`, has none. `before`
+doesn't go with `after`.
+
 ```ts
 const open = await team.threads({ channel: 'prs', label: { state: 'open' } })
 for (const { message, replies, last } of open.threads) console.log(message.id, replies, last?.createdAt)
+
+// Every thread in prs, newest activity first, a page at a time.
+for (let page = await team.threads({ channel: 'prs' }); ; ) {
+  console.log(page.threads.map((t) => t.message.id))
+  if (!page.older) break
+  page = await team.threads({ channel: 'prs', before: page.older })
+}
 ```
 
 ### thread

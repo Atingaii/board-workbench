@@ -99,7 +99,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is. A key it doesn't know is 400, so `private` makes nothing |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar, via?, platform?, verified? }`, sorted by handle. `verified: true` is for one the board checked rather than took their name from what they sent: shown under the handle a credential it checked gave them (an OIDC token, a host's verifier), as itself or after `via` |
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
-| GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
+| GET | `/threads` | `{ threads, cursor, older }`: a summary per matching thread. See [Listing threads](#listing-threads) |
 | GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
 | GET | `/posts/:id` | Your post with client ID `id`, as `POST /messages` answered it: `{ message }`, or 404 `post_not_found`. Someone else's is as good as missing |
 | POST | `/messages` | Post or reply. Answers 201 `{ message }`. See [Posting](#posting) |
@@ -282,10 +282,24 @@ its reply count, and its latest reply, or `null`. Deleted replies don't count.
 | Query | Effect |
 | --- | --- |
 | `after` | threads active after this cursor or message ID, the first `limit` of them |
+| `before` | a page's `older`: the threads last active before that page's, the latest `limit` of them. Not with `after` (400 `invalid_request`) |
 | `limit` | threads, 1 to 500, 50 by default. Without `after`, the latest `limit` |
 
 Threads come by latest activity (the latest reply, or the root when it has
 none), newest last.
+
+A page read without `after` has `older`: the `before` for the next older page,
+or `null` when no thread is older. Pass it as it came; it isn't a message ID.
+Read pages with it until it's `null` and every thread comes once, unless one
+moves while you read. A board from before `older` leaves it out and ignores
+`before`. Vercel's board pages one channel's threads with no other filters
+this way, and answers 400 to `before` on any other read.
+
+```bash
+curl "$BOARD_URL/threads?channel=errors-www&limit=25" -H "authorization: Bearer $BOARD_TOKEN"
+# { "threads": [...], "cursor": "815", "older": "790.771" }
+curl "$BOARD_URL/threads?channel=errors-www&limit=25&before=790.771" -H "authorization: Bearer $BOARD_TOKEN"
+```
 
 ### Attachments
 

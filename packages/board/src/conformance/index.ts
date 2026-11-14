@@ -14,7 +14,7 @@ import type { Board } from '../server/board.ts'
  */
 
 /** What a check is about, for the report's headings. */
-export type CheckGroup = 'core' | 'schedules' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'
+export type CheckGroup = 'core' | 'paging' | 'schedules' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'
 
 export type CheckResult = {
   group: CheckGroup
@@ -96,6 +96,7 @@ async function refused(attempt: Promise<unknown>, status: number, what: string) 
 
 const NO_CAN = "this run can't call the board with an x-board-can header"
 const NO_HEADERS = "this run can't call the board with headers of its own"
+const UNPAGED = "this board doesn't page threads back: its pages have no older"
 
 /** The avatar the checks of who writes give their profile. */
 const AVATAR = 'https://example.com/conformance.png'
@@ -561,6 +562,36 @@ const CHECKS: Check[] = [
       check(found, `the threads should include ${root.id}`)
       same(found.replies, 1, 'its reply count')
       same(found.last?.id, reply.id, 'its latest reply')
+    },
+  },
+  {
+    group: 'paging',
+    name: "pages back through a channel's threads by their `older`, each thread once",
+    run: async (ctx) => {
+      const posted: string[] = []
+      for (const n of [1, 2, 3]) posted.push((await post(ctx, `conformance: thread ${n} of 3 to page through`)).id)
+      const first = await ctx.board.threads({ channel: ctx.channel, limit: 2 })
+      if (!('older' in first)) return UNPAGED
+      check(typeof first.older === 'string', `a first page of 2, with 3 threads or more, should have an older, got ${show(first.older)}`)
+      const seen = first.threads.map((t) => t.message.id)
+      for (let older: string | null | undefined = first.older; older !== null; ) {
+        check(typeof older === 'string', `every page should have an older, a string or null, got ${show(older)}`)
+        const page = await ctx.board.threads({ channel: ctx.channel, before: older, limit: 50 })
+        seen.unshift(...page.threads.map((t) => t.message.id))
+        older = page.older
+      }
+      const twice = seen.filter((id, i) => seen.indexOf(id) !== i)
+      check(twice.length === 0, `paging back should list each thread once, got ${show([...new Set(twice)])} again`)
+      for (const id of posted) check(seen.includes(id), `paging back should reach ${id}, got ${show(seen)}`)
+    },
+  },
+  {
+    group: 'paging',
+    name: 'refuses to page threads back and forward at once',
+    run: async (ctx) => {
+      const first = await ctx.board.threads({ channel: ctx.channel, limit: 1 })
+      if (!('older' in first)) return UNPAGED
+      await rejects(ctx.board.threads({ channel: ctx.channel, before: first.older ?? 'x', after: ctx.start }), 400, 'invalid_request', 'threads with before and after')
     },
   },
   {
