@@ -612,7 +612,6 @@ function fakeBoard(shared: Shared, boardId: string) {
     const invalid = () => new Refused(400, 'invalid_schedule')
     if (actor.principal.type === 'app') throw new Refused(403, 'principal_cannot_schedule')
     if ((body.channelId === undefined) === (body.threadId === undefined)) throw invalid()
-    if (body.labels !== undefined && body.threadId !== undefined) throw invalid()
     if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
     const at = Date.now()
     const time = (value: unknown) => Number.isInteger(value) && (value as number) > 0 && (value as number) <= at + 365 * 86_400_000
