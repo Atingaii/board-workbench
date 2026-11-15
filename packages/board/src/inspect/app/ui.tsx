@@ -5,6 +5,7 @@ import { Popover } from '@base-ui/react/popover'
 import { X } from 'lucide-react'
 import { useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { displayEmoji } from '../../contract/emoji.ts'
+import type { Listed } from './store.ts'
 import { EMOJI_TABLE } from '../../contract/emoji-table.ts'
 
 // Base UI primitives, dressed like Just Chat: square, one hairline, and an
@@ -262,6 +263,10 @@ export function Panel(props: {
   title: string
   trigger?: ReactNode
   triggerTitle?: string
+  /** The trigger's class: a toolbar's icon button unless it says otherwise. */
+  triggerClass?: string
+  /** Which edge of its trigger it lines up with: the end unless the trigger sits at the start of its row. */
+  align?: 'start' | 'end'
   open: boolean
   onOpenChange: (open: boolean) => void
   anchor?: React.RefObject<Element | null>
@@ -270,12 +275,12 @@ export function Panel(props: {
   return (
     <Popover.Root open={props.open} onOpenChange={props.onOpenChange}>
       {props.trigger && (
-        <Popover.Trigger className="tool" aria-label={props.triggerTitle ?? props.title} title={props.triggerTitle ?? props.title}>
+        <Popover.Trigger className={props.triggerClass ?? 'tool'} aria-label={props.triggerTitle ?? props.title} title={props.triggerTitle ?? props.title}>
           {props.trigger}
         </Popover.Trigger>
       )}
       <Popover.Portal>
-        <Popover.Positioner className="positioner" align="end" sideOffset={6} {...(props.anchor ? { anchor: props.anchor } : {})}>
+        <Popover.Positioner className="positioner" align={props.align ?? 'end'} sideOffset={6} {...(props.anchor ? { anchor: props.anchor } : {})}>
           <Frame>
             <Popover.Popup className="menu popover">
               <Popover.Title className="popover-title">{props.title}</Popover.Title>
@@ -326,4 +331,30 @@ export function ResizeHandle(props: {
       <i />
     </div>
   )
+}
+
+/** A view's header: its title, a quiet line beside it, its controls, and whether the feed is live. */
+export function Header(props: { title: string; meta?: string | undefined; live?: 'connecting' | 'live' | 'reconnecting'; lead?: ReactNode; flat?: boolean; children?: ReactNode }) {
+  return (
+    <header className={`header${props.flat ? ' flat' : ''}`}>
+      {props.lead}
+      <span className="title">{props.title}</span>
+      {props.meta && <span className="meta">{props.meta}</span>}
+      <span className="spacer" />
+      {props.children}
+      {props.live && (
+        <span className={`live ${props.live}`} title={props.live === 'live' ? 'receiving board events' : 'the feed reconnects on its own'}>
+          <i />
+          {props.live === 'live' ? 'live' : props.live}
+        </span>
+      )}
+    </header>
+  )
+}
+
+/** What shows in place of a list the board hasn't given: it's on its way, or what the board answered instead. */
+export function Unlisted({ listed }: { listed: Listed<unknown> }) {
+  if (listed.is === 'here') return null
+  if (listed.is === 'failed') return <p className="empty error">{listed.why}</p>
+  return <p className="empty">loading…</p>
 }
