@@ -1619,13 +1619,13 @@ describe('vercel()', () => {
     await webhook(web, WEB_URL, 'webchat', { threadId: 'slack:C9:400', id: '400', text: 'hej', user: 'U_M2', name: 'malte' })
     const julian = handleOn(api)
     await vi.waitFor(async () => expect((await julian.messages({ channel: 'general' })).messages).toHaveLength(2))
-    await julian.post('general', { text: '@malte have a look, @pong/malte and @web/malte, cc @[ada@vercel.com]' })
+    await julian.post('general', { text: '@malte have a look, @pong/malte and @web/malte, cc @[ada@vercel.com] and @[slack:user:U_M1]' })
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await web.fetch(new Request(`${WEB_URL}/wake`, { method: 'POST' }))
     const posted = (platform: typeof pongSlack) => platform.channelPosts.map((post) => JSON.parse(post.text).markdown).filter((text: string) => text.includes('have a look'))
     await vi.waitFor(() => expect([posted(pongSlack), posted(webSlack)]).toEqual([
-      ['**Julián Benegas**: <@U_M1> have a look, <@U_M1> and @web/malte, cc <@U_ADA>'],
-      ['**Julián Benegas**: <@U_M2> have a look, @pong/malte and <@U_M2>, cc ada@vercel.com'],
+      ['**Julián Benegas**: <@U_M1> have a look, <@U_M1> and @web/malte, cc <@U_ADA> and <@U_M1>'],
+      ['**Julián Benegas**: <@U_M2> have a look, @pong/malte and <@U_M2>, cc ada@vercel.com and @[slack:user:U_M1]'],
     ]))
   })
 
