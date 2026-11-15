@@ -761,43 +761,19 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   // --- outbound: board → platforms --------------------------------------------------
 
   /**
-   * A message's text for a platform, through entry `key`, its mentions resolved as it posts and only
-   * against that entry's own users. An `@handle` reads natively when one of them has it, or of
-   * several, the one who wrote in the thread: `@support/malte` names one of support's users, and
-   * `@malte` is short for whichever of this sync's users that is, under its principal's name. An `@[actor-id]` reads natively when it's one of them (`@[slack:user:U0456]` also naming this sync's own profile of them),
-   * and as the actor's name otherwise; an `@[email]`, as whoever the platform finds with it, or as
-   * the email. The rest go as written.
+   * A message's text for a platform, through entry `key`. A mention is `@[actor-id]`, settled when
+   * the message was written: it reads natively when the actor is one of this entry's own users
+   * (`@[slack:user:U0456]` also naming this sync's own profile of them), and as the actor's name
+   * otherwise. An `@[email]` is whoever the platform finds with it, or the email. Everything else
+   * is text and goes as written, an `@handle` included: no sync reads one as a mention.
    */
-  async function textFor(key: string, message: MessageView, actors: Actors, text: string): Promise<string> {
-    const tokens = extractMentions(text)
-    if (tokens.length === 0) return text
+  async function textFor(key: string, actors: Actors, text: string): Promise<string> {
+    const exact = extractMentions(text).flatMap((token) => (token.kind === 'actor' ? [token.actor] : []))
+    if (exact.length === 0) return text
     const found = new Map<string, string | null>()
-    for (const token of tokens)
-      if (token.kind === 'actor' && !actors.byId[token.actor] && isEmail(token.actor)) found.set(token.actor, await emailMention(key, token.actor))
-    const users = new Map<string, { id: string; mention: string }[]>()
-    for (const token of tokens) {
-      if (token.kind !== 'handle') continue
-      const theirs = Object.values(actors.byId).filter((actor) => {
-        const handle = actor.handle.toLowerCase()
-        return handle === token.handle || (!token.handle.includes('/') && handle.slice(handle.indexOf('/') + 1) === token.handle)
-      })
-      users.set(token.handle, theirs.flatMap((actor) => {
-        const mention = nativeMention(key, actor.id, actors)
-        return mention === null ? [] : [{ id: actor.id, mention }]
-      }))
-    }
-    // Several users with one handle: whoever wrote in the thread, read only when it's needed.
-    const several = [...users.values()].some((theirs) => new Set(theirs.map((user) => user.mention)).size > 1)
-    const writers = several ? new Set((await threadOf(message.re ?? message.id)).map((written) => written.by.actor)) : null
-    const one = (theirs: { mention: string }[]) => {
-      const mentions = new Set(theirs.map((user) => user.mention))
-      return mentions.size === 1 ? [...mentions][0]! : null
-    }
+    for (const named of exact) if (!actors.byId[named] && isEmail(named)) found.set(named, await emailMention(key, named))
     return replaceMentions(text, (token) => {
-      if (token.kind === 'handle') {
-        const theirs = users.get(token.handle) ?? []
-        return one(theirs) ?? (writers ? one(theirs.filter((user) => writers.has(user.id))) : null)
-      }
+      if (token.kind === 'handle') return null
       if (found.has(token.actor)) return found.get(token.actor) ?? token.actor
       const actor = actorNamed(token.actor, actors)
       return actor ? (nativeMention(key, actor.id, actors) ?? actor.name) : null
@@ -806,8 +782,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 
   /**
    * The actor an `@[actor-id]` names: that actor, or, when the board has none by that ID, this
-   * sync's own profile of it (`@[slack:user:U0456]` for `<principal>+slack:user:U0456`), as plain
-   * `@malte` is short for this sync's `<principal>/malte`.
+   * sync's own profile of it (`@[slack:user:U0456]` for `<principal>+slack:user:U0456`).
    */
   function actorNamed(id: string, actors: Actors): (Actor & { verified?: true }) | null {
     return actors.byId[id] ?? (actors.principal ? actors.byId[`${actors.principal}+${id}`] : undefined) ?? null
@@ -857,7 +832,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     // A text that opens a block is one only at a line's start: under its label, whichever renderer wrote it, not beside it.
     const labeled = `**${name}**: `
-    const markdown = await textFor(key, message, actors, body.startsWith(labeled) && opensBlock(body.slice(labeled.length)) ? `**${name}**:\n\n${body.slice(labeled.length)}` : body)
+    const markdown = await textFor(key, actors, body.startsWith(labeled) && opensBlock(body.slice(labeled.length)) ? `**${name}**:\n\n${body.slice(labeled.length)}` : body)
     // Where the platform shows a sender per message, it shows one the board checked: anyone else's
     // name is what they sent, so it stays a label in the text, under the app.
     // Vercel's deployment comment goes with its deployments, for a platform that lays them out itself.

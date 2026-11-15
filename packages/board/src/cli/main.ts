@@ -4,7 +4,8 @@ import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
-import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch } from '../client/client.ts'
+import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
+import type { Mentioned } from '../contract/mentions.ts'
 import { createTasksInChunks, TasksInChunksError } from '../client/chunks.ts'
 import { boardUrl, connect, environmentProfile, handFetch, handLogin, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
@@ -20,7 +21,7 @@ import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, pr
 import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
-import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTasks, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTasks, mentionedIn, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import { fileClaims, memoryClaims, type Claims } from './claims.ts'
 import { runCommand } from './run.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
@@ -1017,16 +1018,49 @@ function warn(warning: Warning) {
   else io.error(`${terminalText(`warning: ${warning.message}`)}\n`)
 }
 
-/** A post or reply: its ID, or with `--json`, the message. */
-function printMessage(message: MessageView) {
-  if (flags.json) result({ message, outcome: 'posted' })
-  else out(messageRef(message.id))
+/**
+ * What became of the `@handle`s a write's text typed: a line for each one that's now a mention, with
+ * who it mentions, and a warning for each that names no one or several, which is still text. With
+ * `--json` the lines are the result's `mentions`.
+ */
+function sayMentions(mentions: Mentioned[] | undefined) {
+  for (const { written, actor, candidates } of mentions ?? []) {
+    if (actor) {
+      if (!flags.json) out(`mentioned  ${actor.name}  @${actor.handle}`)
+    } else if (candidates.length === 0) {
+      warn({ reason: 'unknown_mention', message: `${written} names no one here: it stays text, and mentions no one.` })
+    } else {
+      // Each by their handle, where that's theirs alone and more than what was typed, and by their ID otherwise.
+      const handles = candidates.map(({ handle }) => handle.toLowerCase())
+      const choices = candidates.map(({ id, handle }) =>
+        `@${handle}`.toLowerCase() !== written.toLowerCase() && handles.filter((other) => other === handle.toLowerCase()).length === 1 ? `@${handle}` : `@[${id}]`,
+      )
+      warn({ reason: 'ambiguous_mention', message: `${written} mentions no one here, and stays text: write ${choices.join(' or ')}.` })
+    }
+  }
+}
+
+/** A post or reply: its ID, or with `--json`, the message. Then what became of its mentions. */
+function printMessage(written: Written<MessageView>) {
+  const { mentions, ...message } = written
+  if (flags.json) {
+    sayMentions(mentions)
+    result({ message, outcome: 'posted', ...(mentions ? { mentions } : {}) })
+  } else {
+    out(messageRef(message.id))
+    sayMentions(mentions)
+  }
 }
 
 /** A write that answers nothing but that it went through: with `--json`, which message, and what happened to it. */
-function printDone(id: string, outcome: string) {
-  if (flags.json) result({ message: { id }, outcome })
-  else out(`${outcome} ${messageRef(id)}`)
+function printDone(id: string, outcome: string, mentions?: Mentioned[]) {
+  if (flags.json) {
+    sayMentions(mentions)
+    result({ message: { id }, outcome, ...(mentions ? { mentions } : {}) })
+  } else {
+    out(`${outcome} ${messageRef(id)}`)
+    sayMentions(mentions)
+  }
 }
 
 /** Best-effort: the URL is printed either way. */
@@ -1177,7 +1211,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         // And a task names who holds it, and its owner when that isn't its root's author.
         const { task } = thread.message
         const working = task ? [...(task.claim ? [task.claim.actor] : []), ...(task.owner !== thread.message.by.principal ? [task.owner] : [])] : []
-        const unnamed = [...new Set([...reactionNames([thread.message, ...replies]), ...working])].filter((id) => !authors.has(id))
+        // And a text mentions people by ID, who show by name.
+        const unnamed = [...new Set([...reactionNames([thread.message, ...replies]), ...working, ...mentionedIn([thread.message, ...replies])])].filter((id) => !authors.has(id))
         const known = unnamed.length
           ? new Map((await board.actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, actorName(a)]))
           : new Map<string, string>()
@@ -1292,8 +1327,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags.for ? { for: flags.for } : {}),
         ...(times !== undefined ? { times } : {}),
       })
-      if (flags.json) result({ schedule, outcome: 'scheduled' })
-      else out(formatSchedule(schedule))
+      const { mentions, ...made } = schedule
+      if (flags.json) {
+        sayMentions(mentions)
+        result({ schedule: made, outcome: 'scheduled', ...(mentions ? { mentions } : {}) })
+      } else {
+        out(formatSchedule(made))
+        sayMentions(mentions)
+      }
       return 0
     }
 
@@ -1454,8 +1495,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'edit': {
       const id = messageId(args[0])
-      await client().edit(id, await content(args[1]), ifRevision())
-      printDone(id, 'edited')
+      const { mentions } = await client().edit(id, await content(args[1]), ifRevision())
+      printDone(id, 'edited', mentions)
       return 0
     }
 

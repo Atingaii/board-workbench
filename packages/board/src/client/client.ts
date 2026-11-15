@@ -42,6 +42,7 @@ import type {
   TypingResult,
 } from '../api/routes.ts'
 import type { Actor } from '../contract/folds.ts'
+import type { Mentioned } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, typeOf } from '../contract/files.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
@@ -104,6 +105,12 @@ export type ClientOptions = {
    */
   storeFetch?: typeof fetch
 }
+
+/**
+ * What a write that took a text answers: what it made, and under `mentions`, what became of each
+ * `@handle` the text typed, when it typed any.
+ */
+export type Written<T> = T & { mentions?: Mentioned[] }
 
 export type PostOptions = {
   text: string
@@ -401,14 +408,14 @@ export function createBoardClient(options: ClientOptions) {
    * one, as it is. Starting one needs `post` there, and `label` for its labels; `{ re }` needs
    * `label`. You own it. `claim` comes back when it was made with `claim: true`.
    */
-  async function createTask(target: string, input: string | NewTaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
-  async function createTask(target: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
-  async function createTask(target: string | { re: string }, input: string | NewTaskOptions | TaskOptions = {}): Promise<{ task: MessageView; claim?: ClaimedTask }> {
+  async function createTask(target: string, input: string | NewTaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask; mentions?: Mentioned[] }>
+  async function createTask(target: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask; mentions?: Mentioned[] }>
+  async function createTask(target: string | { re: string }, input: string | NewTaskOptions | TaskOptions = {}): Promise<{ task: MessageView; claim?: ClaimedTask; mentions?: Mentioned[] }> {
     const where = typeof target === 'string' ? { channel: target } : { re: target.re }
     // A new thread's root takes files as a post does: uploads, or their IDs.
     const made = typeof input === 'string' ? { text: input } : 'attachments' in input && input.attachments?.length ? { ...input, attachments: input.attachments.map((file) => (typeof file === 'string' ? file : file.id)) } : input
-    const { task, claim } = await call<{ task: MessageView; claim?: TaskClaim }>('POST', '/tasks', { body: { ...where, ...made } })
-    return { task, ...(claim ? { claim: claimed(task, claim) } : {}) }
+    const { task, claim, mentions } = await call<{ task: MessageView; claim?: TaskClaim; mentions?: Mentioned[] }>('POST', '/tasks', { body: { ...where, ...made } })
+    return { task, ...(claim ? { claim: claimed(task, claim) } : {}), ...(mentions ? { mentions } : {}) }
   }
 
   /**
@@ -571,20 +578,29 @@ export function createBoardClient(options: ClientOptions) {
     threads: (query: Filters & Omit<ThreadsQueryInput, keyof FiltersInput> = {}) =>
       call<ThreadsPage>('GET', `/threads${queryString(query)}`),
 
-    async post(channel: string, input: string | PostOptions): Promise<MessageView> {
-      return (await call<{ message: MessageView }>('POST', '/messages', { body: { channel, ...messageBody(input) } })).message
+    /**
+     * Starts a thread. An `@handle` in the text that names exactly one actor you can see is stored as
+     * `@[actor-id]`, a mention of them; one that names none or several stays as typed, a mention of
+     * no one. `mentions` on what comes back says what became of each, when the text typed any.
+     */
+    async post(channel: string, input: string | PostOptions): Promise<Written<MessageView>> {
+      const { message, mentions } = await call<{ message: MessageView; mentions?: Mentioned[] }>('POST', '/messages', { body: { channel, ...messageBody(input) } })
+      return mentions ? { ...message, mentions } : message
     },
-    async reply(id: string, input: string | ReplyOptions): Promise<MessageView> {
-      return (await call<{ message: MessageView }>('POST', '/messages', { body: { re: id, ...messageBody(input) } })).message
+    /** Replies in a thread. Its `@handle`s are settled as `post`'s are: of several who share one, it's the one who wrote in the thread. */
+    async reply(id: string, input: string | ReplyOptions): Promise<Written<MessageView>> {
+      const { message, mentions } = await call<{ message: MessageView; mentions?: Mentioned[] }>('POST', '/messages', { body: { re: id, ...messageBody(input) } })
+      return mentions ? { ...message, mentions } : message
     },
     /**
      * Posts later, as you: a new thread when `target` is a channel, a reply when it's
      * `{ re }`, any message's ID in the thread. Each message it posts carries
      * `schedule: { id, n }`. Needs a board with a scheduler.
      */
-    async schedule(target: string | { re: string }, input: ScheduleOptions): Promise<ScheduleView> {
+    async schedule(target: string | { re: string }, input: ScheduleOptions): Promise<Written<ScheduleView>> {
       const where = typeof target === 'string' ? { channel: target } : { re: target.re }
-      return (await call<{ schedule: ScheduleView }>('POST', '/schedules', { body: { ...where, ...scheduleBody(input) } })).schedule
+      const { schedule, mentions } = await call<{ schedule: ScheduleView; mentions?: Mentioned[] }>('POST', '/schedules', { body: { ...where, ...scheduleBody(input) } })
+      return mentions ? { ...schedule, mentions } : schedule
     },
     /** Pending schedules (`all` for done and canceled too), oldest first. `re` is any message in a thread. */
     schedules: async (query: Omit<SchedulesQueryInput, 'all'> & { all?: boolean } = {}) =>
@@ -703,7 +719,7 @@ export function createBoardClient(options: ClientOptions) {
      * changes, and it throws a 409 `revision_conflict`.
      */
     edit: (id: string, text: string, opts: { revision?: number } = {}) =>
-      call<{ ok: true }>('POST', `/messages/${path(id)}/edit`, { body: { text, ...opts } }),
+      call<{ ok: true; mentions?: Mentioned[] }>('POST', `/messages/${path(id)}/edit`, { body: { text, ...opts } }),
     delete: (id: string, opts: { revision?: number } = {}) => call<{ ok: true }>('POST', `/messages/${path(id)}/delete`, { body: { ...opts } }),
     /** `emoji` is a short name, `:name:`, or the character itself. */
     react: (id: string, emoji: string, opts: { remove?: boolean } = {}) =>

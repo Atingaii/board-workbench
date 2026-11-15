@@ -2,6 +2,7 @@ import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, Schedul
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
+import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { findBlocks } from '../contract/blocks.ts'
 import { shownName, type Via } from '../contract/profiles.ts'
 import type { CheckResult, ConformanceReport } from '../conformance/index.ts'
@@ -68,6 +69,11 @@ export function reactionNames(messages: MessageView[]): string[] {
   return [...new Set(messages.flatMap((m) => Object.values(m.reactions).flatMap((actors) => actors.slice(0, REACTION_NAMES))))]
 }
 
+/** The actors a thread's texts mention by ID, for looking up the ones who didn't write in it. */
+export function mentionedIn(messages: MessageView[]): string[] {
+  return [...new Set(messages.flatMap((m) => (m.deleted ? [] : extractMentions(m.text).flatMap((token) => (token.kind === 'actor' && !isEmail(token.actor) ? [token.actor] : [])))))]
+}
+
 /** An actor's display name from `/actors`, the way a message's author shows: `claude via julian`. */
 export const actorName = (actor: { name: string; via?: Via | undefined }): string => shownName(actor)
 
@@ -75,10 +81,12 @@ export const actorName = (actor: { name: string; via?: Via | undefined }): strin
  * A message's text as a terminal shows it: a bot's in its readable form, and each block as one
  * line, its schema and its data, where its fence was. A message that is only a block is that line.
  */
-function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks'>): string {
-  const text = displayText(message.text, message.by.actor)
+function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks'>, names: Map<string, string> = new Map()): string {
+  // A mention is stored as `@[actor-id]`: it reads as who it mentions, where they're known. `--json` has the ID.
+  const said = replaceMentions(message.text, (token) => (token.kind === 'actor' && names.has(token.actor) ? `@${names.get(token.actor)}` : null))
+  const text = displayText(said, message.by.actor)
   // Only what the board lists as blocks: a fence in a platform's text stays as it was written.
-  if (!message.blocks?.length || text !== message.text) return text
+  if (!message.blocks?.length || text !== said) return text
   let out = ''
   let at = 0
   for (const found of findBlocks(text)) {
@@ -111,7 +119,7 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
   const head = `${options.reply ? '  ↳ ' : ''}#${message.id}  ${authorName(message)} · ${ago(message.createdAt)}${
     message.editedAt ? ' (edited)' : ''
   }${message.schedule ? ` · scheduled ${message.schedule.id}` : ''}${labels(message)}`
-  const body = message.deleted ? `${pad}(message removed)` : indent(shownText(message), pad)
+  const body = message.deleted ? `${pad}(message removed)` : indent(shownText(message, options.names ?? new Map()), pad)
   const task = message.task ? [`${pad}task  ${taskState(message, message.task, options.names ?? new Map(), options.now ?? Date.now())}`] : []
   const files = (message.attachments ?? []).map((a) => `${pad}file ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
   const links = message.deleted ? [] : (message.links ?? []).flatMap((link) => embed(link, pad))

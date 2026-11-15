@@ -34,15 +34,18 @@ export type RowOptions = {
   board?: State
   /** The board's schema registry, once read: what each block's fields mean. */
   schemas?: SchemaView[] | null
+  /** Each actor the page knows, by ID, as they show: who a mention reads as. */
+  names?: Record<string, string>
 }
 
-const MENTIONS = /((?<![\w@])@[a-z0-9][\w./-]*)/gi
-const MENTION = /^@[a-z0-9][\w./-]*$/i
+// A mention is `@[actor-id]` or `@[email]`, as the board stores one: any other `@word` is text.
+const MENTIONS = /((?<![\w@.-])@\[[^\]\s]+\])/g
+const MENTION = /^@\[([^\]\s]+)\]$/
 
 type MdNode = { type: string; value?: string; children?: MdNode[]; data?: unknown }
 
-/** Picks out @mentions in text, but not inside code or links. */
-function remarkMentions() {
+/** Picks out the mentions in text, but not inside code or links: each reads as who it mentions, by `names`, or as it's written. */
+const remarkMentions = (names: Record<string, string>) => () => {
   const walk = (node: MdNode) => {
     if (!node.children || node.type === 'link' || node.type === 'inlineCode' || node.type === 'code') return
     node.children = node.children.flatMap((child): MdNode[] => {
@@ -53,17 +56,18 @@ function remarkMentions() {
       return (child.value ?? '')
         .split(MENTIONS)
         .filter(Boolean)
-        .map((part) =>
-          MENTION.test(part)
-            ? { type: 'mention', value: part, data: { hName: 'span', hProperties: { className: ['mention'] }, hChildren: [{ type: 'text', value: part }] } }
-            : { type: 'text', value: part },
-        )
+        .map((part) => {
+          const named = MENTION.exec(part)?.[1]
+          if (named === undefined) return { type: 'text', value: part }
+          const shown = `@${names[named] ?? named}`
+          return { type: 'mention', value: shown, data: { hName: 'span', hProperties: { className: ['mention'], title: named }, hChildren: [{ type: 'text', value: shown }] } }
+        })
     })
   }
   return (tree: MdNode) => walk(tree)
 }
 
-const PLUGINS = [remarkGfm, remarkBreaks, remarkMentions]
+const NO_NAMES: Record<string, string> = {}
 const COMPONENTS = {
   a: ({ href, children }: { href?: string; children?: ReactNode }) => (
     <a href={href} target="_blank" rel="noreferrer">
@@ -76,10 +80,11 @@ const COMPONENTS = {
  * Markdown, as GitHub and Slack (through Chat SDK) write it: tables, lists,
  * code, links. Raw HTML is dropped. Right-clicking it gives the browser's menu.
  */
-export const Text = memo(function Text({ text, edited = false }: { text: string; edited?: boolean }) {
+export const Text = memo(function Text({ text, edited = false, names = NO_NAMES }: { text: string; edited?: boolean; names?: Record<string, string> }) {
+  const plugins = useMemo(() => [remarkGfm, remarkBreaks, remarkMentions(names)], [names])
   return (
     <div className="text" {...nativeMenu}>
-      <Markdown remarkPlugins={PLUGINS} components={COMPONENTS} skipHtml>
+      <Markdown remarkPlugins={plugins} components={COMPONENTS} skipHtml>
         {text}
       </Markdown>
       {edited && <span className="edited"> (edited)</span>}
@@ -88,7 +93,7 @@ export const Text = memo(function Text({ text, edited = false }: { text: string;
 })
 
 /** A message's body: its prose as markdown, and each block it carries as a card, where its fence was. */
-function Body({ m, schemas }: { m: MessageView; schemas: SchemaView[] | null | undefined }) {
+function Body({ m, schemas, names }: { m: MessageView; schemas: SchemaView[] | null | undefined; names: Record<string, string> | undefined }) {
   const parts = useMemo(() => bodyParts(m.text, m.blocks ?? []), [m.text, m.blocks])
   const edited = m.editedAt !== null
   const lastText = parts.findLastIndex((part) => 'text' in part)
@@ -96,7 +101,7 @@ function Body({ m, schemas }: { m: MessageView; schemas: SchemaView[] | null | u
     <>
       {parts.map((part, i) =>
         'text' in part ? (
-          <Text key={i} text={part.text} edited={edited && i === lastText} />
+          <Text key={i} text={part.text} edited={edited && i === lastText} {...(names ? { names } : {})} />
         ) : (
           <BlockCard
             key={i}
@@ -384,7 +389,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
             <Editor m={m} />
           ) : (
             <>
-              <Body m={m} schemas={options.schemas} />
+              <Body m={m} schemas={options.schemas} names={options.names} />
               <Attachments items={m.attachments ?? []} />
               <Links items={m.links} />
             </>

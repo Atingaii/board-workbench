@@ -1787,6 +1787,34 @@ describe('vercel()', () => {
     expect(await author(pong)).toMatchObject({ handle: 'pong/malte', name: 'Malte Ubl' })
   })
 
+  it("stores the handle an agent held to a channel read on a Slack user as a mention of them, which their sync delivers natively", async () => {
+    const api = fakeMessageboard()
+    const pongSlack = fakePlatform('slack')
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: pongSlack.adapter }, channels({ C1: 'general' })) },
+    })
+    // Malte asks from Slack.
+    await pong.fetch(new Request(`${PONG_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'can you tag me?', user: 'U_M1', name: 'malte' }) }))
+    const agent = pong.as(null, { can: { 'general/': ['read', 'post'] } })
+    await vi.waitFor(async () => expect((await agent.messages({ channel: 'general' })).messages).toHaveLength(1))
+    const [asked] = (await agent.messages({ channel: 'general' })).messages
+    const malte = 'vercel:project:prj_pong:production+slack:user:U_M1'
+    expect(asked!.author).toMatchObject({ id: malte, handle: 'pong/malte' })
+    // It answers him by the handle it read: the board stores who that is, and says so.
+    const reply = await agent.reply(asked!.id, `sure, @${asked!.author!.handle} and @nobody`)
+    expect(reply.text).toBe(`sure, @[${malte}] and @nobody`)
+    expect(reply.mentions).toEqual([
+      { written: '@pong/malte', actor: { id: malte, handle: 'pong/malte', name: 'malte' }, candidates: [] },
+      { written: '@nobody', actor: null, candidates: [] },
+    ])
+    // Slack gets its own user as a mention, and the handle no one has as it was typed.
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await vi.waitFor(() => expect(pongSlack.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**pong**: sure, <@U_M1> and @nobody']))
+  })
+
   it("asks an API that names a caller no one once, by ID and for its list, and not again on every page it reads", async () => {
     const api = fakeMessageboard({ namesNarrowed: false })
     const pong = handleOn(api, 'project:prj_pong:production')
@@ -1906,7 +1934,7 @@ describe('vercel()', () => {
     await vi.waitFor(() => expect(posted.map(({ username, markdown_text }) => [username, markdown_text])).toEqual([['Julián Benegas', 'the deploy is red']]))
   })
 
-  it("resolves mentions as each project's sync posts, against its own users: two syncs' Maltes, and an email its Slack knows", async () => {
+  it("delivers a mention natively through the sync whose user it names, and by name through any other: two syncs' Maltes, and an email its Slack knows", async () => {
     const api = fakeMessageboard()
     const lookupByEmail = vi.fn(async ({ email }: { email: string }) => {
       if (email !== 'ada@vercel.com') throw new Error('users_not_found')
@@ -1931,8 +1959,8 @@ describe('vercel()', () => {
     await web.fetch(new Request(`${WEB_URL}/wake`, { method: 'POST' }))
     const posted = (platform: typeof pongSlack) => platform.channelPosts.map((post) => JSON.parse(post.text).markdown).filter((text: string) => text.includes('have a look'))
     await vi.waitFor(() => expect([posted(pongSlack), posted(webSlack)]).toEqual([
-      ['**Julián Benegas**: <@U_M1> have a look, <@U_M1> and @web/malte, cc <@U_ADA> and <@U_M1>'],
-      ['**Julián Benegas**: <@U_M2> have a look, @pong/malte and <@U_M2>, cc ada@vercel.com and @[slack:user:U_M1]'],
+      ['**Julián Benegas**: @malte have a look, <@U_M1> and malte, cc <@U_ADA> and <@U_M1>'],
+      ['**Julián Benegas**: @malte have a look, malte and <@U_M2>, cc ada@vercel.com and @[slack:user:U_M1]'],
     ]))
   })
 
