@@ -100,7 +100,15 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   let page: Handler | null = null
   const server = createServer((request, response) => {
     if (!handler) return void response.writeHead(503).end()
-    if (page && !mounted((request.url ?? '/').split('?')[0]!)) return page(request, response)
+    if (page && !mounted((request.url ?? '/').split('?')[0]!)) {
+      // Whatever the page makes of a request, the board keeps serving.
+      try {
+        return page(request, response)
+      } catch {
+        if (!response.headersSent) response.writeHead(500)
+        return void response.end()
+      }
+    }
     void forward(handler, originOf(request, origin, hosts), request, response)
   })
   let port: number
