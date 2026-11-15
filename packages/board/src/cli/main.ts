@@ -2051,11 +2051,15 @@ async function tasks(args: string[]): Promise<number> {
         ...about,
       })
     }
+    // What became of the handles its text typed: in the result with --json, and after the task's line without.
+    const mentions = made.mentions ? { mentions: made.mentions } : {}
+    if (flags.json) sayMentions(made.mentions)
     if (made.claim) {
       await claims.put(made.task.id, { epoch: made.claim.epoch, token: made.claim.token, until: made.claim.until })
-      printClaim(made.task, made.claim, { outcome: 'created' })
-    } else if (flags.json) result({ task: made.task, outcome: 'created' })
+      printClaim(made.task, made.claim, { outcome: 'created', ...mentions })
+    } else if (flags.json) result({ task: made.task, outcome: 'created', ...mentions })
     else out(messageRef(made.task.id))
+    if (!flags.json) sayMentions(made.mentions)
     return 0
   }
 
