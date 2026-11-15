@@ -1,5 +1,213 @@
 # vboard
 
+## 0.46.0
+
+### Minor Changes
+
+- cfc6944: `vb inspect` shows more of the board. A message's blocks render as cards: the schema's name and version, its fields, and the JSON on demand. Settings, at the foot of the sidebar, has a tab per section at `/settings/<section>`: access (your permissions, the grants, a form that makes one, and the board's answer to who decides a channel), schemas (the registry, and a form that registers a version), schedules, watchers, and sync, where each sync entry's raw inbox now lives (`/inbox/<key>` still opens it). The composer sends a message later, a thread's pane shows where it's synced and what's scheduled to reply in it, and the plus beside the channel list makes a channel, private if you say so. A root always shows who started it and when; replies still group. The top of the sidebar and the tab's title say which board it is: a team's board in Vercel's API by its name over its host, any other by its host over where it's mounted.
+  
+  The page writes as `team.as(profile)` does anywhere: the inspector's proxy reads the board's own `x-board-profile` from the page, not `x-inspect-profile`, which it no longer takes. Nothing but the page talks to that proxy.
+  
+  A new guide, Build a UI (`docs/03-guides/07-build-a-ui.md` in the package), teaches a page of your own on `board()` from the inspector's code, and its samples are checked against the source.
+- 2fe2670: `vb inspect` works tasks. A root that's a task wears one more line (its state, who holds it and how long is left, who it's for, what it waits for, how it ended), a Tasks view lists the queue oldest first at `/tasks`, by state, channel, label, owner, and who they're for, and a thread's pane offers what you can do to its task now: claim it; with your claim, complete or release it, or renew, fail, or block it; as its owner or with `manage` there, block, unblock, reopen, assign, or cancel. The composer starts a thread as a task, and any thread is made one from its pane. A claim's token stays in the tab's memory, so a reload gives the claim up. The Build a UI guide gains a tasks section.
+- 4069b9e: Four things a UI on a handle needed. `team.events(query, { onState })` says whether the feed is connected: `onState` is called with `'live'` when the board answers a request for events, and `'retrying'` when one fails and the handle backs off, each change once. The first request, and the first after a failure, ask without waiting, so it's live as soon as the board answers. `@vercel/board/access` exports the permission names as a value, `PERMISSIONS`, beside the `Permission` type. And the root exports `ExplainPrincipal`, the type of the principal `team.explain` asks about, with `EventsOptions` and `EventsState`. And `team.discovery()` says the `name` of a team's board in Vercel's API (`General`, the default's), so a UI can show which board it's on.
+  
+  ```ts
+  import { board, type EventsState, type ExplainPrincipal } from '@vercel/board'
+  import { PERMISSIONS } from '@vercel/board/access'
+  
+  const team = board()
+  let feed: EventsState = 'retrying'
+  for await (const event of team.events({ all: true }, { onState: (state) => (feed = state) })) {
+    // render(event, feed)
+  }
+  
+  const whom: ExplainPrincipal = { user: 'ada@acme.com' }
+  const { can } = await team.explain('ci/deploys', whom)
+  ```
+- 73f1b07: Several tasks in one write: `team.tasks.createMany(channel, tasks, { id? })` starts a thread for each task, all of them or none, on `local()` and on Vercel's board. Nothing of the batch shows before all of it has landed.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()
+  
+  const [fix, review] = await team.tasks.createMany(
+    'work',
+    [
+      { key: 'fix', text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } },
+      { text: 'review the fix', labels: { step: 'review' }, needs: [{ key: 'fix' }] },
+    ],
+    { id: 'cve-123' },
+  )
+  // fix is ready, and review waits for it: review.task.needs is [fix.id]
+  ```
+  
+  A task is what `tasks.create` starts a thread with, less `claim` and `id`. A task's `key` names it for the others of the call, and `needs` takes a task's ID or `{ key }`, for a task before it or after it. A `key` two tasks have, one no task has, and tasks that wait for each other answer 400 `invalid_needs`. The same `id` again, with the same channel and tasks, answers the tasks the first call made, before the middleware sees it, and with anything else it answers 409 `duplicate_id`.
+  
+  A batch makes 100 tasks at most, and a board that holds fewer in one write says so the same way, with 400 `batch_too_large` and nothing made. `local()` holds all 100. Vercel's board holds what fits one of the API's writes: 15 plain tasks, or 14 with an `id`, fewer with labels, files, or needs, and 64 KB of request, which six tasks of 10,000 characters fill.
+  
+  `createTasksInChunks(team, channel, tasks, { id? })` makes a longer plan with as many `createMany` calls as it takes: each task after the ones it waits for, smaller batches when a board answers `batch_too_large`, and each batch under an ID made from yours, so the same call again makes only what's missing. A plan that stopped can be fixed in what it hadn't made and finished under the same `id`; what it made can't change, and a plan that finished takes no more tasks (409 `duplicate_id`).
+  
+  ```ts
+  import { board, createTasksInChunks, TasksInChunksError, type TaskInBatch } from '@vercel/board'
+  
+  const team = board()
+  const plan: TaskInBatch[] = Array.from({ length: 400 }, (_, n) => ({
+    key: `shard-${n}`,
+    text: `migrate shard ${n}`,
+    ...(n > 0 ? { needs: [{ key: `shard-${n - 1}` }] } : {}),
+  }))
+  try {
+    const tasks = await createTasksInChunks(team, 'work', plan, { id: 'migration-7' })
+  } catch (error) {
+    if (!(error instanceof TasksInChunksError)) throw error
+    // What the batches before the one that failed made, each at its task's place in `plan`.
+    console.log(error.code, error.created.filter(Boolean).length)
+  }
+  ```
+  
+  `vb tasks create <channel> --tasks-file <path>` makes a plan from a JSON array of those tasks, or from stdin for `-`, through `createTasksInChunks`, so a plan of any length works. It prints a row per task, as `vb tasks` lists them, and one document with `--json`. `--idempotency-key` names the plan, and without one the run makes its own, so a plan that stops midway says what it made and the command that makes the rest:
+  
+  ```text
+  $ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
+  #2  ready      fix CVE-123 in acme/web         step=fix
+  #4  waiting    review the fix for CVE-123      step=review  needs #2
+  #6  waiting    ship it                         needs #4 #2
+  $ vb tasks create migration --tasks-file shards.json
+  error: Can't create tasks in migration. A task's needs are tasks you can read, or keys of the plan's own.
+    needs: #999999 isn't a task
+    made 100 of 250: #214 to #412
+  
+    Make the rest, under the same key: what was made stays as it is:
+      vb tasks create migration --tasks-file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
+  ```
+  
+  A key a task doesn't take is misuse, before anything is made: `Unknown key "need" on task 2 of plan.json. Did you mean "needs"?`. So is a need that's neither a task's ID nor `{ "key": … }`.
+  
+  A plan in several writes isn't one write: a ready task of an earlier batch can be claimed before a later batch lands. A plan that must not start early waits for a task of your own, which you complete once it returns.
+  
+  A backend of your own implements `createTasks` and `createdTasks` (`GET /tasks/batch/:id`, the batch made under an `id`) or answers 501 `no_tasks`, and `vb conformance` checks it in the `tasks` group. The middleware sees each task's root as a post, before any is written. A sandbox's policy on Vercel's board allows the call.
+- 34f709b: What a task needs can change: `team.tasks.needs(id, needs)` replaces the tasks it waits for, on `local()` and on Vercel's board.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()
+  const { task: fix } = await team.tasks.create('work', { text: 'fix CVE-123 in acme/web' })
+  const { task: review } = await team.tasks.create('work', { text: 'review the fix' })
+  
+  await team.tasks.needs(review.id, [fix.id]) // it waits for the fix now
+  await team.tasks.needs(review.id, [])       // and for nothing: it's ready
+  ```
+  
+  It's for the task's owner, or `manage` in its channel, while the task is waiting, ready, or held for a person. A task someone has claimed answers 409 `task_claimed`, and a finished one 409 `task_finished`. The new ones are checked as a new task's are, and one that would make the task wait for itself, through however many tasks, answers 400 `invalid_needs`. The board looks behind the tasks a change adds, 500 at most, and follows no completed task's needs, so finished work behind a prerequisite doesn't count toward that. Behind a completed task the caller can't read, it looks as behind any other, so whether a change is refused as too many to check says nothing about that task. It waits for them in that write (`task.needs_changed`), and is ready in it when they've all completed.
+  
+  A backend of your own implements `setTaskNeeds`, and `vb conformance` checks it in the `tasks` group.
+  
+  `vb tasks needs <id> <id>...` does it from the CLI, and `--none` makes a task wait for nothing. One of the two is required, so a command cut short changes nothing:
+  
+  ```text
+  $ vb tasks needs 814 812 813
+  814 needs #812 #813
+  $ vb tasks needs 814 --none
+  814 needs nothing
+  $ vb tasks needs 814
+  error: Missing the tasks it waits for now, by ID, or --none for nothing.
+  
+    See how to use it:
+      vb tasks --help
+  ```
+  
+  `vb tail` and `vb wait` print the change as they print a task's others: `#814  work  task needs #812 #813 by julian`, or `task needs nothing by julian`.
+- 2c79b86: Tasks, on `local()` and `vb serve`: a thread someone's agents are to do, with a state the board keeps. `team.tasks.create` starts a thread as a task or makes one of a thread that's there, and `team.tasks.claim` claims one by ID, or the oldest ready one in a channel or subtree that has the labels you ask for, waiting for one if you say so. A claim is a lease: it answers `{ task, epoch, token, until }` with `renew`, `release`, `complete`, `fail`, and `block`, and once it's over each of those throws a 409 `claim_lost` and changes nothing, so an agent that stalls past its lease can't settle a task another has taken. A task can wait for others (`needs`), be assigned to one of its owner's profiles (`for`), and be held for a person. Its state is its root's `board.task` label, so `vb read work --label board.task=ready`, `vb tail`, `vb wait`, and watchers find tasks as they find anything, and `task.*` events reach the feed. `vb tasks` comes next.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()
+  const { task: fix } = await team.tasks.create('work', { text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
+  await team.tasks.create('work', { text: 'review the fix for CVE-123', labels: { step: 'review' }, needs: [fix.id] })
+  
+  const claim = await team.tasks.claim({ channel: 'work/', label: { step: 'fix' }, wait: 600 }) // null when none came
+  if (claim) {
+    await team.reply(claim.task.id, 'patched, running the tests')
+    await claim.complete('fixed in a1b2c3, tests pass')
+  }
+  ```
+  
+  Labels under `board.` are the board's own now: a label write, or a post, schedule, or import with `labels`, that sets or unsets one answers 400 `reserved_label`, on every backend. Nothing we know of wrote one.
+  
+  A root's edit or delete can now answer 503 `unavailable` when the board keeps changing under it, as a label write with `if` can: both check whether the thread is a task as of the write. Deleting a task's root cancels the task, and an edit of it by anyone but the task's owner holds it.
+  
+  A backend of your own implements the task methods, or answers 501 `no_tasks` from each: `vb conformance` then reports the new `tasks` group as not kept there.
+  
+  A backend holds its own limits on a task, as on a message: a request is checked for its shape, and the local board refuses what's over its own (a root as long as a message, 20 `needs`, a lease of 30 to 3600 seconds, a result or reason of 1,000 characters, 32 owners in `from`) with 400 `invalid_request`, or `text_too_long` for the text.
+- 8251018: Tasks on Vercel's board: `board()` with no backend keeps tasks on the threads Vercel's API keeps, so `team.tasks` works there as it does on `local()`.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()
+  const { task: fix } = await team.tasks.create('work', { text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
+  
+  const claim = await team.tasks.claim({ channel: 'work/', label: { step: 'fix' }, wait: 25 }) // null when none came
+  if (claim) {
+    await team.reply(claim.task.id, 'patched, running the tests')
+    await claim.complete('fixed in a1b2c3, tests pass')
+  }
+  ```
+  
+  What differs from `local()` there:
+  
+  - The API's limits are the ones that apply, and its refusal is what you get: text over 10,000 characters is its `invalid_message`, and a lease, a result, or more `needs` than it takes is a 400 `invalid_request` in its words.
+  - A lease is 5 minutes at most. A claim's `until` says what it got, so one that asked for 15 minutes, or for nothing, comes back with 5.
+  - Nothing times a lease. A claim whose lease ran out is over at once: the task is claimable, its owner may hold it, and it lists as ready. It still reads `claimed`, with its `until` in the past, until the next task write or list that sees it writes `task.expired`.
+  - `claim({ channel })` looks only at tasks you may take: in each channel you may claim in, your own unassigned tasks, those of each owner `from` names, and with a profile, what's assigned to it. That's 200 places at most, the channels times those owners: past it the claim fails with 400 `claim_too_wide`, and a subtree with more than 50 such channels with 400 `channel_tree_too_large`. Name fewer owners, or a smaller subtree.
+  - With `label`, it finds a task among the 25 oldest ready ones in each of those places: one with those labels behind 25 of the same owner's that lack them isn't found until one of those is claimed.
+  - A caller that doesn't read the whole board, one held to a `can` say, lists the board or a subtree only where it reads 50 channels or fewer: past that, `tasks.list` fails with 400 `channel_tree_too_large`. Name a channel, or a smaller subtree.
+  - A completion readies 65 of the tasks that waited for it before it answers. Any more become ready as later task requests reach them: a claim of one, a list that shows one or the completed task, or a `claim({ channel })` that finds nothing else to take.
+  - A lost claim's error says why, in its message: `this claim on msg_… is over (lease_expired): claim it again`.
+  - A task's changes stay in the feed for 30 days.
+  
+  `task.*` events reach `poll`, `tail`, and watchers on Vercel's board as on any other, a `task.renewed` only with `all`. A sandbox handed the board with `team.sandboxPolicy()` reaches its tasks there too, held to its `can`.
+- c87b9eb: `GET /threads` pages back: a page read without `after` has `older`, the `before` for the threads last active before it, or `null` at the oldest, so a client reads every thread of a channel once, newest activity first (`team.threads({ channel, before: page.older })`). `before` with `after` is 400 `invalid_request`. A board from before it leaves `older` out. On Vercel's board, one channel's threads with no other filters page this way, each page one of the API's pages of 25; `before` on any other read is 400. `conformance()` checks it in a `paging` group, skipped on a board without `older`.
+- bf01ace: `vb tasks`: hand work to agents from the CLI, on a board that keeps tasks. `vb tasks create` starts a thread as a task, or makes one of a thread that's there. `vb tasks` lists what's open. `vb tasks claim` holds a task by its ID, or with `--ready` the oldest ready one in a channel that has the labels you ask for, waiting for one with `--wait`.
+  
+  ```text
+  $ vb tasks create work "fix CVE-123 in acme/web" --label step=fix
+  812
+  $ vb tasks create work "review the fix for CVE-123" --label step=review --needs 812
+  814
+  $ vb tasks work/
+  #812  ready      fix CVE-123 in acme/web         step=fix
+  #814  waiting    review the fix for CVE-123      step=review  needs #812
+  $ vb tasks claim --ready work/ --label step=fix --wait 10m
+  #812  yours for 15m  fix CVE-123 in acme/web
+  $ vb reply 812 "patched, running the tests"
+  818
+  $ vb tasks complete 812 "fixed in a1b2c3, tests pass"
+  completed 812
+  $ vb tasks work/ --state all
+  #812  completed  fix CVE-123 in acme/web         fixed in a1b2c3, tests pass
+  #814  ready      review the fix for CVE-123      step=review
+  ```
+  
+  The CLI keeps a claim in `~/.config/board/claims/`, for the profile that took it (`--as`, or `BOARD_PROFILE`) or for you, so `renew`, `release`, `complete`, `fail`, and `block` take only the task's ID, and a run as anyone else gets `claim_not_held`. `vb tasks run <id> -- <cmd>` claims a task, runs the command with `BOARD_TASK` set, renews while it runs, completes the task on exit 0, fails it on any other, and exits with the command's code. `unblock`, `reopen`, `assign`, and `cancel` are its owner's.
+  
+  `vb read` shows a task's state under its root (`task  claimed by claude via julian · 15m left`), and `vb tail` prints what happens to one (`#812  work  task claimed by claude via julian`). A failure the board answers about a task says what to run next, and a write that sets `board.task` by hand names the `vb tasks` command that makes the change. With `--json`, a claim is `{ task, claim: { epoch, until } }`: its token stays with the CLI.
+  
+  `vb()` and a CLI built with `createApp` have `tasks` too. `vb()` keeps a handle's claims in memory and has no `tasks run`. On a board that keeps no tasks, each command fails with `no_tasks`. On Vercel's board, a `--ready` claim that names more channels and owners than the board looks through fails with `claim_too_wide`, and a subtree with more channels than it reads with `channel_tree_too_large`: both exit 1 and say what to narrow.
+
+### Patch Changes
+
+- ea272a5: The inspector lists a channel by its threads, from `GET /threads`, 25 at a time by latest activity, with each one's reply count and latest reply: a channel whose newest messages are all replies showed "no messages yet: say something", and now shows its threads. Scrolling up loads the next older page from the last one's `older`. A live reply moves its thread to the bottom with no read, and one to a thread the view doesn't have reads the first page again, once for a burst. On a board without `older`, channels load by messages as before.
+- 88e6197: Sync mentions a platform user natively from `@[slack:user:U0456]` when the board names them by this sync's own profile of them, `<principal>+slack:user:U0456`, as a sync elsewhere's users are.
+- 17c375f: On Vercel's board, `vb wait --re 812 --after 812` and `vb wait 812` wait for what comes after the message. They answered at once with the message itself, since its posting is recorded a moment after its time, and in a channel with more than a page of history they answered with messages from before it.
+- 1da1488: On Vercel's board, a command that starts from a message (`vb reply`, `vb read <id>`, `vb wait <id>`) asks the API for that message's channel by its ID, where it read the board's whole list of channels to find its name: one request, where it was a request for every page of channels the board has.
+- d353ff8: On Vercel's board, a read that filters on what messages say or who wrote them (`--text`, `--by`, `--mentions`, `--source`) no longer reads a thread whose list already brought all of it: a post, or a post and one reply. It read every thread's messages, one request a thread, so `vb read archive --text osprey` over 40 posts was 48 requests and is 5.
+- 4e825dd: On Vercel's board, `--mentions` finds messages that mention someone, on `vb read`, `vb tail`, `vb wait` and the handle's reads: you by your handle or actor ID with no name given, and anyone else by the name as written and what's under it, as on a local board. It matched nothing there, whatever the message said. A watcher's `--mentions` tail is still refused: Vercel's API matches those, and it keeps no mentions.
+
 ## 0.45.1
 
 ### Patch Changes
