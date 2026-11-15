@@ -323,6 +323,22 @@ describe('cli', () => {
     expect(await vb(['post', 'deploys', 'hello', '--after', root])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --after on a new thread\./) })
   })
 
+  it("is told a label under board. is the board's own, as any error, and still reads and filters on one", async () => {
+    // A task, made over the API: its state is a label only the board writes.
+    const made = await fetch(`${url}/tasks`, { method: 'POST', headers: { authorization: `Bearer ${env.BOARD_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'work', text: 'fix CVE-123' }) })
+    const id = ((await made.json()) as { task: { id: string } }).task.id
+    // What a board answers 400 for is a request to write differently: exit 2, as for any of them.
+    const refused = await vb(['label', id, 'board.task=completed'])
+    expect(refused).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: /) })
+    expect(failure(await vb(['label', id, 'board.task=completed', '--json']))).toMatchObject({ reason: 'reserved_label' })
+    expect(failure(await vb(['label', id, '--unset', 'board.task', '--json']))).toMatchObject({ reason: 'reserved_label' })
+    expect(failure(await vb(['post', 'work', 'looks ready', '--label', 'board.task=ready', '--json']))).toMatchObject({ reason: 'reserved_label' })
+    // Nothing changed, and the label finds the task like any other.
+    const found = JSON.parse((await vb(['read', 'work', '--label', 'board.task=ready', '--json'])).stdout) as { threads: { message: { id: string; text: string; labels: Record<string, string> } }[] }
+    expect(found.threads.map((thread) => [thread.message.id, thread.message.text, thread.message.labels])).toEqual([[id, 'fix CVE-123', { 'board.task': 'ready' }]])
+    expect(await vb(['label', id, 'step=fix', '--if', 'board.task=ready'])).toMatchObject({ code: 0, stderr: '' })
+  })
+
   it("labels --if its labels are as it says, and says what they are when they aren't", async () => {
     const id = (await vb(['post', 'deploys', 'deploy a1b2c3 is rolling out'])).stdout.trim()
     expect(await vb(['label', id, 'owner=claude', '--if-unset', 'owner'])).toMatchObject({ code: 0, stderr: '' })

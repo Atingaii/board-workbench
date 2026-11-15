@@ -58,6 +58,11 @@ export interface MessageTables {
   messages(filter: MessageFilter, page: Page): Promise<{ messages: Message[]; position: number }>
   /** Threads with a message that matches, by their latest reply. */
   threads(filter: MessageFilter, page: Page): Promise<{ threads: ThreadSummary[]; position: number }>
+  /**
+   * Threads whose root matches, by the root's ID, so in the order they started: `after` takes the
+   * first `limit` after it; otherwise the last `limit`. What lists tasks, which are roots.
+   */
+  roots(filter: MessageFilter, page: Page): Promise<{ threads: ThreadSummary[]; position: number }>
   /** A thread's sync: its targets, and the platform thread it lives in on each. */
   syncOf(thread: string): Promise<SyncedThread | null>
   /** The board thread a platform thread belongs to. */

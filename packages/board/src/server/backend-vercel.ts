@@ -1,8 +1,8 @@
 import type { Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type ThreadSummaryView } from '../api/routes.ts'
+import { LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
-import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
+import { IMPORT_BYTES_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { blocksIn } from '../contract/blocks.ts'
 import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
@@ -10,7 +10,7 @@ import { VERSION } from '../version.ts'
 import { compileAccess, parseCan, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { fileName, mediaType } from '../contract/files.ts'
-import { badRequest, HttpError, json, notFound } from './errors.ts'
+import { badRequest, duplicateId, HttpError, json, notFound } from './errors.ts'
 import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
@@ -38,8 +38,39 @@ type ApiActor = {
   profile?: { name: string; avatar?: string; platform?: { key: string; platform?: string; userId: string } }
 }
 type ApiChannel = { id: string; name: string }
+/**
+ * A thread's task, as the API's thread and message views carry it, and its feed's events: `needs` are thread IDs,
+ * `claim.until` is in milliseconds, and a claim's token is never in it. Those views show what is stored, so a claim
+ * whose lease ran out still reads `claimed` there.
+ */
+type ApiTask = {
+  state: TaskState
+  owner: string
+  /** The actor its owner made it a task as: itself, or one of its profiles. */
+  by: string
+  for: string | null
+  needs: string[]
+  epoch: number
+  claim: { actor: string; until: number } | null
+  blocked: { kind: string | null; reason: string } | null
+  result: string | null
+  reason: string | null
+}
 /** A schema version in the team's registry: a built-in's `createdAt` is 0, and it has no `createdBy`. */
 type ApiSchema = { id: string; name: string; version: number; description?: string; schema: Record<string, unknown>; builtIn: boolean; createdAt: number; createdBy?: ApiActor }
+/**
+ * A task as the API's task routes answer it: the thread's ID, its state at the top, and its first message, which
+ * carries no `task` of its own there. On these routes a claim whose lease ran out reads as over: `ready`, and no one's.
+ */
+type ApiTaskOf = ApiTask & {
+  id: string
+  channelId: string
+  message: ApiMessage
+  /** Its first message and its replies, deleted ones included. */
+  messageCount: number
+  lastActivityAt: number
+  lastMessage?: { id: string; sequence: number; createdAt: number; createdBy: ApiActor }
+}
 type ApiThread = {
   id: string
   channelId: string
@@ -49,6 +80,7 @@ type ApiThread = {
   createdAt: number
   createdBy: ApiActor
   labels?: Labels
+  task?: ApiTask
   /** With `include=messages` on a thread list: its first message, as it is now. */
   rootMessage?: ApiMessage
   /** With `include=messages`: its newest message, when it has replies. */
@@ -79,6 +111,8 @@ type ApiMessage = {
   attachments?: Attachment[]
   /** Set when a schedule posted it: which schedule, and which of its sends, from 0. */
   schedule?: { id: string; n: number }
+  /** On a root whose thread is a task. */
+  task?: ApiTask
 }
 /**
  * A post as the API answers a caller that can't read its channel: IDs only, as a client-ID replay to
@@ -140,6 +174,8 @@ type ApiChange = {
    * which project's sync. An API from before each project had its own keys names no project.
    */
   binding?: { target: string; targetKind: 'channel' | 'thread'; cause: 'config' | 'request'; projectId?: string }
+  /** On a task's change (`task.made`, `task.claimed`, …): the task right after it. */
+  task?: ApiTask
 }
 /**
  * Who these credentials are, as the API says: `can`, what they may do in each channel pattern, in
@@ -253,6 +289,17 @@ const SANDBOX_ROUTES: readonly SandboxRoute[] = [
   { method: 'POST', path: '/schedules' },
   { method: 'POST', path: '/schedules/:id/cancel' },
   { method: 'GET', path: '/sync/linked' },
+]
+/**
+ * What its task methods call there, under version 2's `/boards/<id>`: making a task, listing them, claiming the next
+ * ready one, and each change of one. A sandbox's policy hands it these and nothing else at that version.
+ */
+const SANDBOX_TASK_ROUTES: readonly SandboxRoute[] = [
+  { method: 'GET', path: '/tasks' },
+  { method: 'POST', path: '/tasks' },
+  { method: 'POST', path: '/tasks/batch' },
+  { method: 'POST', path: '/tasks/claim' },
+  ...['claim', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'assign', 'needs', 'cancel'].map((change) => ({ method: 'POST', path: `/tasks/:task/${change}` })),
 ]
 
 /**
@@ -389,6 +436,40 @@ function operationId(): string {
 }
 
 const iso = (ms: number) => new Date(ms).toISOString()
+
+/** A claim's token as the API takes one: 43 base64url characters. */
+const CLAIM_TOKEN = /^[a-zA-Z0-9_-]{43}$/
+const base64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+/** A claim's secret, which the API has its caller make: 32 random bytes, of which it keeps the hash alone. */
+const newClaimToken = () => base64url(crypto.getRandomValues(new Uint8Array(32)))
+/**
+ * A token a caller holds, as the API takes one. One that isn't shaped like any this backend made can't be a claim's:
+ * it goes as its hash, which is shaped like one and matches none, so the API answers as it does for any wrong token.
+ */
+const sendableToken = async (token: string) => (CLAIM_TOKEN.test(token) ? token : base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)))))
+/** A task list's cursor before any task: a read after it starts at the oldest. */
+const TASKS_START = '0'
+/** Whether `value` is shaped like an ID, `<where it's from>:<who>`, as every principal's and actor's is: a handle isn't. */
+const isId = (value: string) => /^[^\s:]+:\S+$/.test(value)
+/** The board's task events, by the API's name for each: only a new task's differs, since the API's older tasks have a `task.created` of their own. */
+const TASK_EVENTS: Record<string, BoardEventView['type']> = {
+  'task.made': 'task.created',
+  'task.assigned': 'task.assigned',
+  'task.needs_changed': 'task.needs_changed',
+  'task.ready': 'task.ready',
+  'task.claimed': 'task.claimed',
+  'task.renewed': 'task.renewed',
+  'task.released': 'task.released',
+  'task.expired': 'task.expired',
+  'task.completed': 'task.completed',
+  'task.failed': 'task.failed',
+  'task.blocked': 'task.blocked',
+  'task.unblocked': 'task.unblocked',
+  'task.canceled': 'task.canceled',
+  'task.reopened': 'task.reopened',
+}
+/** The API's codes for a task that can't change as asked, each a 409 on a board. */
+const TASK_CONFLICTS = new Set(['already_a_task', 'task_claimed', 'task_assigned', 'task_waiting', 'task_blocked', 'task_finished', 'claim_lost'])
 
 /** A grant as the API answers it, its `at` in milliseconds, as the protocol has it: an ISO string. */
 const grantFrom = (grant: GrantView): GrantView => ({ ...grant, at: expiryOf(grant.at) })
@@ -561,7 +642,7 @@ type Filters = Protocol['messages']['input']
 /**
  * Vercel's board for your team, in Vercel's API: this deployment keeps nothing and reads and writes
  * it as itself, its people as themselves. Messages, threads, reactions, labels, a channel's
- * changes, schedules, files, watchers, and sync's records work: the API keeps sync's state, and
+ * changes, schedules, tasks, files, watchers, and sync's records work: the API keeps sync's state, and
  * the platforms stay with board()'s sync.
  */
 export function createVercel(options: VercelOptions, environment: VercelEnvironment | null) {
@@ -583,13 +664,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return (team ??= given ? Promise.resolve(given) : (environment?.team() ?? Promise.resolve(null)))
   }
 
+  /** What the API said of an error beside its code: a lost claim's `reason`. */
+  const reasons = new WeakMap<HttpError, string>()
+
   /**
    * One request to the API, as `who`. Its errors are the API's own, with its status and code. One the
    * API puts off (429, or a 503) waits and goes again as it was, so a write keeps its operation ID
    * and lands once.
    */
-  async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | readonly string[] | undefined>; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
-    const url = new URL(`${origin}/v1/messageboard${path}`)
+  async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | readonly string[] | undefined>; body?: unknown; signal?: AbortSignal; version?: 2 } = {}): Promise<T> {
+    // Everything is at version 1 of the API but its task routes, which are version 2.
+    const url = new URL(`${origin}/v${init.version ?? 1}/messageboard${path}`)
     const id = await teamId()
     // A team's ID, or its slug, as Vercel's API takes either.
     if (id) url.searchParams.set(id.startsWith('team_') ? 'teamId' : 'slug', id)
@@ -626,8 +711,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         init.signal?.throwIfAborted()
         continue
       }
-      const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
-      throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
+      const error = (body as { error?: { code?: string; message?: string; reason?: unknown } } | undefined)?.error
+      const refused = new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
+      // What a code says more of: why a claim was lost.
+      if (typeof error?.reason === 'string' && /^[a-z_]{1,64}$/.test(error.reason)) reasons.set(refused, error.reason)
+      throw refused
     }
   }
 
@@ -1020,6 +1108,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return `${(await projectOf(who, by)) ?? project}/${from}`
   }
 
+  /** A task as board shows it: the tasks it waits for by their roots' IDs, and its claim's end as a time. */
+  const taskView = (task: ApiTask): TaskView => ({
+    state: task.state,
+    owner: task.owner,
+    by: task.by,
+    for: task.for,
+    needs: task.needs.map((thread) => idAt(thread, 1)),
+    epoch: task.epoch,
+    claim: task.claim ? { actor: task.claim.actor, until: iso(task.claim.until) } : null,
+    blocked: task.blocked ? { kind: task.blocked.kind, reason: task.blocked.reason } : null,
+    result: task.result,
+    reason: task.reason,
+  })
+
   async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
     const root = message.sequence === 1
     // Asked for before anything here waits, so every message of a page asks in the same turn, and so in one request.
@@ -1048,6 +1150,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       revision: message.revision,
       author: await author,
       ...(message.schedule ? { schedule: { id: message.schedule.id, n: message.schedule.n } } : {}),
+      ...(root && message.task ? { task: taskView(message.task) } : {}),
       // The API keeps text alone: its blocks are read out of it here, for what was written on the board.
       blocks: (message.from ?? null) === null && message.deletedAt === undefined ? blocksIn(message.text) : [],
     }
@@ -1337,6 +1440,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return { profile: named(caller.self ?? 'client') }
   }
 
+  /**
+   * The channel a post landed in, by name. A new post is in the one it named. Only a retried post ID may have landed in
+   * another one, which a whole answer names by ID; a channel it may only post in it can't list, so it keeps the one it named.
+   */
+  async function landedIn(who: Who, channelId: string | undefined, name: string, clientId: string | undefined): Promise<string> {
+    if (channelId === undefined) return name
+    if (clientId !== undefined && posted.get(channelId) !== name)
+      return channelById(who, channelId).then(
+        (channel) => (posted.set(channelId, channel.name), channel.name),
+        () => name,
+      )
+    posted.set(channelId, name)
+    return name
+  }
+
   /** A post's client ID, as the API takes one: its own when it fits, a hash of it when it doesn't. */
   const clientIdOf = async (id: string) => (CLIENT_ID.test(id) ? id : `h.${(await sha256(id)).slice(0, 64)}`)
 
@@ -1407,17 +1525,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
-  /** A change in the API's feed as a board event, with the message as it is now. Null for what isn't a message's. */
+  /** A change in the API's feed as a board event, with the message as it is now. Null for what's neither a message's nor a task's. */
   async function eventOf(
     who: Who,
     change: ApiChange,
     channel: string,
     cursor: string,
-    filters: Filters,
+    filters: Filters & { all?: boolean | undefined },
     narrow: Narrow,
     given?: { thread: ApiThread; message: ApiMessage },
     threads: (id: string) => Promise<ApiThread> = threadReader(who),
   ): Promise<BoardEventView | null> {
+    if (change.type.startsWith('task.')) return taskEventOf(who, change, channel, cursor, filters, narrow, given)
     if (!change.messageId || !change.type.startsWith('message.')) return null
     let found =
       given ??
@@ -2041,6 +2160,219 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
     throw error
   }
+  // Tasks. The API keeps a task on its thread and names it by the thread; a board names it by its root.
+  /** What a task route answers. On a create, `claimed` says whether the token this request sent holds the task's live claim. */
+  type Made = { task: ApiTaskOf; claimed?: boolean }
+
+  /**
+   * What the API refused of a task, as a board says it: its codes with a board's statuses, and a
+   * thread that isn't there as the message it is here. A lost claim keeps the API's word for why, in
+   * its message.
+   */
+  function taskRefusal(error: unknown, about: { id?: string } = {}): unknown {
+    if (!(error instanceof HttpError)) return error
+    const { code, message } = error
+    if (code === 'thread_not_found') return notFound(`message not found: ${about.id ?? 'that task'}`, 'message_not_found')
+    if (code === 'not_a_task') return notFound(message, 'not_a_task')
+    if (code === 'message_deleted') return badRequest(message, 'message_deleted')
+    // What a board's own schema would have refused, and an assignee that isn't its owner's, are a board's `invalid_request`.
+    if (code === 'bad_request' || code === 'invalid_for') return badRequest(message)
+    if (code === 'invalid_needs' || code === 'reserved_label') return badRequest(message, code)
+    if (code === 'task_not_owned') return new HttpError(403, code, message)
+    if (code === 'claim_lost') {
+      const reason = reasons.get(error)
+      return new HttpError(409, 'claim_lost', `this claim on ${about.id ?? 'the task'} is over${reason ? ` (${reason})` : ''}: claim it again`)
+    }
+    if (TASK_CONFLICTS.has(code)) return new HttpError(409, code, message)
+    return error
+  }
+
+  /** One write to a task route, `/tasks` and `path` after it, with an operation ID of its own. */
+  async function taskWrite(who: Who, path: string, body: Record<string, unknown>, about: { id?: string; signal?: AbortSignal } = {}): Promise<Made> {
+    try {
+      return await api<Made>(who, 'POST', await onBoard(who, `/tasks${path}`), { version: 2, body: { operationId: operationId(), ...body }, ...(about.signal ? { signal: about.signal } : {}) })
+    } catch (error) {
+      throw taskRefusal(error, about)
+    }
+  }
+
+  /**
+   * The task a board's ID names, as a task route's path takes it after `/tasks`: the API names a task by its thread,
+   * and a board by its root. A reply names no task, so one that's there is 404 `not_a_task`, as on any board, and
+   * nothing is asked of its thread.
+   */
+  async function taskPath(who: Who, id: string, signal?: AbortSignal): Promise<string> {
+    const at = locate(id)
+    if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+    if (at.sequence !== 1) {
+      await messageById(who, id, signal)
+      throw notFound(`${id} isn't a task`, 'not_a_task')
+    }
+    return `/${encodeURIComponent(at.threadId)}`
+  }
+
+  /** A task's first message with the task on it, as a board's root carries it. */
+  const firstOf = ({ id: _id, channelId: _channel, message, messageCount: _count, lastActivityAt: _at, lastMessage: _last, ...task }: ApiTaskOf): ApiMessage => ({ ...message, task })
+  /** A task as a thread list brings a thread with its messages: its first message on it, which carries the task. */
+  const listedOf = (task: ApiTaskOf): ApiThread => ({
+    id: task.id,
+    channelId: task.channelId,
+    messageCount: task.messageCount,
+    lastActivityAt: task.lastActivityAt,
+    ...(task.lastMessage ? { lastMessage: task.lastMessage } : {}),
+    createdAt: task.message.createdAt,
+    createdBy: task.message.createdBy,
+    rootMessage: firstOf(task),
+  })
+  /** A task's root as board shows it, from what a task route answered. */
+  const rootOf = async (who: Who, made: { task: ApiTaskOf }) => view(who, firstOf(made.task), (await channelById(who, made.task.channelId)).name)
+
+  /** What a claim answers once: the epoch and the end the API gave it, with the token this backend made for it. */
+  function claimOf({ task }: { task: ApiTaskOf }, token: string): TaskClaim {
+    if (!task.claim) throw new HttpError(502, 'remote_error', "Vercel's API answered a claim without one")
+    return { epoch: task.epoch, token, until: iso(task.claim.until) }
+  }
+
+  /** What a claim's own write carries there: its token, as the API takes one, and its epoch. */
+  const proofOf = async (proof: { epoch: number; token: string }) => ({ claimToken: await sendableToken(proof.token), epoch: proof.epoch })
+
+  /** The threads the tasks `refs` name: each a root's ID. Anything else is no task, as a task nobody can read is. */
+  function needsOf(refs: readonly string[]): string[] {
+    const threads = new Set<string>()
+    for (const ref of refs) {
+      const at = locate(ref)
+      if (!at || at.sequence !== 1) throw badRequest(`needs: ${ref} isn't a task`, 'invalid_needs')
+      threads.add(at.threadId)
+    }
+    return [...threads]
+  }
+
+  /**
+   * What makes a thread a task, as the API takes it: the token is this backend's, for a claim made in the same write.
+   * Whom it's for is the API's to check, one of its owner's profiles, as on any board.
+   */
+  const taskSpec = (input: { needs?: string[] | undefined; for?: string | null | undefined; claim?: boolean | undefined; lease?: number | undefined }, token: string | null) => ({
+    ...(input.needs?.length ? { needs: needsOf(input.needs) } : {}),
+    ...(input.for ? { for: input.for } : {}),
+    ...(token ? { claim: { claimToken: token, leaseSeconds: input.lease ?? LEASE_DEFAULT_S } } : {}),
+  })
+
+  /**
+   * A task as a caller that may post but not read gets it back from a retry: the API answers its ID alone, so the task
+   * is what was asked for. It waits when it names tasks to wait for, which the API checked, and no one holds it: a
+   * claim takes `label`, which reads.
+   */
+  const askedTask = (owner: string, by: string, input: { needs?: string[] | undefined; for?: string | null | undefined }): ApiTask => ({
+    state: input.needs?.length ? 'waiting' : 'ready',
+    owner,
+    by,
+    for: input.for ?? null,
+    needs: input.needs?.length ? needsOf(input.needs) : [],
+    epoch: 0,
+    claim: null,
+    blocked: null,
+    result: null,
+    reason: null,
+  })
+
+  /** Who a handle or an ID names, as IDs: an ID names itself, whether or not the board has seen it write. */
+  async function idsNamed(who: Who, value: string): Promise<Set<string>> {
+    if (isId(value)) return new Set([value])
+    const read = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : readNames(who)
+    return new Set(goingBy(await read.views, await namesIn(read), value.toLowerCase()))
+  }
+
+  /**
+   * A task's change in the API's feed as the board's event, built from the task as it was right
+   * after it. It's delivered when its root matched the filters before the change or after it, as a
+   * label's change is on any board: `board.task` is the label a task's change moves.
+   */
+  async function taskEventOf(
+    who: Who,
+    change: ApiChange,
+    channel: string,
+    cursor: string,
+    filters: Filters & { all?: boolean | undefined },
+    narrow: Narrow,
+    given: { thread: ApiThread; message: ApiMessage } | undefined,
+  ): Promise<BoardEventView | null> {
+    const type = TASK_EVENTS[change.type]
+    // A renewal is a claim's bookkeeping: only a read of everything gets it.
+    if (!type || !change.messageId || (type === 'task.renewed' && !filters.all)) return null
+    const found =
+      given ??
+      (await messageById(who, change.messageId).catch((error: unknown) => {
+        if (error instanceof HttpError && error.status === 404) return null
+        throw error
+      }))
+    const task = change.task ?? found?.message.task
+    if (!found || !task || found.message.sequence !== 1) return null
+    // The root's labels with `board.task` as `state`: its own as the API keeps them, a deleted root's too.
+    const wearing = (own: Labels, state: string | undefined) => {
+      const { [TASK_LABEL]: _state, ...rest } = own
+      return state === undefined ? rest : { ...rest, [TASK_LABEL]: state }
+    }
+    const moved = change.labels?.[TASK_LABEL]
+    // The change is about the root, whose labels its thread carries too.
+    const as = (labels: Labels) => ({ message: { ...found.message, task, labels }, thread: { ...found.thread, labels } })
+    // What it's shown as: the root as it is, and a deleted root wears no labels.
+    const after = as(found.message.deletedAt !== undefined ? {} : wearing(labelsOf(found.message), task.state))
+    // What it's matched as: the root as the change left it, and as it found it. The cancel a root's
+    // delete brings found it wearing its labels and its state, as on a board that writes the cancel first.
+    const kept: Labels = { ...found.message.labels }
+    const then = [as(wearing(kept, task.state)), ...(moved ? [as(wearing(kept, moved.from))] : [])]
+    let matched = false
+    for (const { message, thread } of then) matched ||= await matches(filters, message, thread, narrow)
+    if (!matched) return null
+    const message = await view(who, after.message, channel)
+    const by = authorOf(change.actor)
+    const base = { id: message.id, thread: message.thread }
+    const claimed = { epoch: task.epoch, until: iso(task.claim?.until ?? change.createdAt) }
+    let payload: Record<string, unknown>
+    switch (type) {
+      case 'task.created':
+        payload = { ...base, needs: message.task!.needs, for: task.for, by }
+        break
+      case 'task.assigned':
+        payload = { ...base, for: task.for, by }
+        break
+      case 'task.needs_changed':
+        payload = { ...base, needs: message.task!.needs, by }
+        break
+      case 'task.claimed':
+      case 'task.renewed':
+        payload = { ...base, ...claimed, by }
+        break
+      case 'task.released':
+        payload = { ...base, epoch: task.epoch, by }
+        break
+      case 'task.completed':
+        payload = { ...base, epoch: task.epoch, result: task.result, by }
+        break
+      case 'task.failed':
+        payload = { ...base, epoch: task.epoch, reason: task.reason, by }
+        break
+      case 'task.blocked':
+        payload = { ...base, kind: task.blocked?.kind ?? null, reason: task.blocked?.reason ?? '', by }
+        break
+      case 'task.canceled':
+        payload = { ...base, reason: task.reason, by }
+        break
+      case 'task.unblocked':
+      case 'task.reopened':
+        payload = { ...base, by }
+        break
+      case 'task.expired':
+        payload = { ...base, epoch: task.epoch }
+        break
+      default:
+        payload = base
+    }
+    // What the board did on its own, a lease running out or a task becoming ready, has no one's name on it.
+    const own = type === 'task.expired' || type === 'task.ready'
+    return { cursor, type, createdAt: iso(change.createdAt), payload, message, ...(own ? {} : { actor: await nameOf(who, change.actor) }) } as BoardEventView
+  }
+
   const unsupported = Object.fromEntries(
     METHODS.map((method) => [
       method,
@@ -2322,17 +2654,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         }
         made = reply
       }
-      // A new post is in the channel it named. Only a retried post ID may have landed in another one,
-      // which a whole answer names by ID; a channel it may only post in it can't list, so it keeps the one it named.
-      const channelId = made.thread.channelId
-      if (channelId !== undefined) {
-        if (clientId !== undefined && posted.get(channelId) !== channelName)
-          channelName = await channelById(who, channelId).then(
-            (channel) => (posted.set(channelId, channel.name), channel.name),
-            () => channelName,
-          )
-        else posted.set(channelId, channelName)
-      }
+      channelName = await landedIn(who, made.thread.channelId, channelName, clientId)
       return { message: await view(who, 'text' in made.message ? made.message : await sent(who, made.message, input), channelName) }
     },
     async posted(caller, { id }, signal) {
@@ -2486,6 +2808,256 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         signal,
       })
       return { schedule: await scheduleView(who, schedule), canceled }
+    },
+    // Tasks live on the API's threads: each method is one of its task routes, the task named by its thread.
+    async tasks(caller, query, signal) {
+      const who = whoOf(caller)
+      const limit = query.limit ?? 50
+      // A list's cursor is the last task it answered, by its ID: the API's list goes on after a thread, in creation
+      // order, whether or not that thread is still in the list. Any message's ID reads on from its thread the same way.
+      let after: string | undefined
+      if (query.after !== undefined && query.after !== TASKS_START) {
+        const at = locate(query.after)
+        if (!at) throw new HttpError(400, 'invalid_cursor', `${query.after} isn't a cursor or a message ID on this board`)
+        after = at.threadId
+      }
+      const none = { tasks: [], cursor: query.after ?? TASKS_START }
+      // A ref that names no root here is no task's prerequisite.
+      const needed = query.needs === undefined ? undefined : locate(query.needs)
+      if (needed === null || (needed !== undefined && needed.sequence !== 1)) return none
+      const by = await byOf(who, query.by)
+      const owners = query.owner === undefined ? null : await idsNamed(who, query.owner)
+      const assignees = query.for === undefined ? null : await idsNamed(who, query.for)
+      const labels = query.label ?? []
+      // What the API doesn't filter by: a root's author, whoever goes by a handle, and a choice of a label's values.
+      const matching = (task: ApiTaskOf) => {
+        if (owners && !owners.has(task.owner)) return false
+        if (assignees && !(task.for !== null && assignees.has(task.for))) return false
+        if (by && !by(task.message.createdBy)) return false
+        const wears = task.message.labels
+        return labels.every(([key, values]) => wears !== undefined && Object.hasOwn(wears, key) && (values === null || values.includes(wears[key]!)))
+      }
+      const asked = {
+        // A state as the API lists it: what's ready there includes a claim whose lease ran out, and what's claimed leaves it out.
+        state: query.state ?? 'open',
+        channel: query.channel,
+        // The API narrows by a label, or by one value of it: a choice of values is checked here.
+        label: labels.map(([key, values]) => (values === null || values.length !== 1 ? key : `${key}=${values[0]}`)),
+        owner: query.owner !== undefined && isId(query.owner) ? query.owner : undefined,
+        for: query.for !== undefined && isId(query.for) ? query.for : undefined,
+        needs: needed?.threadId,
+      }
+      const path = await onBoard(who, '/tasks')
+      const found: ApiTaskOf[] = []
+      // The first page goes on after the task, and each one after it from the API's own cursor: it takes one or the other.
+      let from: { after?: string; cursor?: string } = after !== undefined ? { after } : {}
+      while (found.length < limit) {
+        const page = await api<{ tasks: ApiTaskOf[]; cursor: string | null }>(who, 'GET', path, { version: 2, query: { ...asked, ...from }, signal }).catch((error: unknown) => {
+          throw taskRefusal(error)
+        })
+        for (const task of page.tasks) if (found.length < limit && matching(task)) found.push(task)
+        if (!page.cursor) break
+        from = { cursor: page.cursor }
+      }
+      // Each task comes with its first message: only its latest reply is read apart, by reference, and the page's
+      // authors are named together, as a page of threads' are.
+      const tasks = await summaries(who, await Promise.all(found.map(async (task) => ({ thread: listedOf(task), channel: await channelById(who, task.channelId) }))), signal)
+      const last = found.at(-1)
+      return { tasks, cursor: last ? idAt(last.id, 1) : none.cursor }
+    },
+    async createTask(caller, input, signal) {
+      const who = whoOf(caller)
+      const token = input.claim ? newClaimToken() : null
+      const spec = taskSpec(input, token)
+      // To a caller that may post but not read, a retry answers the task's ID alone.
+      let made: { task: ApiTaskOf | { id: string }; claimed?: boolean }
+      let root: MessageView
+      let task: ApiTask
+      if (input.re !== undefined) {
+        const at = locate(input.re)
+        if (!at) throw notFound(`message not found: ${input.re}`, 'message_not_found')
+        if (at.sequence !== 1) {
+          await messageById(who, input.re, signal)
+          throw badRequest(`${input.re} is a reply: a task is a thread, so name its root, ${idAt(at.threadId, 1)}`)
+        }
+        const adopted = await taskWrite(who, '', { threadId: at.threadId, ...spec }, { id: input.re, signal })
+        made = adopted
+        task = adopted.task
+        root = await rootOf(who, adopted)
+      } else {
+        const clientId = input.id !== undefined ? await clientIdOf(input.id) : undefined
+        const text = input.text ?? ''
+        // The post's own fields, with what makes it a task beside them: one write starts the thread as a task.
+        made = await taskWrite(who, '', { channel: input.channel, text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.noSync ? { noSync: true } : {}), ...spec }, { signal }).catch((error: unknown) => {
+          // A retry gets back the task that landed with its ID: a post that was no task's is another write's, as on any board.
+          if (error instanceof HttpError && error.code === 'not_a_task') throw duplicateId()
+          throw error
+        })
+        if ('message' in made.task) {
+          task = made.task
+          root = await view(who, firstOf(made.task), await landedIn(who, made.task.channelId, input.channel!, clientId))
+        } else {
+          // The task is what it asked for, as far as it can say: it can't read the channel to see.
+          const { actor } = await self(who)
+          task = askedTask(principalId(actor.principal), await actorOf(who), input)
+          const first = { id: idAt(made.task.id, 1), threadId: made.task.id, sequence: 1 }
+          root = await view(who, { ...(await sent(who, first, { text, labels: { ...input.labels, [TASK_LABEL]: task.state }, attachments: input.attachments, noSync: input.noSync })), task }, input.channel!)
+        }
+      }
+      // The API says whether the token this request sent holds the task's claim. A retry of a create that landed sent
+      // another, so it gets the task as it is now and no claim: that one was answered once, to the first request.
+      if (!token || made.claimed !== true || !task.claim) return { task: root }
+      return { task: root, claim: { epoch: task.epoch, token, until: iso(task.claim.until) } }
+    },
+    async createTasks(caller, input, signal) {
+      const who = whoOf(caller)
+      // A task waits for one that's there by its thread, and for another of the batch by its key, which the API resolves:
+      // each named once, the ones that were there first, as a board keeps them. The API tells a repeat by their order too.
+      const waits = input.tasks.map((task) => {
+        const keys = [...new Set((task.needs ?? []).flatMap((need) => (typeof need === 'string' ? [] : [need.key])))]
+        return { threads: needsOf((task.needs ?? []).filter((need) => typeof need === 'string')), keys }
+      })
+      const tasks = input.tasks.map((task, at) => {
+        const needs = [...waits[at]!.threads, ...waits[at]!.keys.map((key) => ({ key }))]
+        return {
+          ...(task.key !== undefined ? { key: task.key } : {}),
+          text: task.text,
+          ...(task.labels && Object.keys(task.labels).length ? { labels: task.labels } : {}),
+          ...(task.noSync ? { noSync: true } : {}),
+          ...(task.attachments?.length ? { attachments: task.attachments } : {}),
+          ...(needs.length ? { needs } : {}),
+          ...(task.for ? { for: task.for } : {}),
+        }
+      })
+      // The batch's `id` is its caller's own key for it: the API answers the key again, with the same request, with the
+      // tasks the first one made, and keeps it for good. The operation ID is this attempt's alone, and a time the API
+      // reads. The request is the same when its channel is named the same way and its tasks' fields are, so both go as given.
+      const body = { operationId: operationId(), channel: input.channel, ...(input.id !== undefined ? { idempotencyKey: input.id } : {}), tasks }
+      const made = await api<{ tasks: (ApiTaskOf | { id: string })[] }>(who, 'POST', await onBoard(who, '/tasks/batch'), { version: 2, body, signal }).catch((error: unknown) => {
+        // An `id` sent again with other tasks, or for another channel, is another write's, as on any board.
+        if (error instanceof HttpError && error.code === 'idempotency_key_reused') throw duplicateId()
+        // More bytes than one of the API's requests holds: none was made and less of it fits, as with more than it counts for one write.
+        if (error instanceof HttpError && error.code === 'entity_too_large') throw new HttpError(400, 'batch_too_large', error.message)
+        throw taskRefusal(error)
+      })
+      const threads = made.tasks.map((task) => task.id)
+      const places = new Map(input.tasks.flatMap((task, at) => (task.key !== undefined ? [[task.key, at] as const] : [])))
+      return {
+        tasks: await Promise.all(
+          made.tasks.map(async (task, at) => {
+            if ('message' in task) return view(who, firstOf(task), await landedIn(who, task.channelId, input.channel, undefined))
+            // To a caller that may post but not read, a retry answers each task's ID alone: the task is what it asked for, as far as it can say.
+            const asked = input.tasks[at]!
+            const needs = [...waits[at]!.threads, ...waits[at]!.keys.map((key) => threads[places.get(key)!]!)]
+            const { actor } = await self(who)
+            const stood: ApiTask = { state: needs.length ? 'waiting' : 'ready', owner: principalId(actor.principal), by: await actorOf(who), for: asked.for ?? null, needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
+            const first = { id: idAt(task.id, 1), threadId: task.id, sequence: 1 }
+            return view(who, { ...(await sent(who, first, { text: asked.text, labels: { ...asked.labels, [TASK_LABEL]: stood.state }, attachments: asked.attachments, noSync: asked.noSync })), task: stood }, input.channel)
+          }),
+        ),
+      }
+    },
+    async createdTasks(_caller, { id }) {
+      // Vercel's API has no read of a batch by its caller's key: only the write itself answers a repeat. So board() asks
+      // it to make the batch, and its key says whether it has: a retry goes through the middleware once more on the way.
+      throw notFound(`no batch of yours has id ${id}`, 'batch_not_found')
+    },
+    async claimTask(caller, { id, lease }, signal) {
+      const who = whoOf(caller)
+      const token = newClaimToken()
+      // The API gives what's asked up to its own cap, and the board's default when nothing is.
+      const made = await taskWrite(who, `${await taskPath(who, id, signal)}/claim`, { claimToken: token, leaseSeconds: lease ?? LEASE_DEFAULT_S }, { id, signal })
+      return { task: await rootOf(who, made), claim: claimOf(made, token) }
+    },
+    async claimReadyTask(caller, input, signal) {
+      const who = whoOf(caller)
+      // An owner is named by ID, as on any board: a handle is how someone shows, and several can show the same.
+      for (const owner of input.from ?? []) if (!isId(owner)) throw badRequest(`from: ${owner} is a handle, which several can share: name the owner by ID`, 'invalid_from')
+      if (signal.aborted) return { task: null }
+      const path = await onBoard(who, '/tasks/claim')
+      // The API holds a request up to 25 seconds, and answers that it took nothing by then or sooner: it looks only so
+      // many times, so where many tasks change it answers before its wait is up. Nothing here says the wait ran out:
+      // whoever waits asks again until their own wait is up, as the handle does.
+      const wait = Math.min(WAIT_MAX_S, Math.ceil(input.wait ?? 0))
+      const token = newClaimToken()
+      const body = {
+        operationId: operationId(),
+        claimToken: token,
+        channel: input.channel,
+        ...(input.label && Object.keys(input.label).length ? { labels: input.label } : {}),
+        ...(input.from?.length ? { from: input.from } : {}),
+        leaseSeconds: input.lease ?? LEASE_DEFAULT_S,
+        ...(wait > 0 ? { wait } : {}),
+      }
+      // A caller that leaves takes nothing, so the task isn't left claimed for no one: what the API claimed meanwhile is given back.
+      const release = async (found: { task: ApiTaskOf | null }) => {
+        if (found.task) await taskWrite(who, `/${encodeURIComponent(found.task.id)}/release`, { claimToken: token, epoch: found.task.epoch }).catch(() => {})
+      }
+      let found: { task: ApiTaskOf | null }
+      try {
+        found = await api(who, 'POST', path, { version: 2, body, signal })
+      } catch (error) {
+        // The request was cut off. The API stops waiting once its caller is gone, but a claim it was already writing
+        // lands all the same: the same operation and token, sent again without the wait, answers that claim.
+        if (signal.aborted) {
+          const { wait: _held, ...again } = body
+          waitUntil(api<{ task: ApiTaskOf | null }>(who, 'POST', path, { version: 2, body: again }).then(release, () => {}))
+          return { task: null }
+        }
+        throw taskRefusal(error)
+      }
+      const { task } = found
+      if (!task) return { task: null }
+      if (signal.aborted) {
+        await release(found)
+        return { task: null }
+      }
+      return { task: await rootOf(who, { task }), claim: claimOf({ task }, token) }
+    },
+    async renewTask(caller, { id, epoch, token, lease }, signal) {
+      const who = whoOf(caller)
+      const made = await taskWrite(who, `${await taskPath(who, id, signal)}/renew`, { ...(await proofOf({ epoch, token })), leaseSeconds: lease ?? LEASE_DEFAULT_S }, { id, signal })
+      return { task: await rootOf(who, made), until: claimOf(made, token).until }
+    },
+    async releaseTask(caller, { id, epoch, token }, signal) {
+      const who = whoOf(caller)
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/release`, await proofOf({ epoch, token }), { id, signal })) }
+    },
+    async completeTask(caller, { id, epoch, token, result }, signal) {
+      const who = whoOf(caller)
+      const body = { ...(await proofOf({ epoch, token })), ...(result !== undefined ? { result } : {}) }
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/complete`, body, { id, signal })) }
+    },
+    async failTask(caller, { id, epoch, token, reason }, signal) {
+      const who = whoOf(caller)
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/fail`, { ...(await proofOf({ epoch, token })), reason }, { id, signal })) }
+    },
+    async blockTask(caller, { id, reason, kind, epoch, token }, signal) {
+      const who = whoOf(caller)
+      const proof = epoch !== undefined && token !== undefined ? await proofOf({ epoch, token }) : null
+      const body = { reason, ...(kind !== undefined ? { kind } : {}), ...proof }
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/block`, body, { id, signal })) }
+    },
+    async unblockTask(caller, { id }, signal) {
+      const who = whoOf(caller)
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/unblock`, {}, { id, signal })) }
+    },
+    async reopenTask(caller, { id }, signal) {
+      const who = whoOf(caller)
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/reopen`, {}, { id, signal })) }
+    },
+    async assignTask(caller, { id, for: actor }, signal) {
+      const who = whoOf(caller)
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/assign`, { for: actor }, { id, signal })) }
+    },
+    async setTaskNeeds(caller, { id, needs }, signal) {
+      const who = whoOf(caller)
+      // What it waits for now, by their threads: the API checks each, and that none waits for this one.
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/needs`, { needs: needsOf(needs) }, { id, signal })) }
+    },
+    async cancelTask(caller, { id, reason }, signal) {
+      const who = whoOf(caller)
+      return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/cancel`, { reason }, { id, signal })) }
     },
     events: (caller, query, signal) => eventsAs(whoOf(caller), query, signal),
     // Typing shows where this board's own sync has the thread: Vercel's API keeps no platform's app.
@@ -2698,9 +3270,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = { profile: null }
       const team = await teamId()
       const id = team?.startsWith('team_') ? team : (await self(who)).teamId
-      const url = `${origin}/v1/messageboard${await onBoard(who)}?teamId=${encodeURIComponent(id)}`
+      const board = await onBoard(who)
+      const url = `${origin}/v1/messageboard${board}?teamId=${encodeURIComponent(id)}`
       const credential = environment ? await environment.sandbox(url, token) : token === undefined ? withoutToken(url) : { authorization: `Bearer ${token}` }
-      return { url, headers: { ...credential, ...apiProfileHeaders(profile), 'x-board-can': can }, routes: SANDBOX_ROUTES, reads: ['/v1/messageboard/me'] }
+      return {
+        url,
+        headers: { ...credential, ...apiProfileHeaders(profile), 'x-board-can': can },
+        routes: SANDBOX_ROUTES,
+        reads: ['/v1/messageboard/me'],
+        // Its tasks are the same board's, at version 2 of the API.
+        under: [{ path: `/v2/messageboard${board}`, routes: SANDBOX_TASK_ROUTES }],
+      }
     },
     // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
     sendsSchedulesHere: false,

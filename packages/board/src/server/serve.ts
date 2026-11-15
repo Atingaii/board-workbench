@@ -1,5 +1,19 @@
 import {
   AckBody,
+  AssignTaskBody,
+  TaskNeedsBody,
+  BlockTaskBody,
+  CancelTaskBody,
+  ClaimReadyTaskBody,
+  ClaimTaskBody,
+  CompleteTaskBody,
+  CreateTaskBody,
+  CreateTasksBody,
+  CreatedTasksQuery,
+  FailTaskBody,
+  ReleaseTaskBody,
+  RenewTaskBody,
+  TasksQuery,
   DeleteBody,
   EditBody,
   EventsQuery,
@@ -37,19 +51,19 @@ import {
 import type { Method, Protocol } from '../api/protocol.ts'
 import type { ExternalAuthor } from '../contract/external.ts'
 import type { Actor } from '../contract/folds.ts'
-import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, RESERVED_LABEL_PREFIX, TASK_BATCH_MAX, type Attachment, type Labels } from '../contract/schemas.ts'
 import { findBlocks } from '../contract/blocks.ts'
 import type { SchemaDefinition } from '../contract/data-schemas.ts'
 import { checkValue } from '../contract/data-values.ts'
 import type { SyncEvent } from '../sync/engine.ts'
 import { SYNC, type Caller, type InboxDelivery, type ProtocolMethods, type SelfCaller, type VerifiedCaller } from './backend.ts'
 import type { Board, BoardContext } from './board.ts'
-import { derivedId } from '../client/ids.ts'
+import { derivedId, sha256 } from '../client/ids.ts'
 import { claimsOf, KNOWN_AGENTS, viaOf } from './actors.ts'
 import { importedHandle, userIdOf } from '../contract/profiles.ts'
 import type { CallerRequest } from './auth.ts'
 import { avatarSvg } from './avatars.ts'
-import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
+import { badRequest, batchTooLarge, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
 import { DroppedError, runMiddleware, type Write, type WriteSource } from './middleware.ts'
 import { createRouter, METHODS, openapi, queryObject, readCapped, readJson, type BoardRoute } from './routing.ts'
 import { FULL_ACCESS, parseCan, type Access } from './access.ts'
@@ -59,7 +73,16 @@ import type { WatcherContext } from './watcher.ts'
 import { VERSION } from '../version.ts'
 
 /** The methods whose answer is something new. */
-const CREATED = new Set<Method>(['post', 'schedule', 'upload', 'uploadFinish'])
+const CREATED = new Set<Method>(['post', 'schedule', 'createTask', 'createTasks', 'upload', 'uploadFinish'])
+
+/**
+ * Refuses a label write under `board.`: those keys are the board's own, which only its task writes
+ * set, so no caller's write sets or unsets one, this deployment's own code included.
+ */
+function ownLabels(set: Labels | undefined, unset: readonly string[] = []) {
+  const key = [...Object.keys(set ?? {}), ...unset].find((name) => name.startsWith(RESERVED_LABEL_PREFIX))
+  if (key !== undefined) throw new HttpError(400, 'reserved_label', `${key} is the board's own label: only its task writes set labels under ${RESERVED_LABEL_PREFIX}`)
+}
 
 /** Shown inline only when a browser can't run it: everything else downloads. */
 const INLINE = /^(image\/(png|jpeg|gif|webp|avif)|video\/(mp4|webm)|text\/plain)$/
@@ -102,6 +125,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'posted':
     case 'synced':
     case 'cancelSchedule':
+    case 'unblockTask':
+    case 'reopenTask':
     case 'revokeGrant':
     case 'schema':
     case 'attachment':
@@ -128,6 +153,40 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return CreateChannelBody.parse(await body())
     case 'schedule':
       return ScheduleBody.parse(await body())
+    case 'tasks':
+      return TasksQuery.parse(queryObject(url))
+    case 'createTask':
+      return CreateTaskBody.parse(await body())
+    case 'createdTasks':
+      return { id, ...CreatedTasksQuery.parse(queryObject(url)) }
+    case 'createTasks': {
+      const sent = await body()
+      // Every root of a batch goes through the middleware before a backend sees one, so more than any backend makes
+      // stops here, before anything runs for it: said as that, which its sender splits on, whatever else is wrong with it.
+      const tasks = (sent as { tasks?: unknown } | null | undefined)?.tasks
+      if (Array.isArray(tasks) && tasks.length > TASK_BATCH_MAX) throw batchTooLarge(tasks.length, TASK_BATCH_MAX)
+      return CreateTasksBody.parse(sent)
+    }
+    case 'claimReadyTask':
+      return ClaimReadyTaskBody.parse(await body())
+    case 'claimTask':
+      return { id, ...(ClaimTaskBody.parse(await body()) ?? {}) }
+    case 'renewTask':
+      return { id, ...RenewTaskBody.parse(await body()) }
+    case 'releaseTask':
+      return { id, ...ReleaseTaskBody.parse(await body()) }
+    case 'completeTask':
+      return { id, ...CompleteTaskBody.parse(await body()) }
+    case 'failTask':
+      return { id, ...FailTaskBody.parse(await body()) }
+    case 'blockTask':
+      return { id, ...BlockTaskBody.parse(await body()) }
+    case 'assignTask':
+      return { id, ...AssignTaskBody.parse(await body()) }
+    case 'setTaskNeeds':
+      return { id, ...TaskNeedsBody.parse(await body()) }
+    case 'cancelTask':
+      return { id, ...CancelTaskBody.parse(await body()) }
     case 'createGrant':
       return GrantBody.parse(await body())
     case 'updateGrant':
@@ -386,7 +445,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   let middlewareBoard: Board | null = null
   /** Runs the middleware on a write, then `commit`s what it passed on: a `DroppedError` when it drops it. */
   const screen = <W extends Write, T>(write: W, author: Actor, source: WriteSource, commit: (write: W) => Promise<T>): Promise<T> =>
-    runMiddleware(middleware, { write, author, source, board: () => (middlewareBoard ??= handleOf(MIDDLEWARE, null)) }, commit)
+    runMiddleware(middleware, { write, author, source, board: () => (middlewareBoard ??= handleOf(MIDDLEWARE, null)) }, (passed) => {
+      // What the middleware made of its labels is a caller's write too.
+      if (passed.kind === 'post') ownLabels(passed.labels)
+      return commit(passed)
+    })
 
   /** Whether a lookup found what it looked for: a 404 says it didn't. */
   async function found(lookup: () => Promise<unknown>): Promise<boolean> {
@@ -438,6 +501,48 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     return screen({ kind: 'post', channel, re, text: input.text, labels: input.labels ?? {}, attachments }, actor, source, (write) =>
       send({ ...input, text: write.text, labels: write.labels }),
     )
+  }
+
+  /**
+   * A digest of what a batch asks for, as it was given: its channel and its tasks, as many, in the
+   * same order, each with the same key, text, labels, `noSync`, files, needs, and assignee. A field
+   * left out is its empty value. A batch made under an `id` is that `id`'s only for the same one.
+   */
+  async function batchRequest(body: Pick<Protocol['createTasks']['input'], 'channel' | 'tasks'>): Promise<string> {
+    const tasks = body.tasks.map((task) => [task.key ?? null, task.text, Object.entries(task.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)), task.noSync ?? false, task.attachments ?? [], task.needs ?? [], task.for ?? null])
+    return (await sha256(JSON.stringify([body.channel, tasks]))).slice(0, 32)
+  }
+
+  /**
+   * A batch's roots through the middleware, each as the post it is, in order, then `send` with what
+   * it passed on: every one before any is written, so a root it drops makes none of them. A batch
+   * that wouldn't land goes as it came, for the backend to say why. One that landed already never
+   * gets here: its retry is answered before.
+   */
+  async function screenTasks<T>(
+    caller: Caller,
+    input: Protocol['createTasks']['input'],
+    signal: AbortSignal,
+    send: (tasks: Protocol['createTasks']['input']['tasks']) => Promise<T>,
+  ): Promise<T> {
+    const source = sourceOf(caller)
+    if (middleware.length === 0 || source === null) return send(input.tasks)
+    const { channel } = input
+    const access = accessOf(caller)
+    const labels = input.tasks.some((task) => Object.keys(task.labels ?? {}).length > 0)
+    if (access && (!access.can('post', channel) || (labels && !access.can('label', channel)))) return send(input.tasks)
+    const { actor } = await whoIs(caller, signal)
+    const passed: Protocol['createTasks']['input']['tasks'] = []
+    const from = async (at: number): Promise<T> => {
+      const task = input.tasks[at]
+      if (!task) return send(passed)
+      const attachments = await attachmentsOf(caller, task.attachments, signal)
+      return screen({ kind: 'post', channel, re: null, text: task.text, labels: task.labels ?? {}, attachments }, actor, source, (write) => {
+        passed.push({ ...task, text: write.text, ...(task.labels || Object.keys(write.labels).length > 0 ? { labels: write.labels } : {}) })
+        return from(at + 1)
+      })
+    }
+    return from(0)
   }
 
   /**
@@ -528,6 +633,8 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * the platform. A retry of one that landed stands.
    */
   async function syncImport(caller: Caller, body: Protocol['syncImport']['input'], signal: AbortSignal): Promise<Protocol['syncImport']['output']> {
+    if (body.op === 'post') ownLabels(body.labels)
+    if (body.op === 'labels') ownLabels(body.set, body.unset)
     // What a sync writes on the board itself, as a platform user (`from: null`), is checked as any
     // write, a sync callback's client's and a sync elsewhere's alike: only what came from a platform
     // is text the board can't refuse. Checked again when the middleware changed it.
@@ -708,7 +815,52 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   async function invoke(name: Method, caller: Caller, input: unknown, signal: AbortSignal): Promise<unknown> {
     switch (name) {
       case 'post':
+        ownLabels((input as Protocol['post']['input']).labels)
         return post(caller, input as Protocol['post']['input'], signal)
+      case 'label': {
+        const { set, unset } = input as Protocol['label']['input']
+        ownLabels(set, unset)
+        return backend.label(caller, input as Protocol['label']['input'], signal)
+      }
+      case 'createTask': {
+        const body = input as Protocol['createTask']['input']
+        ownLabels(body.labels)
+        // A thread that's there becomes a task as it is: nothing is posted, so the middleware has nothing to see.
+        if (body.channel === undefined) return backend.createTask(caller, body, signal)
+        // A new one's root is a post: its blocks are checked and the middleware sees it, as any post's.
+        const { channel, labels, noSync, attachments, id } = body
+        // It may be empty when the root has files, as a post's may.
+        const sent = body.text ?? ''
+        await checkWrite(caller, sent, { channel }, signal)
+        const root = { channel, text: sent, ...(labels ? { labels } : {}), ...(noSync !== undefined ? { noSync } : {}), ...(attachments ? { attachments } : {}), ...(id !== undefined ? { id } : {}) } as Protocol['post']['input']
+        return screenPost(caller, root, signal, async (screened) => {
+          if (screened.text !== sent) await checkBlocks(screened.text)
+          return backend.createTask(caller, { ...body, text: screened.text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal)
+        })
+      }
+      case 'createTasks': {
+        const body = input as Protocol['createTasks']['input']
+        for (const task of body.tasks) ownLabels(task.labels)
+        // A batch under an `id` that landed stands: the same request again gets its tasks, whatever the middleware would
+        // make of it now, and another request under the `id` is refused. Neither is screened: each write is, once.
+        // What it asks for is a digest of the request as given: this board's, or the one a board in front of it made
+        // of what it was given, before its middleware. Both then know a repeat by the same thing.
+        const request = body.id !== undefined ? (body.request ?? (await batchRequest(body))) : undefined
+        if (body.id !== undefined) {
+          try {
+            return await backend.createdTasks(caller, { id: body.id, request }, signal)
+          } catch (error) {
+            if (!(error instanceof HttpError && error.status === 404 && error.code === 'batch_not_found')) throw error
+          }
+        }
+        // Each task's root is a post: its blocks are checked and the middleware sees it, as any post's.
+        for (const task of body.tasks) await checkWrite(caller, task.text, { channel: body.channel }, signal)
+        return screenTasks(caller, body, signal, async (tasks) => {
+          for (const [at, task] of tasks.entries()) if (task.text !== body.tasks[at]!.text) await checkBlocks(task.text)
+          // What it asked for goes with it: a backend keeps it with the batch, and a board behind this one goes by it.
+          return backend.createTasks(caller, { ...body, tasks, request }, signal)
+        })
+      }
       case 'edit': {
         const edit = input as Protocol['edit']['input']
         await checkWrite(caller, edit.text, { message: edit.id }, signal)
@@ -721,6 +873,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)
       case 'schedule': {
         const body = input as Protocol['schedule']['input']
+        ownLabels(body.labels)
         // Checked when it's made, where its author sees it; a send that comes back through here is checked as any post.
         await checkWrite(caller, body.text, body.channel !== undefined ? { channel: body.channel } : { message: body.re! }, signal)
         return backend.sendsSchedulesHere === false ? screenSchedule(caller, body, signal) : backend.schedule(caller, body, signal)
@@ -901,9 +1054,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   return {
     dispatch,
     async inject(request, caller, trigger, writes) {
-      if (trigger !== null && request.method === 'POST' && new URL(request.url).pathname.endsWith('/messages')) {
+      // What it posts, a task's new thread included, gets an ID from what triggered it, so a retry posts once.
+      const pathname = new URL(request.url).pathname
+      if (trigger !== null && request.method === 'POST' && (pathname.endsWith('/messages') || pathname.endsWith('/tasks') || pathname.endsWith('/tasks/batch'))) {
         const body = ((await request.json()) ?? {}) as Record<string, unknown>
-        body.id ??= await derivedId('board-inbound', trigger, 'client', String(writes.made++))
+        if (pathname.endsWith('/messages') || body.channel !== undefined) body.id ??= await derivedId('board-inbound', trigger, 'client', String(writes.made++))
         request = new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) })
       }
       return dispatch(request, caller)
