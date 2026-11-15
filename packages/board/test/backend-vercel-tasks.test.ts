@@ -1647,10 +1647,12 @@ describe("vercel()'s tasks", () => {
     await expect(julian.tasks.create('dev', 'a task')).rejects.toMatchObject(refused)
     await expect(julian.tasks.claim(root.id)).rejects.toMatchObject(refused)
     await expect(julian.tasks.needs(root.id, [])).rejects.toMatchObject(refused)
+    // A batch under a key of its caller's, which the API has no read of: it's asked to make it.
+    await expect(julian.tasks.createMany('dev', [{ key: 'a', text: 'a task' }, { text: 'another', needs: [{ key: 'a' }] }], { id: 'once' })).rejects.toMatchObject(refused)
     // One that would wait for a task fails at once, and isn't asked again.
     await expect(julian.tasks.claim({ channel: 'dev', wait: 30 })).rejects.toMatchObject(refused)
     // Each asked its route, and nothing else was asked to find out.
-    expect(julian.sent.map((request) => `${request.method} v${request.version} ${request.path}`)).toEqual(['GET v2 /tasks', 'POST v2 /tasks', `POST v2 /tasks/${threadOf(root.id)}/claim`, `POST v2 /tasks/${threadOf(root.id)}/needs`, 'POST v2 /tasks/claim'])
+    expect(julian.sent.map((request) => `${request.method} v${request.version} ${request.path}`)).toEqual(['GET v2 /tasks', 'POST v2 /tasks', `POST v2 /tasks/${threadOf(root.id)}/claim`, `POST v2 /tasks/${threadOf(root.id)}/needs`, 'POST v2 /tasks/batch', 'POST v2 /tasks/claim'])
     // Its threads read as they do on any board, and none is a task.
     expect((await julian.threads({ channel: 'dev' })).threads.map((thread) => [thread.message.id, thread.message.task])).toEqual([[root.id, undefined]])
   })
