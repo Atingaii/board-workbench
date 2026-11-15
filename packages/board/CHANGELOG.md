@@ -1,5 +1,53 @@
 # vboard
 
+## 0.45.1
+
+### Patch Changes
+
+- 73140b7: On Vercel's board, a scheduled reply takes labels (`vb schedule 812 "check in" --in 1h --label kind=task`), as a scheduled thread already did: each send carries them, and the schedule shows them. It answered 501 `not_supported`.
+- 7499cf1: On Vercel's board, a wait or a tail in one thread (`vb wait --re 812`, `vb wait 812`) reads the feed of that thread's channel, where it read every channel's on the board, and a read across channels takes each message from the feed, where it read each by ID. A 30-second `vb wait <id>` on a board with 80 channels was about 500 requests and is about 10.
+
+## 0.45.0
+
+### Minor Changes
+
+- 9b2cfe1: `board()` no longer checks message text length, attachment count, or a schema's name, version, and description length before a backend does: the local board keeps refusing what's over its limits as before, and on `vercel()`, Vercel's API decides and its error comes back (text over 10,000 characters is now its `invalid_message` instead of `text_too_long`). A grant's channel pattern can now be as long as a channel path, up from 300 characters, so every channel can be granted.
+- 46feeb0: Channel paths can be up to 2048 characters, up from 80. The board no longer holds a path to a backend's own limit: on `vercel()`, Vercel's API still caps channel names at 80 for now, and refuses a longer one with its `invalid_channel_name`. Clients on an older `@vercel/board` still refuse paths over 80 in events and requests, so upgrade them along with the board.
+- a4a8376: `vb inspect --allow-host <host>` lets the inspector answer behind a proxy that serves it on another name, such as a tailnet host, instead of only on `127.0.0.1` and `localhost`.
+- 4069b9e: Four things a UI on a handle needed. `team.events(query, { onState })` says whether the feed is connected: `onState` is called with `'live'` when the board answers a request for events, and `'retrying'` when one fails and the handle backs off, each change once. The first request, and the first after a failure, ask without waiting, so it's live as soon as the board answers. `@vercel/board/access` exports the permission names as a value, `PERMISSIONS`, beside the `Permission` type. And the root exports `ExplainPrincipal`, the type of the principal `team.explain` asks about, with `EventsOptions` and `EventsState`. And `team.discovery()` says the `name` of a team's board in Vercel's API (`General`, the default's), so a UI can show which board it's on.
+  
+  ```ts
+  import { board, type EventsState, type ExplainPrincipal } from '@vercel/board'
+  import { PERMISSIONS } from '@vercel/board/access'
+  
+  const team = board()
+  let feed: EventsState = 'retrying'
+  for await (const event of team.events({ all: true }, { onState: (state) => (feed = state) })) {
+    // render(event, feed)
+  }
+  
+  const whom: ExplainPrincipal = { user: 'ada@acme.com' }
+  const { can } = await team.explain('ci/deploys', whom)
+  ```
+
+### Patch Changes
+
+- a68ae0e: On Vercel's board, listing threads takes each thread's first and newest message from the thread list where the API sends them (`include=messages`), where it read each by ID: a 20-thread `vb read` is 2 requests where it was 32. Vercel's API doesn't send them yet and refuses the parameter, so a process asks once, reads that page again without it, and lists as before from then on.
+- 82b14e6: `vercel()` names the authors on a page by asking Vercel's API for those actors by ID, where it read the board's whole list of actors, 50 at a time: a page of messages or threads, a thread with its replies, and a page of a channel's changes each ask once, for up to 100 authors a request, however many agents the board has. A synced message's project is named from the actor that imported it. On an API that doesn't answer actors by ID yet, names come from the list as before.
+
+## 0.44.0
+
+### Minor Changes
+
+- 4d2b534: Vercel's deployment comment on a pull request shows in Slack as Vercel's own table (Project, Deployment, Actions, Updated) instead of a list. It's still one message per pull request, replaced in place as Vercel edits its comment, with the deployments Vercel skipped in a line under the table. A sync provider of your own is handed the comment's deployments too (`deployments` in the body of `post` and `edit`), beside the markdown that lists them.
+
+### Patch Changes
+
+- 5e532d6: A block's data gets the same answer on every board as on Vercel's: `checkValue` now reads each format as Vercel's API does (ajv-formats 2.1.1, full mode). A `uri` is RFC 3986's, so one with `<`, `"`, `{`, `|`, a space, or a bad percent-escape is refused where it posted before. An `ipv4` address with a leading zero, a `time` whose offset is any two digits, and a `date-time` parted by a tab are taken where they were refused. A `time`'s 60th second is taken only at `23:59:60`. `checkValue` also checks `items` given as a list of schemas, one for each place: it let any items through.
+- f900be2: A synced message whose text opens with a code block, a list, a heading, a quote, or a table keeps it on Slack, GitHub, and Linear. The author's label (`**ada**:`) now sits on a line of its own above such a text, whether the default rendering wrote it or a renderer of yours that opens the same way. It used to share the text's first line, where a code block stops being one, so a message that was only a block arrived as a line of inline code.
+- bfea984: An edit to a long message syncs on Vercel's board. Sync put the edited text in the inbox event's ID, which Vercel's API refuses past 300 characters, so the webhook answered 500 and the board kept the text from before the edit (a Vercel deployment comment stayed at "Building"). The ID now carries a digest of the text. `local()` refuses an inbox event ID over 300 characters too, as Vercel's API does, the conformance kit pushes an edit of a long message, and a webhook whose event the board refuses answers 200 instead of 500, so the platform stops redelivering it.
+- 28a1096: `typing`'s `status`, and so `vb typing <id> "<status>"`, is at most 50 characters, Slack's limit for the text it shows in place of "Typing…": a longer one is a 400, where Slack refused it and the thread showed no status.
+
 ## 0.43.1
 
 ### Patch Changes

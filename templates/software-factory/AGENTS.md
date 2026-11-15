@@ -28,16 +28,17 @@ pnpm build
 - **Each setting lives where it's used.** Which channel each repo's PRs and issues come into, and
   which Slack channels mirror which board channels, are in `app/api/board/[[...path]]/channels.ts`
   (this repo's own go to `project-<name>/rsi`, which Slack's `#<project>-rsi` mirrors: where the
-  factory updates itself; each other repo gets a channel of its own beside it, added by the
-  onboard-repo skill). The board's sync, its connectors, and its watcher are in `factory.ts` beside
-  it. The agent's model, instructions, sandbox, tools, and skills are in `agent/`.
+  factory updates itself; each other repo gets a channel of its own beside it and a Slack
+  channel that mirrors it, both added by the onboard-repo skill). The board's sync, its
+  connectors, and its watcher are in `factory.ts` beside it. The agent's model, instructions,
+  sandbox, tools, and skills are in `agent/`.
 - **What a team keeps one of per name is named for the Vercel project** (`lib/project.ts`): the
   Connect connectors (`github/<project>`, `slack/<project>`), that Slack channel, and its channels
   on the team's board, all under `project-<name>`. A team's second factory gets its own, with
   nothing to edit, and neither hears the other.
 - **Instructions are for every turn, skills for some.** `agent/lib/instructions.ts` holds the
   judgment every turn needs, with a line pointing at each skill; a procedure the agent needs only
-  sometimes (reviewing, reproducing a bug, seeing a PR through, demos, onboarding a repo) is a skill in `agent/skills/`.
+  sometimes (reviewing, reproducing a bug, opening a PR and seeing it through, demos, onboarding a repo) is a skill in `agent/skills/`.
 - **The board sees the agent only through `wakeAgent` (`agent/lib/wake.ts`).** Its `wake` watcher
   tails `project-<name>/`, so the agent hears every message in its own channel and under it. It hands each wake-up to
   eve's own channel (`agent/channels/eve.ts`, at `/eve/v1`), opening the session with the
@@ -46,9 +47,12 @@ pnpm build
   sessions here. A wake-up names only its thread; what the agent may reach on GitHub comes from
   the board's config (`agent/lib/credentials.ts`).
 - **The agent is this deployment, writing as itself** through the factory's own handle
-  (`agent/tools/vb.ts`), so `vb typing` and reads reach Slack through the board's sync. It has no
-  profile: the board and Slack show it by the Vercel project's name, not as a name "via" the
-  project. What else the deployment writes has a profile, which is how the watcher and the
+  (`agent/tools/vb.ts`), so `vb typing` and reads reach Slack through the board's sync. That handle
+  is held to the factory's own channels (`AGENT_CAN` in `agent/lib/vb-tool.ts`: read, post, react,
+  label), and the board refuses it the rest: other channels, sync's raw events, sources, grants.
+  The tool keeps no list of commands of its own. It has no profile: the board and Slack show it
+  by the Vercel project's name, not as a name "via" the project. What else the deployment writes
+  has a profile, which is how the watcher and the
   launcher know the agent's messages (`byAgent`): its watcher's replies (`wake`), and what its sync
   brings in. The board never wakes a watcher for its own writes, so the agent's check-ins reach
   it. The agent's `setup_steps` tool asks the setup page's own `/api/launcher/steps`.
@@ -61,6 +65,13 @@ pnpm build
   `setup_steps` tool. `/` answers the markdown to whatever doesn't ask for a page (the rewrites in
   `next.config.ts`), so someone can tell their agent "set up" and the deployment's URL. A link to
   `channels.ts` opens on a line found in the file as deployed, never a remembered number.
+- **The launcher writes only when asked, and as itself** (`lib/page-board.ts`): under a
+  `launcher` profile, held to opening a thread where the factory changes itself, so it reads as
+  `launcher via <project>` and the agent hears it through its watcher, as it hears anyone. It
+  starts the factory's first task (`lib/first-task.ts`, `POST /api/launcher/first-task`), offered
+  while the README is still the template's and started once however often it's asked, and it asks
+  for a repo to be onboarded (`lib/onboard.ts`, `POST /api/launcher/onboard`). Only the
+  deployment's own page or a client that isn't a browser may ask.
 - **While strangers can open the deployment, the page and `app/api/launcher/` say only how to
   protect it,** and nothing about the factory.
 - **The deployment calls itself with its OIDC token, and no bypass secret.** The watcher reaches the

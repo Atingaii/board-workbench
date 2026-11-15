@@ -262,8 +262,8 @@ checked with `@vercel/board/conformance`.
   files (direct uploads too, on URLs the API signs for the bytes' SHA-256),
   and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
   middleware screens a schedule when it's made. What the API doesn't keep yet
-  answers 501 `not_supported`: files on a scheduled message, labels on a
-  scheduled reply, a post's sync targets. Grants go to the API, which takes no `github` or `oidc`
+  answers 501 `not_supported`: files on a scheduled message and a post's sync
+  targets. Grants go to the API, which takes no `github` or `oidc`
   principal in a grant, or explains one (400 `unsupported_principal`: an app,
   which an OIDC exchange policy issues tokens for, stands in); `vercel()`
   says the refusals with a hint. It
@@ -1181,7 +1181,7 @@ through the sync that speaks for them, under the key it imported them through.
 | Block | a fence in a message's text that names a schema | written with its message, and checked then; changes and goes with it |
 
 - **Channel paths** are one or more segments matching
-  `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
+  `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 2048 characters in total. Prefixes
   are display groups.
 - **Message IDs are opaque strings** (see
   [IDs, cursors, and versions](#ids-cursors-and-versions)). They're stable,
@@ -1218,7 +1218,10 @@ through the sync that speaks for them, under the key it imported them through.
   holds one folds like any other name, and a handle or channel named
   `constructor` is like any other.
 - **Limits:** message text is at most 10,000 characters. It may be empty only
-  when the message has attachments.
+  when the message has attachments. A backend holds its own limits: board()
+  checks a request's shape, and leaves lengths and counts a backend enforces
+  to it, so on `vercel()` Vercel's API refuses what's over and its error is
+  the one callers get.
 - **Text is markdown (GFM).** Sync stores what platforms send as markdown:
   GitHub's own (tables and all), and Slack's through Chat SDK's parser. It posts
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
@@ -1228,7 +1231,13 @@ through the sync that speaks for them, under the key it imported them through.
   starting with `[vc]: #…`) shows as one line per
   deployment: status, project, preview link, and when it was updated. That form
   appears in `vb read`, `vb tail`, and the copies sync posts to other platforms
-  (`src/contract/bots.ts`). `vb inspect` keeps rendering Vercel's own table,
+  (`src/contract/bots.ts`). Sync hands a provider the comment's deployments
+  with that markdown (`deployments` in what it's asked to post or edit), and
+  Slack's lays them out as Vercel's table (Project, Deployment, Actions,
+  Updated) in place of the lines, the ones Vercel skipped in a line under it:
+  one message that follows the comment's edits. It stays lines where Slack
+  refuses the layout, a renderer wrote the deployments its own way, or the
+  message goes out with files. `vb inspect` keeps rendering Vercel's own table,
   which it shows well. The board stores what the bot wrote, and `--json` and
   the API return it unchanged.
 
@@ -2750,7 +2759,7 @@ isn't synced or replayed.
   it. An unsynced thread answers `{ targets: [] }`.
 - **Slack** sets the thread's assistant status, which shows under the thread,
   in channel threads too, until the app posts or about two minutes pass. An
-  optional `status` (up to 100 characters: `vb typing <id> "running tests…"`)
+  optional `status` (up to 50 characters: `vb typing <id> "running tests…"`)
   replaces the default "Typing…". **GitHub** has no
   typing, so it's a no-op.
 - It needs `post` and `read` in the thread's channel.

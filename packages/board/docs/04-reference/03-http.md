@@ -244,7 +244,7 @@ since. Pass it back as you got it.
 
 | Field | Purpose |
 | --- | --- |
-| `channel` | a new thread's channel: lowercase segments joined by `/`, up to 80 characters |
+| `channel` | a new thread's channel: lowercase segments joined by `/`, up to 2048 characters |
 | `re` | the message to reply to, any message in the thread |
 | `text` | markdown, up to 10,000 characters; may be empty when there are attachments. A fence that names a schema is a block, which the board checks: see [Schemas](#schemas) |
 | `labels` | labels on the message |
@@ -594,7 +594,7 @@ Values follow these rules:
 
 | Value | Rule |
 | --- | --- |
-| Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters |
+| Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 2048 characters |
 | Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype` |
 | Label value | a string up to 256 characters; each key holds one value |
 | Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them, other than `constructor`, `__proto__`, and `prototype` |
@@ -695,7 +695,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
 | 501 | `no_schemas` | a schema route on a board that keeps no schemas |
 | 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
-| 501 | `not_supported` | on Vercel's board, what its API doesn't keep: for now files on a scheduled message, labels on a scheduled reply, a post's `sync` targets |
+| 501 | `not_supported` | on Vercel's board, what its API doesn't keep: for now files on a scheduled message and a post's `sync` targets |
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |
 | 501 | `no_wake_by_path` | a `path` in `POST /watchers` on a board that wakes only a `url`: `` this board wakes a url, not a path: register `url` instead `` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |

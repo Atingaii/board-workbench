@@ -12,7 +12,7 @@ import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
 import { isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
-import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
+import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
@@ -209,6 +209,8 @@ let typed: string[] = []
 let warnings: Warning[] = []
 /** The board this run reached by its URL, for a failure to name. */
 let reached: string | null = null
+/** How long the message text this run sends is, for a backend's refusal of it to say what to do instead. */
+let sentLength = 0
 
 /** The help `words` ask for: a command's page when they name one (`read`, `sources read`), or else every command. */
 function help(words: readonly string[] = []): string {
@@ -435,8 +437,15 @@ async function text(value: string | undefined, { optional = false } = {}): Promi
 
 /** Uploads each `--attach` file, reading them all before sending any. */
 async function attachments(board: ReturnType<typeof client>): Promise<Attachment[]> {
+  const paths = flags.attach ?? []
+  // The board takes at most this many on a message: say so before uploading any, not after uploading them all.
+  if (paths.length > ATTACHMENTS_PER_MESSAGE_MAX)
+    throw usage(`Can't attach ${paths.length} files. A message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX}.`, {
+      reason: 'too_many_attachments',
+      next: [{ instruction: `Attach the rest in another reply, or bundle them into one file (a zip or tarball)`, argv: [...cli(), 'reply', '<ID>', '<TEXT>', '--attach', '<FILE>'] }],
+    })
   const files: { path: string; data: Uint8Array }[] = []
-  for (const path of flags.attach ?? []) {
+  for (const path of paths) {
     const data = await io.readFile(path)
     // `--attach -` is someone piping the message's text: stdin is the text's, as `-` or `--text-file -`.
     if (!data && path === '-')
@@ -543,6 +552,12 @@ function configuredUrl(): string | null {
  * JSON the text is, from wherever text comes (the argument, stdin, `--text-file`).
  */
 async function content(value: string | undefined, options: { optional?: boolean } = {}): Promise<string> {
+  const said = await given(value, options)
+  sentLength = said.length
+  return said
+}
+
+async function given(value: string | undefined, options: { optional?: boolean }): Promise<string> {
   const schema = flags.schema
   if (schema === undefined) return text(value, options)
   if (!parseSchemaId(schema)) throw usage(`${schema} doesn't name a schema. One is name@version, like sandbox@1.`)
@@ -747,7 +762,8 @@ function failureOf(error: unknown): Failure {
   if (status === 400 && code === 'schema_not_found' && current.command !== 'schemas')
     return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: 'See the schemas this board has', argv: [...cli(), 'schemas'] }])
   // Too much text: what it can't hold goes in a file, on a message that can take one (an edit can't).
-  if (status === 400 && code === 'text_too_long')
+  // Vercel's API says it as `invalid_message`, which also means empty text: only text over the limit is too long.
+  if (status === 400 && (code === 'text_too_long' || (code === 'invalid_message' && sentLength > MESSAGE_TEXT_MAX)))
     return {
       ...theirs('limit', 'payload_too_large', `Can't ${doing()}. A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.`, [
         { instruction: current.command === 'edit' ? 'Keep the edit short, and reply with the long part in a file with --attach' : 'Put the long part in a file and --attach it, with a short summary as the text' },
@@ -1667,6 +1683,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
   positionals = []
   warnings = []
   reached = null
+  sentLength = 0
   try {
     parse(argv)
     if (flags.version) {

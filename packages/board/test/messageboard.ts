@@ -231,11 +231,13 @@ const whoOf = (actor: Actor): Who => {
  */
 type Shared = {
   teamId: string
+  inlineThreadMessages: boolean
   accounts: Accounts
   directory: Directory
   now: () => number
   stored: Map<string, Uint8Array<ArrayBuffer>>
   externalImports: boolean
+  actorsById: boolean
   platformHandles: boolean
   boardWideKeys: boolean
   projectIdHandles: boolean
@@ -610,7 +612,6 @@ function fakeBoard(shared: Shared, boardId: string) {
     const invalid = () => new Refused(400, 'invalid_schedule')
     if (actor.principal.type === 'app') throw new Refused(403, 'principal_cannot_schedule')
     if ((body.channelId === undefined) === (body.threadId === undefined)) throw invalid()
-    if (body.labels !== undefined && body.threadId !== undefined) throw invalid()
     if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
     const at = Date.now()
     const time = (value: unknown) => Number.isInteger(value) && (value as number) > 0 && (value as number) <= at + 365 * 86_400_000
@@ -1029,7 +1030,19 @@ function fakeBoard(shared: Shared, boardId: string) {
         listed.sort((a, b) => a.createdAt - b.createdAt)
       } else listed.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
       const { items, cursor } = page(listed, url.searchParams.get('cursor'), 25)
-      return { threads: items.map(showThread), cursor }
+      const include = url.searchParams.get('include')
+      // An API from before `include=messages` takes no `include`, as it takes no other parameter it doesn't know.
+      if (include !== null && !shared.inlineThreadMessages) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `include`.')
+      if (include !== null && include !== 'messages') throw new Refused(400, 'bad_request')
+      return {
+        threads: items.map((t) => {
+          if (include === null) return showThread(t)
+          // Each thread's first message, and its newest when it has replies.
+          const latest = t.lastMessage && t.lastMessage.sequence > 1 ? t.messages.find((m) => m.sequence === t.lastMessage!.sequence) : undefined
+          return { ...showThread(t), ...(t.messages[0] ? { rootMessage: show(t.messages[0]) } : {}), ...(latest ? { latestMessage: show(latest) } : {}) }
+        }),
+        cursor,
+      }
     }
     if (method === 'POST' && rest === '/threads') {
       const again = repeat(actor, body.clientId)
@@ -1091,7 +1104,14 @@ function fakeBoard(shared: Shared, boardId: string) {
         return { attachment, url: `${STORAGE}${attachment.id}`, expiresAt: now() + 60_000 }
       }
     }
-    if (method === 'GET' && rest === '/actors') return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
+    if (method === 'GET' && rest === '/actors') {
+      const ids = url.searchParams.getAll('id')
+      if (ids.length === 0) return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
+      // An API from before actors by ID takes no `id`, as it takes no other parameter it doesn't know.
+      if (!shared.actorsById) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `id`.')
+      if (ids.length > 100 || new Set(ids).size !== ids.length || url.searchParams.has('cursor')) throw new Refused(400, 'bad_request')
+      return { actors: ids.flatMap((id) => actors.get(id) ?? []), cursor: null }
+    }
     if (method === 'GET' && rest === '/messages') {
       const channelId = url.searchParams.get('channelId') ?? ''
       channelAt(channelId)
@@ -1144,6 +1164,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (method !== 'GET') tokenMay(actor, action === '/reactions' ? 'react' : action === '/labels' ? 'label' : 'post', thread.channelId)
       if (method === 'PATCH' && action === '') {
         if (!owns(actor, message.createdBy)) throw new Refused(403, 'message_not_owned')
+        if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
         if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
         if (message.deletedAt !== undefined) throw new Refused(409, 'message_deleted')
         if (message.text !== body.text) {
@@ -1346,6 +1367,8 @@ export function fakeMessageboard(
     teamId?: string
     slug?: string
     boardId?: string | null
+    /** False for an API from before it answered actors by their IDs: `GET /actors?id=` is 400. */
+    actorsById?: boolean
     accounts?: Accounts
     boards?: { name: string; id?: string; granted?: string[]; members?: string[] }[]
     /** By user ID: u_jb is an owner and u_val a viewer unless it says, and anyone else a member. */
@@ -1358,6 +1381,8 @@ export function fakeMessageboard(
     repositories?: Record<string, string>
     me?: Record<string, MeSays> | false
     notDefault?: boolean
+    /** True for an API that lists threads with their first and newest messages (`include=messages`). Vercel's doesn't yet: `include` is 400 there. */
+    inlineThreadMessages?: boolean
     /** Credentials the API takes, by their bearer, whatever it looks like: the principal each is, as `as()` names it. */
     tokens?: Record<string, string>
     /** An import's author is the platform user alone (`principal: { type: 'external' }`), as Vercel's API named them before platform profiles. */
@@ -1401,7 +1426,9 @@ export function fakeMessageboard(
     directory,
     now,
     stored,
+    inlineThreadMessages: options.inlineThreadMessages ?? false,
     externalImports: options.externalImports ?? false,
+    actorsById: options.actorsById ?? true,
     platformHandles: options.platformHandles ?? false,
     boardWideKeys: options.boardWideKeys ?? false,
     projectIdHandles: options.projectIdHandles ?? false,
