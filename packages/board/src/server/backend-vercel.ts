@@ -5,6 +5,7 @@ import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { blocksIn } from '../contract/blocks.ts'
+import { mentionTerm, mentionTerms } from '../contract/mentions.ts'
 import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parseCan, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
@@ -1305,10 +1306,33 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** What a read narrows its messages by beside what the API can: who `--by` names, and where `--source` does. */
-  type Narrow = { by?: By | undefined; source?: Source | undefined }
-  const narrowOf = async (who: Who, filters: { by?: string | undefined; from?: string | undefined }): Promise<Narrow> => ({
+  /** Whether a message's text mentions who a read asks about. */
+  type Mentioned = (text: string) => boolean
+  /**
+   * What `--mentions` matches, in a message's text, as on any board: `me` is the caller's handle and
+   * actor ID, as the API names them. Anyone else is the name as written and what's under it: a
+   * person's agents (`@julian/claude`), a project's imports. The API keeps no mentions, so this reads
+   * them from the text of each message a read covers.
+   */
+  async function mentionsOf(who: Who, value: string | undefined): Promise<Mentioned | undefined> {
+    if (value === undefined) return undefined
+    let terms: string[]
+    let prefixes: string[] = []
+    if (value === 'me') {
+      const found = await api<ApiMe>(who, 'GET', await onBoard(who, '/me'))
+      terms = [found.actor.id, ...(found.view?.handle ? [mentionTerm(found.view.handle)] : [])]
+    } else {
+      terms = [mentionTerm(value)]
+      prefixes = [value.includes(':') ? `${value}+` : `${mentionTerm(value)}/`]
+    }
+    return (text) => mentionTerms(text).some((term) => terms.includes(term) || prefixes.some((prefix) => term.startsWith(prefix)))
+  }
+
+  type Narrow = { by?: By | undefined; source?: Source | undefined; mentions?: Mentioned | undefined }
+  const narrowOf = async (who: Who, filters: { by?: string | undefined; from?: string | undefined; mentions?: string | undefined }): Promise<Narrow> => ({
     by: await byOf(who, filters.by),
     source: await sourceOf(who, filters.from),
+    mentions: await mentionsOf(who, filters.mentions),
   })
 
   /**
@@ -1318,8 +1342,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   async function matches(filters: Omit<Filters, 'channel'>, message: ApiMessage, thread: ApiThread, narrow: Narrow): Promise<boolean> {
     if (filters.re !== undefined && filters.re !== message.id && filters.re !== idAt(thread.id, 1)) return false
     if (narrow.by && !narrow.by(message.createdBy)) return false
-    // Nothing here resolves mentions yet, so a mention filter matches nothing.
-    if (filters.mentions !== undefined) return false
+    // A filter `narrowOf` wasn't given (a watcher's, which the API matches) matches nothing here.
+    if (filters.mentions !== undefined && !narrow.mentions?.(message.text)) return false
     if (filters.from !== undefined && !(await narrow.source?.(message))) return false
     if (filters.text !== undefined && !message.text.toLowerCase().includes(filters.text.toLowerCase())) return false
     for (const [key, values] of filters.label ?? []) {

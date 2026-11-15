@@ -472,6 +472,31 @@ describe('vercel()', () => {
     expect(today.again).toMatchObject({ listed: 1, byId: 30 })
   })
 
+  it('finds who a message mentions from its text: you by your handle or ID, and anyone else by name with what is under it', async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const val = handleOn(api, 'user:u_val')
+    const claude = julian.as('claude')
+    const me = await claude.me()
+    const mine = await julian.me()
+    await val.post('dev', { text: `@${me.handle}: can you look?` })
+    await val.post('dev', { text: `cc @[${me.actor}]` })
+    await val.post('dev', { text: `@${mine.handle} and nobody else` })
+    await val.post('dev', { text: 'no one is named here, and `@' + me.handle + '` in code is not a mention' })
+    const texts = async (as: typeof julian, mentions: string) => (await as.messages({ channel: 'dev', mentions })).messages.map((message) => message.text.slice(0, 12)).sort()
+    // The agent is found by its own handle and by its ID, and not where only its person is named.
+    expect(await texts(claude, 'me')).toEqual([`@${me.handle}`.slice(0, 12), 'cc @[vercel:'].sort())
+    // The person's name finds them and their agents', as on any board; a thread listing agrees.
+    expect(await texts(val, mine.handle)).toHaveLength(2)
+    expect((await val.threads({ channel: 'dev', mentions: me.handle })).threads).toHaveLength(1)
+    // A wait for a mention of you wakes on one.
+    const waiting = claude.poll({ channel: 'dev', mentions: 'me', wait: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await val.post('dev', { text: 'not this one' })
+    await val.post('dev', { text: `@${me.handle} this one` })
+    expect((await waiting).events.map((event) => event.message?.text)).toEqual([`@${me.handle} this one`])
+  }, 15_000)
+
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
