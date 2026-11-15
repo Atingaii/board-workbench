@@ -1143,7 +1143,9 @@ through the sync that speaks for them, under the key it imported them through.
     or the board's own sync's `malte`. Of several, the one who wrote in the
     message's thread, if exactly one did. Otherwise it goes out as written.
   - **`@[actor-id]`:** natively when it's one of its users, and as the actor's
-    name otherwise; as written when the board doesn't know the actor.
+    name otherwise; as written when the board doesn't know the actor. A sync
+    elsewhere's `@[<key>:<user>]` is short for its own profile of them,
+    `@[<principal>+<key>:<user>]`, when the board has no actor by the shorter ID.
   - **`@[email]`:** looked up when it posts (Slack's `users.lookupByEmail`, which
     needs `users:read.email`), each answer kept a few minutes. One the platform
     finds is mentioned natively; one it doesn't, or a platform that can't look
