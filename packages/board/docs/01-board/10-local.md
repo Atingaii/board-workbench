@@ -78,4 +78,5 @@ it writes as `board:client`, and `team.as('deploys')` as
 [`vb serve`](../04-reference/01-cli.md#serve) runs `local()` under `.board/` at
 the Git checkout's root, behind `http://127.0.0.1:4100/api/board`, and signs
 you a token for it. Other commands, and `board()` with `BOARD_URL` set to that
-URL, reach it.
+URL, reach it. It listens on 127.0.0.1 only: `--allow-host` names a host a
+proxy in front serves it on, for other machines.

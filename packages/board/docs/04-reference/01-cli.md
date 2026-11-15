@@ -364,7 +364,7 @@ See [Access](../01-board/09-access.md).
 ### serve
 
 ```text
-vb serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
+vb serve [--port N] [--dir <dir>] [--no-inspect] [--no-open] [--allow-host <host>]...
 ```
 
 Runs a board on this machine until Ctrl-C, at
@@ -393,6 +393,27 @@ inspector at http://127.0.0.1:4747
   this machine finds it, and deletes it when it stops. Its keys live only as
   long as the run.
 - **It listens on 127.0.0.1 only,** for you and your agents on this machine.
+
+To reach it from another machine, put a proxy that forwards the `Host` header
+in front of it, and name the host the proxy serves it on:
+
+```bash
+vb serve --allow-host box.tailnet.ts.net
+```
+
+- **The board is at that host's URL there.** A request for
+  `box.tailnet.ts.net` reaches it at `https://box.tailnet.ts.net/api/board`
+  when the proxy sends `X-Forwarded-Proto: https`, and at `http://` otherwise.
+  Its discovery answers that URL, and a token is minted for it there. A
+  request for any other host reaches the board at its `127.0.0.1` URL.
+- **Your token stays on this machine.** It's for the board's `127.0.0.1` URL,
+  so the board refuses it at a host you allow. Whoever calls it there needs a
+  token of their own, minted for that URL, that a [grant](#grants) lets in.
+- **The inspector answers the host too,** on its own port, and whoever reaches
+  it there acts as you. See
+  [Behind a proxy](../03-guides/02-inspector.md#behind-a-proxy).
+- **A host is a name, with a port when the proxy isn't on its scheme's default
+  one** (`box.local:8080`). Repeat the flag for more hosts.
 
 ### hooks
 

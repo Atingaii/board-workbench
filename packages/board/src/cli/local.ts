@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { projectDir } from '../client/node.ts'
 import { startInspector } from '../inspect/server.ts'
 import { option } from './commands.ts'
-import { stopped } from './inspect.ts'
+import { allowedHosts, stopped } from './inspect.ts'
 import type { Command, CommandContext } from './main.ts'
 
 /** Keeps the local board's log (`.board/`) out of the project's Git. */
@@ -44,16 +44,27 @@ const serve: Command = {
     description:
       "run a board on this machine (127.0.0.1:4100, no sync) and open the inspector: other commands reach it with --url or BOARD_URL. Its log lives in .board/, and you're local:user:<your OS user>",
     arguments: [],
-    options: [option('port', 'the port to listen on (default: 4100)'), option('dir'), option('no-inspect'), option('no-open')],
-    examples: [{ name: 'run a board here, and open it', value: 'serve' }],
+    options: [
+      option('port', 'the port to listen on (default: 4100)'),
+      option('dir'),
+      option('no-inspect'),
+      option('no-open'),
+      option('allow-host', 'also answer requests for this host, from a proxy in front: the board is at its URL there, and whoever reaches the inspector there acts as you'),
+    ],
+    examples: [
+      { name: 'run a board here, and open it', value: 'serve' },
+      { name: 'serve it behind a proxy on another name', value: 'serve --allow-host box.tailnet.ts.net' },
+    ],
   },
   async run(args, { flags, out, usage, portFlag, connection, openBrowser }: CommandContext) {
     if (args.length > 0) throw usage('serve takes no arguments: pass its port with --port, and its directory with --dir.')
     const port = portFlag()
+    const hosts = allowedHosts({ flags, usage })
     const root = projectDir()
     const { serveLocal } = await import('./serve.ts')
     const local = await serveLocal({
       dir: flags.dir ?? join(root, '.board'),
+      hosts,
       ...(port !== undefined ? { port } : {}),
     })
     let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
@@ -64,7 +75,7 @@ const serve: Command = {
       if (!flags['no-inspect']) {
         // With this board's token, whatever BOARD_TOKEN says.
         const { board } = connection(local.url, { token: local.token })
-        inspector = await startInspector({ client: board.as(null) })
+        inspector = await startInspector({ client: board.as(null), hosts })
         out(`inspector at ${inspector.url}`)
         if (!flags['no-open']) openBrowser(inspector.url)
       }

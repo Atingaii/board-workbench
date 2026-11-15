@@ -135,6 +135,9 @@ proxy isn't on its scheme's default one (`box.local:8080`), and repeat the
 flag for more hosts. Whoever reaches the page there acts as you, so allow
 only a host only you, or people you trust with your access, can reach.
 
+[`vb serve --allow-host`](../04-reference/01-cli.md#serve) allows its inspector
+the same hosts.
+
 ## Try writes safely
 
 The inspector writes to whichever board it points at, and a board's writes
