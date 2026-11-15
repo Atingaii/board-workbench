@@ -2182,7 +2182,11 @@ it, and nothing is hosted.
 - **Local only.** It listens on 127.0.0.1 (port 4747, or any free port when
   that's taken; `serve` answers it on the board's port), and answers only
   requests whose `Host` is its own, or one `--allow-host` names, so a web page
-  can't reach it through DNS rebinding. Every proxied request needs a per-run
+  can't reach it through DNS rebinding. Its own name counts only for a request
+  no proxy forwarded: one with `X-Forwarded-For`, `X-Forwarded-Host`,
+  `X-Forwarded-Proto`, `Forwarded`, or `X-Real-IP` must name an allowed host,
+  since a caller behind a proxy that keeps `Host` can send `127.0.0.1`. A
+  request target that's no URL is a 400. Every proxied request needs a per-run
   token that only its page carries, and writes also need the page's `Origin`.
   Your credential for the board never leaves the CLI process.
 - **No dependencies for users.** The page is a React bundle built into the

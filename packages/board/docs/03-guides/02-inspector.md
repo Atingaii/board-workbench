@@ -111,6 +111,11 @@ The proxy acts as you, so it answers no one but its own page:
 - **It listens on 127.0.0.1.** Nothing else on your network can reach it.
 - **It checks the `Host` header.** A request naming any other host gets a 421,
   so a web page can't reach the proxy through DNS rebinding.
+- **Its own name is this machine's alone.** A request a proxy forwarded, one
+  with `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`,
+  `Forwarded`, or `X-Real-IP`, gets a 421 unless it names a host you
+  [allowed](#behind-a-proxy): a caller behind a proxy can send `127.0.0.1` as
+  its `Host`.
 - **Every proxied request needs a per-run token** that only the page carries,
   and writes also need the page's `Origin`. Another tab, or another site,
   gets a 403.
@@ -134,6 +139,10 @@ writes from `http://` or `https://box.tailnet.ts.net`. Add a port when the
 proxy isn't on its scheme's default one (`box.local:8080`), and repeat the
 flag for more hosts. Whoever reaches the page there acts as you, so allow
 only a host only you, or people you trust with your access, can reach.
+
+A forwarder that passes raw TCP adds no header to say a request came through
+it. Whoever connects through one is on this machine, as far as the page can
+tell, and acts as you with or without `--allow-host`.
 
 [`vb serve`](../04-reference/01-cli.md#serve) serves the inspector on its
 board's port, so `vb serve --allow-host box.tailnet.ts.net` puts both behind
