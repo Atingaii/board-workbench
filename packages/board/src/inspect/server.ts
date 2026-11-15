@@ -73,10 +73,17 @@ const CSP = [
  * the per-run token that only the page has, and writes must also come from its
  * origin. Your credential for the board never leaves this process. `hosts` adds
  * names a proxy in front of it serves the page on: whoever reaches the page there
- * acts as you. A request a proxy forwarded must name one of them: the server's own
- * name is this machine's alone, and a caller behind a proxy can send it too.
+ * acts as you, unless `visitor` says who a request is: a client that acts as them,
+ * or null for one it can't name, which the proxy then refuses. A request a proxy
+ * forwarded must name one of them: the server's own name is this machine's alone,
+ * and a caller behind a proxy can send it too.
  */
-export async function createInspector(options: { client: BoardClient; page?: string; hosts?: string[] }): Promise<InspectorPage> {
+export async function createInspector(options: {
+  client: BoardClient
+  page?: string
+  hosts?: string[]
+  visitor?: (request: IncomingMessage) => BoardClient | null | undefined
+}): Promise<InspectorPage> {
   const { client } = options
   const me = await client.me()
   // Who it starts as (`--as claude`): the page's handle says who each request is, from there on.
@@ -89,6 +96,8 @@ export async function createInspector(options: { client: BoardClient; page?: str
   // Hosts you allow are ones a proxy in front serves the page on, over http or https.
   const allowed = new Set((options.hosts ?? []).map((host) => host.toLowerCase()))
   let hosts = new Set<string>()
+  // The hosts a proxy may forward a request for: never the server's own name, allowed or not.
+  let proxied = new Set<string>()
   let origins = new Set<string>()
   const streams = new Set<AbortController>()
 
@@ -104,6 +113,11 @@ export async function createInspector(options: { client: BoardClient; page?: str
       decoded = '..'
     }
     if (/(^|\/)\.\.?(\/|$)|\\/.test(decoded)) return json(response, 400, { error: { code: 'bad_path', message: 'no relative paths' } })
+    // Whose page this is: yours, or where the proxy in front names its visitors, theirs.
+    const visiting = options.visitor?.(request)
+    if (visiting === null)
+      return json(response, 401, { error: { code: 'unauthorized', message: "the proxy in front of this page names no one for this request, so there's no one to act as" } })
+    const acting = visiting ?? client
     const controller = new AbortController()
     streams.add(controller)
     response.on('close', () => controller.abort())
@@ -123,7 +137,7 @@ export async function createInspector(options: { client: BoardClient; page?: str
           return json(response, 400, { error: { code: 'invalid_profile', message: error.message } })
         }
       }
-      const upstream = await client.request(`${path}${url.search}`, {
+      const upstream = await acting.request(`${path}${url.search}`, {
         as,
         method: request.method ?? 'GET',
         headers: {
@@ -161,7 +175,7 @@ export async function createInspector(options: { client: BoardClient; page?: str
     // can send this server's own name. So it reaches the page only at a host you allowed.
     const named = String(request.headers.host).toLowerCase()
     const forwarded = FORWARDED.some((header) => request.headers[header] !== undefined)
-    if (!(forwarded ? allowed : hosts).has(named)) return send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
+    if (!(forwarded ? proxied : hosts).has(named)) return send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
     if (url.pathname === '/board' || url.pathname.startsWith('/board/'))
       return void proxy(request, response, url).catch(() =>
         response.headersSent ? response.end() : send(response, 500, 'text/plain; charset=utf-8', 'error'),
@@ -179,7 +193,9 @@ export async function createInspector(options: { client: BoardClient; page?: str
     board,
     me,
     at(port) {
-      hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, ...allowed])
+      const own = [`127.0.0.1:${port}`, `localhost:${port}`]
+      hosts = new Set([...own, ...allowed])
+      proxied = new Set([...allowed].filter((host) => !own.includes(host)))
       origins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, ...[...allowed].flatMap((host) => [`http://${host}`, `https://${host}`])])
       return {
         handle,

@@ -1,4 +1,5 @@
-import { request } from 'node:http'
+import { createServer, request } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createBoardClient, type BoardClient } from '../src/client/client.ts'
 import { startInspector, type Inspector } from '../src/inspect/server.ts'
@@ -205,5 +206,31 @@ describe('behind a proxy', () => {
 
   it('still refuses every other host', async () => {
     expect((await via('/', { headers: { host: 'evil.example' } })).status).toBe(421)
+  })
+
+  it("never takes a forwarded request for its own name, even one you allowed", async () => {
+    // A port that's free, to name before the inspector has it.
+    const free = await new Promise<number>((resolve) => {
+      const probe = createServer().listen(0, '127.0.0.1', () => {
+        const { port } = probe.address() as AddressInfo
+        probe.close(() => resolve(port))
+      })
+    })
+    const own = await startInspector({ client, port: free, hosts: [`127.0.0.1:${free}`] })
+    const ask = (headers: Record<string, string>) =>
+      new Promise<number>((resolve, reject) => {
+        const req = request({ hostname: '127.0.0.1', port: free, path: '/', headers }, (res) => {
+          res.resume()
+          resolve(res.statusCode ?? 0)
+        })
+        req.on('error', reject)
+        req.end()
+      })
+    try {
+      expect(await ask({})).toBe(200)
+      expect(await ask({ 'x-forwarded-host': `127.0.0.1:${free}` })).toBe(421)
+    } finally {
+      await own.close()
+    }
   })
 })

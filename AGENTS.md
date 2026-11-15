@@ -453,6 +453,9 @@ included, post to Slack and GitHub.
   per-run token on every `/board` request and the page's `Origin` on writes.
   Keep all of them. That's why attachments render from `blob:` URLs: the page
   fetches each file with its token, since an `<img>` can't send one.
+  `vb serve` answers it on the board's own port (`createInspector`'s handler),
+  and at a `--tailscale` host its proxy acts as the visitor Tailscale names
+  (`visitor`), never as you: one it can't name gets a 401, not your access.
 - **The bundle is built** into `dist/inspect/app.js` by `tsdown` (React
   included), which the standalone CLI reads where board is installed. Only it
   has `inspect`, so no UI ships in a CLI that bundles board's (`vercel board`).

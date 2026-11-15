@@ -172,9 +172,11 @@ it. Whoever connects through one is on this machine, as far as the page can
 tell, and acts as you with or without `--allow-host`.
 
 [`vb serve`](../04-reference/01-cli.md#serve) serves the inspector on its
-board's port, so `vb serve --allow-host box.tailnet.ts.net` puts both behind
-one name: the page at `https://box.tailnet.ts.net`, and the board under it at
-`/api/board`.
+board's port, so one name reaches both: the page at the host's root, and the
+board under it at `/api/board`. Behind `tailscale serve`, use
+`vb serve --tailscale box.tailnet.ts.net` instead: the page there acts as
+whoever Tailscale says opened it, not as you. See
+[Share a local board on a tailnet](08-tailnet.md).
 
 ## Try writes safely
 

@@ -310,6 +310,7 @@ function build(options: A2Options, binding: BoardBinding) {
     accessNow: (principal, grants) => binding.accessNow(principal, grants),
     explain: (principal, channel) => binding.explain(principal, channel),
     team: async () => (await binding.project()).teamId,
+    logins: () => binding.logins,
   })
   // The schema registry, in a session of its own beside the board's.
   const schemaRegistry = createSchemas({ store: log })

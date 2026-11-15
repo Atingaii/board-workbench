@@ -436,6 +436,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     accessNow: (principal, grants) => policy.accessNow(principal, grants),
     explain: (principal, channel) => policy.explain(principal, channel),
     project: () => policy.project(),
+    logins: policy.logins,
     handle: (caller) => handleOf(caller, null),
     url: ownUrl,
   }

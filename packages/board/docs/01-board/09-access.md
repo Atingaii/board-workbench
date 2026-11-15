@@ -157,7 +157,9 @@ more specific pattern decides first.
   `{ userId, email }`, `{ projectId, name }`, and `{ repositoryId,
   repository }`. A board that verifies tokens itself, such as `vb serve`'s,
   has nothing to look names up with, so it takes a user's ID and a project's
-  `prj_…`, and matches a repository by the token's `repository`.
+  `prj_…`, and matches a repository by the token's `repository`. On a board
+  [behind Tailscale](../03-guides/08-tailnet.md), a person's login is their
+  ID, so `--user ada@example.com` names them there.
 - **A project names its environments,** and `all-projects` only production,
   preview, or development, since a custom environment's ID is one project's.
 - **A project is its team's.** A grant keeps the board's team on each project

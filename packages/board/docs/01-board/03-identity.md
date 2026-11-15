@@ -28,6 +28,7 @@ The CLI and `board()` in Node find a token themselves. The first match wins:
 | GitHub Actions | the job's OIDC token, for the board's audience; needs `permissions: id-token: write` | `github:repo:<repository_id>` |
 | A Vercel deployment | `getVercelOidcToken({ audience })` from `@vercel/oidc`, when `VERCEL=1` | `vercel:project:<project_id>:<env>` |
 | A local terminal | your `vercel login`, minted for the board's project and exchanged for its audience | `vercel:user:<user_id>` |
+| A board with no Vercel project | no token: the request goes without one, and what verifies the board's callers says who it is. [`vb serve --tailscale`](../03-guides/08-tailnet.md) takes Tailscale's word | `tailscale:user:<login>` there |
 
 Every token the CLI and a handle in Node get is for the URL they send it to. When
 discovery there names another URL, they get no token and fail with
@@ -118,6 +119,7 @@ A **principal** is who holds the credential. It's a readable string:
 | --- | --- |
 | `vercel:user:u_abc123` | a person, from their `vercel login` |
 | `local:user:ada` | a person on a `vb serve` board |
+| `tailscale:user:ada@example.com` | a person on a `vb serve` board [behind Tailscale](../03-guides/08-tailnet.md), by their login |
 | `vercel:project:prj_x:production` | a deployment of a Vercel project |
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
 | `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
