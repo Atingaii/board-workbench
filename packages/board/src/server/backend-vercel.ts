@@ -267,6 +267,7 @@ const SANDBOX_ROUTES: readonly SandboxRoute[] = [
   { method: 'GET', path: '' },
   { method: 'GET', path: '/me' },
   { method: 'GET', path: '/channels' },
+  { method: 'GET', path: '/channels/:id' },
   { method: 'POST', path: '/channels' },
   { method: 'GET', path: '/actors' },
   { method: 'GET', path: '/messages' },
