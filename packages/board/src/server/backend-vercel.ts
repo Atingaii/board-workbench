@@ -1135,7 +1135,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (kept) return kept
     const found = CURSOR.exec(cursor)
     if (!found) throw new HttpError(400, 'invalid_cursor', `after: ${cursor} isn't a cursor here or a message's ID`)
-    return { t: parseInt(found[1]!, 36), feeds: {} }
+    // A cursor this process doesn't hold, as every `vb` run's is, is its time alone: nothing at or before it is after it,
+    // on any page of a feed read from its oldest change.
+    const t = parseInt(found[1]!, 36)
+    return { t, feeds: {}, floor: t }
   }
   /** A time a read goes on from: a cursor's, or a message's own. */
   async function timeOf(who: Who, after: string): Promise<number> {
@@ -1511,17 +1514,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const merged = pages.flatMap((page) => page.events.map((event) => ({ ...event, page }))).sort((a, b) => a.change.createdAt - b.change.createdAt)
     const events: BoardEventView[] = []
     naming(who, merged.flatMap(({ change }) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
+    // Where the read started stays with every position it hands out: a feed that hasn't caught up to it yet reads on from one.
+    const start = { ...(position.past !== undefined ? { past: position.past } : {}), ...(position.floor !== undefined ? { floor: position.floor } : {}) }
     for (const { change, i, page } of merged) {
       running[page.channel.id] = { at: page.at, skip: i + 1 }
       const message = change.currentMessage
       // A label matches on the root's, which only a read of the thread has: nothing else needs one.
       const given = message && change.threadId ? { message, thread: filters.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
-      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running } }), filters, narrow, given, threads)
+      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running }, ...start }), filters, narrow, given, threads)
       if (event) events.push(event)
     }
     const after: Record<string, Feed> = { ...position.feeds }
     for (const page of pages) after[page.channel.id] = { at: page.next, skip: 0 }
-    const start = { ...(position.past !== undefined ? { past: position.past } : {}), ...(position.floor !== undefined ? { floor: position.floor } : {}) }
     return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after, ...start } }
   }
 

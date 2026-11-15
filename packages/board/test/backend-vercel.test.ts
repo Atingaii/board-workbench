@@ -872,8 +872,18 @@ describe('vercel()', () => {
     const later = team.poll({ channel: 'busy', after: newest.id, wait: 5 })
     await new Promise((resolve) => setTimeout(resolve, 100))
     await team.post('busy', { text: 'after it' })
-    expect((await later).events.map((event) => event.message?.text)).toEqual(['after it'])
-  }, 20_000)
+    const [event] = (await later).events
+    expect(event?.message?.text).toBe('after it')
+    // The cursor it came with goes on from there, as the `next:` a wait prints does: in another process, which holds
+    // only its time, and in this one, where a second channel with pages of history hasn't caught up yet.
+    for (let i = 0; i < 60; i++) await team.post('other', { text: `other ${i}` })
+    const question = await team.post('busy', { text: 'q' })
+    await team.reply(question.id, { text: 'answer' })
+    const [answer] = (await team.poll({ after: question.id, wait: 5 })).events
+    expect(answer?.message?.text).toBe('answer')
+    expect((await handleOn(api).poll({ after: answer!.cursor, wait: 2 })).events).toEqual([])
+    expect((await team.poll({ after: answer!.cursor, wait: 2 })).events).toEqual([])
+  }, 30_000)
 
   it('finds an older thread by labels the API can only filter after it lists, and refuses a cursor it can’t read', async () => {
     const api = fakeMessageboard()
