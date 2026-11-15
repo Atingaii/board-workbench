@@ -102,6 +102,28 @@ describe('a mention, when it is written', () => {
     expect(batch.mentions).toEqual([...ada, { written: '@nobody', actor: null, candidates: [] }])
   })
 
+  it("keeps a handle as typed where its ID would take the text past what a message holds, and never refuses it for that", async () => {
+    const { as, text } = await boardOf('pt_ada')
+    // 10,000 characters as typed: Ada's ID in place of her handle would make it longer.
+    const written = `${'x'.repeat(9_995)} @ada`
+    const { status, body } = await as('pt_julian')('POST', '/messages', { channel: 'dev', text: written })
+    expect([status, body.message.text === written]).toEqual([201, true])
+    expect(body.mentions).toEqual([{ written: '@ada', actor: null, candidates: [ADA] }])
+    expect(await text(body.message.id)).toBe(written)
+  })
+
+  it('says of a retry what the message its first try made mentions, not what the handle would now', async () => {
+    const { as } = await boardOf()
+    // No one goes by ada yet, so the first try keeps the handle as typed.
+    const first = (await as('pt_julian')('POST', '/messages', { channel: 'dev', text: 'over to @ada', id: 'once' })).body
+    expect([first.message.text, first.mentions]).toEqual(['over to @ada', [{ written: '@ada', actor: null, candidates: [] }]])
+    // Ada writes, and the same post is sent again: it's the first one's message that comes back.
+    await as('pt_ada')('POST', '/messages', { channel: 'lobby', text: 'hello' })
+    const again = (await as('pt_julian')('POST', '/messages', { channel: 'dev', text: 'over to @ada', id: 'once' })).body
+    expect([again.message.id, again.message.text]).toEqual([first.message.id, 'over to @ada'])
+    expect(again.mentions).toEqual([{ written: '@ada', actor: null, candidates: [ADA] }])
+  })
+
   it('says nothing of a text that types no handle: an exact mention, an email, code', async () => {
     const { as, text } = await boardOf('pt_ada')
     const written = 'cc @[vercel:user:u_ada] and @[ada@acme.com], run `@ada`, or mail ada@acme.com'

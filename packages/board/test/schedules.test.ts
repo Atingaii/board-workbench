@@ -504,6 +504,16 @@ describe('scheduled messages', () => {
     ])
   })
 
+  it('send a text as it was settled when the schedule was made: a handle that mentioned no one then mentions no one later', async () => {
+    const { julian, pi, root, replies, advance } = await setup()
+    // A Vercel login's handle is its user ID, and Pi hasn't written: no one goes by u_pi yet.
+    const made = await julian('POST', '/schedules', { re: root.id, in: '1h', text: 'standup, @u_pi' })
+    expect(made.body.mentions).toEqual([{ written: '@u_pi', actor: null, candidates: [] }])
+    await pi('POST', '/messages', { channel: 'dev', text: 'hi' })
+    await advance(3_600_000)
+    expect((await replies()).map((reply) => reply.text)).toEqual(['standup, @u_pi'])
+  })
+
   it('refuse what they cannot do', async () => {
     const { julian, root } = await setup()
     const refused = async (body: object) => (await julian('POST', '/schedules', { re: root.id, text: 'x', ...body })).body.error.message

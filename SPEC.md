@@ -1145,7 +1145,13 @@ through the sync that speaks for them, under the key it imported them through.
   - **It runs in board(), after the middleware,** so what's stored is settled
     whatever a middleware made of the text, on every backend. A board behind
     another (`http()`) leaves it to that board. A platform's import is not
-    settled: what someone typed there is its text.
+    settled: what someone typed there is its text. Nor is a schedule's send,
+    which goes as it was settled when the schedule was made.
+  - **An ID is longer than a handle.** Where settling would take a text past
+    the 10,000 characters a message holds, the text stays as typed, and each
+    handle's actor is a candidate: no write is refused for a length its writer
+    didn't type. A retry by client ID answers what the first try's message
+    mentions.
 - **Filters match the text.** `--mentions <who>` on `read`, `tail`, and `wait`,
   and a watcher's `--mentions`, match a message whose text, outside code, has
   `@<handle>` or `@[<actor id>]` for who it names: a handle covers each actor

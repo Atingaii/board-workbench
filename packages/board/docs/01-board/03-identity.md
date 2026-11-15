@@ -290,7 +290,8 @@ warning: @nobody names no one here: it stays text, and mentions no one.
 - **A handle that names no one stays text.** No one has it, several do, or
   someone has it only under a name (`@malte` isn't `support/malte`): it's kept
   as typed, a mention of no one, and the answer says so, with who it could
-  have meant. No write fails over a mention, and an edit settles its new text
+  have meant. So is one whose ID wouldn't fit in the message's 10,000
+  characters. No write fails over a mention, and an edit settles its new text
   the same way.
 - **`@[actor-id]`** is exact, and stored as written: `@[slack:user:U0456]`.
   It's how to name one of several who share a handle.
