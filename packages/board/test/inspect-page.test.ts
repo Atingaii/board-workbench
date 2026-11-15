@@ -4,7 +4,7 @@ import type { MessageView, ScheduleView } from '../src/api/routes.ts'
 // The page's data module, as the page runs it: one handle on the inspector's proxy, which is
 // faked here. What the page asks the board, and what it keeps, are what a person at it sees.
 
-type Asked = { method: string; path: string; body: unknown }
+type Asked = { method: string; path: string; query: Record<string, string>; body: unknown }
 const asked: Asked[] = []
 /** What the board answers next for a route, by `METHOD /path`: each is used once, then the route's usual answer. */
 const next = new Map<string, (() => Response)[]>()
@@ -60,14 +60,15 @@ beforeAll(async () => {
   vi.stubGlobal('addEventListener', () => {})
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
-    const path = new URL(request.url).pathname.slice('/board'.length)
+    const url = new URL(request.url)
+    const path = url.pathname.slice('/board'.length)
     const method = request.method
     // What it carries, when that's JSON: a file's bytes are not.
     const body = await request
       .text()
       .then((text) => (text ? (JSON.parse(text) as unknown) : null))
       .catch(() => null)
-    asked.push({ method, path, body })
+    asked.push({ method, path, query: Object.fromEntries(url.searchParams), body })
     const route = `${method} ${path}`
     return next.get(route)?.shift()?.() ?? usual[route]?.(body) ?? Response.json({ error: { code: 'not_found', message: `no ${route} here` } }, { status: 404 })
   })
@@ -139,5 +140,50 @@ describe("the inspector's page, starting a task", () => {
     expect(posts('/tasks')).toMatchObject([wanted, wanted])
     // The task the board answered is the page's now.
     expect(page.getState().messages['50']).toMatchObject({ text: 'publish the release', task: { state: 'waiting', needs: ['9999'] } })
+  })
+})
+
+describe("the inspector's page, reading a channel back", () => {
+  it('goes on from where its pages reached, not from an older task the list brought in', async () => {
+    const at = (n: number) => new Date(Date.UTC(2026, 8, 1) + n * 60_000).toISOString()
+    const message = (id: number): MessageView => ({ ...taskRoot({ channel: 'history', text: `message ${id}` }), id: String(id), version: id, revision: id, thread: `t${id}`, labels: {}, createdAt: at(id), task: undefined }) as MessageView
+    // A full page of the channel's newest, #101 to #300, and an open task from long before it.
+    const newest = Array.from({ length: 200 }, (_, n) => message(101 + n))
+    const old = { ...taskRoot({ channel: 'history', text: 'an old task' }), id: '5', version: 5, revision: 5, thread: 't5', createdAt: at(5) }
+    next.set('GET /messages', [() => Response.json({ messages: newest, cursor: '300' }), () => Response.json({ messages: [message(100)], cursor: '300' })])
+    next.set('GET /tasks', [() => Response.json({ tasks: [{ message: old, replies: 0, last: null }], cursor: '5' })])
+
+    await page.loadChannel('history')
+    await page.loadTasks({ state: 'open', label: [] })
+    // The task is the page's, for the Tasks view and its thread.
+    expect(page.getState().messages['5']).toMatchObject({ text: 'an old task' })
+
+    await page.loadOlder('history')
+    // The next page back is the one before #101: nothing between it and the task is skipped.
+    expect(asked.filter((request) => request.method === 'GET' && request.path === '/messages').map((request) => [request.query.channel, request.query.before])).toEqual([
+      ['history', undefined],
+      ['history', '101'],
+    ])
+    expect(page.getState().messages['100']).toMatchObject({ text: 'message 100' })
+  })
+})
+
+describe("the inspector's page, working a task it claimed", () => {
+  it('keeps a claim it made while the page changed under it, and completes with it', async () => {
+    const claimed = { ...taskRoot({ channel: 'work', text: 'fix the export' }), id: '70', version: 71, revision: 71, thread: 't70', labels: { 'board.task': 'claimed' } }
+    claimed.task = { ...claimed.task!, state: 'claimed', epoch: 1, claim: { actor: 'local:user:julian', until: '2099-01-01T00:00:00.000Z' } }
+    next.set('POST /tasks/70/claim', [() => Response.json({ task: claimed, claim: { epoch: 1, token: 'secret-token', until: '2099-01-01T00:00:00.000Z' } })])
+    next.set('POST /tasks/70/complete', [() => Response.json({ task: { ...claimed, labels: { 'board.task': 'completed' }, task: { ...claimed.task, state: 'completed', claim: null, result: 'done' } } })])
+
+    // While the claim is on its way back, the page keeps changing: something else in it settles on every turn.
+    const claiming = page.claimTask('70')
+    let turns = Promise.resolve()
+    for (let n = 0; n < 200; n++) turns = turns.then(() => page.discard(`nothing-${n}`))
+    expect(await claiming).toBe(true)
+    await turns
+
+    // The claim is still this tab's: completing sends its epoch and token to the board.
+    expect(await page.completeTask('70', 'done')).toBe(true)
+    expect(posts('/tasks/70/complete')).toEqual([{ epoch: 1, token: 'secret-token', result: 'done' }])
   })
 })

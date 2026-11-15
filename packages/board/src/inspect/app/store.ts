@@ -42,6 +42,12 @@ export type State = {
   messages: Record<string, MessageView>
   ops: Record<string, { id: string; op: Op }[]>
   pending: Pending[]
+  /**
+   * Per channel, the oldest message its pages have read back to: where reading back goes on from,
+   * and how far back the channel shows. It isn't the oldest message held: a thread opened by its
+   * link or a task from the list can be older, with messages between that no page has read.
+   */
+  paged: Record<string, Pick<MessageView, 'id' | 'createdAt'>>
   actors: Record<string, ActorView>
   /** The stream's position: the last event's cursor, to resume from. */
   cursor: string | null
@@ -70,6 +76,7 @@ export const initialState: State = {
   messages: {},
   ops: {},
   pending: [],
+  paged: {},
   actors: {},
   cursor: null,
   live: 'connecting',
@@ -259,15 +266,28 @@ export type Thread = { root: MessageView; replies: MessageView[]; pending: Pendi
 export const byWritten = (a: Pick<MessageView, 'createdAt' | 'id'>, b: Pick<MessageView, 'createdAt' | 'id'>) =>
   a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id.localeCompare(b.id, undefined, { numeric: true })
 
-/** A channel's threads, oldest first, from the messages loaded so far. */
-export function channelThreads(state: State, channel: string): { threads: Thread[]; pending: Pending[] } {
+/** A page of a channel's history, its newest or one further back: its messages, and how far back the channel's pages now reach. */
+export function page(state: State, channel: string, messages: MessageView[]): State {
+  const oldest = [...messages].sort(byWritten)[0]
+  const next = merge(state, messages)
+  return oldest ? { ...next, paged: { ...next.paged, [channel]: { id: oldest.id, createdAt: oldest.createdAt } } } : next
+}
+
+/**
+ * A channel's threads, oldest first, from the messages loaded so far: as far back as its pages
+ * have read, so a thread that came in some other way shows once reading back reaches it, in its
+ * place, and never above messages that aren't loaded. With `all`, every thread held, for a view
+ * that asked the board for older ones by a filter.
+ */
+export function channelThreads(state: State, channel: string, all = false): { threads: Thread[]; pending: Pending[] } {
+  const from = all ? undefined : state.paged[channel]
   const roots: MessageView[] = []
   const replies = new Map<string, MessageView[]>()
   for (const message of Object.values(state.messages)) {
     if (message.channel !== channel) continue
     const view = shown(state, message.id)!
-    if (message.re === null) roots.push(view)
-    else replies.set(message.re, [...(replies.get(message.re) ?? []), view])
+    if (message.re !== null) replies.set(message.re, [...(replies.get(message.re) ?? []), view])
+    else if (!from || byWritten(view, from) >= 0) roots.push(view)
   }
   roots.sort(byWritten)
   return {
@@ -413,6 +433,12 @@ export type Claim = { epoch: number }
 
 /** The states a task can still leave by being worked: what a list shows unless it's asked for more. */
 export const OPEN_STATES: readonly TaskState[] = ['waiting', 'ready', 'claimed', 'blocked']
+
+/** The profiles the board has seen a principal write as, then the usual agents: who a task of its can be for. */
+export function profilesOf(state: State, principal: string): string[] {
+  const seen = Object.keys(state.actors).flatMap((id) => (id.startsWith(`${principal}+`) ? [id.slice(principal.length + 1)] : []))
+  return [...new Set([...seen, 'claude', 'codex'])]
+}
 
 /** Takes in a claim this tab made: the task as the claim left it, and what its writes carry. */
 export function claimed(state: State, view: MessageView, claim: Claim): State {

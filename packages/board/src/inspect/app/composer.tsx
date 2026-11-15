@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX } from '../../contract/schemas.ts'
 import type { ScheduleTiming } from '../../server/index.default.ts'
 import { toast } from './chrome.ts'
-import type { State } from './store.ts'
+import { profilesOf, type State } from './store.ts'
 import { actorFor, taskIds } from './task.tsx'
 import { fieldMenu, LabelEditor, Panel, Suggest, type KnownLabels } from './ui.tsx'
 import { fileSize, laterFields, timingWords } from './words.ts'
@@ -138,6 +138,7 @@ export function Composer(props: {
     setNeeds('')
     setAssignee('')
     setDetail(false)
+    setTask(props.tasks?.always ?? false)
   }
 
   const wrap = (el: HTMLTextAreaElement, marker: string) => {
@@ -215,7 +216,7 @@ export function Composer(props: {
               <span className="prefix">needs</span>
               <input value={needs} onChange={(event) => setNeeds(event.target.value)} placeholder="task IDs it waits for" spellCheck={false} />
             </label>
-            <Suggest className="grow" prefix="for" value={assignee} onChange={setAssignee} items={profiles(tasking.state)} placeholder="anyone, or one of your profiles" onEnter={() => area.current?.focus()} />
+            <Suggest className="grow" prefix="for" value={assignee} onChange={setAssignee} items={profilesOf(tasking.state, tasking.state.me?.principal ?? '')} placeholder="anyone, or one of your profiles" onEnter={() => area.current?.focus()} />
           </div>
         )}
         {labelEntries.length > 0 && (
@@ -368,13 +369,6 @@ export function Composer(props: {
       </div>
     </div>
   )
-}
-
-/** The profiles the board has seen you write as, plus the usual agents: who a task of yours can be for. */
-function profiles(state: State): string[] {
-  const principal = state.me?.principal ?? ''
-  const seen = Object.keys(state.actors).flatMap((id) => (id.startsWith(`${principal}+`) ? [id.slice(principal.length + 1)] : []))
-  return [...new Set([...seen, 'claude', 'codex'])]
 }
 
 /** When a message goes out: in a while or at a time, and again every so often. The board checks it. */

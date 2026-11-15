@@ -2,7 +2,7 @@ import { Circle, CircleCheck, CircleDashed, CircleDot, CirclePause, CircleSlash,
 import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import * as board from './board.ts'
 import { here, Link } from './nav.tsx'
-import { isTask, moves, nameOf, stateNow, type State, type TaskRoot, type TaskState, type Viewer } from './store.ts'
+import { isTask, moves, nameOf, profilesOf, stateNow, type State, type TaskRoot, type TaskState, type Viewer } from './store.ts'
 import { AskForm, Menu, MenuItem, MenuSeparator, nativeMenu, Panel, type AskProps } from './ui.tsx'
 import { clock, firstLine } from './words.ts'
 
@@ -110,12 +110,6 @@ export function TaskLine({ root, state }: { root: TaskRoot; state: State }) {
     </div>
   )
 }
-
-/** The profiles the board has seen a principal write as: who a task of its can be assigned to. */
-const profilesOf = (state: State, principal: string) =>
-  Object.keys(state.actors)
-    .filter((id) => id.startsWith(`${principal}+`))
-    .map((id) => id.slice(principal.length + 1))
 
 /** A profile's actor under a principal, as the board writes one: the profile in lowercase. */
 export const actorFor = (principal: string, profile: string) => `${principal}+${profile.trim().toLowerCase()}`

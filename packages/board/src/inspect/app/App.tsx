@@ -12,7 +12,7 @@ import { Sidebar } from './sidebar.tsx'
 import { actorFor, TaskCard, taskIds } from './task.tsx'
 import { Tasks } from './tasks.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
-import { byWritten, channelThreads, filtering, isTask, knownLabels, matches, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
+import { byWritten, channelThreads, filtering, isTask, knownLabels, matches, profilesOf, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
 import { Ask, Header, nativeMenu, ResizeHandle, type KnownLabels } from './ui.tsx'
 import { boardWords, cadence, firstLine, until } from './words.ts'
 
@@ -290,7 +290,8 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   useEffect(() => {
     if (filtering(filter)) void board.loadFiltered(channel, filter)
   }, [channel, key])
-  const { threads: all, pending: posts } = useMemo(() => channelThreads(state, channel), [state.messages, state.ops, state.pending, state.actors, channel])
+  // A filter asks the board for older matches, so a filtered channel shows every thread held.
+  const { threads: all, pending: posts } = useMemo(() => channelThreads(state, channel, filtering(filter)), [state.messages, state.ops, state.pending, state.actors, state.paged, channel, key])
   // A filtered channel shows the threads where anything matches.
   const threads = filtering(filter) ? all.filter((t) => matches(state, t.root, filter) || t.replies.some((r) => matches(state, r, filter))) : all
   const pending = filtering(filter) ? [] : posts
@@ -358,8 +359,8 @@ function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: numb
             submit="make it a task"
             note="You own it, and agents claim it."
             fields={[
-              { name: 'needs', placeholder: 'needs: #812 #813 (optional)' },
-              { name: 'for', placeholder: 'for one of your profiles (optional)', items: ['claude', 'codex'] },
+              { name: 'needs', placeholder: 'needs: task IDs it waits for (optional)' },
+              { name: 'for', placeholder: 'for one of your profiles (optional)', items: profilesOf(state, viewer.principal) },
             ]}
             onSubmit={(values) => void board.makeTask(id, { needs: taskIds(values.needs ?? ''), for: values.for ? actorFor(viewer.principal, values.for) : null })}
           />

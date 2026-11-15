@@ -207,18 +207,19 @@ export const loadChannel = (channel: string) =>
   once(`channel:${channel}`, async () => {
     const page = await readChannel(channel)
     if (page.messages.length < PAGE) exhausted.add(channel)
-    set((s) => store.merge(s, page.messages))
+    set((s) => store.page(s, channel, page.messages))
   })
 
 export async function loadOlder(channel: string): Promise<boolean> {
-  const oldest = Object.values(state.messages)
-    .filter((m) => m.channel === channel)
-    .sort(store.byWritten)[0]
-  if (exhausted.has(channel) || !oldest) return false
+  await loadChannel(channel)
+  // From where its pages reached, not from the oldest message held: a task or a thread loaded
+  // some other way can be older than that, and reading back from it would skip what's between.
+  const reached = state.paged[channel]
+  if (exhausted.has(channel) || !reached) return false
   try {
-    const page = await readChannel(channel, oldest.id)
+    const page = await readChannel(channel, reached.id)
     if (page.messages.length < PAGE) exhausted.add(channel)
-    set((s) => store.merge(s, page.messages))
+    set((s) => store.page(s, channel, page.messages))
     return !exhausted.has(channel)
   } catch (error) {
     toast(said(error))
@@ -423,9 +424,15 @@ function held(id: string) {
 }
 // #endregion
 
-// The store knows which claims are live, from what the board shows; once it drops one, its token goes too.
+// The store knows which claims are live, from what the board shows; once it drops one it had,
+// its token goes too. One the store hasn't taken in yet is kept: a claim's token is here a
+// moment before the store hears of it, and anything that changes the store in between runs this.
+const recorded = new Set<string>()
 listeners.add(() => {
-  for (const id of claims.keys()) if (!state.claims[id]) claims.delete(id)
+  for (const id of claims.keys()) {
+    if (state.claims[id]) recorded.add(id)
+    else if (recorded.delete(id)) claims.delete(id)
+  }
 })
 
 /**
@@ -469,6 +476,8 @@ export async function claimTask(id: string): Promise<boolean> {
   try {
     const root = await claim(id)
     set((s) => store.claimed(s, root, { epoch: claims.get(id)!.epoch }))
+    // The feed was ahead and the task has moved on: the store never held this claim, so its token goes here.
+    if (!state.claims[id]) claims.delete(id)
     return true
   } catch (error) {
     toast(refusal(error))
