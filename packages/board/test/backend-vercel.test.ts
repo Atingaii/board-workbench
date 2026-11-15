@@ -1536,6 +1536,22 @@ describe('vercel()', () => {
     expect([message!.by.actor, message!.from, message!.author?.platform]).toEqual(['vercel:project:prj_pong:production+slack-eu:user:U_ADA', 'pong/slack-eu', 'slack'])
   })
 
+  it("shows a caller held to some channels an author the API doesn't name it by their ID: no handle made up from it, and no name a wider caller read", async () => {
+    const api = fakeMessageboard({ namesNarrowed: false })
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    await pong.syncImport({ op: 'post', author: { id: 'slack:user:U_MALTE', handle: 'malte', name: 'Malte Ubl', avatar: null, isBot: false }, from: 'slack', channel: 'general', text: 'hi' })
+    const malte = 'vercel:project:prj_pong:production+slack:user:U_MALTE'
+    const author = async (handle: ReturnType<typeof handleOn>) => (await handle.messages({ channel: 'general' })).messages[0]!.author
+    // The deployment reads the whole board, as its sync does, and is named everyone.
+    expect(await author(pong)).toMatchObject({ id: malte, handle: 'pong/malte', name: 'Malte Ubl' })
+    // Its agent, on the same handle held to one channel, is named no one: it reads the author by ID.
+    const agent = pong.as(null, { can: { 'general/': ['read', 'post'] } })
+    expect(await author(agent)).toMatchObject({ id: malte, handle: malte })
+    // And the deployment still by name.
+    expect(await author(pong)).toMatchObject({ handle: 'pong/malte', name: 'Malte Ubl' })
+  })
+
   it("puts an import's handle under its project's name, typable, from an API that names them as their platform does", async () => {
     const api = fakeMessageboard({ platformHandles: true })
     // The second project's name isn't one the API knows.

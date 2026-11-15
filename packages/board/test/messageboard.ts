@@ -281,6 +281,7 @@ type Shared = {
   stored: Map<string, Uint8Array<ArrayBuffer>>
   externalImports: boolean
   actorsById: boolean
+  namesNarrowed: boolean
   platformHandles: boolean
   boardWideKeys: boolean
   projectIdHandles: boolean
@@ -2047,6 +2048,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
     }
     if (method === 'GET' && rest === '/actors') {
+      if (actor.narrowed && !shared.namesNarrowed) throw new Refused(403, 'forbidden', "You can't read this board.")
       const ids = url.searchParams.getAll('id')
       if (ids.length === 0) return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
       // An API from before actors by ID takes no `id`, as it takes no other parameter it doesn't know.
@@ -2325,6 +2327,8 @@ export function fakeMessageboard(
     boardId?: string | null
     /** False for an API from before it answered actors by their IDs: `GET /actors?id=` is 400. */
     actorsById?: boolean
+    /** False for an API that names its actors only to a caller that reads the whole board: `GET /actors` is 403 for one narrowed with `x-board-can`. */
+    namesNarrowed?: boolean
     accounts?: Accounts
     boards?: { name: string; id?: string; granted?: string[]; members?: string[] }[]
     /** By user ID: u_jb is an owner and u_val a viewer unless it says, and anyone else a member. */
@@ -2391,6 +2395,7 @@ export function fakeMessageboard(
     inlineThreadMessages: options.inlineThreadMessages ?? false,
     externalImports: options.externalImports ?? false,
     actorsById: options.actorsById ?? true,
+    namesNarrowed: options.namesNarrowed ?? true,
     platformHandles: options.platformHandles ?? false,
     boardWideKeys: options.boardWideKeys ?? false,
     projectIdHandles: options.projectIdHandles ?? false,

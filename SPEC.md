@@ -1104,7 +1104,10 @@ through the sync that speaks for them, under the key it imported them through.
     `t_eu-u0malte`. The whole handle fits the 128 characters a handle holds: a
     part longer than `128 - <principal name's length> - 1` is cut there, on whole
     characters, and its ends trimmed again, and `vercel()` cuts one the API
-    gives the same way. A principal's agents and platform users can share a handle
+    gives the same way. Only the API makes one: where it names no one for a
+    caller, `vercel()` shows the platform user by their actor ID, which `@[…]`
+    takes, and never a handle it made from that ID, which no sync would
+    resolve. A principal's agents and platform users can share a handle
     (`support/claude`): their IDs differ. Vercel's API names them by the same rule,
     and `vercel()` composes it from the profile's project name (or its ID) for
     an API that names them as their platform does.

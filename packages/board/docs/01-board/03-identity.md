@@ -260,7 +260,8 @@ the caller: nothing a client sends sets one, or a name.
   one `-`, and the ends trimmed, so "Jürgen Ubl" is `support/jurgen-ubl`. When
   nothing is left, it's their ID on the platform, without the sync key, the same
   way (`T_EU:U0MALTE` is `t_eu-u0malte`). A handle holds 128 characters, so a
-  longer one is cut to fit, its ends trimmed again.
+  longer one is cut to fit, its ends trimmed again. A caller Vercel's board
+  names no one for reads them by their actor ID instead, which `@[…]` takes.
 
 `vb actors` lists them.
 
