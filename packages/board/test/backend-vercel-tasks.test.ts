@@ -1235,6 +1235,22 @@ describe("vercel()'s tasks", () => {
 })
 
 describe("vb's tasks on Vercel's board", () => {
+  it("says the API's own refusal under what the command was doing, where the API serves no task routes", async () => {
+    const api = fakeMessageboard({ tasks: false })
+    const julian = handleOn(api)
+    // The board's words under the command's: it failed, and nothing says the board keeps no tasks.
+    expect(await vb(julian, ['tasks'])).toEqual({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Can't list tasks\.\n  [^\n]+\n$/) })
+    // For a program: the API's code to branch on, and its answer in data.
+    expect(JSON.parse((await vb(julian, ['tasks', 'create', 'work', 'fix it', '--json'])).stderr)).toEqual({
+      status: 'error',
+      reason: 'not_found',
+      message: "Can't create a task in work.",
+      data: { error: { code: 'not_found', message: expect.any(String), status: 404 } },
+    })
+    // Each command asked its route.
+    expect(julian.sent.filter((request) => request.version === 2).map((request) => `${request.method} ${request.path}`)).toEqual(['GET /tasks', 'POST /tasks'])
+  })
+
   it("says a claim of the next task names more channels and owners than the board looks through, as the board's error, with what narrows it", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
