@@ -15,6 +15,17 @@ export type Inspector = {
   close(): Promise<void>
 }
 
+/** The inspector for one board, before a server has it: who it acts as, and what answers its requests there. */
+export type InspectorPage = {
+  board: string
+  me: Me
+  /**
+   * What answers the page, its bundle, and its proxy on a server listening at `port` on this
+   * machine: `handle` takes every request meant for them, and `close` stops the streams it has open.
+   */
+  at(port: number): { handle(request: IncomingMessage, response: ServerResponse): void; close(): void }
+}
+
 export const DEFAULT_PORT = 4747
 
 /** The prebuilt UI where board is installed, read only when an inspector starts without one. */
@@ -53,14 +64,15 @@ const CSP = [
 ].join('; ')
 
 /**
- * Serves the UI, and a proxy for the board's API that adds your credentials, on
- * 127.0.0.1. Because the proxy acts as you, it answers only its own page: every
- * request must name this server's host (no DNS rebinding) and carry the per-run
- * token that only the page has, and writes must also come from its origin. Your
- * credential for the board never leaves this process. `hosts` adds names a proxy in
- * front of it serves the page on: whoever reaches the page there acts as you.
+ * The UI, and a proxy for the board's API that adds your credentials, for a server
+ * on 127.0.0.1 to answer with. Because the proxy acts as you, it answers only its
+ * own page: every request must name the server's host (no DNS rebinding) and carry
+ * the per-run token that only the page has, and writes must also come from its
+ * origin. Your credential for the board never leaves this process. `hosts` adds
+ * names a proxy in front of it serves the page on: whoever reaches the page there
+ * acts as you.
  */
-export async function startInspector(options: { client: BoardClient; port?: number; page?: string; hosts?: string[] }): Promise<Inspector> {
+export async function createInspector(options: { client: BoardClient; page?: string; hosts?: string[] }): Promise<InspectorPage> {
   const { client } = options
   const me = await client.me()
   // Who it starts as (`--as claude`): the page's handle says who each request is, from there on.
@@ -131,7 +143,7 @@ export async function startInspector(options: { client: BoardClient; port?: numb
     }
   }
 
-  const server = createServer((request, response) => {
+  function handle(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? '/', 'http://inspector')
     if (!hosts.has(String(request.headers.host).toLowerCase())) return send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
     if (url.pathname === '/board' || url.pathname.startsWith('/board/'))
@@ -145,20 +157,40 @@ export async function startInspector(options: { client: BoardClient; port?: numb
         : send(response, 503, 'text/plain; charset=utf-8', "the inspector's UI isn't built: run `pnpm --filter @vercel/board build`")
     // Every other path is a route inside the page.
     send(response, 200, 'text/html; charset=utf-8', shell(token, started), { 'content-security-policy': CSP })
-  })
+  }
 
-  const port = await listen(server, options.port ?? DEFAULT_PORT, options.port === undefined)
-  // Hosts you allow are ones a proxy in front serves the page on, over http or https.
-  const allowed = (options.hosts ?? []).map((host) => host.toLowerCase())
-  hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, ...allowed])
-  origins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, ...allowed.flatMap((host) => [`http://${host}`, `https://${host}`])])
   return {
-    url: `http://127.0.0.1:${port}`,
     board,
     me,
+    at(port) {
+      // Hosts you allow are ones a proxy in front serves the page on, over http or https.
+      const allowed = (options.hosts ?? []).map((host) => host.toLowerCase())
+      hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, ...allowed])
+      origins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, ...allowed.flatMap((host) => [`http://${host}`, `https://${host}`])])
+      return {
+        handle,
+        close() {
+          for (const stream of streams) stream.abort()
+        },
+      }
+    },
+  }
+}
+
+/** The inspector on a server of its own, on 127.0.0.1: `port`, or 4747, or any free one when that's taken. */
+export async function startInspector(options: { client: BoardClient; port?: number; page?: string; hosts?: string[] }): Promise<Inspector> {
+  const inspector = await createInspector(options)
+  let page: ReturnType<InspectorPage['at']> | null = null
+  const server = createServer((request, response) => (page ? page.handle(request, response) : void response.writeHead(503).end()))
+  const port = await listen(server, options.port ?? DEFAULT_PORT, options.port === undefined)
+  const serving = (page = inspector.at(port))
+  return {
+    url: `http://127.0.0.1:${port}`,
+    board: inspector.board,
+    me: inspector.me,
     close: () =>
       new Promise<void>((resolve) => {
-        for (const stream of streams) stream.abort()
+        serving.close()
         server.close(() => resolve())
         server.closeAllConnections()
       }),

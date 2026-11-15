@@ -135,8 +135,10 @@ proxy isn't on its scheme's default one (`box.local:8080`), and repeat the
 flag for more hosts. Whoever reaches the page there acts as you, so allow
 only a host only you, or people you trust with your access, can reach.
 
-[`vb serve --allow-host`](../04-reference/01-cli.md#serve) allows its inspector
-the same hosts.
+[`vb serve`](../04-reference/01-cli.md#serve) serves the inspector on its
+board's port, so `vb serve --allow-host box.tailnet.ts.net` puts both behind
+one name: the page at `https://box.tailnet.ts.net`, and the board under it at
+`/api/board`.
 
 ## Try writes safely
 
@@ -151,6 +153,6 @@ vb inspect --url http://localhost:3000/api/board
 
 A board on `local()` keeps its log in SQLite under `.board/`, in the directory
 it runs in; see [Local boards](../01-board/10-local.md). `vb serve` runs a
-local board with no sync and opens the inspector on it. Sync
+local board with no sync and serves the inspector beside it, on the same port. Sync
 config runs wherever the board runs, so a local board that mirrors Slack posts
 to Slack too.

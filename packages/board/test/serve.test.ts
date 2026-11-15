@@ -187,6 +187,34 @@ describe('vb serve', () => {
     expect(await second.exited).toBe(0)
   })
 
+  it("serves the inspector beside the board, on its port, and the board alone with --no-inspect", async () => {
+    const { project, env } = await setup()
+    const serving = serveIn(project, env, ['--no-open'])
+    const url = await serving.url
+    const origin = new URL(url).origin
+    await expect.poll(serving.output, { timeout: 10_000 }).toContain(`inspector at ${origin}\n`)
+    // Every path outside the board's is the page's, as on the inspector's own server.
+    for (const path of ['/', '/c/local', '/settings/access']) {
+      const page = await fetch(`${origin}${path}`)
+      expect(page.status).toBe(200)
+      expect(await page.text()).toContain('<div id="root"></div>')
+    }
+    expect((await fetch(`${origin}/app.js`)).headers.get('content-type')).toContain('text/javascript')
+    // And the board is where it was.
+    expect(await (await fetch(url)).json()).toMatchObject({ url, audience: url })
+    expect((await vb(project, { ...env, BOARD_URL: url }, ['post', 'local', 'beside the page'])).code).toBe(0)
+    serving.child.kill('SIGINT')
+    expect(await serving.exited).toBe(0)
+
+    const alone = serveIn(project, env, ['--no-inspect'])
+    const bare = await alone.url
+    expect((await fetch(`${new URL(bare).origin}/`)).status).toBe(404)
+    expect(alone.output()).not.toContain('inspector at')
+    expect((await vb(project, { ...env, BOARD_URL: bare }, ['read', 'local'])).stdout).toContain('beside the page')
+    alone.child.kill('SIGINT')
+    expect(await alone.exited).toBe(0)
+  })
+
   it("opens the inspector as you on this board, whatever BOARD_TOKEN holds", async () => {
     const { project, env } = await setup()
     const serving = serveIn(project, { ...env, BOARD_TOKEN: 'not-a-token-for-this-board' }, ['--no-open'])
@@ -223,10 +251,10 @@ describe('vb serve', () => {
     expect(await serving.exited).toBe(0)
   })
 
-  it('opens the inspector to a host you allow', async () => {
+  it('opens the inspector to a host you allow, beside the board there', async () => {
     const { project, env } = await setup()
     const serving = serveIn(project, env, ['--no-open', '--allow-host', 'box.tailnet.ts.net'])
-    await serving.url
+    const url = await serving.url
     await expect.poll(serving.output, { timeout: 10_000 }).toMatch(/inspector at http:\/\/127\.0\.0\.1:\d+\n/)
     const inspector = /inspector at (\S+)/.exec(serving.output())![1]!
     const page = await forwarded(inspector, '/', { host: 'box.tailnet.ts.net' })
@@ -236,6 +264,8 @@ describe('vb serve', () => {
     const me = await forwarded(inspector, '/board/me', { host: 'box.tailnet.ts.net', 'x-inspect-token': token })
     expect(JSON.parse(me.body)).toMatchObject({ actor: `local:user:${localHandle()}` })
     expect((await forwarded(inspector, '/', { host: 'evil.example' })).status).toBe(421)
+    // One name reaches both: the board is under it too.
+    expect(JSON.parse((await forwarded(url, '', { host: 'box.tailnet.ts.net' })).body)).toMatchObject({ url: 'http://box.tailnet.ts.net/api/board' })
     serving.child.kill('SIGINT')
     expect(await serving.exited).toBe(0)
   })

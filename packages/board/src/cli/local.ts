@@ -4,7 +4,7 @@
 import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { projectDir } from '../client/node.ts'
-import { startInspector } from '../inspect/server.ts'
+import { createInspector } from '../inspect/server.ts'
 import { option } from './commands.ts'
 import { allowedHosts, stopped } from './inspect.ts'
 import type { Command, CommandContext } from './main.ts'
@@ -67,21 +67,24 @@ const serve: Command = {
       hosts,
       ...(port !== undefined ? { port } : {}),
     })
-    let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
+    let inspector: { close(): void } | null = null
     try {
       if (!flags.dir) await ignoreLog(root)
       out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
       out(`reach it with --url ${local.url}, or BOARD_URL=${local.url}`)
       if (!flags['no-inspect']) {
-        // With this board's token, whatever BOARD_TOKEN says.
+        // With this board's token, whatever BOARD_TOKEN says, and on the board's own server: one port to open, or to proxy.
         const { board } = connection(local.url, { token: local.token })
-        inspector = await startInspector({ client: board.as(null), hosts })
-        out(`inspector at ${inspector.url}`)
-        if (!flags['no-open']) openBrowser(inspector.url)
+        const page = (await createInspector({ client: board.as(null), hosts })).at(local.port)
+        inspector = page
+        local.page(page.handle)
+        const at = new URL(local.url).origin
+        out(`inspector at ${at}`)
+        if (!flags['no-open']) openBrowser(at)
       }
       await stopped()
     } finally {
-      await inspector?.close()
+      inspector?.close()
       await local.close()
     }
     return 0

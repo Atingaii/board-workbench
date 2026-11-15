@@ -11,12 +11,22 @@ import { oidcTokens } from '../server/tokens.ts'
 import { board } from '../server/index.ts'
 
 export const DEFAULT_SERVE_PORT = 4100
+/** Where the board is mounted on its server: every other path is the inspector's, when it's served. */
+const MOUNT = '/api/board'
+const mounted = (path: string) => path === MOUNT || path.startsWith(`${MOUNT}/`)
 const ISSUER = 'board:local'
 const BODY_MAX = 8 * 1024 * 1024
+
+/** What answers a request on the board's server that isn't for the board. */
+type Handler = (request: IncomingMessage, response: ServerResponse) => void
 
 export type LocalBoard = {
   /** The board's URL, `http://127.0.0.1:<port>/api/board`. */
   url: string
+  /** The port its server listens on, where a page beside the board is served too. */
+  port: number
+  /** Answers every request outside the board's mount (`/api/board`) with `handler`: the inspector. Without one, the board answers them 404. */
+  page(handler: Handler): void
   /** Who you are on it: `local:user:<name>`. */
   principal: string
   handle: string
@@ -60,7 +70,8 @@ async function carryOver(dir: string) {
  * Its keys live in memory for this run; it signs one token, for you, into a file only you can read
  * (`localTokenFile`), which `vb` on this machine picks up. `hosts` adds names a proxy in front of
  * it serves it on: a request for one reaches the board at that host's URL, which a token must be
- * minted for there, and your token is for its own.
+ * minted for there, and your token is for its own. Its server answers the board under `/api/board`,
+ * and what `page` is given everywhere else.
  */
 export async function serveLocal(options: { dir: string; port?: number; handle?: string; hosts?: readonly string[] }): Promise<LocalBoard> {
   const dir = resolve(options.dir)
@@ -76,8 +87,10 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   // Its own address, once the port is known: where every request reaches it but one for a host you allowed.
   let origin = ''
   let handler: ((request: Request) => Promise<Response>) | null = null
+  let page: Handler | null = null
   const server = createServer((request, response) => {
     if (!handler) return void response.writeHead(503).end()
+    if (page && !mounted((request.url ?? '/').split('?')[0]!)) return page(request, response)
     void forward(handler, originOf(request, origin, hosts), request, response)
   })
   let port: number
@@ -89,23 +102,23 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
     throw error
   }
   origin = `http://127.0.0.1:${port}`
-  const url = `${origin}/api/board`
-  const mounted = board({
+  const url = `${origin}${MOUNT}`
+  const team = board({
     // Its timers live in this process, which runs as long as the board does.
     backend,
     authenticate: oidcTokens({ local: { issuer: ISSUER, jwks } }),
     // No `url`: the board is at the URL a request reaches it at, a token's audience there, and
     // `originOf` lets a request name only this server's own or a host you allowed.
-    basePath: '/api/board',
+    basePath: MOUNT,
   })
   try {
     // Opened now, so a directory it can't write says so before it serves.
-    await mounted.channels()
+    await team.channels()
   } catch (error) {
     server.close()
     throw error
   }
-  handler = mounted.fetch
+  handler = team.fetch
 
   const handle = options.handle ?? localHandle()
   const token = await new SignJWT({})
@@ -122,6 +135,10 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
 
   return {
     url,
+    port,
+    page(handler) {
+      page = handler
+    },
     principal: `local:user:${handle}`,
     handle,
     token,
