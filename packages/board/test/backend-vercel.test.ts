@@ -552,6 +552,8 @@ describe('vercel()', () => {
     const seen = [...read.messages.map((message) => message.text), ...later.events.map((event) => event.message?.text)]
     expect(seen).toContain('osprey, seen today')
 
+  })
+
   it("names a message's channel by its ID, without listing the board's channels", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
