@@ -227,6 +227,37 @@ describe("vercel()'s tasks", () => {
     expect((await julian.messages({ channel: 'work', label: { 'board.task': 'waiting' } })).messages.map((message) => message.id)).toEqual([review.id])
   })
 
+  it("shows a task's state on its thread in a channel's thread list, whether the API lists threads with their messages or each is read by ID", async () => {
+    for (const inlineThreadMessages of [true, false]) {
+      const api = fakeMessageboard({ inlineThreadMessages })
+      const julian = handleOn(api)
+      const plain = await julian.post('work', 'just a thread')
+      const { task, claim } = await julian.tasks.create('work', { text: 'fix CVE-123 in acme/web', claim: true })
+      const reply = await julian.reply(task.id, 'on it')
+      julian.sent.length = 0
+      const { threads } = await julian.threads({ channel: 'work' })
+      const byId = julian.sent.filter((request) => request.path.startsWith('/messages/')).length
+      expect([inlineThreadMessages, byId]).toEqual([inlineThreadMessages, inlineThreadMessages ? 0 : 3])
+      const shown = threads.map((thread) => [thread.message.id, thread.message.task?.state ?? null, thread.message.labels['board.task'] ?? null, thread.last?.id ?? null])
+      expect(shown.sort()).toEqual([[plain.id, null, null, null], [task.id, 'claimed', 'claimed', reply.id]].sort())
+      expect(threads.find((thread) => thread.message.id === task.id)!.message.task).toMatchObject({ owner: JULIAN, epoch: claim!.epoch, claim: { actor: JULIAN, until: claim!.until } })
+    }
+  })
+
+  it("names the authors on a page of tasks, and of their latest replies, in one request, on an API that takes its time", async () => {
+    const api = fakeMessageboard()
+    const first = await handleOn(api, 'user:u_ada').tasks.create('work', 'one')
+    const second = await handleOn(api, 'user:u_bob').tasks.create('work', 'two')
+    await handleOn(api, 'user:u_tom').reply(first.task.id, 'on it')
+    await handleOn(api, 'user:u_kim').reply(second.task.id, 'me too')
+    // Each answer comes a moment later, so what's asked apart goes out apart.
+    const julian = handleOn(api, 'user:u_jb', { answered: (_request, response) => new Promise((resolve) => setTimeout(() => resolve(response), 5)) })
+    const { tasks } = await julian.tasks.list({ channel: 'work' })
+    expect(tasks.map((task) => [task.message.author?.handle, task.last?.author?.handle])).toEqual([['ada', 'u_tom'], ['u_bob', 'u_kim']])
+    const named = julian.sent.filter((request) => request.path === '/actors').map((request) => [...(request.query.id ?? [])].sort())
+    expect(named).toEqual([[ADA, 'vercel:user:u_bob', 'vercel:user:u_kim', 'vercel:user:u_tom']])
+  })
+
   it("has a new task's blocks checked before Vercel's API is asked, which checks them itself: a task refused for one makes no channel", async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
@@ -855,6 +886,9 @@ describe("vercel()'s tasks", () => {
     expect(at('task.ready', 1).message).toMatchObject({ labels: { 'board.task': 'ready' }, task: { state: 'ready' } })
     expect(at('task.claimed').actor).toMatchObject({ id: `${JULIAN}+claude`, handle: 'julian/claude' })
     expect(at('task.ready').actor).toBeUndefined()
+    // A read in one task's thread gets that task's changes and no other's.
+    const inThread = (await julian.poll({ re: review.id, after: cursor })).events
+    expect(inThread.map((event) => [event.type, event.message?.id])).toEqual(expected.filter(([, id]) => id === review.id).map(([type, id]) => [type, id]))
   })
 
   it("delivers a task's change to a feed whose label filter its root matched before the change or after it", async () => {

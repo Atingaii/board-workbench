@@ -2224,6 +2224,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** A task's first message with the task on it, as a board's root carries it. */
   const firstOf = ({ id: _id, channelId: _channel, message, messageCount: _count, lastActivityAt: _at, lastMessage: _last, ...task }: ApiTaskOf): ApiMessage => ({ ...message, task })
+  /** A task as a thread list brings a thread with its messages: its first message on it, which carries the task. */
+  const listedOf = (task: ApiTaskOf): ApiThread => ({
+    id: task.id,
+    channelId: task.channelId,
+    messageCount: task.messageCount,
+    lastActivityAt: task.lastActivityAt,
+    ...(task.lastMessage ? { lastMessage: task.lastMessage } : {}),
+    createdAt: task.message.createdAt,
+    createdBy: task.message.createdBy,
+    rootMessage: firstOf(task),
+  })
   /** A task's root as board shows it, from what a task route answered. */
   const rootOf = async (who: Who, made: { task: ApiTaskOf }) => view(who, firstOf(made.task), (await channelById(who, made.task.channelId)).name)
 
@@ -2856,15 +2867,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         if (!page.cursor) break
         from = { cursor: page.cursor }
       }
-      // Each task comes with its first message: only its latest reply is read apart, by reference.
-      const tasks = await Promise.all(
-        found.map(async (task): Promise<ThreadSummaryView> => {
-          const channel = await channelById(who, task.channelId)
-          const last = task.lastMessage && task.lastMessage.sequence > 1 ? await messageById(who, task.lastMessage.id, signal) : null
-          // The API counts deleted messages too.
-          return { message: await view(who, firstOf(task), channel.name), replies: task.messageCount - 1, last: last && (await view(who, last.message, channel.name)) }
-        }),
-      )
+      // Each task comes with its first message: only its latest reply is read apart, by reference, and the page's
+      // authors are named together, as a page of threads' are.
+      const tasks = await summaries(who, await Promise.all(found.map(async (task) => ({ thread: listedOf(task), channel: await channelById(who, task.channelId) }))), signal)
       const last = found.at(-1)
       return { tasks, cursor: last ? idAt(last.id, 1) : none.cursor }
     },
