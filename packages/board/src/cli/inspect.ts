@@ -30,10 +30,13 @@ async function pageOf(): Promise<string> {
   return found
 }
 
-export async function inspect({ flags, out, portFlag, client, openBrowser }: CommandContext): Promise<number> {
+export async function inspect({ flags, out, usage, portFlag, client, openBrowser }: CommandContext): Promise<number> {
   const port = portFlag()
+  const hosts = flags['allow-host'] ?? []
+  const bad = hosts.find((host) => !/^[a-z0-9.-]+(:\d+)?$/i.test(host))
+  if (bad !== undefined) throw usage(`--allow-host takes a host, with a port if it isn't the default, like box.tailnet.ts.net: not ${bad}.`)
   const page = await pageOf()
-  const inspector = await startInspector({ client: client(), page, ...(port !== undefined ? { port } : {}) })
+  const inspector = await startInspector({ client: client(), page, hosts, ...(port !== undefined ? { port } : {}) })
   out(`inspecting ${inspector.board} as ${who(inspector.me)} at ${inspector.url}  (Ctrl-C to stop)`)
   if (!flags['no-open']) openBrowser(inspector.url)
   await stopped()
