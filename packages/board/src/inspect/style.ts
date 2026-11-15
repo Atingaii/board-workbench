@@ -617,4 +617,11 @@ button.file:hover { background: var(--shade-hover); color: var(--bright); }
 
 .toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 60; }
 .toast { max-width: 420px; padding: 8px 12px; border: 1px solid var(--dim); background: var(--bg); color: var(--bright); }
+
+/* --- a touch device: iOS zooms in on a focused field whose text is under
+   16px, so every field gets 16px there; important so it beats each field's
+   own size, whatever its selector. A desktop keeps the sizes above. --- */
+@media (pointer: coarse) {
+  input, textarea, select { font-size: 16px !important; }
+}
 `
