@@ -1220,7 +1220,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   // channel, more than fits in a cursor here, so a cursor names a position this process keeps,
   // after its time. Another process reads it as the time alone, from each channel's oldest change.
   type Feed = { at: string | null; skip: number }
-  type Position = { t: number; feeds: Record<string, Feed> }
+  /**
+   * `past` is the message a read starts after, and `floor` its time. A feed it hasn't read yet is read
+   * from its oldest change, a page at a time, so every page of it holds changes from before the
+   * message until it catches up: none at or before `floor` is after it, and neither is the message's
+   * own posting, which comes a moment after its time.
+   */
+  type Position = { t: number; feeds: Record<string, Feed>; past?: string; floor?: number }
   const positions = new Map<string, Position>()
   function cursorOf(position: Position): string {
     const key = `${position.t.toString(36)}.${Math.floor(Math.random() * 36 ** 8).toString(36)}`
@@ -1233,11 +1239,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (kept) return kept
     const found = CURSOR.exec(cursor)
     if (!found) throw new HttpError(400, 'invalid_cursor', `after: ${cursor} isn't a cursor here or a message's ID`)
-    return { t: parseInt(found[1]!, 36), feeds: {} }
+    // A cursor this process doesn't hold, as every `vb` run's is, is its time alone: nothing at or before it is after it,
+    // on any page of a feed read from its oldest change.
+    const t = parseInt(found[1]!, 36)
+    return { t, feeds: {}, floor: t }
   }
   /** A time a read goes on from: a cursor's, or a message's own. */
   async function timeOf(who: Who, after: string): Promise<number> {
     return locate(after) ? (await messageById(who, after)).message.createdAt : positionOf(after).t
+  }
+  /** Where a read after a message starts: its time, with no feed read yet. */
+  async function afterMessage(who: Who, id: string): Promise<Position> {
+    const t = await timeOf(who, id)
+    return { t, feeds: {}, past: id, floor: t }
   }
   /** Each channel's feed now, taken before a read, so what's posted while it reads comes after. */
   async function heads(who: Who, listed: ApiChannel[]): Promise<Record<string, Feed>> {
@@ -1679,7 +1693,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         // Each change comes with its message as it is now, so showing one costs no read of its own.
         const page = await api<{ events: ApiChange[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, include: 'message', ...(from?.at ? { cursor: from.at } : {}) }, signal })
         const skip = from?.skip ?? 0
-        const events = page.events.map((change, i) => ({ change, i })).slice(skip).filter(({ change }) => from || change.createdAt > position.t)
+        const events = page.events
+          .map((change, i) => ({ change, i }))
+          .slice(skip)
+          .filter(({ change }) => from || change.createdAt > position.t)
+          .filter(({ change }) => !(position.floor !== undefined && change.createdAt <= position.floor) && !(change.type === 'message.posted' && change.messageId === position.past))
         return { channel, at: from?.at ?? null, next: page.cursor, events }
       }),
     )
@@ -1689,17 +1707,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const merged = pages.flatMap((page) => page.events.map((event) => ({ ...event, page }))).sort((a, b) => a.change.createdAt - b.change.createdAt)
     const events: BoardEventView[] = []
     naming(who, merged.flatMap(({ change }) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
+    // Where the read started stays with every position it hands out: a feed that hasn't caught up to it yet reads on from one.
+    const start = { ...(position.past !== undefined ? { past: position.past } : {}), ...(position.floor !== undefined ? { floor: position.floor } : {}) }
     for (const { change, i, page } of merged) {
       running[page.channel.id] = { at: page.at, skip: i + 1 }
       const message = change.currentMessage
       // A label matches on the root's, which only a read of the thread has: nothing else needs one.
       const given = message && change.threadId ? { message, thread: filters.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
-      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running } }), filters, narrow, given, threads)
+      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running }, ...start }), filters, narrow, given, threads)
       if (event) events.push(event)
     }
     const after: Record<string, Feed> = { ...position.feeds }
     for (const page of pages) after[page.channel.id] = { at: page.next, skip: 0 }
-    return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after } }
+    return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after, ...start } }
   }
 
   /**
@@ -1810,7 +1830,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       query.after === undefined
         ? { t: Date.now(), feeds: await heads(who, listed) }
         : locate(query.after)
-          ? { t: await timeOf(who, query.after), feeds: {} }
+          ? await afterMessage(who, query.after)
           : positionOf(query.after)
     const until = Date.now() + (query.wait ?? 0) * 1000
     // On a busy board a wait wakes at every change, so one that a filter (--mentions me, --by) finds
