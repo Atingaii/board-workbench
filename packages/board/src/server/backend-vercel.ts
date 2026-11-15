@@ -616,7 +616,9 @@ function actorView(actor: ApiActor, view?: ApiActorView, project?: string): Acto
   if (principal.type === 'external') return { id: actor.id, kind: 'external', handle: principal.id.slice(principal.id.lastIndexOf(':') + 1), name: principal.id, avatar: null, verified: true }
   if (profile?.platform) {
     const { userId, platform, key } = profile.platform
-    const handle = importedHandleOf(view?.handle ?? '', principal, view, userId, project)
+    // One the API doesn't name goes by its ID, which `@[…]` takes: a handle made up from the ID reads like one a
+    // sync resolves, and no sync has it.
+    const handle = view ? importedHandleOf(view.handle, principal, view, userId, project) : actor.id
     return { id: actor.id, kind: 'external', handle, name: profile.name, avatar: null, via: viaFor(principal, view, project), platform: view?.platform ?? platform ?? key, verified: true }
   }
   if (profile) return { id: actor.id, kind: 'agent', handle: profile.name, name: profile.name, avatar: profile.avatar ?? null, via: viaFor(principal, view, project), verified: true }
@@ -955,20 +957,52 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return out
   }
 
-  /** Who's written here, by actor ID, as the API names them: messages carry only the actor. */
-  let actorNames: { at: number; views: Promise<Map<string, ApiActorView>> } | null = null
+  /**
+   * What one caller's reads have named. The API names a narrowed caller (`who.can`) only who it may see, so each
+   * narrowing keeps its own: one held to a channel is never shown names a wider one read.
+   */
+  type Names = {
+    /**
+     * Who's written here, by actor ID, as the API names them: messages carry only the actor. `refused` once the
+     * API refused this caller the list, which is its answer while the read is fresh.
+     */
+    list: { at: number; views: Promise<Map<string, ApiActorView>>; refused: boolean } | null
+    /** Actors a list read again for them didn't have: it isn't read again for them. */
+    unlisted: Set<string>
+    /** Each actor asked for by ID, and when: one the API didn't have is asked for again after `NAMES_FRESH_MS`, as one it had is. */
+    asked: Map<string, { at: number; view: Promise<ApiActorView | undefined | null> }>
+    /** The request for actors by ID that hasn't gone out yet: everyone named before this turn's promises settle shares it. */
+    asking: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } | null
+    /** What a fresh read of the actors still didn't name: it isn't read again for them until names are read anyway. */
+    unnamed: Set<string>
+    /** Handles a fresh read of the names didn't have, by when: `--by` doesn't read again for them for a while. */
+    unhandled: Map<string, number>
+  }
+  const namesBy = new Map<string, Names>()
+  const namesOf = (who: Who): Names => {
+    const narrowing = who.can ?? ''
+    let names = namesBy.get(narrowing)
+    if (!names) {
+      if (namesBy.size >= 100) namesBy.clear()
+      namesBy.set(narrowing, (names = { list: null, unlisted: new Set(), asked: new Map(), asking: null, unnamed: new Set(), unhandled: new Map() }))
+    }
+    return names
+  }
   /** How long names are kept before they're read again: someone renamed shows by their new name after this. */
   const NAMES_FRESH_MS = 5 * 60_000
-  /** Actors a list read again for them didn't have: it isn't read again for them. */
-  const unlisted = new Set<string>()
-  /** Reads the list, kept as the current one; a read that fails isn't kept, so the next name tries again. */
+  /** An answer that says no to the request itself, and not that the API couldn't serve it now. */
+  const refusal = (error: unknown): error is HttpError => error instanceof HttpError && error.status >= 400 && error.status < 500 && error.status !== 429
+  /** Reads the list, kept as the current one; a read that fails isn't kept, so the next name tries again, unless the API refused it. */
   const readNames = (who: Who) => {
+    const names = namesOf(who)
     const views = (async () =>
       new Map((await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')).map((view) => [view.id, view] as const)))()
-    const read = { at: Date.now(), views }
-    actorNames = read
-    views.catch(() => {
-      if (actorNames === read) actorNames = null
+    const read = { at: Date.now(), views, refused: false }
+    names.list = read
+    views.catch((error) => {
+      // What the API refuses this caller is kept as a list is, so each page it reads doesn't ask again.
+      if (refusal(error)) read.refused = true
+      else if (names.list === read) names.list = null
     })
     return read
   }
@@ -979,10 +1013,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   let namesById = true
   /** Actor IDs one request names, as many as the API takes. */
   const NAMED_AT_ONCE = 100
-  /** Each actor asked for by ID, and when: one the API didn't have is asked for again after `NAMES_FRESH_MS`, as one it had is. */
-  const asked = new Map<string, { at: number; view: Promise<ApiActorView | undefined | null> }>()
-  /** The request for actors by ID that hasn't gone out yet: everyone named before this turn's promises settle shares it. */
-  let asking: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } | null = null
   /**
    * Once everything already running in this turn has had its say, and before any timer or request answers: the
    * views of a page each name their author as they start, a few promise steps apart, and what waits on them
@@ -998,7 +1028,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return new Map(actors.map((view) => [view.id, view] as const))
     } catch (error) {
       // What the API refuses for these IDs is named from the list this once. Only an API that takes no `id` at all never is again.
-      if (!(error instanceof HttpError && error.status >= 400 && error.status < 500 && error.status !== 429)) throw error
+      if (!refusal(error)) throw error
       if (error.status === 400 && /additional property/i.test(error.message)) namesById = false
       return null
     }
@@ -1013,19 +1043,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * doesn't have or a read that failed, which isn't kept; null when the API doesn't answer by ID.
    */
   function byId(who: Who, id: string): Promise<ApiActorView | undefined | null> {
+    const names = namesOf(who)
+    const { asked } = names
     const kept = asked.get(id)
     if (kept && Date.now() - kept.at <= NAMES_FRESH_MS) return kept.view
-    let batch = asking
+    let batch = names.asking
     if (!batch || batch.ids.length >= NAMED_AT_ONCE) {
       const ids: string[] = []
       const next: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } = {
         ids,
         views: settled().then(() => {
-          if (asking === next) asking = null
+          if (names.asking === next) names.asking = null
           return readNamed(who, ids)
         }),
       }
-      batch = asking = next
+      batch = names.asking = next
     }
     batch.ids.push(id)
     const view: Promise<ApiActorView | undefined | null> = batch.views.then(
@@ -1052,14 +1084,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** An actor as the actors list names them: read again every few minutes, and at once for someone who wrote since it was. */
   async function listed(who: Who, id: string): Promise<ApiActorView | undefined> {
-    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? readNames(who) : actorNames
+    const names = namesOf(who)
+    const current = !names.list || Date.now() - names.list.at > NAMES_FRESH_MS ? readNames(who) : names.list
     let found = await inList(current, id)
-    if (!found && !unlisted.has(id)) {
+    if (!found && !current.refused && !names.unlisted.has(id)) {
       // Someone new since this list: one read again covers everyone it's missing, even several at once.
-      const again = actorNames && actorNames !== current ? actorNames : readNames(who)
+      const again = names.list && names.list !== current ? names.list : readNames(who)
       found = await inList(again, id)
       // Only a read that worked and still doesn't have them settles it.
-      if (!found && (await again.views.then(() => true, () => false))) unlisted.add(id)
+      if (!found && (await again.views.then(() => true, () => false))) names.unlisted.add(id)
     }
     return found
   }
@@ -1091,20 +1124,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!names) namesRead.set(read, (names = read.views.then(projectNamesOf, () => new Map<string, string>())))
     return names
   }
-  /** What a fresh read of the actors still didn't name: it isn't read again for them until names are read anyway. */
-  const unnamed = new Set<string>()
   /**
    * Projects' names by ID, as the actors list names them, read again at once when `wanted` (one or more projects, by
    * their IDs) isn't among them, as for someone new since the list was read.
    */
   async function projectNames(who: Who, wanted?: { key: string; found: (names: Map<string, string>) => boolean }): Promise<Map<string, string>> {
-    const kept = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : null
+    const mine = namesOf(who)
+    const kept = mine.list && Date.now() - mine.list.at <= NAMES_FRESH_MS ? mine.list : null
     let names = await namesIn(kept ?? readNames(who))
-    if (!wanted || wanted.found(names) || !kept || unnamed.has(wanted.key)) return names
-    names = await namesIn(actorNames && actorNames !== kept ? actorNames : readNames(who))
+    if (!wanted || wanted.found(names) || !kept || kept.refused || mine.unnamed.has(wanted.key)) return names
+    names = await namesIn(mine.list && mine.list !== kept ? mine.list : readNames(who))
     if (!wanted.found(names)) {
-      if (unnamed.size >= 1000) unnamed.clear()
-      unnamed.add(wanted.key)
+      if (mine.unnamed.size >= 1000) mine.unnamed.clear()
+      mine.unnamed.add(wanted.key)
     }
     return names
   }
@@ -1283,8 +1315,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return Object.fromEntries(listed.map((channel, i) => [channel.id, { at: found[i]!.cursor, skip: 0 }]))
   }
 
-  /** Handles a fresh read of the names didn't have, by when: `--by` doesn't read again for them for a while. */
-  const unhandled = new Map<string, number>()
   /** Who a `--by` value covers, as the API's authors. */
   type By = (actor: ApiActor) => boolean
 
@@ -1302,7 +1332,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!by.startsWith('vercel:')) {
       const handle = by.toLowerCase()
       const find = async (read: { views: Promise<Map<string, ApiActorView>> }) => goingBy(await read.views, await namesIn(read), handle)
-      const kept = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : null
+      const { list, unhandled } = namesOf(who)
+      const kept = list && Date.now() - list.at <= NAMES_FRESH_MS ? list : null
       let ids = await find(kept ?? readNames(who))
       // Someone new since the list was read: one read again finds them. A value no fresh read had
       // (a profile name, an ID, a typo) isn't read again for it until names are read anyway.
@@ -2421,7 +2452,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** Who a handle or an ID names, as IDs: an ID names itself, whether or not the board has seen it write. */
   async function idsNamed(who: Who, value: string): Promise<Set<string>> {
     if (isId(value)) return new Set([value])
-    const read = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : readNames(who)
+    const { list } = namesOf(who)
+    const read = list && Date.now() - list.at <= NAMES_FRESH_MS ? list : readNames(who)
     return new Set(goingBy(await read.views, await namesIn(read), value.toLowerCase()))
   }
 
