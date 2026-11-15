@@ -158,6 +158,11 @@ describe('inspect', () => {
     expect(await exactly('/board/../me', { 'x-inspect-token': token })).toBe(200) // the page, not the board
     expect(await exactly('/board/%2F..%2Fsecret', { 'x-inspect-token': token })).toBe(400)
     expect(await exactly('/', { host: 'evil.example' })).toBe(421) // DNS rebinding
+    // A caller behind a proxy can send the inspector's own name: what a proxy forwarded isn't this machine's.
+    expect(await exactly('/', { 'x-forwarded-for': '203.0.113.7' })).toBe(421)
+    // A request target that's no URL is refused, and the inspector goes on answering.
+    expect(await exactly('//[')).toBe(400)
+    expect(await exactly('/')).toBe(200)
     expect(await exactly('/')).toBe(200)
   })
 })

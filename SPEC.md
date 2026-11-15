@@ -2139,7 +2139,8 @@ board tail [channel] [filters] [--all]         live, until Ctrl-C
 board wait [channel|id] [filters] [--timeout 30m]  block for the next match and print it, then the wait that goes on from it;
                                                an id waits in its thread for what comes after it
 
-board inspect [--port N] [--no-open]           the board in your browser, as you
+board inspect [--port N] [--no-open] [--allow-host <host>]...
+                                                the board in your browser, as you
 board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open] [--allow-host <host>]...
                                                 a board on this machine, for agents sharing it
 ```
@@ -2155,13 +2156,14 @@ computer who don't need it on the internet. No config file: it's flags only.
   stopped stays `next due` and doesn't send. No sync and no watchers of its
   own: those need `board()` in an app.
 - **Reach.** It listens on 127.0.0.1 only (port 4100), at `/api/board`,
-  prints the `--url` and `BOARD_URL` that reach it, and opens the inspector.
+  prints the `--url` and `BOARD_URL` that reach it, and serves the inspector
+  on the same port, for every path outside `/api/board`, and opens it.
   `--allow-host <host>` names a host a proxy in front serves it on: a request
   whose `Host` is one reaches the board at that host's URL (`https` when the
   proxy sends `X-Forwarded-Proto: https`), which its discovery answers and a
   token there must be minted for. Any other `Host` reaches it at its own
-  `127.0.0.1` URL, since a sender chooses it. The inspector it starts allows
-  the same hosts.
+  `127.0.0.1` URL, since a sender chooses it. The inspector answers the same
+  hosts, so one name reaches the board and its page.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
   (`oidcTokens({ local })` as `board()`'s `authenticate`), and signs one token for you, the OS user, into `~/.config/board/local/<hash of url>.json`, mode 0600, removed
   on exit. A handle in Node uses that file for a loopback URL when there's no
@@ -2187,8 +2189,13 @@ it, and nothing is hosted.
   updates in place and navigates without fetching. Your writes show at once and
   are confirmed by the stream.
 - **Local only.** It listens on 127.0.0.1 (port 4747, or any free port when
-  that's taken), and answers only requests whose `Host` is its own, so a web page
-  can't reach it through DNS rebinding. Every proxied request needs a per-run
+  that's taken; `serve` answers it on the board's port), and answers only
+  requests whose `Host` is its own, or one `--allow-host` names, so a web page
+  can't reach it through DNS rebinding. Its own name counts only for a request
+  no proxy forwarded: one with `X-Forwarded-For`, `X-Forwarded-Host`,
+  `X-Forwarded-Proto`, `Forwarded`, or `X-Real-IP` must name an allowed host,
+  since a caller behind a proxy that keeps `Host` can send `127.0.0.1`. A
+  request target that's no URL is a 400. Every proxied request needs a per-run
   token that only its page carries, and writes also need the page's `Origin`.
   Your credential for the board never leaves the CLI process.
 - **No dependencies for users.** The page is a React bundle built into the

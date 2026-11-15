@@ -384,15 +384,15 @@ vb serve [--port N] [--dir <dir>] [--no-inspect] [--no-open] [--allow-host <host
 
 Runs a board on this machine until Ctrl-C, at
 `http://127.0.0.1:4100/api/board` (`--port` picks another). Other commands
-reach it with `--url` or `BOARD_URL`, as it prints. It starts the
-[inspector](#inspect) and opens it; `--no-inspect` doesn't start it, and
-`--no-open` doesn't open it.
+reach it with `--url` or `BOARD_URL`, as it prints. It serves the
+[inspector](#inspect) on the same port, at `http://127.0.0.1:4100`, and opens
+it; `--no-inspect` serves the board alone, and `--no-open` doesn't open it.
 
 ```text
 $ vb serve
 serving a local board at http://127.0.0.1:4100/api/board as local:user:ada, its log in /Users/ada/src/www/.board  (Ctrl-C to stop)
 reach it with --url http://127.0.0.1:4100/api/board, or BOARD_URL=http://127.0.0.1:4100/api/board
-inspector at http://127.0.0.1:4747
+inspector at http://127.0.0.1:4100
 ```
 
 - **It keeps everything in `.board/`** at the Git checkout's root (and adds
@@ -424,8 +424,9 @@ vb serve --allow-host box.tailnet.ts.net
 - **Your token stays on this machine.** It's for the board's `127.0.0.1` URL,
   so the board refuses it at a host you allow. Whoever calls it there needs a
   token of their own, minted for that URL, that a [grant](#grants) lets in.
-- **The inspector answers the host too,** on its own port, and whoever reaches
-  it there acts as you. See
+- **The inspector answers the host too,** at `https://box.tailnet.ts.net`,
+  since it's on the board's port: one name reaches both. Whoever reaches the
+  page there acts as you. See
   [Behind a proxy](../03-guides/02-inspector.md#behind-a-proxy).
 - **A host is a name, with a port when the proxy isn't on its scheme's default
   one** (`box.local:8080`). Repeat the flag for more hosts.
@@ -1254,12 +1255,13 @@ vb wait --re 812 --after "$reply" --timeout 30m --json
 ### inspect
 
 ```text
-vb inspect [--port N] [--no-open]
+vb inspect [--port N] [--no-open] [--allow-host <host>]...
 ```
 
 Serves the board's web UI on 127.0.0.1, as you, and opens it. The port is 4747,
 or any free port when that's taken. Only board's own CLI has it, so without
-`vb` installed, `npx @vercel/board@latest inspect` runs it. See
+`vb` installed, `npx @vercel/board@latest inspect` runs it. [`vb serve`](#serve)
+serves it on its board's port instead. See
 [Inspector](../03-guides/02-inspector.md).
 
 ## Filters

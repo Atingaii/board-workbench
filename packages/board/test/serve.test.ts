@@ -187,6 +187,69 @@ describe('vb serve', () => {
     expect(await second.exited).toBe(0)
   })
 
+  it("serves the inspector beside the board, on its port, and the board alone with --no-inspect", async () => {
+    const { project, env } = await setup()
+    const serving = serveIn(project, env, ['--no-open'])
+    const url = await serving.url
+    const origin = new URL(url).origin
+    await expect.poll(serving.output, { timeout: 10_000 }).toContain(`inspector at ${origin}\n`)
+    // Every path outside the board's is the page's, as on the inspector's own server.
+    for (const path of ['/', '/c/local', '/settings/access']) {
+      const page = await fetch(`${origin}${path}`)
+      expect(page.status).toBe(200)
+      expect(await page.text()).toContain('<div id="root"></div>')
+    }
+    expect((await fetch(`${origin}/app.js`)).headers.get('content-type')).toContain('text/javascript')
+    // And the board is where it was.
+    expect(await (await fetch(url)).json()).toMatchObject({ url, audience: url })
+    expect((await vb(project, { ...env, BOARD_URL: url }, ['post', 'local', 'beside the page'])).code).toBe(0)
+    serving.child.kill('SIGINT')
+    expect(await serving.exited).toBe(0)
+
+    const alone = serveIn(project, env, ['--no-inspect'])
+    const bare = await alone.url
+    expect((await fetch(`${new URL(bare).origin}/`)).status).toBe(404)
+    expect(alone.output()).not.toContain('inspector at')
+    expect((await vb(project, { ...env, BOARD_URL: bare }, ['read', 'local'])).stdout).toContain('beside the page')
+    alone.child.kill('SIGINT')
+    expect(await alone.exited).toBe(0)
+  })
+
+  it('keeps serving after a path the page can\'t parse', async () => {
+    const { project, env } = await setup()
+    const serving = serveIn(project, env, ['--no-open'])
+    const url = await serving.url
+    const origin = new URL(url).origin
+    await expect.poll(serving.output, { timeout: 10_000 }).toContain(`inspector at ${origin}\n`)
+    // A request target HTTP allows and a URL doesn't: it's refused, and nothing stops.
+    expect((await forwarded(origin, '//[', {})).status).toBe(400)
+    expect((await fetch(`${origin}/`)).status).toBe(200)
+    expect((await fetch(url)).status).toBe(200)
+    serving.child.kill('SIGINT')
+    expect(await serving.exited).toBe(0)
+  })
+
+  it("gives a request a proxy forwarded the page only at a host you allowed, whatever Host it carries", async () => {
+    const { project, env } = await setup()
+    const serving = serveIn(project, env, ['--no-open', '--allow-host', 'box.tailnet.ts.net'])
+    const url = await serving.url
+    const origin = new URL(url).origin
+    await expect.poll(serving.output, { timeout: 10_000 }).toContain(`inspector at ${origin}\n`)
+    const own = new URL(url).host
+    // On this machine, by the server's own name: yours.
+    expect((await forwarded(origin, '/', { host: own })).status).toBe(200)
+    // Through a proxy, a caller can send that name too: it isn't on this machine, so it's no one's page.
+    for (const header of ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'x-real-ip'])
+      expect((await forwarded(origin, '/', { host: own, [header]: 'anything' })).status, header).toBe(421)
+    expect((await forwarded(origin, '/board/me', { host: `localhost:${new URL(url).port}`, 'x-forwarded-host': 'box.tailnet.ts.net' })).status).toBe(421)
+    // At the host you allowed, it's the page, as before.
+    expect((await forwarded(origin, '/', { host: 'box.tailnet.ts.net', 'x-forwarded-host': 'box.tailnet.ts.net', 'x-forwarded-for': '100.64.0.1' })).status).toBe(200)
+    // The board takes tokens wherever it's reached, so it still answers: at its own URL, for a name you didn't allow.
+    expect(JSON.parse((await forwarded(url, '', { host: own, 'x-forwarded-for': '100.64.0.1' })).body)).toMatchObject({ url, audience: url })
+    serving.child.kill('SIGINT')
+    expect(await serving.exited).toBe(0)
+  })
+
   it("opens the inspector as you on this board, whatever BOARD_TOKEN holds", async () => {
     const { project, env } = await setup()
     const serving = serveIn(project, { ...env, BOARD_TOKEN: 'not-a-token-for-this-board' }, ['--no-open'])
@@ -223,10 +286,10 @@ describe('vb serve', () => {
     expect(await serving.exited).toBe(0)
   })
 
-  it('opens the inspector to a host you allow', async () => {
+  it('opens the inspector to a host you allow, beside the board there', async () => {
     const { project, env } = await setup()
     const serving = serveIn(project, env, ['--no-open', '--allow-host', 'box.tailnet.ts.net'])
-    await serving.url
+    const url = await serving.url
     await expect.poll(serving.output, { timeout: 10_000 }).toMatch(/inspector at http:\/\/127\.0\.0\.1:\d+\n/)
     const inspector = /inspector at (\S+)/.exec(serving.output())![1]!
     const page = await forwarded(inspector, '/', { host: 'box.tailnet.ts.net' })
@@ -236,6 +299,8 @@ describe('vb serve', () => {
     const me = await forwarded(inspector, '/board/me', { host: 'box.tailnet.ts.net', 'x-inspect-token': token })
     expect(JSON.parse(me.body)).toMatchObject({ actor: `local:user:${localHandle()}` })
     expect((await forwarded(inspector, '/', { host: 'evil.example' })).status).toBe(421)
+    // One name reaches both: the board is under it too.
+    expect(JSON.parse((await forwarded(url, '', { host: 'box.tailnet.ts.net' })).body)).toMatchObject({ url: 'http://box.tailnet.ts.net/api/board' })
     serving.child.kill('SIGINT')
     expect(await serving.exited).toBe(0)
   })

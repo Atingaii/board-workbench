@@ -448,7 +448,8 @@ included, post to Slack and GitHub.
   tabs of one view at `/settings/<section>`, reached from the sidebar's foot.
   Links are text, buttons act, and a view says little.
 - **The proxy acts as you, so it trusts nothing but its own page.** It binds
-  127.0.0.1, rejects any `Host` that isn't its own (DNS rebinding), requires the
+  127.0.0.1, rejects any `Host` that isn't its own (DNS rebinding), and its own
+  on a request a proxy forwarded (a caller behind one can send it), requires the
   per-run token on every `/board` request and the page's `Origin` on writes.
   Keep all of them. That's why attachments render from `blob:` URLs: the page
   fetches each file with its token, since an `<img>` can't send one.
