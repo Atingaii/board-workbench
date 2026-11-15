@@ -4,7 +4,7 @@ import type { ExternalCopy, Message, SyncedThread } from '../contract/folds.ts'
 import { externalMessageKey } from '../contract/external.ts'
 import { mentionTerms } from '../contract/mentions.ts'
 import { concernedMessageId, project, projectSync, syncReads, type Before, type Change, type SyncChange } from './project.ts'
-import type { MessageFilter, MessageTables, Page, ThreadSummary } from './types.ts'
+import type { MessageFilter, MessageTables, Page, ThreadsPage, ThreadSummary } from './types.ts'
 
 /** One statement, with `$1`-style placeholders. */
 export type Sql = { text: string; values: unknown[] }
@@ -365,7 +365,7 @@ export function sqlTables(db: Db): MessageTables {
     return db.commit(next ? claimNext(event.index) : claim(event.index), statements(event.index, written))
   }
 
-  function threadsQuery(filter: MessageFilter, page: Page): Sql {
+  function threadsQuery(filter: MessageFilter, page: ThreadsPage): Sql {
     const p = new Params()
     const where = ['r.re is null']
     // A thread's messages are all in its root's channel: that filter goes on the root, where an index has it.
@@ -376,12 +376,15 @@ export function sqlTables(db: Db): MessageTables {
     if (matching.length > 0)
       where.push(`r.id in (select coalesce(m.re, m.id) from board_messages m where ${matching.join(' and ')})`)
     if (page.after !== undefined) where.push(`r.at > ${p.add(page.after)}`)
+    if (page.before !== undefined) where.push(`(r.at < ${p.add(page.before.at)} or (r.at = ${p.add(page.before.at)} and r.id < ${p.add(page.before.id)}))`)
     const order = page.after !== undefined ? 'asc' : 'desc'
+    // Backward, one more than the page: whether it's there says if an older page is.
+    const limit = page.after !== undefined ? page.limit : page.limit + 1
     return {
-      text: `select r.data as data, r.replies as replies, l.data as last
+      text: `select r.data as data, r.replies as replies, r.at as at, l.data as last
 from board_messages r left join board_messages l on l.id = r.at and r.at <> r.id
 where ${where.join(' and ')}
-order by r.at ${order} limit ${p.add(page.limit)}`,
+order by r.at ${order}, r.id ${order} limit ${p.add(limit)}`,
       values: p.values,
     }
   }
@@ -469,8 +472,12 @@ where v.message_id in (${p.list([...new Set(ids)])})
     async threads(filter, page) {
       if (filter.mentions) await mentionsReady()
       const [positions, rows] = await db.read([positionSql, threadsQuery(filter, page)])
-      const threads = rows!.map(summary)
-      return { threads: page.after !== undefined ? threads : threads.reverse(), position: position(positions!) }
+      const listed = rows!.map((found) => ({ ...summary(found), at: Number(found.at) }))
+      if (page.after !== undefined) return { threads: listed.map(({ at: _, ...thread }) => thread), position: position(positions!) }
+      const shown = listed.slice(0, page.limit)
+      const oldest = shown.at(-1)
+      const older = listed.length > page.limit && oldest ? { at: oldest.at, id: oldest.root.id } : null
+      return { threads: shown.reverse().map(({ at: _, ...thread }) => thread), position: position(positions!), older }
     },
 
     async roots(filter, page) {

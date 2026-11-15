@@ -10,7 +10,7 @@ import { here, Link, navigate, route, useLocation, useNow, useTypeToFocus } from
 import { Settings } from './settings.tsx'
 import { Sidebar } from './sidebar.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
-import { byWritten, channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
+import { byWritten, channelRows, channelThreads, filtering, knownLabels, listingOf, matches, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
 import { Header, nativeMenu, ResizeHandle, type KnownLabels } from './ui.tsx'
 import { boardWords, cadence, firstLine, until } from './words.ts'
 
@@ -286,14 +286,22 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   useEffect(() => {
     if (filtering(filter)) void board.loadFiltered(channel, filter)
   }, [channel, key])
-  const { threads: all, pending: posts } = useMemo(() => channelThreads(state, channel), [state.messages, state.ops, state.pending, state.actors, channel])
+  // The board's thread list, by latest activity; a filter, or a board from before `older`, the messages loaded.
+  const listed = !!listingOf(state, channel) && !filtering(filter)
+  const { threads: all, pending: posts } = useMemo(
+    () => (listed ? channelRows(state, channel) : channelThreads(state, channel)),
+    [state.messages, state.ops, state.pending, state.actors, state.listings, listed, channel],
+  )
   // A filtered channel shows the threads where anything matches.
   const threads = filtering(filter) ? all.filter((t) => matches(state, t.root, filter) || t.replies.some((r) => matches(state, r, filter))) : all
   const pending = filtering(filter) ? [] : posts
   const roots = threads.map((t) => t.root)
-  const replies = new Map(threads.map((t) => [t.root.id, t.replies]))
+  const summaries = new Map(threads.map((t) => [t.root.id, t.summary]))
   const info = state.channels[channel]
-  const newest = [...roots, ...threads.flatMap((t) => t.replies)].sort(byWritten).at(-1)?.id ?? ''
+  const newest = listed
+    ? (threads.at(-1)?.summary.last ?? threads.at(-1)?.root)?.id ?? ''
+    : [...roots, ...threads.flatMap((t) => t.replies)].sort(byWritten).at(-1)?.id ?? ''
+  const activeAt = (m: MessageView) => summaries.get(m.id)?.last?.createdAt ?? m.createdAt
   return (
     <>
       <Header
@@ -309,8 +317,8 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
         {roots.length === 0 && pending.length === 0 && (
           <p className="empty">{loading ? 'loading…' : filtering(filter) ? 'nothing matches these filters' : 'no messages yet: say something'}</p>
         )}
-        <Messages messages={roots} now={options.now} options={{ ...options, replies: (m) => replies.get(m.id) ?? [] }} />
-        <Pendings posts={pending} me={state.me!} after={roots.at(-1)} afterHasReplies={(replies.get(roots.at(-1)?.id ?? '')?.length ?? 0) > 0} />
+        <Messages messages={roots} now={options.now} options={{ ...options, summary: (m) => summaries.get(m.id) }} {...(listed ? { at: activeAt } : {})} />
+        <Pendings posts={pending} me={state.me!} after={roots.at(-1)} afterHasReplies={(summaries.get(roots.at(-1)?.id ?? '')?.count ?? 0) > 0} />
       </Feed>
       <Composer
         scope={`channel:${channel}`}
