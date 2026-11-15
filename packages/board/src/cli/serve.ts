@@ -128,7 +128,9 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
     // At a host Tailscale serves it on, a request's URL is that host's, since `originOf` allowed it.
     authenticate: tailnet.size > 0 ? tailscale(tokens, (audience) => tailnet.has(new URL(audience).host)) : tokens,
     // No `url`: the board is at the URL a request reaches it at, a token's audience there, and
-    // `originOf` lets a request name only this server's own or a host you allowed.
+    // `originOf` lets a request name only this server's own or a host you allowed. So this handle
+    // knows no URL of its own: its `url` is the in-process one, and `sandboxPolicy()` has none to
+    // give. It only serves requests here: hand it nothing that needs either.
     basePath: MOUNT,
   })
   try {
