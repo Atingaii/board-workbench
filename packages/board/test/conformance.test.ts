@@ -170,7 +170,7 @@ describe('the conformance kit', () => {
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
     expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 23 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
@@ -424,6 +424,31 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')), { withCan: withCan(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')) })
     expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect((await preview('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', branch: 'jb/watchers', watch: {} }])
+  })
+
+  it('skips paging back on a board from before `older`, and fails one that lists a thread twice', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const paging = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'paging').map((check) => [check.status, check.detail])
+    const unpaged: Fetch = async (request) => {
+      const response = await board.fetch(request)
+      if (!new URL(request.url).pathname.endsWith('/threads') || !response.ok) return response
+      const { older: _, ...page } = await response.json()
+      return Response.json(page)
+    }
+    expect(paging(await conformance(await clientOf(unpaged)))).toEqual([
+      ['skipped', "this board doesn't page threads back: its pages have no older"],
+      ['skipped', "this board doesn't page threads back: its pages have no older"],
+    ])
+    // A board whose `older` starts over: the second page is the first again.
+    const restarted: Fetch = async (request) => {
+      const url = new URL(request.url)
+      if (!url.pathname.endsWith('/threads')) return board.fetch(request)
+      const again = url.searchParams.get('before') === 'again'
+      url.searchParams.delete('before')
+      const page = await (await board.fetch(new Request(url, request))).json()
+      return Response.json({ ...page, older: again ? null : page.older && 'again' })
+    }
+    expect(paging(await conformance(await clientOf(restarted)))[0]).toEqual(['failed', expect.stringMatching(/^paging back should list each thread once, got \[/)])
   })
 
   it("fails a board that reads who writes as boards did before: a profile's name alone, an avatar from x-board-avatar, and a session on each by", async () => {

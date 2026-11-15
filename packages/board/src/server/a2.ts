@@ -26,7 +26,7 @@ import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readable
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { createTasks, taskLimits } from './tasks.ts'
-import type { BoardStore, MessageFilter } from '../store/types.ts'
+import type { BoardStore, MessageFilter, ThreadPosition } from '../store/types.ts'
 import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type SyncEntrySpec } from './registry.ts'
@@ -75,6 +75,15 @@ function cursorAt(value: string): number {
   const index = indexOf(value)
   if (index === null) throw badRequest(`${value} isn't a cursor or a message ID on this board`, 'invalid_cursor')
   return index
+}
+
+/** A `/threads` page's `older` on this board: where its oldest thread stands, its latest message's index then its root's. */
+const olderRef = (position: ThreadPosition) => `${position.at}.${position.id}`
+
+function olderAt(value: string): ThreadPosition {
+  const match = /^(\d{1,15})\.(\d{1,15})$/.exec(value)
+  if (!match) throw badRequest(`${value} isn't a page of threads on this board`, 'invalid_cursor')
+  return { at: Number(match[1]), id: Number(match[2]) }
 }
 
 /** The message a ref in a request names, as its log index, or a 404 for one that names nothing here. */
@@ -521,14 +530,16 @@ function build(options: A2Options, binding: BoardBinding) {
       const { principal, actor } = (await identityOf(caller))
       const { state: actors } = await session.state(actorsReducer)
       const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors, access: principal.access }), principal.access)
-      const { threads, position } = await reads.threads(filter, {
+      const { threads, position, older } = await reads.threads(filter, {
         ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
+        ...(query.before !== undefined ? { before: olderAt(query.before) } : {}),
         limit: query.limit ?? 50,
       })
       const reader = await reads.reader(principal.access, threads.flatMap((t) => (t.last ? [t.root, t.last] : [t.root])))
       return {
         threads: threads.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
         cursor: ref(Math.min(position, through)),
+        ...(older !== undefined ? { older: older && olderRef(older) } : {}),
       }
     },
     async message(caller, { id }, signal) {

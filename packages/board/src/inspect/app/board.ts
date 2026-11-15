@@ -10,6 +10,7 @@ import { board, BoardError, type Attachment, type EventsState, type ExplainPrinc
 // Everything under that line reads as it would in your app: plain `team.*` calls.
 import { http } from '../../backend-http/index.default.ts'
 import { toast } from './chrome.ts'
+import { listing } from './listing.ts'
 import * as store from './store.ts'
 import { refusal, said } from './words.ts'
 
@@ -161,7 +162,7 @@ export async function boot() {
   const flush = () => {
     const events = queue
     queue = []
-    set((s) => events.reduce(store.applyEvent, s))
+    listed.apply(events)
     // A schedule's own state isn't in the feed, but its sends are: one that landed means the list moved.
     if (events.some((event) => event.message?.schedule !== undefined)) void loadSchedules()
   }
@@ -200,27 +201,21 @@ const readChannel = (channel: string, before?: string) => team.messages({ channe
 const readThread = (id: string) => team.thread(id)
 // #endregion
 
-/** Whether older messages exist past what's loaded, per channel. */
-const exhausted = new Set<string>()
+/**
+ * Each channel's view, a page of its threads at a time (by messages on a board from before `older`), through
+ * whichever handle you post as now.
+ */
+const listed = listing(
+  { threads: (query) => team.threads(query), messages: ({ channel, before }) => readChannel(channel, before) },
+  () => state,
+  set,
+)
 
-export const loadChannel = (channel: string) =>
-  once(`channel:${channel}`, async () => {
-    const page = await readChannel(channel)
-    if (page.messages.length < PAGE) exhausted.add(channel)
-    set((s) => store.page(s, channel, page.messages))
-  })
+export const loadChannel = (channel: string) => once(`channel:${channel}`, () => listed.load(channel))
 
 export async function loadOlder(channel: string): Promise<boolean> {
-  await loadChannel(channel)
-  // From where its pages reached, not from the oldest message held: a task or a thread loaded
-  // some other way can be older than that, and reading back from it would skip what's between.
-  const reached = state.paged[channel]
-  if (exhausted.has(channel) || !reached) return false
   try {
-    const page = await readChannel(channel, reached.id)
-    if (page.messages.length < PAGE) exhausted.add(channel)
-    set((s) => store.page(s, channel, page.messages))
-    return !exhausted.has(channel)
+    return await listed.older(channel)
   } catch (error) {
     toast(said(error))
     return true

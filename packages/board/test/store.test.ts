@@ -174,24 +174,21 @@ describe('the inspector store', () => {
     expect(continues(message(1, { createdAt: at(0) }), message(2, { createdAt: at(1) }))).toBe(false)
   })
 
-  it('shows a channel as far back as its pages have read: a thread that came in some other way waits for its place', () => {
+  it("lists a channel by the board's thread pages: a task that came in from the task list shows there once a page has it", () => {
     const on = (day: string) => `2026-${day}T00:00:00.000Z`
-    // The channel's newest page, then a task from the list that is older than anything in it.
-    let state = store.page(start, 'ops', [message(101, { createdAt: on('10-02') }), message(102, { createdAt: on('10-03') })])
-    state = store.merge(state, [message(5, { createdAt: on('09-01'), text: 'an old task' })])
-    const roots = (s: store.State, all?: boolean) => store.channelThreads(s, 'ops', all).threads.map((t) => t.root.id)
-    expect(roots(state)).toEqual(['101', '102'])
-    // It is held: its thread opens, and a view that asked the board for older matches by a filter shows it.
+    const row = (m: MessageView) => ({ message: m, replies: 0, last: null })
+    // The channel's first page, then an open task from the list that is older than anything on it.
+    let state = store.listing(start, 'ops')
+    state = store.mergeThreads(state, 'ops', { threads: [row(message(101, { createdAt: on('10-02') })), row(message(102, { createdAt: on('10-03') }))], cursor: '102', older: 'before-101' }, 'first')
+    const task = message(5, { createdAt: on('09-01'), text: 'an old task' })
+    state = store.merge(state, [task])
+    const roots = (s: store.State) => store.channelRows(s, 'ops').threads.map((t) => t.root.id)
+    // It is held, for the Tasks view and its thread, and the channel shows no thread above ones it hasn't read.
     expect(store.thread(state, '5')!.root.text).toBe('an old task')
-    expect(roots(state, true)).toEqual(['5', '101', '102'])
-    // A page further back that stops short of it still leaves it out; one that reaches past it shows it in its place.
-    state = store.page(state, 'ops', [message(60, { createdAt: on('09-15') })])
-    expect(roots(state)).toEqual(['60', '101', '102'])
-    state = store.page(state, 'ops', [message(3, { createdAt: on('08-01') })])
-    expect(roots(state)).toEqual(['3', '5', '60', '101', '102'])
-    // A channel no page has read shows what it holds, and an empty page moves nothing.
-    expect(store.channelThreads(store.merge(start, [message(7, { channel: 'dev' })]), 'dev').threads.map((t) => t.root.id)).toEqual(['7'])
-    expect(roots(store.page(state, 'ops', []))).toEqual(['3', '5', '60', '101', '102'])
+    expect(roots(state)).toEqual(['101', '102'])
+    // Once a page further back has it, it shows in its place.
+    state = store.mergeThreads(state, 'ops', { threads: [row(task)], cursor: '102', older: null }, 'older')
+    expect(roots(state)).toEqual(['5', '101', '102'])
   })
 
   it('offers the profiles the board has seen a principal write as, then the usual agents, each once', () => {

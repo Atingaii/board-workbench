@@ -11,7 +11,7 @@ import { BlockCard } from './blocks.tsx'
 import * as board from './board.ts'
 import { setEditing, toast, useEditing } from './chrome.ts'
 import { Ago } from './nav.tsx'
-import { bodyParts, continues, isTask, schemaOf, sourcePlatform, type Groupable, type Pending, type State } from './store.ts'
+import { bodyParts, continues, isTask, schemaOf, sourcePlatform, type Groupable, type Pending, type ReplySummary, type State } from './store.ts'
 import { TaskLine } from './task.tsx'
 import { authorName, fileSize, shownName, timingWords } from './words.ts'
 import { ContextMenuArea, EmojiPicker, fieldMenu, LabelEditor, Panel, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
@@ -27,7 +27,7 @@ export type RowOptions = {
   /** Shown after the author, e.g. "in #prs" in the activity view. */
   context?: (m: MessageView) => ReactNode
   /** A root's replies, summarized under it. */
-  replies?: (m: MessageView) => MessageView[]
+  summary?: (m: MessageView) => ReplySummary | undefined
   /** Sync key → platform, for each message's source mark. */
   platforms?: Record<string, string>
   /** The page's state, where a root that's a task shows it in a line; unset in a thread, whose pane shows it in full. */
@@ -242,14 +242,16 @@ export function DayDivider({ iso, now }: { iso: string; now: number }) {
 /**
  * A list of messages with day dividers and author grouping. `after` is what
  * came just before the list (a thread's root), so its day isn't repeated.
+ * `at` is the time a message is listed by, when it isn't when it was written.
  */
-export function Messages(props: { messages: MessageView[]; options: RowOptions; now: number; after?: MessageView }) {
+export function Messages(props: { messages: MessageView[]; options: RowOptions; now: number; after?: MessageView; at?: (m: MessageView) => string }) {
+  const at = props.at ?? ((m: MessageView) => m.createdAt)
   const rows: ReactNode[] = []
   props.messages.forEach((m, i) => {
     const previous = props.messages[i - 1]
     const before = previous ?? props.after
-    if (!before || day(before.createdAt) !== day(m.createdAt)) rows.push(<DayDivider key={`d${m.id}`} iso={m.createdAt} now={props.now} />)
-    const grouped = continues(previous, m, previous ? (props.options.replies?.(previous).length ?? 0) > 0 : false)
+    if (!before || day(at(before)) !== day(at(m))) rows.push(<DayDivider key={`d${m.id}`} iso={at(m)} now={props.now} />)
+    const grouped = continues(previous, m, previous ? (props.options.summary?.(previous)?.count ?? 0) > 0 : false)
     rows.push(<MessageRow key={m.id} m={m} options={props.options} continued={grouped} />)
   })
   return <>{rows}</>
@@ -310,7 +312,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
   const mine = m.by.actor === options.me
   const reacted = (emoji: string) => (m.reactions[emoji] ?? []).includes(options.me)
   const toggle = (emoji: string) => void board.react(m.id, emoji, reacted(emoji))
-  const replies = m.re === null ? (options.replies?.(m) ?? []) : []
+  const replies = m.re === null ? options.summary?.(m) : undefined
   const thread = m.re ?? m.id
   // A task's state is its `board.task` label too, which its line already says.
   const labels = Object.entries(m.labels).filter(([key]) => !(key.startsWith('board.') && m.task))
@@ -407,15 +409,15 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
               ✗ didn't reach {target}: {error}
             </div>
           ))}
-          {replies.length > 0 && options.openThread && (
+          {replies && replies.count > 0 && options.openThread && (
             <button className="replies" onClick={() => options.openThread!(m.id)}>
               <span className="faces">
-                {[...new Map(replies.map((r) => [r.by.actor, r])).values()].slice(-3).map((r) => (
+                {replies.faces.map((r) => (
                   <Avatar key={r.by.actor} name={authorName(r)} url={r.author?.avatar} size={16} />
                 ))}
               </span>
-              {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
-              <Ago iso={replies.at(-1)!.createdAt} prefix=" · last " />
+              {replies.count} {replies.count === 1 ? 'reply' : 'replies'}
+              {replies.last && <Ago iso={replies.last.createdAt} prefix=" · last " />}
             </button>
           )}
         </div>

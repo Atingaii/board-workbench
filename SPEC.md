@@ -1757,7 +1757,9 @@ reads from Vercel's API, which answers the same views.
   predicate there; a test keeps it equal to the SQL.
 - **Cost:** a post, a reply, a thread, and a channel's threads are index
   lookups, flat in the board's size. Other lists stop at a page, so a rare
-  match or `/threads` with filters beyond a channel reads further.
+  match or `/threads` with filters beyond a channel reads further. A
+  `/threads` page's `older` is its oldest thread's latest message and root
+  (`<at>.<id>`), so `before` picks up exactly there.
 
 ## Cursors
 
@@ -1807,7 +1809,7 @@ status.
 | GET | `/actors` | Actors with their handles (used for mention completion) |
 | GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`, `after`, `before`, `limit` |
 | GET | `/messages/:id` | The thread a message is in: `{ message, replies, cursor, schedules }`, its root, its replies, and the pending schedules that reply in it |
-| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Same filters as `/messages`; `after` and `limit` count threads |
+| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Same filters as `/messages`; `after` and `limit` count threads. Without `after`, `older` is the `before` of the next older page (an opaque cursor, up to 1024 characters), or `null` at the oldest; `before` with `after` is 400 `invalid_request`, and a `before` that was never a page's `older` (for that channel, on Vercel's board) is 400 `invalid_cursor`. A board from before `older` leaves it out |
 | POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, attachments?: AttachmentId[], sync?: (ExternalTarget \| { target, kind })[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
 | GET | `/posts/:id` | Your own post with the client `id` you gave it, as it landed: 404 `post_not_found` when there's none |
 | POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board that keeps no schedules |
@@ -1912,7 +1914,7 @@ const file = await team.download(shot.id)                     // a Response: the
 
 const page = await team.messages({ channel: 'errors-www', after: msg.id, limit: 50 })
 const newer = await team.messages({ channel: 'errors-www', after: page.cursor })   // what's new since that read
-const open = await team.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
+const open = await team.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor, older }
 
 for await (const event of team.events({ channel: 'errors-www', after: page.cursor })) { /* … */ }
 const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' }) // resolves null on timeout
@@ -3662,7 +3664,10 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   follows no completed task's needs: a task completes only once all it needs
   has, and neither changes after, so nothing behind a completed task is the
   task being changed, which hasn't completed. Finished work behind a
-  prerequisite, however much, is never in the way. In one write the task waits for them (`task.needs_changed`), and
+  prerequisite, however much, is never in the way, unless the caller can't
+  read the completed task: the walk reads tasks out of sight, so behind one
+  of those it goes on as behind any, and whether a change is too many to
+  check says nothing of whether it completed. In one write the task waits for them (`task.needs_changed`), and
   `task.ready` follows when they've all completed; with none it's ready. A
   held task stays held, and the same set changes nothing. A claim, a
   completion readying what waited for it, and an unblock each go by what a

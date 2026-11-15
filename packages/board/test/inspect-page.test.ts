@@ -143,31 +143,6 @@ describe("the inspector's page, starting a task", () => {
   })
 })
 
-describe("the inspector's page, reading a channel back", () => {
-  it('goes on from where its pages reached, not from an older task the list brought in', async () => {
-    const at = (n: number) => new Date(Date.UTC(2026, 8, 1) + n * 60_000).toISOString()
-    const message = (id: number): MessageView => ({ ...taskRoot({ channel: 'history', text: `message ${id}` }), id: String(id), version: id, revision: id, thread: `t${id}`, labels: {}, createdAt: at(id), task: undefined }) as MessageView
-    // A full page of the channel's newest, #101 to #300, and an open task from long before it.
-    const newest = Array.from({ length: 200 }, (_, n) => message(101 + n))
-    const old = { ...taskRoot({ channel: 'history', text: 'an old task' }), id: '5', version: 5, revision: 5, thread: 't5', createdAt: at(5) }
-    next.set('GET /messages', [() => Response.json({ messages: newest, cursor: '300' }), () => Response.json({ messages: [message(100)], cursor: '300' })])
-    next.set('GET /tasks', [() => Response.json({ tasks: [{ message: old, replies: 0, last: null }], cursor: '5' })])
-
-    await page.loadChannel('history')
-    await page.loadTasks({ state: 'open', label: [] })
-    // The task is the page's, for the Tasks view and its thread.
-    expect(page.getState().messages['5']).toMatchObject({ text: 'an old task' })
-
-    await page.loadOlder('history')
-    // The next page back is the one before #101: nothing between it and the task is skipped.
-    expect(asked.filter((request) => request.method === 'GET' && request.path === '/messages').map((request) => [request.query.channel, request.query.before])).toEqual([
-      ['history', undefined],
-      ['history', '101'],
-    ])
-    expect(page.getState().messages['100']).toMatchObject({ text: 'message 100' })
-  })
-})
-
 describe("the inspector's page, working a task it claimed", () => {
   it('keeps a claim it made while the page changed under it, and completes with it', async () => {
     const claimed = { ...taskRoot({ channel: 'work', text: 'fix the export' }), id: '70', version: 71, revision: 71, thread: 't70', labels: { 'board.task': 'claimed' } }

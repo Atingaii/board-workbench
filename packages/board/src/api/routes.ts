@@ -83,10 +83,17 @@ export const MessagesQuery = Filters.extend({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
-/** `limit` counts threads: each thread with a matching message, by its latest reply. */
+/**
+ * `limit` counts threads: each thread with a matching message, by its latest reply. `before` is a page's
+ * `older`, for the threads last active before it; it pages backward, so it takes no `after`.
+ */
 export const ThreadsQuery = Filters.extend({
   after: Ref.optional(),
+  before: z.string().min(1).max(1024).optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
+}).refine((query) => query.before === undefined || query.after === undefined, {
+  message: '`before` pages back from a page\'s `older`, and `after` reads forward: pass one',
+  path: ['before'],
 })
 
 export const EventsQuery = Filters.extend({
@@ -1024,7 +1031,15 @@ export type ThreadView = {
 }
 /** A thread at a glance: its root, how many replies it has, and the latest one (null when none). Deleted replies don't count. */
 export type ThreadSummaryView = { message: MessageView; replies: number; last: MessageView | null }
-export type ThreadsPage = { threads: ThreadSummaryView[]; cursor: string }
+export type ThreadsPage = {
+  threads: ThreadSummaryView[]
+  cursor: string
+  /**
+   * The `before` for the threads last active before this page's, or null when there are none. A board that pages
+   * threads backward sends it on every read without `after`; one from before it leaves it out.
+   */
+  older?: string | null
+}
 /** Tasks, oldest first, each as its thread's summary: `message.task` is the task. `cursor` reads the next page, as `after`. */
 export type TasksPage = { tasks: ThreadSummaryView[]; cursor: string }
 export type EventsPage = { events: BoardEventView[]; cursor: string }
@@ -1091,7 +1106,7 @@ export const routes = {
   actors: { method: 'GET', path: '/actors' },
   messages: { method: 'GET', path: '/messages', query: MessagesQuery },
   message: { method: 'GET', path: '/messages/:id' },
-  /** Threads with a matching message, one summary each, by latest activity. */
+  /** Threads with a matching message, one summary each, by latest activity. `before` takes a page's `older`. */
   threads: { method: 'GET', path: '/threads', query: ThreadsQuery },
   post: { method: 'POST', path: '/messages', body: PostBody },
   edit: { method: 'POST', path: '/messages/:id/edit', body: EditBody },

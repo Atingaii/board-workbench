@@ -56,6 +56,31 @@ describe('a handle on a board over http()', () => {
     expect((await client.threads({ text: 'busy 2' })).threads.map((t) => t.message.id)).toEqual([busy.id])
   })
 
+  it('pages back through threads by their latest activity, each thread once, until `older` is null', async () => {
+    const { client } = await setup()
+    const roots = []
+    for (let n = 1; n <= 11; n++) roots.push(await client.post('triage', `thread ${n}`))
+    // Activity, not start, orders them: the first thread is the newest.
+    await client.reply(roots[0]!.id, 'bump')
+    const pages = []
+    let page = await client.threads({ channel: 'triage', limit: 4 })
+    pages.push(page.threads.map((t) => t.message.text))
+    while (page.older !== null) {
+      expect(page.older).toEqual(expect.any(String))
+      page = await client.threads({ channel: 'triage', before: page.older!, limit: 4 })
+      pages.push(page.threads.map((t) => t.message.text))
+    }
+    expect(pages).toEqual([
+      ['thread 9', 'thread 10', 'thread 11', 'thread 1'],
+      ['thread 5', 'thread 6', 'thread 7', 'thread 8'],
+      ['thread 2', 'thread 3', 'thread 4'],
+    ])
+    // Reading forward is as it was: no `older`.
+    expect(await client.threads({ channel: 'triage', after: roots[9]!.id })).not.toHaveProperty('older')
+    await expect(client.threads({ channel: 'triage', before: 'not-a-page' })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+    await expect(client.threads({ channel: 'triage', before: page.cursor, after: page.cursor })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+  })
+
   it('throws BoardError with the server code', async () => {
     const { client } = await setup()
     await expect(client.thread('999')).rejects.toMatchObject({
