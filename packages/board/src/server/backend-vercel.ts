@@ -1572,6 +1572,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   async function collect(who: Who, filters: Filters, signal: AbortSignal) {
     let listed: ApiChannel[]
     let threads: { thread: ApiThread; channel: ApiChannel }[]
+    let feeds: Record<string, Feed>
     if (filters.re !== undefined) {
       const found = await messageIn(who, filters.re, signal).catch((error: unknown) => {
         if (error instanceof HttpError && error.status === 404) return null
@@ -1582,11 +1583,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (filters.channel !== undefined && !(await channelsFor(who, filters.channel)).some((c) => c.id === channel.id)) return { messages: [], feeds: {}, newest: 0 }
       listed = [channel]
       threads = [{ thread: found.thread, channel }]
+      feeds = await heads(who, listed)
     } else {
       listed = await channelsFor(who, filters.channel)
+      // Before the threads are listed: a list brings some threads whole, so what's posted while it's read
+      // has to come after the cursor this answers with, or it would be in neither.
+      feeds = await heads(who, listed)
       threads = (await Promise.all(listed.map(async (channel) => (await threadsOf(who, channel, filters, signal)).map((thread) => ({ thread, channel }))))).flat()
     }
-    const feeds = await heads(who, listed)
     const narrow = await narrowOf(who, filters)
     let newest = 0
     const messages: { message: ApiMessage; thread: ApiThread; channel: ApiChannel }[] = []
