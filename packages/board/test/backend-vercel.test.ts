@@ -497,6 +497,62 @@ describe('vercel()', () => {
     expect((await waiting).events.map((event) => event.message?.text)).toEqual([`@${me.handle} this one`])
   }, 15_000)
 
+  it('filters a channel by what its messages say without reading the threads its list brought whole', async () => {
+    const found = async (inlineThreadMessages: boolean) => {
+      const api = fakeMessageboard({ inlineThreadMessages })
+      const team = handleOn(api)
+      // 30 posts, 5 with a reply, and 2 with two: only those two are longer than their list shows.
+      const roots = []
+      for (let i = 0; i < 30; i++) roots.push(await team.post('archive', { text: i % 3 === 0 ? `note ${i} about osprey` : `note ${i}` }))
+      for (const root of roots.slice(0, 5)) await team.reply(root.id, { text: `osprey, re ${root.text}` })
+      for (const root of roots.slice(5, 7)) for (const text of ['first', 'osprey at last']) await team.reply(root.id, { text })
+      await team.threads({ channel: 'archive', limit: 1 })
+      api.requests.length = 0
+      const { threads } = await team.threads({ channel: 'archive', text: 'osprey' })
+      const { messages } = await team.messages({ channel: 'archive', text: 'osprey', after: roots[0]!.id })
+      return {
+        threads: threads.map((thread) => thread.message.text).sort(),
+        messages: messages.map((message) => message.text).sort(),
+        read: api.requests.filter((r) => /\/threads\/[^/]+\/messages$/.test(r)).length,
+      }
+    }
+    const inline = await found(true)
+    const today = await found(false)
+    // The same threads and messages either way: every one that says it, replies included.
+    expect(inline.threads).toEqual(today.threads)
+    expect(inline.messages).toEqual(today.messages)
+    expect(inline.threads).toHaveLength(14)
+    // A thread's messages are read only for the two that have more than their list brings, once per read.
+    expect(inline.read).toBe(4)
+    // Vercel's API before `include=messages` lists none, so each thread is read, as before.
+    expect(today.read).toBe(60)
+  })
+
+  it('misses nothing posted while a filtered read lists threads: its cursor is from before the list', async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true })
+    const val = handleOn(api, 'user:u_val')
+    const fetching = as(api, 'user:u_jb')
+    // A reply lands as the read takes where the feed is: on either side of its thread list, never between the two.
+    let landing: (() => Promise<unknown>) | null = null
+    const racing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input instanceof Request ? input.url : input))
+      if (landing && url.pathname.endsWith('/changes') && url.searchParams.get('from') === 'latest') {
+        const post = landing
+        landing = null
+        await post()
+      }
+      return fetching(input, init)
+    }) as typeof fetch
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: racing, files: api.files }) })
+    const root = await team.post('archive', { text: 'osprey nests here' })
+    landing = () => val.reply(root.id, { text: 'osprey, seen today' })
+    const read = await team.messages({ channel: 'archive', text: 'osprey', after: root.id })
+    const later = await team.poll({ channel: 'archive', after: read.cursor })
+    // In the read, or in the feed after its cursor: a watcher that reads on from it sees the reply.
+    const seen = [...read.messages.map((message) => message.text), ...later.events.map((event) => event.message?.text)]
+    expect(seen).toContain('osprey, seen today')
+  })
+
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
