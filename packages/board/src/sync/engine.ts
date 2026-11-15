@@ -764,7 +764,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
    * A message's text for a platform, through entry `key`, its mentions resolved as it posts and only
    * against that entry's own users. An `@handle` reads natively when one of them has it, or of
    * several, the one who wrote in the thread: `@support/malte` names one of support's users, and
-   * `@malte` is short for whichever of this sync's users that is, under its principal's name. An `@[actor-id]` reads natively when it's one of them,
+   * `@malte` is short for whichever of this sync's users that is, under its principal's name. An `@[actor-id]` reads natively when it's one of them (`@[slack:user:U0456]` also naming this sync's own profile of them),
    * and as the actor's name otherwise; an `@[email]`, as whoever the platform finds with it, or as
    * the email. The rest go as written.
    */
@@ -799,9 +799,18 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         return one(theirs) ?? (writers ? one(theirs.filter((user) => writers.has(user.id))) : null)
       }
       if (found.has(token.actor)) return found.get(token.actor) ?? token.actor
-      const actor = actors.byId[token.actor]
+      const actor = actorNamed(token.actor, actors)
       return actor ? (nativeMention(key, actor.id, actors) ?? actor.name) : null
     })
+  }
+
+  /**
+   * The actor an `@[actor-id]` names: that actor, or, when the board has none by that ID, this
+   * sync's own profile of it (`@[slack:user:U0456]` for `<principal>+slack:user:U0456`), as plain
+   * `@malte` is short for this sync's `<principal>/malte`.
+   */
+  function actorNamed(id: string, actors: Actors): (Actor & { verified?: true }) | null {
+    return actors.byId[id] ?? (actors.principal ? actors.byId[`${actors.principal}+${id}`] : undefined) ?? null
   }
 
   /**

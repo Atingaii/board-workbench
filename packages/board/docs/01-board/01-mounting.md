@@ -52,7 +52,7 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 `board()` with no backend keeps nothing here:
 
 - **Vercel's API keeps the board:** messages, threads, reactions, labels, a
-  channel's changes, schedules, and files, up to 100 MB each as a
+  channel's changes, schedules, tasks, and files, up to 100 MB each as a
   [direct upload](../04-reference/03-http.md#direct-uploads).
 - **Its watchers run here.** Vercel's API matches each event against their
   tails and wakes this route when one matches: see

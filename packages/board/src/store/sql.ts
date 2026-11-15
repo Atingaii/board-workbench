@@ -4,7 +4,7 @@ import type { ExternalCopy, Message, SyncedThread } from '../contract/folds.ts'
 import { externalMessageKey } from '../contract/external.ts'
 import { mentionTerms } from '../contract/mentions.ts'
 import { concernedMessageId, project, projectSync, syncReads, type Before, type Change, type SyncChange } from './project.ts'
-import type { MessageFilter, MessageTables, ThreadsPage, ThreadSummary } from './types.ts'
+import type { MessageFilter, MessageTables, Page, ThreadsPage, ThreadSummary } from './types.ts'
 
 /** One statement, with `$1`-style placeholders. */
 export type Sql = { text: string; values: unknown[] }
@@ -389,6 +389,29 @@ order by r.at ${order}, r.id ${order} limit ${p.add(limit)}`,
     }
   }
 
+  /** Roots that match, each with its summary, by ID: a root's own row holds its reply count and its latest reply. */
+  function rootsQuery(filter: MessageFilter, page: Page): Sql {
+    const p = new Params()
+    const where = ['m.re is null', ...clauses(filter, p)]
+    if (page.before !== undefined) where.push(`m.id < ${p.add(page.before)}`)
+    if (page.after !== undefined) where.push(`m.id > ${p.add(page.after)}`)
+    const order = page.after !== undefined ? 'asc' : 'desc'
+    return {
+      text: `select m.data as data, m.replies as replies, l.data as last
+from board_messages m left join board_messages l on l.id = m.at and m.at <> m.id
+where ${where.join(' and ')}
+order by m.id ${order} limit ${p.add(page.limit)}`,
+      values: p.values,
+    }
+  }
+
+  /** A thread summary from a row of a root joined with its latest reply. */
+  const summary = (found: Record<string, unknown>): ThreadSummary => ({
+    root: parse(found)!,
+    replies: Number(found.replies),
+    last: found.last === null || found.last === undefined ? null : (JSON.parse(String(found.last)) as Message),
+  })
+
   return {
     async position() {
       return position(await db.all(positionSql))
@@ -449,17 +472,18 @@ where v.message_id in (${p.list([...new Set(ids)])})
     async threads(filter, page) {
       if (filter.mentions) await mentionsReady()
       const [positions, rows] = await db.read([positionSql, threadsQuery(filter, page)])
-      const listed = rows!.map((found) => ({
-        root: parse(found)!,
-        replies: Number(found.replies),
-        last: found.last === null || found.last === undefined ? null : (JSON.parse(String(found.last)) as Message),
-        at: Number(found.at),
-      }))
+      const listed = rows!.map((found) => ({ ...summary(found), at: Number(found.at) }))
       if (page.after !== undefined) return { threads: listed.map(({ at: _, ...thread }) => thread), position: position(positions!) }
       const shown = listed.slice(0, page.limit)
       const oldest = shown.at(-1)
       const older = listed.length > page.limit && oldest ? { at: oldest.at, id: oldest.root.id } : null
       return { threads: shown.reverse().map(({ at: _, ...thread }) => thread), position: position(positions!), older }
+    },
+
+    async roots(filter, page) {
+      const [positions, rows] = await db.read([positionSql, rootsQuery(filter, page)])
+      const threads = rows!.map(summary)
+      return { threads: page.after !== undefined ? threads : threads.reverse(), position: position(positions!) }
     },
 
     async syncOf(thread) {

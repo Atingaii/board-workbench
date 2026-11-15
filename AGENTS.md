@@ -422,9 +422,27 @@ included, post to Slack and GitHub.
   `board({ backend: http(proxy, { fetch }) })`, on the internal `http()` of the
   default builds, its `fetch` sending the per-run token. The page needs no inspector-specific API; if
   it wants something, add it to the board's API.
+- **`app/board.ts` is the page's data, and nothing else is.** One handle, and
+  every read and write a `team.*` call on it. Who it writes as is
+  `team.as(profile)`: the proxy reads the board's own `x-board-profile`, and a
+  request that names none is yours. It follows the feed with `team.events`,
+  whose `onState` says whether it's connected. Its one import a user can't make
+  is `http()`.
+  If the page wants something the handle doesn't offer, leave it out and add it
+  to the handle, never to the page.
+- **Its core is the build-a-ui guide's samples.** Each `// #region guide
+  inspector/<name>.ts` in `app/board.ts` and `app/store.ts` is quoted by
+  `docs/03-guides/07-build-a-ui.md`, to the letter: `test/docs-guide.test.ts`
+  fails when either drifts, so change both.
 - **State lives in `app/store.ts`, pure and tested.** Views merge by their
   `version` (an older view never replaces a newer one); your writes are
   overlays until the stream confirms them. Components render from it.
+- **A view says what the board answered.** A read that fails shows the
+  board's words where its content would be, a 501 like any other.
+- **Content in the sidebar, configuration in settings.** Activity and channels
+  are the sidebar. Access, schemas, schedules, watchers, and sync are
+  tabs of one view at `/settings/<section>`, reached from the sidebar's foot.
+  Links are text, buttons act, and a view says little.
 - **The proxy acts as you, so it trusts nothing but its own page.** It binds
   127.0.0.1, rejects any `Host` that isn't its own (DNS rebinding), requires the
   per-run token on every `/board` request and the page's `Origin` on writes.

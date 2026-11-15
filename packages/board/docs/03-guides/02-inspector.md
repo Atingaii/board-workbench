@@ -21,6 +21,10 @@ The inspector is the board's own UI. Every board has it, whoever mounted it,
 and nothing is hosted: it runs on your machine for as long as the command
 does.
 
+The top of the sidebar says which board it is, and so does the tab's title. A
+team's board in Vercel's API shows its name over its host. Any other board
+shows its host over where it's mounted.
+
 | Flag | Does |
 | --- | --- |
 | `--port N` | Listens on that port. Without it, the inspector uses 4747, or any free port when 4747 is taken |
@@ -41,26 +45,49 @@ Everything you can do from the CLI, with the board laid out:
   (`?thread=812`), so a link opens the same view.
 - **Write.** Start threads with labels, reply, react from a picker, set and
   unset labels, and edit or delete your own messages. A toggle keeps a post on
-  the board instead of syncing it.
+  the board instead of syncing it, and the clock
+  [sends it later](../01-board/07-schedules.md), once or on a repeat.
 - **Files.** Attach files, or paste them into the composer. Images and video
   show inline, in a fixed frame so loading one doesn't move the page; other
   files are chips that download.
+- **Read data.** A message's [blocks](../01-board/04-messages.md#data) show as
+  cards where their fences are: the schema's name and version, its fields, and
+  the JSON on demand.
 - **Switch who you are.** Post as yourself, as an agent's profile (claude,
   codex, grok), or as a profile you name ("reviewer"), with an avatar you give it (an https
   URL). The page remembers each profile's avatar. Your permissions don't
   change: a profile is always shown with you.
-- **Debug sync.** Each sync entry's raw inbox lists what the platform sent,
-  newest first, as [`vb inbox`](../04-reference/01-cli.md) does.
+- **Make a channel.** The plus beside the channel list makes one before
+  anything posts to it, private if you say so.
 
 Messages also show where they came from (Slack, GitHub, WhatsApp), links to
-platform messages quoted under them, and any platform a message didn't reach.
+platform messages quoted under them, any platform a message didn't reach, and
+whether a schedule sent them. A thread's pane lists where it's synced, with a
+link to its copy on each platform, and what's scheduled to reply in it.
+
+## Settings
+
+The gear at the foot of the sidebar opens the board's configuration, a tab
+per section at `/settings/<section>`:
+
+| Section | Shows |
+| --- | --- |
+| access | What you may do, the board's [grants](../01-board/09-access.md#grants), a form that makes one, and revoke. Explain asks the board which grants decide a channel, for you or for a principal you name, and shows its answer |
+| schemas | The registry: each schema's versions, fields, and JSON Schema. Registers a version where you may |
+| schedules | What's scheduled, when it next sends, and how often. Cancels one |
+| watchers | The [watchers](../01-board/06-watchers.md#woken-by-the-board) boards elsewhere registered here, and what each tails |
+| sync | Each sync entry's raw inbox: what the platform sent, newest first, as [`vb inbox`](../04-reference/01-cli.md) does |
 
 ## How it works
 
-The page is another board client: a handle from `board()`, as in the CLI,
-on a local proxy at `/board`. Its `fetch` sends the page's own credential, a
-token only this run's page has, and the proxy forwards the board's API with
-yours:
+The page is another board client: a handle from `board()`, and every read and
+write is a method on it (`team.messages`, `team.schedule`, `team.explain`).
+Nothing in the page calls the board's routes by hand, and the inspector has no
+API of its own. In an app of yours the handle lives in server code, as
+`const team = board()`; this page's server is the CLI on your machine, so its
+handle is in the page and reaches the board through a local proxy at `/board`.
+Its `fetch` sends the page's own credential, a token only this run's page has,
+and the proxy forwards the board's API with yours:
 
 ```text
 browser ──▶ 127.0.0.1:4747/board/* ──▶ vb (adds your token) ──▶ https://team.example/api/board
@@ -69,7 +96,10 @@ browser ──▶ 127.0.0.1:4747/board/* ──▶ vb (adds your token) ──�
 It loads each view's snapshot, then follows the board's event feed from that
 snapshot's cursor, a long-poll at a time. Every event carries its message as it is afterwards, so
 the page updates in place and navigates without fetching again. Your writes
-show at once and are confirmed by the stream.
+show at once and are confirmed by the stream. Who you post as is
+`team.as(profile)`, as in any code on a board.
+
+[Build a UI](07-build-a-ui.md) shows these patterns with the page's own code.
 
 The page is a React bundle built into the package and served from
 `node:http`, so installing board installs no UI dependencies.

@@ -21,18 +21,19 @@ import { viaOf } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
-import { badRequest, forbidden, HttpError, notFound, textTooLong, toErrorResponse } from './errors.ts'
+import { badRequest, duplicateId, forbidden, HttpError, notFound, textTooLong, toErrorResponse } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
+import { createTasks, taskLimits } from './tasks.ts'
 import type { BoardStore, MessageFilter, ThreadPosition } from '../store/types.ts'
 import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
-import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
+import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, writeRoots, landedBatch, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
 import { SYNC_ACTOR, type WriteOrigin } from './origin.ts'
-import { isKeyIdOf } from '../client/ids.ts'
+import { derivedId, isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
 import { VERSION } from '../version.ts'
 
@@ -244,6 +245,7 @@ function build(options: A2Options, binding: BoardBinding) {
     registered: { state: registry.state, accessNow: (principal) => binding.accessNow(principal) },
   })
   const schedules = createSchedules({ store: log, scheduler: options.scheduler })
+  const tasks = createTasks({ store: log, scheduler: options.scheduler })
   const projection = tablesConsumer(store.tables)
 
   /** Sync's delivery in progress here: its receipts are its consumer's appends, fenced by its attempt. */
@@ -318,6 +320,7 @@ function build(options: A2Options, binding: BoardBinding) {
   // A schedule sends with what its creator may do now, which board()'s `access` says at each send. It
   // posts as its creator, through board(), so the middleware sees it.
   schedules.bind({ writes, accessNow: binding.accessNow, send: async (identity, origin, input) => sendAs(identity, origin, input) })
+  tasks.bind({ writes })
   watchers.bind({ reads })
 
   /**
@@ -358,6 +361,13 @@ function build(options: A2Options, binding: BoardBinding) {
     }
   }
 
+  /**
+   * The IDs the events of a batch made under `id` carry, as a post's carries its own: each root's post in turn, and the
+   * event after the first root, which says what the batch was asked for. A batch is found again by them alone.
+   */
+  const batchRoot = (id: string, at: number) => derivedId('board-batch', id, String(at))
+  const batchAsked = (id: string, request: string) => derivedId('board-batch-request', id, request)
+
   /** Files a write carries, as the board stored them: each one the caller may have, or 404 as if it didn't exist. */
   const attachmentsFor = (principal: Granted, ids: readonly string[] | undefined) =>
     Promise.all(
@@ -392,21 +402,24 @@ function build(options: A2Options, binding: BoardBinding) {
     }
   }
 
+  /** Refuses a request's post an ID that's someone else's to post with: the board's own, another client's key, or a sync's import. */
+  function ownId(caller: Caller, principal: Granted, id: string | undefined) {
+    if (!fromRequest(caller) || id === undefined) return
+    if (DERIVED_ID.test(id)) throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
+    // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
+    // one else can post with one first and make its retry fail.
+    if (id.startsWith('key:') && !isKeyIdOf(id, principal.id)) throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
+    // Nor with one a sync's import lands with (`importId`), which anyone can work out.
+    if (id.startsWith('sync:')) throw badRequest('id: sync:… IDs are what sync imports, under the principal that imports them')
+  }
+
   /** A post as it lands: what the caller may post, with the files it may have. */
   async function postNow(caller: Caller, identity: Identity, parsed: Protocol['post']['input']): Promise<Protocol['post']['output']> {
     const { principal } = identity
     withinLimits(parsed)
     const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
     const proofs = await authorizePost(writes, principal.access, body)
-    if (fromRequest(caller) && body.id !== undefined && DERIVED_ID.test(body.id))
-      throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
-    // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
-    // one else can post with one first and make its retry fail.
-    if (fromRequest(caller) && body.id?.startsWith('key:') && !isKeyIdOf(body.id, principal.id))
-      throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
-    // Nor with one a sync's import lands with (`importId`), which anyone can work out.
-    if (fromRequest(caller) && body.id?.startsWith('sync:'))
-      throw badRequest('id: sync:… IDs are what sync imports, under the principal that imports them')
+    ownId(caller, principal, body.id)
     const attachments = await attachmentsFor(principal, body.attachments)
     const { schedule } = caller.origin
     const message = await writePost(writes, {
@@ -604,6 +617,98 @@ function build(options: A2Options, binding: BoardBinding) {
       const identity = await identityOf(caller)
       const answer = await schedules.cancel(identity, scheduleAt(id))
       return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
+    },
+    tasks: async (caller, query) => tasks.list(await identityOf(caller), query),
+    async createTask(caller, body) {
+      // A new thread's root is a message, within what this board holds of one, and a task within what it holds of those.
+      if (body.re === undefined) withinLimits({ text: body.text ?? '', attachments: body.attachments })
+      taskLimits.needs(body.needs)
+      taskLimits.lease(body.lease)
+      const identity = await identityOf(caller)
+      const { principal } = identity
+      const about = { needs: body.needs, for: body.for, claim: body.claim, lease: body.lease }
+      if (body.re !== undefined) return tasks.adopt(identity, messageAt(body.re), about)
+      // A new thread, posted as any is: `post` where it lands, and `label` for the labels it carries.
+      const proofs = await authorizePost(writes, principal.access, { channel: body.channel, labels: body.labels })
+      ownId(caller, principal, body.id)
+      const attachments = await attachmentsFor(principal, body.attachments)
+      const made = tasks.starting(identity, { channel: body.channel!, ...about })
+      const task = await writePost(writes, { attachments, identity, proofs, channel: body.channel, text: body.text ?? '', labels: body.labels, noSync: body.noSync, id: body.id, with: made.along })
+      // A retry gets back the post that landed with its ID: one that was no task's is another write's.
+      if (!task.task) throw duplicateId()
+      const claim = await made.claimed(messageAt(task.id))
+      return { task, ...(claim ? { claim } : {}) }
+    },
+    async createTasks(caller, body) {
+      // This board's own limits on a batch, and on each task's root as on any message.
+      taskLimits.batch(body.tasks)
+      for (const [at, task] of body.tasks.entries()) {
+        if (task.text.length > MESSAGE_TEXT_MAX) throw textTooLong()
+        if ((task.attachments?.length ?? 0) > ATTACHMENTS_PER_MESSAGE_MAX) throw badRequest(`tasks.${at}.attachments: a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX}`)
+      }
+      const identity = await identityOf(caller)
+      const { principal } = identity
+      // New threads, posted as any are: `post` where they land, and `label` when any carries labels.
+      const proofs = await authorizePost(writes, principal.access, { channel: body.channel, labels: body.tasks.find((task) => Object.keys(task.labels ?? {}).length > 0)?.labels })
+      ownId(caller, principal, body.id)
+      const made = tasks.startingMany(identity, body.tasks)
+      // A batch's `id` names its roots in order, so a retry finds the ones that landed. They're the board's own IDs, which no request posts with.
+      const rootId = (at: number) => (body.id !== undefined ? batchRoot(body.id, at) : Promise.resolve(crypto.randomUUID()))
+      const roots = await Promise.all(
+        body.tasks.map(async (task, at) => ({ id: await rootId(at), text: task.text, labels: task.labels, noSync: task.noSync, attachments: await attachmentsFor(principal, task.attachments) })),
+      )
+      // The same `id` again is the same batch only for the same request, as board() gave it: the event after the first
+      // root keeps that, in its ID. board() answers a retry before it gets here; two first calls at once meet in the write.
+      const { id } = body
+      const asked = id !== undefined ? await batchAsked(id, body.request ?? '') : undefined
+      const again = id !== undefined && asked !== undefined ? { asked, landed: () => landedBatch(writes, identity, (at) => batchRoot(id, at), asked) } : undefined
+      return { tasks: await writeRoots(writes, { identity, proofs, channel: body.channel, roots, with: made, again }) }
+    },
+    async createdTasks(caller, { id, request }) {
+      const identity = await identityOf(caller)
+      const found = await landedBatch(writes, identity, (at) => batchRoot(id, at), request !== undefined ? await batchAsked(id, request) : undefined)
+      if ('tasks' in found) return found
+      // Someone else's batch is none of the caller's, as a post is. Its own, made for another request, is another write's.
+      if (found.not === 'asked') throw duplicateId()
+      throw notFound(`no batch of yours has id ${id}`, 'batch_not_found')
+    },
+    async claimReadyTask(caller, body, signal) {
+      taskLimits.lease(body.lease)
+      taskLimits.from(body.from)
+      return tasks.claimReady(await identityOf(caller), body, signal)
+    },
+    async claimTask(caller, { id, lease }) {
+      taskLimits.lease(lease)
+      return tasks.claim(await identityOf(caller), messageAt(id), lease)
+    },
+    async renewTask(caller, { id, epoch, token, lease }) {
+      taskLimits.lease(lease)
+      return tasks.renew(await identityOf(caller), messageAt(id), { epoch, token }, lease)
+    },
+    releaseTask: async (caller, { id, epoch, token }) => tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.released' }),
+    async completeTask(caller, { id, epoch, token, result }) {
+      taskLimits.note('result', result)
+      return tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.completed', result: result ?? null })
+    },
+    async failTask(caller, { id, epoch, token, reason }) {
+      taskLimits.note('reason', reason)
+      return tasks.settle(await identityOf(caller), messageAt(id), { epoch, token }, { type: 'task.failed', reason })
+    },
+    async blockTask(caller, { id, reason, kind, epoch, token }) {
+      taskLimits.note('reason', reason)
+      taskLimits.kind(kind)
+      return tasks.block(await identityOf(caller), messageAt(id), { reason, kind, ...(epoch !== undefined && token !== undefined ? { proof: { epoch, token } } : {}) })
+    },
+    unblockTask: async (caller, { id }) => tasks.unblock(await identityOf(caller), messageAt(id)),
+    reopenTask: async (caller, { id }) => tasks.reopen(await identityOf(caller), messageAt(id)),
+    assignTask: async (caller, { id, for: actor }) => tasks.assign(await identityOf(caller), messageAt(id), actor),
+    async setTaskNeeds(caller, { id, needs }) {
+      taskLimits.needs(needs)
+      return tasks.needs(await identityOf(caller), messageAt(id), needs)
+    },
+    async cancelTask(caller, { id, reason }) {
+      taskLimits.note('reason', reason)
+      return tasks.cancel(await identityOf(caller), messageAt(id), reason)
     },
     grants: async (caller) => access.grants(await identityOf(caller)),
     createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
@@ -1231,7 +1336,7 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   // The inbox's second and the watchers' last, where tests and tools look for them.
-  const servers = [server, inboxServer, schedules.server, registry.server, watchers.server]
+  const servers = [server, inboxServer, schedules.server, registry.server, tasks.server, watchers.server]
   return {
     methods,
     schedules,

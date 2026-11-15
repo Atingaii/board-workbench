@@ -110,6 +110,31 @@ describe('vercel()', () => {
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'passed',
+      // Tasks are the API's threads': vercel() maps each task method onto their routes.
+      'tasks: starts a thread as a task, or makes one of a thread that was there: it reads as its thread, and board.task finds it': 'passed',
+      'tasks: makes a task once for a client ID, and none under an ID a reply or a plain thread landed with': 'passed',
+      'tasks: gives a task to one of the claims that race for it, and takes its result': 'passed',
+      'tasks: gives a claim the lease it asks for, up to 5 minutes, and says when it ends': 'passed',
+      "tasks: fences what a claim does: once it's over, its writes are lost and change nothing": 'passed',
+      'tasks: holds a task until the tasks it needs complete, which a failed or canceled one never does': 'passed',
+      'tasks: refuses a prerequisite that was canceled, which can never complete, and takes one that failed': 'passed',
+      'tasks: lists the tasks that wait for one in the channel a list names, or its subtree, and no other': 'passed',
+      'tasks: says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed': 'passed',
+      'tasks: changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none': 'passed',
+      'tasks: refuses a change of needs that would make a task wait for itself, straight back or through others': 'passed',
+      'tasks: changes what a task needs only while no one holds it and it has not finished': 'passed',
+      'tasks: makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once': 'passed',
+      'tasks: makes none of a batch when one of its tasks can not be made, wherever it comes in it': 'passed',
+      'tasks: holds a task for a person, by its owner or its claim, and gives it back when unblocked': 'passed',
+      'tasks: keeps a task assigned to a profile for that actor alone': 'passed',
+      'tasks: lets a profile change only the tasks it made, and its principal all of them': 'passed',
+      'tasks: takes label in its channel to claim a task: a caller narrowed to reading and posting claims none': 'passed',
+      "tasks: takes read in a prerequisite's channel to wait for it: a caller narrowed out of it makes no task that needs it": 'passed',
+      'tasks: claims the oldest ready task in a channel or its subtree that has the labels asked for, and waits for one': 'passed',
+      'tasks: shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token': 'passed',
+      'tasks: keeps labels under board. its own: a label write or a post that sets one is refused': 'passed',
+      // Its other author is a platform's, imported by a sync, which only a deployment runs.
+      'tasks: holds a task when anyone but its owner edits its root, which ends its claim': 'skipped',
       'grants: grants a principal, lists it, and revokes it': 'passed',
       'grants: makes another grant for the same principals, and changes one by its ID': 'passed',
       "grants: keeps a grant's can as written, a pattern with no permissions included": 'passed',
@@ -130,6 +155,7 @@ describe('vercel()', () => {
       'schemas: carries a block in a message, checked against the schema its fence names': 'passed',
       'schemas: refuses a caller narrowed with x-board-can a schema, and lets it read them': 'passed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
+      'attachments: starts a task with a file, which its root carries': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'skipped',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'skipped',
       "sync: keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
@@ -141,6 +167,20 @@ describe('vercel()', () => {
     // It leaves the grants as it found them.
     expect([...api.grants.keys()]).toEqual(['g1', 'g2', 'g3'])
   }, 30_000)
+
+  it("refuses a label under board. before it reaches Vercel's API, as on any backend", async () => {
+    const api = fakeMessageboard()
+    const handle = handleOn(api)
+    const root = await handle.post('dev', 'fix CVE-123')
+    api.requests.length = 0
+    // The board's own labels are board()'s to keep, on every backend.
+    await expect(handle.label(root.id, { set: { 'board.task': 'ready' } })).rejects.toMatchObject({ status: 400, code: 'reserved_label' })
+    await expect(handle.post('dev', { text: 'looks ready', labels: { 'board.task': 'ready' } })).rejects.toMatchObject({ status: 400, code: 'reserved_label' })
+    expect(api.requests).toEqual([])
+    // Any other label still goes through.
+    await handle.label(root.id, { set: { step: 'fix' } })
+    expect((await handle.thread(root.id)).message.labels).toEqual({ step: 'fix' })
+  })
 
   it("passes the conformance kit's checks of who writes against an API that reads them as board's protocol has it, and says how today's fails", async () => {
     const statuses = (report: Awaited<ReturnType<typeof conformance>>) =>
@@ -1708,13 +1748,13 @@ describe('vercel()', () => {
     await webhook(web, WEB_URL, 'webchat', { threadId: 'slack:C9:400', id: '400', text: 'hej', user: 'U_M2', name: 'malte' })
     const julian = handleOn(api)
     await vi.waitFor(async () => expect((await julian.messages({ channel: 'general' })).messages).toHaveLength(2))
-    await julian.post('general', { text: '@malte have a look, @pong/malte and @web/malte, cc @[ada@vercel.com]' })
+    await julian.post('general', { text: '@malte have a look, @pong/malte and @web/malte, cc @[ada@vercel.com] and @[slack:user:U_M1]' })
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await web.fetch(new Request(`${WEB_URL}/wake`, { method: 'POST' }))
     const posted = (platform: typeof pongSlack) => platform.channelPosts.map((post) => JSON.parse(post.text).markdown).filter((text: string) => text.includes('have a look'))
     await vi.waitFor(() => expect([posted(pongSlack), posted(webSlack)]).toEqual([
-      ['**Julián Benegas**: <@U_M1> have a look, <@U_M1> and @web/malte, cc <@U_ADA>'],
-      ['**Julián Benegas**: <@U_M2> have a look, @pong/malte and <@U_M2>, cc ada@vercel.com'],
+      ['**Julián Benegas**: <@U_M1> have a look, <@U_M1> and @web/malte, cc <@U_ADA> and <@U_M1>'],
+      ['**Julián Benegas**: <@U_M2> have a look, @pong/malte and <@U_M2>, cc ada@vercel.com and @[slack:user:U_M1]'],
     ]))
   })
 
