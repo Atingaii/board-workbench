@@ -95,7 +95,9 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
     backend,
     authenticate: oidcTokens({ local: { issuer: ISSUER, jwks } }),
     // No `url`: the board is at the URL a request reaches it at, a token's audience there, and
-    // `originOf` lets a request name only this server's own or a host you allowed.
+    // `originOf` lets a request name only this server's own or a host you allowed. So this handle
+    // knows no URL of its own: its `url` is the in-process one, and `sandboxPolicy()` has none to
+    // give. It only serves requests here: hand it nothing that needs either.
     basePath: '/api/board',
   })
   try {
