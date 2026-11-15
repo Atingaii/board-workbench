@@ -651,6 +651,26 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: 'stores a handle one actor has as a mention of them, and keeps one no one has as typed',
+    run: async (ctx) => {
+      check(ctx.root, "posting failed, so there's no thread to reply in")
+      // The caller wrote the root, so the board knows it, and of any who share its handle it's the one in the thread.
+      const { handle, actor } = ctx.me
+      if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)?$/i.test(handle)) return `the caller's handle, ${handle}, isn't one a mention can type`
+      const nobody = `conformance-nobody-${Date.now().toString(36)}`
+      const sent = await reply(ctx, ctx.root.id, `conformance: over to @${handle} and @${nobody}`)
+      const settled = `conformance: over to @[${actor}] and @${nobody}`
+      check(sent.text === settled, `a handle one actor has should be stored as @[actor-id], and one no one has as typed: expected ${show(settled)}, got ${show(sent.text)}`)
+      const [mine, none, ...more] = sent.mentions ?? []
+      check(mine?.written === `@${handle}` && mine.actor?.id === actor, `the answer's mentions should say @${handle} mentions ${actor}, got ${show(mine)}`)
+      check(none?.written === `@${nobody}` && none.actor === null && none.candidates.length === 0, `the answer's mentions should say @${nobody} mentions no one, got ${show(none)}`)
+      check(more.length === 0, `the answer's mentions should have one entry a handle, got ${more.length + 2}`)
+      const kept = (await ctx.board.thread(ctx.root.id)).replies.find((message) => message.id === sent.id)
+      check(kept?.text === settled, `the message should read back as it was stored, got ${show(kept?.text)}`)
+    },
+  },
+  {
+    group: 'core',
     name: "matches text anywhere in a message's own, in any case, as it reads now",
     run: async (ctx) => {
       // Roots of its own: the second matches the first's searches only where % or _ is a wildcard.

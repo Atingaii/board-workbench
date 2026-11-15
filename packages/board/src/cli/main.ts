@@ -1213,10 +1213,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const working = task ? [...(task.claim ? [task.claim.actor] : []), ...(task.owner !== thread.message.by.principal ? [task.owner] : [])] : []
         // And a text mentions people by ID, who show by name.
         const unnamed = [...new Set([...reactionNames([thread.message, ...replies]), ...working, ...mentionedIn([thread.message, ...replies])])].filter((id) => !authors.has(id))
-        const known = unnamed.length
-          ? new Map((await board.actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, actorName(a)]))
-          : new Map<string, string>()
-        out(formatThreads([thread.message, ...replies], known))
+        const listed = unnamed.length ? (await board.actors().catch(() => [])).filter((a) => unnamed.includes(a.id)) : []
+        const known = new Map(listed.map((a) => [a.id, actorName(a)]))
+        out(formatThreads([thread.message, ...replies], known, new Map(listed.map((a) => [a.id, a.handle]))))
         if (!narrowed) for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
         return 0
       }
@@ -1245,7 +1244,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (flags.json) return result(page), 0
       const count = `${page.threads.length} ${page.threads.length === 1 ? 'thread' : 'threads'}`
       out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}${page.threads.length ? '\n' : ''}`)
-      if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
+      if (page.threads.length) {
+        // A root's first line may mention, by ID, someone who wrote none of what's listed: they show by handle.
+        const roots = page.threads.map(({ message }) => message)
+        const wrote = new Set(page.threads.flatMap(({ message, last }) => (last ? [message.by.actor, last.by.actor] : [message.by.actor])))
+        const unnamed = mentionedIn(roots).filter((id) => !wrote.has(id))
+        const handles = new Map(unnamed.length ? (await client().actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, a.handle]) : [])
+        out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/'), handles }))
+      }
       // The cursor is where this read stopped: the next command is the one that reads on from it.
       // It's this run as typed, its board, identity and filters included, from where it stopped.
       out(`\nnew since then: ${commandLine(rerunWithout(['--after'], '--after', String(page.cursor)))}`)

@@ -269,33 +269,44 @@ the caller: nothing a client sends sets one, or a name.
 
 ## Mentions
 
+A mention is `@[actor-id]`: one actor, by their ID. You rarely type one: write
+a handle, and the board settles it when the message is written.
+
 ```bash
-vb reply 812 "@ada can you look? cc @julian/claude"
+vb reply 2 "over to @julian/claude, cc @nobody"
 ```
 
-- **A mention is text.** The board posts it as written and stores nothing
-  else: no handle or actor ID fails a write, whether no one has it, several
-  share it, or the board has never seen them. An edit is just new text.
-- **`@handle` and `@person/profile`** name whoever has that handle.
-- **`@[actor-id]`** names an exact actor: `@[slack:user:U0456]`. It's how to
-  name one of several who share a handle.
-- **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
-  even someone the board hasn't seen.
-- **Mentions in inline code or code blocks don't count.**
-- **Each sync resolves them when it posts,** and only against its own users:
-  the platform users it brought in under the key it posts through. On Slack:
-  - `@ada` becomes `<@U0456>` when exactly one of its users goes by `ada`, or
-    by `<its project>/ada`: `@support/ada` reaches only support's Ada, and
-    `@ada` is the shorthand each sync reads as its own. Of several, it's the
-    one who wrote in the thread, if exactly one did. Otherwise it stays `@ada`.
-  - `@[actor-id]` becomes `<@U0456>` when it's one of its users, and their
-    name for anyone else, a board person included.
-  - `@[ada@vercel.com]` is looked up as it posts (it needs `users:read.email`):
-    `<@U0456>` when Slack finds her, and the plain email when it doesn't.
+```text
+5
+mentioned  claude  @julian/claude
+warning: @nobody names no one here: it stays text, and mentions no one.
+```
 
-  So `@malte` reaches each sync's own Malte, and neither two syncs that each
-  bring in a Malte nor a sync allowed only one channel makes it fail anywhere.
-  GitHub mentions its users as `@login`.
+- **A handle is settled when you write.** `@ada` and `@julian/claude` name
+  whoever has that handle in full, among the actors you can see. When that's
+  exactly one, the board stores `@[their-id]` in its place, and the answer
+  says who. Of several, it's the one who wrote in the thread, if exactly one
+  did.
+- **A handle that names no one stays text.** No one has it, several do, or
+  someone has it only under a name (`@malte` isn't `support/malte`): it's kept
+  as typed, a mention of no one, and the answer says so, with who it could
+  have meant. No write fails over a mention, and an edit settles its new text
+  the same way.
+- **`@[actor-id]`** is exact, and stored as written: `@[slack:user:U0456]`.
+  It's how to name one of several who share a handle.
+- **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
+  even someone the board hasn't seen. Each sync looks it up when it posts.
+- **Mentions in inline code or code blocks don't count.**
+- **Each sync delivers by ID.** One of its own users, the platform users it
+  brought in under the key it posts through, becomes a native mention:
+  `<@U0456>` on Slack, `@login` on GitHub. Anyone else, a board person
+  included, is their name as plain text. A handle that stayed text goes out
+  as written, and pings no one. On Slack, `@[ada@vercel.com]` needs
+  `users:read.email`: `<@U0456>` when Slack finds her, and the plain email
+  when it doesn't.
+- **Reading.** `vb read` shows a mention as the handle to type for them
+  (`@julian/claude`), and the inspector as their name. `--json` and the API
+  have the text as stored, with the ID.
 - **Filters read the text.** `--mentions @ada` finds `@ada`, and
   `@[<actor id>]` for anyone who goes by `ada`. A name covers what's under it:
   a person's agents (`@julian/claude`), and a project's imports

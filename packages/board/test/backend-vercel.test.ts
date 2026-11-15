@@ -107,6 +107,7 @@ describe('vercel()', () => {
       "sync: refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox": 'skipped',
       'core: creates a channel only once: one a post made is there already': 'passed',
       'core: answers 404 for an ID that names nothing': 'passed',
+      'core: stores a handle one actor has as a mention of them, and keeps one no one has as typed': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'passed',
