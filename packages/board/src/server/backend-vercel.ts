@@ -938,8 +938,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * narrowing keeps its own: one held to a channel is never shown names a wider one read.
    */
   type Names = {
-    /** Who's written here, by actor ID, as the API names them: messages carry only the actor. */
-    list: { at: number; views: Promise<Map<string, ApiActorView>> } | null
+    /**
+     * Who's written here, by actor ID, as the API names them: messages carry only the actor. `refused` once the
+     * API refused this caller the list, which is its answer while the read is fresh.
+     */
+    list: { at: number; views: Promise<Map<string, ApiActorView>>; refused: boolean } | null
     /** Actors a list read again for them didn't have: it isn't read again for them. */
     unlisted: Set<string>
     /** Each actor asked for by ID, and when: one the API didn't have is asked for again after `NAMES_FRESH_MS`, as one it had is. */
@@ -963,15 +966,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
   /** How long names are kept before they're read again: someone renamed shows by their new name after this. */
   const NAMES_FRESH_MS = 5 * 60_000
-  /** Reads the list, kept as the current one; a read that fails isn't kept, so the next name tries again. */
+  /** An answer that says no to the request itself, and not that the API couldn't serve it now. */
+  const refusal = (error: unknown): error is HttpError => error instanceof HttpError && error.status >= 400 && error.status < 500 && error.status !== 429
+  /** Reads the list, kept as the current one; a read that fails isn't kept, so the next name tries again, unless the API refused it. */
   const readNames = (who: Who) => {
     const names = namesOf(who)
     const views = (async () =>
       new Map((await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')).map((view) => [view.id, view] as const)))()
-    const read = { at: Date.now(), views }
+    const read = { at: Date.now(), views, refused: false }
     names.list = read
-    views.catch(() => {
-      if (names.list === read) names.list = null
+    views.catch((error) => {
+      // What the API refuses this caller is kept as a list is, so each page it reads doesn't ask again.
+      if (refusal(error)) read.refused = true
+      else if (names.list === read) names.list = null
     })
     return read
   }
@@ -997,7 +1004,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return new Map(actors.map((view) => [view.id, view] as const))
     } catch (error) {
       // What the API refuses for these IDs is named from the list this once. Only an API that takes no `id` at all never is again.
-      if (!(error instanceof HttpError && error.status >= 400 && error.status < 500 && error.status !== 429)) throw error
+      if (!refusal(error)) throw error
       if (error.status === 400 && /additional property/i.test(error.message)) namesById = false
       return null
     }
@@ -1056,7 +1063,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const names = namesOf(who)
     const current = !names.list || Date.now() - names.list.at > NAMES_FRESH_MS ? readNames(who) : names.list
     let found = await inList(current, id)
-    if (!found && !names.unlisted.has(id)) {
+    if (!found && !current.refused && !names.unlisted.has(id)) {
       // Someone new since this list: one read again covers everyone it's missing, even several at once.
       const again = names.list && names.list !== current ? names.list : readNames(who)
       found = await inList(again, id)
@@ -1101,7 +1108,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const mine = namesOf(who)
     const kept = mine.list && Date.now() - mine.list.at <= NAMES_FRESH_MS ? mine.list : null
     let names = await namesIn(kept ?? readNames(who))
-    if (!wanted || wanted.found(names) || !kept || mine.unnamed.has(wanted.key)) return names
+    if (!wanted || wanted.found(names) || !kept || kept.refused || mine.unnamed.has(wanted.key)) return names
     names = await namesIn(mine.list && mine.list !== kept ? mine.list : readNames(who))
     if (!wanted.found(names)) {
       if (mine.unnamed.size >= 1000) mine.unnamed.clear()

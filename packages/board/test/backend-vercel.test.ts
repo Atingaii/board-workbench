@@ -1552,6 +1552,22 @@ describe('vercel()', () => {
     expect(await author(pong)).toMatchObject({ handle: 'pong/malte', name: 'Malte Ubl' })
   })
 
+  it("asks an API that names a caller no one once, by ID and for its list, and not again on every page it reads", async () => {
+    const api = fakeMessageboard({ namesNarrowed: false })
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    for (const user of ['U_ADA', 'U_BOB', 'U_MALTE'])
+      await pong.syncImport({ op: 'post', author: { id: `slack:user:${user}`, handle: user.toLowerCase(), name: user, avatar: null, isBot: false }, from: 'slack', channel: 'general', text: 'hi' })
+    const agent = pong.as(null, { can: { 'general/': ['read', 'post'] } })
+    const asked = () => api.requests.filter((request) => /^GET \S*\/actors\b/.test(request)).length
+    const before = asked()
+    await agent.messages({ channel: 'general' })
+    expect(asked() - before).toBe(2)
+    await agent.messages({ channel: 'general' })
+    await agent.messages({ channel: 'general' })
+    expect(asked() - before).toBe(2)
+  })
+
   it("puts an import's handle under its project's name, typable, from an API that names them as their platform does", async () => {
     const api = fakeMessageboard({ platformHandles: true })
     // The second project's name isn't one the API knows.
