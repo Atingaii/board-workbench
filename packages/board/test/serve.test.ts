@@ -341,7 +341,7 @@ describe('vb serve', () => {
 
     it('names whoever Tailscale says is calling, only at the host it serves the board on', async () => {
       const { project, env } = await setup()
-      const serving = serveIn(project, env, ['--no-inspect', '--tailscale', 'box.tailnet.ts.net', '--allow-host', 'other.example'])
+      const serving = serveIn(project, env, ['--no-inspect', '--tailscale', 'box.tailnet.ts.net'])
       const url = await serving.url
       // It says what to hand the people on the tailnet, and what puts Tailscale in front of this port.
       await expect.poll(serving.output).toContain(`on your tailnet, behind tailscale serve --bg ${new URL(url).port}: BOARD_URL=https://box.tailnet.ts.net/api/board\n`)
@@ -357,9 +357,11 @@ describe('vb serve', () => {
       expect(posted.status).toBe(201)
       expect(JSON.parse(posted.body).message.by).toMatchObject({ actor: 'tailscale:user:ada@example.com+claude', principal: 'tailscale:user:ada@example.com' })
 
-      // The header is Tailscale's word only where Tailscale's proxy is: anyone else writes their own.
+      // The header is Tailscale's word only at the host Tailscale serves: anywhere else a sender writes its own.
       expect(await me({ 'tailscale-user-login': 'ada@example.com' })).toEqual({ status: 401 })
       expect(await me({ host: 'other.example', 'tailscale-user-login': 'ada@example.com' })).toEqual({ status: 401 })
+      // And through Tailscale, a caller who sends the board's own name as its Host is still not you.
+      expect(await me({ host: new URL(url).host, 'x-forwarded-host': new URL(url).host, 'tailscale-user-login': 'ada@example.com' })).toEqual({ status: 401 })
       // No one named, as for a tagged device, or a login an ID can't hold: a token, or nothing.
       expect(await me(at)).toEqual({ status: 401 })
       expect(await me({ ...at, 'tailscale-user-login': 'ada+work@example.com' })).toEqual({ status: 401 })
@@ -419,6 +421,10 @@ describe('vb serve', () => {
       expect(JSON.parse(written.body).message.by).toMatchObject({ actor: 'tailscale:user:ada@example.com' })
       // With no one named, the page there is no one's: it doesn't fall back to you.
       expect((await forwarded(origin, '/board/me', { ...at, ...through })).status).toBe(401)
+      // Nor for a caller who sends the board's own name through Tailscale, which forwards whatever Host it's sent.
+      const spoofed = { host: new URL(url).host, 'x-forwarded-host': new URL(url).host, 'x-forwarded-proto': 'https', 'tailscale-user-login': 'ada@example.com' }
+      expect((await forwarded(origin, '/', spoofed)).status).toBe(421)
+      expect((await forwarded(origin, '/board/me', { ...spoofed, ...through })).status).toBe(421)
       // At the board's own address the page is yours, as it was.
       expect(await (await fetch(`${origin}/board/me`, { headers: through })).json()).toMatchObject({ actor: `local:user:${localHandle()}` })
       serving.child.kill('SIGINT')
@@ -448,6 +454,13 @@ describe('vb serve', () => {
       serving.child.kill('SIGINT')
       expect(await serving.exited).toBe(0)
     })
+  })
+
+  it("refuses --tailscale beside --allow-host: another proxy could forge Tailscale's word", async () => {
+    const { project, env } = await setup()
+    const refused = await vb(project, env, ['serve', '--port', '0', '--no-inspect', '--tailscale', 'box.tailnet.ts.net', '--allow-host', 'box.example.com'])
+    expect(refused.code).toBe(2)
+    expect(refused.stderr).toContain("doesn't go with --allow-host")
   })
 
   it('takes only a host for --allow-host', async () => {

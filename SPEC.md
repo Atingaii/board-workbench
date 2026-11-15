@@ -2171,8 +2171,13 @@ computer who don't need it on the internet. No config file: it's flags only.
   have no login: they need a token a grant lets in. The page there acts as
   the visitor Tailscale names, through the board in process, and as no one
   (401) when it names none. Any program on the board's machine can write the
-  header itself, so it's for a machine you trust. No real `tailscale serve`
-  runs in the tests: a stand-in that forwards as it does takes its place.
+  header itself, so it's for a machine you trust, and so could another proxy
+  that forwards to the same port, so `--tailscale` is a usage error beside
+  `--allow-host`. Tailscale forwards whatever `Host` its caller sends: the
+  board's own name on a forwarded request gets no name from the board and a
+  421 from the page, so a tailnet caller is never the owner. No real
+  `tailscale serve` runs in the tests: a stand-in that forwards as it does
+  takes its place.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
   (`oidcTokens({ local })` as `board()`'s `authenticate`), and signs one token for you, the OS user, into `~/.config/board/local/<hash of url>.json`, mode 0600, removed
   on exit. A handle in Node uses that file for a loopback URL when there's no

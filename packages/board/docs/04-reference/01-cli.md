@@ -416,13 +416,14 @@ tailscale serve --bg 4100
 - **`--tailscale <host>` names whoever Tailscale says is calling.** A request
   for that host with no token is `tailscale:user:<login>`, a person on the
   board, so `vb` on another machine of your tailnet needs only the `BOARD_URL`
-  it prints: `https://box.tailnet.ts.net/api/board`.
-  The page at `https://box.tailnet.ts.net` acts as whoever opens it. See
+  it prints: `https://box.tailnet.ts.net/api/board`. The page at
+  `https://box.tailnet.ts.net` acts as whoever opens it. See
   [Share a local board on a tailnet](../03-guides/08-tailnet.md).
 - **`--allow-host <host>` names no one.** It's for any other proxy: whoever
   calls the board there needs a token minted for that URL, that a
   [grant](#grants) lets in, and whoever reaches the page there acts as you.
-  See [Behind a proxy](../03-guides/02-inspector.md#behind-a-proxy).
+  See [Behind a proxy](../03-guides/02-inspector.md#behind-a-proxy). It
+  doesn't go with `--tailscale`: another proxy could forge Tailscale's word.
 - **Your token stays on this machine.** It's for the board's `127.0.0.1` URL,
   so the board refuses it at either kind of host.
 - **A host is a name, with a port when the proxy isn't on its scheme's default

@@ -63,6 +63,9 @@ const serve: Command = {
     const port = portFlag()
     const hosts = allowedHosts({ flags, usage })
     const tailscale = allowedHosts({ flags, usage }, 'tailscale')
+    // Another proxy to the same port could carry a caller's own Tailscale-User-Login, at Tailscale's host.
+    if (tailscale.length > 0 && hosts.length > 0)
+      throw usage("--tailscale takes Tailscale's word for who's calling, which another proxy in front could forge: it doesn't go with --allow-host.")
     const root = projectDir()
     const { serveLocal } = await import('./serve.ts')
     const local = await serveLocal({
