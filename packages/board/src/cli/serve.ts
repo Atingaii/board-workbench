@@ -126,7 +126,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
     // Its timers live in this process, which runs as long as the board does.
     backend,
     // At a host Tailscale serves it on, a request's URL is that host's, since `originOf` allowed it.
-    authenticate: tailnet.size > 0 ? tailscale(tokens, (audience) => tailnet.has(new URL(audience).host)) : tokens,
+    authenticate: tailnet.size > 0 ? tailscale(tokens, (audience) => servedAt(tailnet, audience)) : tokens,
     // No `url`: the board is at the URL a request reaches it at, a token's audience there, and
     // `originOf` lets a request name only this server's own or a host you allowed. So this handle
     // knows no URL of its own: its `url` is the in-process one, and `sandboxPolicy()` has none to
@@ -165,7 +165,11 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
     },
     visitor(request) {
       const at = originOf(request, origin, hosts)
-      if (!tailnet.has(new URL(at).host)) return undefined
+      // Only this server's own address is yours. At a host Tailscale serves, the page is whoever
+      // Tailscale names, or no one; and on a board behind Tailscale, so is it at any other host, so
+      // nothing about how a host is written, a port added or left out, makes a caller you.
+      if (at === origin) return undefined
+      if (!servedAt(tailnet, at)) return tailnet.size > 0 ? null : undefined
       const login = tailscaleLogin(request.headers['tailscale-user-login'])
       if (login === null) return null
       const key = `${at} ${login}`
@@ -225,6 +229,22 @@ function originOf(request: IncomingMessage, own: string, hosts: ReadonlySet<stri
   if (!hosts.has(host)) return own
   const scheme = String(request.headers['x-forwarded-proto'] ?? '').split(',')[0]!.trim().toLowerCase()
   return `${scheme === 'https' ? 'https' : 'http'}://${host}`
+}
+
+/**
+ * Whether `url` is at one of `hosts`, however each was written: a URL leaves its scheme's own port
+ * out of its host (`box:443` over https is `box`), so each is compared as that URL would write it.
+ */
+function servedAt(hosts: ReadonlySet<string>, url: string): boolean {
+  const { protocol, host } = new URL(url)
+  for (const named of hosts) {
+    try {
+      if (new URL(`${protocol}//${named}`).host === host) return true
+    } catch {
+      // Not a host a URL can hold: it names nothing.
+    }
+  }
+  return false
 }
 
 async function forward(handler: (request: Request) => Promise<Response>, origin: string, req: IncomingMessage, res: ServerResponse) {

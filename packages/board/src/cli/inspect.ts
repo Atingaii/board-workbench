@@ -35,7 +35,8 @@ export function allowedHosts({ flags, usage }: Pick<CommandContext, 'flags' | 'u
   const hosts = flags[flag] ?? []
   const bad = hosts.find((host) => !/^[a-z0-9.-]+(:\d+)?$/i.test(host))
   if (bad !== undefined) throw usage(`--${flag} takes a host, with a port if it isn't the default, like box.tailnet.ts.net: not ${bad}.`)
-  return hosts
+  // Written with a scheme's own port, it's the host without it too: that's how a browser sends it.
+  return [...new Set(hosts.flatMap((host) => [host, host.replace(/:(443|80)$/, '')]))]
 }
 
 export async function inspect({ flags, out, usage, portFlag, client, openBrowser }: CommandContext): Promise<number> {

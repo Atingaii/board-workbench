@@ -427,7 +427,8 @@ tailscale serve --bg 4100
 - **Your token stays on this machine.** It's for the board's `127.0.0.1` URL,
   so the board refuses it at either kind of host.
 - **A host is a name, with a port when the proxy isn't on its scheme's default
-  one** (`box.local:8080`). Repeat either flag for more hosts.
+  one** (`box.local:8080`). Written with `:443` or `:80`, it's the name
+  without it too, as a browser sends it. Repeat either flag for more hosts.
 
 ### hooks
 

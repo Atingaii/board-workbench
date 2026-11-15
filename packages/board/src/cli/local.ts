@@ -80,7 +80,8 @@ const serve: Command = {
       out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
       out(`reach it with --url ${local.url}, or BOARD_URL=${local.url}`)
       // What to hand the people on it, and the one command that puts Tailscale in front.
-      for (const host of tailscale) out(`on your tailnet, behind tailscale serve --bg ${local.port}: BOARD_URL=https://${host}/api/board`)
+      for (const host of new Set(tailscale.map((named) => new URL(`https://${named}`).host)))
+        out(`on your tailnet, behind tailscale serve --bg ${local.port}: BOARD_URL=https://${host}/api/board`)
       if (!flags['no-inspect']) {
         // With this board's token, whatever BOARD_TOKEN says, and on the board's own server: one port to open, or to proxy.
         const { board } = connection(local.url, { token: local.token })

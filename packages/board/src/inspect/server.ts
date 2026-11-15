@@ -96,6 +96,8 @@ export async function createInspector(options: {
   // Hosts you allow are ones a proxy in front serves the page on, over http or https.
   const allowed = new Set((options.hosts ?? []).map((host) => host.toLowerCase()))
   let hosts = new Set<string>()
+  // The hosts a proxy may forward a request for: never the server's own name, allowed or not.
+  let proxied = new Set<string>()
   let origins = new Set<string>()
   const streams = new Set<AbortController>()
 
@@ -173,7 +175,7 @@ export async function createInspector(options: {
     // can send this server's own name. So it reaches the page only at a host you allowed.
     const named = String(request.headers.host).toLowerCase()
     const forwarded = FORWARDED.some((header) => request.headers[header] !== undefined)
-    if (!(forwarded ? allowed : hosts).has(named)) return send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
+    if (!(forwarded ? proxied : hosts).has(named)) return send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
     if (url.pathname === '/board' || url.pathname.startsWith('/board/'))
       return void proxy(request, response, url).catch(() =>
         response.headersSent ? response.end() : send(response, 500, 'text/plain; charset=utf-8', 'error'),
@@ -191,7 +193,9 @@ export async function createInspector(options: {
     board,
     me,
     at(port) {
-      hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, ...allowed])
+      const own = [`127.0.0.1:${port}`, `localhost:${port}`]
+      hosts = new Set([...own, ...allowed])
+      proxied = new Set([...allowed].filter((host) => !own.includes(host)))
       origins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, ...[...allowed].flatMap((host) => [`http://${host}`, `https://${host}`])])
       return {
         handle,

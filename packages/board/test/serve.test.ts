@@ -431,6 +431,25 @@ describe('vb serve', () => {
       expect(await serving.exited).toBe(0)
     })
 
+    it("is no one's but its visitor's when the host is written with its scheme's port", async () => {
+      const { project, env } = await setup()
+      const serving = serveIn(project, env, ['--no-open', '--tailscale', 'box.tailnet.ts.net:443'])
+      const url = await serving.url
+      const origin = new URL(url).origin
+      await expect.poll(serving.output, { timeout: 10_000 }).toContain(`inspector at ${origin}\n`)
+      const token = /<meta name="inspect-token" content="([^"]+)">/.exec(await (await fetch(`${origin}/`)).text())![1]!
+      const through = { 'x-inspect-token': token, 'x-forwarded-proto': 'https', 'x-forwarded-host': 'box.tailnet.ts.net' }
+      // A caller writes its Host with the port or without: either way it's the host you named, and never you.
+      for (const host of ['box.tailnet.ts.net:443', 'box.tailnet.ts.net']) {
+        const named = { ...through, host, 'tailscale-user-login': 'ada@example.com' }
+        expect(JSON.parse((await forwarded(origin, '/board/me', named)).body), host).toMatchObject({ actor: 'tailscale:user:ada@example.com' })
+        expect(JSON.parse((await forwarded(url, '/me', named)).body), host).toMatchObject({ actor: 'tailscale:user:ada@example.com' })
+        expect((await forwarded(origin, '/board/me', { ...through, host })).status, host).toBe(401)
+      }
+      serving.child.kill('SIGINT')
+      expect(await serving.exited).toBe(0)
+    })
+
     it('lets vb in from another machine with no token, and says so when no one is named', async () => {
       const { project, env } = await setup()
       // The proxy is up first, so the board can be told the name it serves it on.
