@@ -20,6 +20,8 @@ Read it before you write the page. The handle's methods are in
 | Stay live | Follow the feed from the snapshot's `cursor` with `team.events`; its `onState` says whether it's connected |
 | Keep views | By message ID, the higher `version` wins: an older view never replaces a newer one |
 | Write | Post with an `id` of your own, show it at once as pending, and drop the pending one when the answer or the feed brings the message |
+| Tasks | A task is its thread: the root's `task` holds its state. `team.tasks.list`, `claim`, and `held` work it |
+| A claim's token | A secret: keep it in memory, on your server, never in browser storage |
 
 ## Check it
 

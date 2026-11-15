@@ -436,11 +436,15 @@ included, post to Slack and GitHub.
   fails when either drifts, so change both.
 - **State lives in `app/store.ts`, pure and tested.** Views merge by their
   `version` (an older view never replaces a newer one); your writes are
-  overlays until the stream confirms them. Components render from it.
+  overlays until the stream confirms them. Components render from it. A claim's
+  token is a secret: it stays in `board.ts`'s memory, never in the store or in
+  storage, and the store holds only which claims are live.
 - **A view says what the board answered.** A read that fails shows the
-  board's words where its content would be, a 501 like any other.
-- **Content in the sidebar, configuration in settings.** Activity and channels
-  are the sidebar. Access, schemas, schedules, watchers, and sync are
+  board's words where its content would be, a 501 like any other. What a viewer
+  may do to a task is `store.moves`, by the board's rules; the board still
+  decides each write.
+- **Content in the sidebar, configuration in settings.** Activity, tasks, and
+  channels are the sidebar. Access, schemas, schedules, watchers, and sync are
   tabs of one view at `/settings/<section>`, reached from the sidebar's foot.
   Links are text, buttons act, and a view says little.
 - **The proxy acts as you, so it trusts nothing but its own page.** It binds

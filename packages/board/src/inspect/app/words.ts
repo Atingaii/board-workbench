@@ -38,6 +38,34 @@ export const said = (error: unknown): string => (error instanceof Error ? error.
 /** A message's first line, for a row that shows one. */
 export const firstLine = (text: string): string => text.split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
 
+/** `58:12`, or `1h 02m` past an hour: how long is left. */
+export function clock(ms: number): string {
+  const seconds = Math.max(0, Math.ceil(ms / 1000))
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const two = (n: number) => String(n).padStart(2, '0')
+  return hours > 0 ? `${hours}h ${two(minutes)}m` : `${minutes}:${two(seconds % 60)}`
+}
+
+const REFUSALS: Record<string, string> = {
+  claim_lost: "this tab's claim is over: it was released, taken over, or its lease ran out. Claim the task again to go on.",
+  task_claimed: 'someone holds this task now, until their lease ends',
+  task_assigned: "it's assigned to someone else, and only they claim it",
+  task_waiting: 'it still waits for the tasks it needs',
+  task_blocked: "it's held for a person: unblock it first",
+  task_finished: "it's finished already",
+  task_not_owned: "this is someone else's task: its owner changes it, or anyone with manage in its channel",
+  already_a_task: 'this thread is a task already',
+  not_a_task: "this thread isn't a task",
+  reserved_label: "labels under board. are the board's own: a task's actions change them",
+}
+
+/** What a refusal means, in the page's words, or the board's own where the page has none. */
+export function refusal(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  return (typeof code === 'string' && REFUSALS[code]) || said(error)
+}
+
 /** Who a grant names, the way people say it. */
 export function principalName(principal: PrincipalView): string {
   switch (principal.kind) {

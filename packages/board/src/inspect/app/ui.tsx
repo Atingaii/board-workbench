@@ -219,7 +219,8 @@ export function LabelEditor(props: {
     setKey('')
     setValue('')
   }
-  const entries = Object.entries(props.labels)
+  // Labels under `board.` are the board's own: it writes them, and no one else can.
+  const entries = Object.entries(props.labels).filter(([k]) => !k.startsWith('board.'))
   return (
     <div className="labels-editor">
       {entries.length === 0 ? (
@@ -241,7 +242,7 @@ export function LabelEditor(props: {
         <Suggest
           value={key}
           onChange={setKey}
-          items={[...props.known.keys()].filter((k) => !(k in props.labels))}
+          items={[...props.known.keys()].filter((k) => !(k in props.labels) && !k.startsWith('board.'))}
           placeholder="key"
           autoFocus
           onEnter={() => valueRef.current?.querySelector('input')?.focus()}
@@ -349,6 +350,77 @@ export function Header(props: { title: string; meta?: string | undefined; live?:
         </span>
       )}
     </header>
+  )
+}
+
+/** One thing a form asks for: a line, a longer note, or a line with suggestions. */
+export type AskField = { name: string; placeholder: string; required?: boolean; items?: string[]; long?: boolean; value?: string }
+
+/** What a small form asks for, and what it does with the answers. */
+export type AskProps = {
+  fields: AskField[]
+  submit: string
+  note?: string | undefined
+  disabled?: boolean
+  onSubmit: (values: Record<string, string>) => unknown
+}
+
+/** A small form: a field per thing it asks, sent with Enter (⌘Enter from a note). `onDone` hears that it was sent. */
+export function AskForm(props: AskProps & { onDone?: () => void }) {
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(props.fields.map((field) => [field.name, field.value ?? ''])))
+  const value = (name: string) => values[name] ?? ''
+  const put = (name: string, next: string) => setValues((current) => ({ ...current, [name]: next }))
+  const ready = !props.disabled && props.fields.every((field) => !field.required || value(field.name).trim() !== '')
+  const send = () => {
+    if (!ready) return
+    props.onDone?.()
+    props.onSubmit(Object.fromEntries(props.fields.map((field) => [field.name, value(field.name).trim()])))
+  }
+  return (
+    <form
+      className="ask"
+      onSubmit={(event) => {
+        event.preventDefault()
+        send()
+      }}
+      {...fieldMenu}
+    >
+      {props.fields.map((field, i) =>
+        field.items ? (
+          <Suggest key={field.name} value={value(field.name)} onChange={(next) => put(field.name, next)} items={field.items} placeholder={field.placeholder} autoFocus={i === 0} onEnter={send} />
+        ) : field.long ? (
+          <textarea
+            key={field.name}
+            rows={3}
+            autoFocus={i === 0}
+            value={value(field.name)}
+            placeholder={field.placeholder}
+            onChange={(event) => put(field.name, event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) send()
+            }}
+          />
+        ) : (
+          <label key={field.name} className="suggest">
+            <input autoFocus={i === 0} value={value(field.name)} placeholder={field.placeholder} spellCheck={false} onChange={(event) => put(field.name, event.target.value)} />
+          </label>
+        ),
+      )}
+      {props.note && <p className="hint">{props.note}</p>}
+      <button type="submit" className="send small" disabled={!ready}>
+        {props.submit}
+      </button>
+    </form>
+  )
+}
+
+/** A button that asks before it acts: its form in a popover, closed once it's sent. */
+export function Ask(props: AskProps & { label: ReactNode; title: string; triggerTitle?: string; className?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Panel title={props.title} trigger={props.label} triggerTitle={props.triggerTitle ?? props.title} triggerClass={props.className ?? 'act'} open={open} onOpenChange={setOpen}>
+      <AskForm fields={props.fields} submit={props.submit} note={props.note} {...(props.disabled !== undefined ? { disabled: props.disabled } : {})} onSubmit={props.onSubmit} onDone={() => setOpen(false)} />
+    </Panel>
   )
 }
 

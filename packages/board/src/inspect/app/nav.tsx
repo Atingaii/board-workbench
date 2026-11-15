@@ -152,6 +152,7 @@ export type Section = (typeof SECTIONS)[number]
 /** The view a path names. Settings is one view: its section, and what's open in it (a schema, a sync entry). */
 export type Route =
   | { view: 'activity' }
+  | { view: 'tasks' }
   | { view: 'channel'; channel: string }
   | { view: 'settings'; section: Section; open: string | null }
   | { view: 'missing' }
@@ -164,6 +165,7 @@ export function route(path: string): Route {
     return { view: 'missing' }
   }
   if (decoded === '/') return { view: 'activity' }
+  if (decoded === '/tasks') return { view: 'tasks' }
   if (decoded.startsWith('/c/') && decoded.length > 3) return { view: 'channel', channel: decoded.slice(3) }
   const [, settings, section, ...rest] = decoded.split('/')
   if (settings === 'settings' && (SECTIONS as readonly string[]).includes(section ?? 'access'))

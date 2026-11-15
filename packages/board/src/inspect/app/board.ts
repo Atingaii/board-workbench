@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from 'react'
-import type { BoardEventView, Explanation, GrantInput, InboxEntry, Me, SchemaInput, SyncedView } from '../../api/routes.ts'
+import type { BoardEventView, Explanation, GrantInput, InboxEntry, Me, MessageView, SchemaInput, SyncedView, TaskView } from '../../api/routes.ts'
 // `@vercel/board/access`, in an app of yours.
 import { compileAccess } from '../../server/access.ts'
-import { board, type Attachment, type EventsState, type ExplainPrincipal, type PostOptions, type ScheduleTiming } from '../../server/index.default.ts'
+import { board, BoardError, type Attachment, type EventsState, type ExplainPrincipal, type PostOptions, type ScheduleTiming } from '../../server/index.default.ts'
 // The one import an app of yours can't make, and doesn't need. There, this file starts with
 // `const team = board()` in server code (a route handler, a server action), which finds the team's
 // board and your credentials itself. This page's server is the CLI on your machine, which keeps
@@ -12,7 +12,7 @@ import { http } from '../../backend-http/index.default.ts'
 import { toast } from './chrome.ts'
 import { listing } from './listing.ts'
 import * as store from './store.ts'
-import { said } from './words.ts'
+import { refusal, said } from './words.ts'
 
 // The page's data: one handle on the board, and every read and write the page makes through it.
 
@@ -101,7 +101,7 @@ export async function setProfile(next: Profile | null | undefined) {
 /** What you may do where: `me.can` is each channel pattern's permissions, and `compileAccess` answers for a channel. */
 export function viewerOf(me: Me): store.Viewer {
   const access = compileAccess(me.can)
-  return { actor: me.actor, principal: me.principal, may: (permission, channel) => access.can(permission, channel), manages: access.at('manage', '*') }
+  return { actor: me.actor, principal: me.principal, profile: me.profile, may: (permission, channel) => access.can(permission, channel), manages: access.at('manage', '*') }
 }
 
 // --- the page's state: what the board said, folded by store.ts --------------------------------
@@ -173,10 +173,11 @@ export async function boot() {
     },
     (feed) => set((s) => ({ ...s, live: feed === 'live' ? 'live' : 'reconnecting' })),
   ).catch((error) => toast(`live updates stopped: ${said(error)}`))
-  // Who's who, for the names beside IDs: who made a grant, who registered a schema.
+  // Who's who, for the names of a task's owner and holder; and the open tasks, for their count.
   void team.actors().then((actors) => set((s) => ({ ...s, actors: { ...Object.fromEntries(actors.map((actor) => [actor.id, actor])), ...s.actors } })), () => {})
   void loadSchemas()
   void loadSchedules()
+  void loadTasks({ state: 'open', label: [] }).then((listed) => 'cursor' in listed && !listed.more && set((s) => ({ ...s, tasksCounted: true })))
 }
 
 // #region guide inspector/live.ts
@@ -273,7 +274,7 @@ const outgoing = new Map<string, File[]>()
  * retry schedules it again, so nothing typed is lost.
  */
 export async function send(
-  post: { channel: string; re: string | null; text: string; noSync: boolean; labels: Record<string, string>; files?: File[]; later?: ScheduleTiming },
+  post: { channel: string; re: string | null; text: string; noSync: boolean; labels: Record<string, string>; files?: File[]; task?: store.Pending['task']; later?: ScheduleTiming },
   key: string = crypto.randomUUID(),
 ) {
   const files = post.files ?? outgoing.get(key) ?? []
@@ -286,6 +287,7 @@ export async function send(
     labels: post.labels,
     ...(files.length ? { files: files.map((f) => ({ name: f.name, size: f.size })) } : {}),
     ...(post.later ? { later: post.later } : {}),
+    ...(post.task ? { task: post.task } : {}),
     key,
     createdAt: new Date().toISOString(),
     error: null,
@@ -310,11 +312,14 @@ export async function send(
     }
     // The same `id` never posts twice, so a retry is safe.
     const options = { ...content, id: key }
-    const sent = await write(post.re === null ? { channel: post.channel } : { re: post.re }, options)
+    // A thread that starts as a task is one write: its root, files and all, and what makes it a task.
+    const sent = post.task
+      ? (await team.tasks.create(post.channel, { ...options, needs: post.task.needs, for: post.task.for })).task
+      : await write(post.re === null ? { channel: post.channel } : { re: post.re }, options)
     outgoing.delete(key)
     set((s) => store.merge({ ...s, pending: s.pending.filter((p) => p.key !== key) }, [sent]))
   } catch (error) {
-    set((s) => ({ ...s, pending: s.pending.map((p) => (p.key === key ? { ...p, error: said(error) } : p)) }))
+    set((s) => ({ ...s, pending: s.pending.map((p) => (p.key === key ? { ...p, error: refusal(error) } : p)) }))
   }
 }
 
@@ -377,6 +382,128 @@ export async function saveAttachment(attachment: Attachment) {
     toast(`couldn't download ${attachment.name}: ${said(error)}`)
   }
 }
+
+// --- tasks: threads with a state ---------------------------------------------------
+
+// #region guide inspector/tasks.ts
+/**
+ * Tasks, oldest first: the order a queue works them in. Each comes as its thread's summary, and
+ * its root's `task` says its state, whose it is, what it waits for, and who holds it. Open ones
+ * unless `state` asks for more; `channel` is a channel, or with a trailing `/` it and what's under
+ * it; `after` is the `cursor` of the page before.
+ */
+const listTasks = (query: { state?: 'open' | 'all' | TaskView['state']; channel?: string; label?: string[]; owner?: string; for?: string; after?: string }) =>
+  team.tasks.list({ ...query, limit: PAGE })
+// #endregion
+
+// #region guide inspector/claims.ts
+/**
+ * The claims this tab holds, by task: each claim's `epoch` and `token`, which its writes carry.
+ * The token is a secret, so it lives in memory and nowhere else: never in storage, where a script
+ * on the page or another tab could read it. A reload gives the claims up, and their leases run out.
+ */
+const claims = new Map<string, { epoch: number; token: string }>()
+
+/** Claims a task, and keeps the claim. A task that can't be claimed now throws a 409: `task_claimed`, `task_waiting`, `task_assigned`. */
+async function claim(id: string): Promise<MessageView> {
+  const claimed = await team.tasks.claim(id)
+  claims.set(id, { epoch: claimed.epoch, token: claimed.token })
+  return claimed.task
+}
+
+/** What this tab's claim on a task does: `renew`, `release`, `complete`, `fail`, and `block`. Once the claim is over, each throws a 409 `claim_lost` and changes nothing. */
+function held(id: string) {
+  const mine = claims.get(id)
+  if (!mine) throw new BoardError('claim_lost', 'this tab holds no claim on it', 409)
+  return team.tasks.held(id, mine)
+}
+// #endregion
+
+// The store knows which claims are live, from what the board shows; once it drops one it had,
+// its token goes too. One the store hasn't taken in yet is kept: a claim's token is here a
+// moment before the store hears of it, and anything that changes the store in between runs this.
+const recorded = new Set<string>()
+listeners.add(() => {
+  for (const id of claims.keys()) {
+    if (state.claims[id]) recorded.add(id)
+    else if (recorded.delete(id)) claims.delete(id)
+  }
+})
+
+/**
+ * The tasks a filter keeps, a page at a time, into the store. Answers where the list ends for
+ * now, or what the board refused it for.
+ */
+export async function loadTasks(filter: store.TaskFilter, after?: string): Promise<{ cursor: string; last: MessageView | undefined; more: boolean } | { refused: string }> {
+  try {
+    const page = await listTasks({
+        state: filter.state,
+        ...(filter.channel ? { channel: filter.channel } : {}),
+        ...(filter.label.length > 0 ? { label: filter.label } : {}),
+        ...(filter.owner ? { owner: filter.owner } : {}),
+        ...(filter.for ? { for: filter.for } : {}),
+        ...(after ? { after } : {}),
+      })
+    const roots = page.tasks.map((task) => task.message)
+    set((s) => store.merge(s, roots))
+    return { cursor: page.cursor, last: roots.at(-1), more: roots.length === PAGE }
+  } catch (error) {
+    return { refused: refusal(error) }
+  }
+}
+
+/** A task write: the root it answers goes in the store, and a refusal is said in the page's words. */
+async function work(id: string, write: () => Promise<MessageView>): Promise<boolean> {
+  try {
+    const root = await write()
+    set((s) => store.merge(s, [root]))
+    return true
+  } catch (error) {
+    // The board never says who holds it now, only that this claim doesn't.
+    if (error instanceof BoardError && error.code === 'claim_lost') set((s) => store.unclaimed(s, id))
+    toast(refusal(error))
+    return false
+  }
+}
+
+/** Claims a task for the board's default lease, and tells the store which claim this tab now holds. */
+export async function claimTask(id: string): Promise<boolean> {
+  try {
+    const root = await claim(id)
+    set((s) => store.claimed(s, root, { epoch: claims.get(id)!.epoch }))
+    // The feed was ahead and the task has moved on: the store never held this claim, so its token goes here.
+    if (!state.claims[id]) claims.delete(id)
+    return true
+  } catch (error) {
+    toast(refusal(error))
+    return false
+  }
+}
+
+export const renewTask = (id: string) => work(id, async () => (await held(id).renew()).task)
+export const releaseTask = (id: string) => work(id, async () => held(id).release())
+export const completeTask = (id: string, result?: string) => work(id, async () => held(id).complete(result))
+export const failTask = (id: string, reason: string) => work(id, async () => held(id).fail(reason))
+/** Holds a task for a person: through this tab's claim while it has one, which ends the claim, or else as its owner. */
+export const blockTask = (id: string, reason: string, kind?: string) =>
+  work(id, async () => {
+    const root = state.messages[id]
+    const mine = store.isTask(root) && store.holding(state, root, Date.now()) !== undefined
+    return mine ? held(id).block(reason, kind ? { kind } : {}) : team.tasks.block(id, reason, kind ? { kind } : {})
+  })
+export const unblockTask = (id: string) => work(id, () => team.tasks.unblock(id))
+export const reopenTask = (id: string) => work(id, () => team.tasks.reopen(id))
+/** `actor` is one of the owner's (`<owner>+<profile>`), or null for anyone who may claim it. */
+export const assignTask = (id: string, actor: string | null) => work(id, () => team.tasks.assign(id, actor))
+export const cancelTask = (id: string, reason: string) => work(id, () => team.tasks.cancel(id, reason))
+
+/** Makes the thread `re` roots a task, as it is. */
+export const makeTask = (re: string, options: { needs: string[]; for: string | null }) => work(re, async () => (await team.tasks.create({ re }, options)).task)
+
+// A claim's token is only in this tab: leaving the page gives up what it holds, so the browser asks first.
+addEventListener('beforeunload', (event) => {
+  if (Object.keys(state.claims).length > 0) event.preventDefault()
+})
 
 // --- schemas: what a message's blocks hold -------------------------------------------------
 

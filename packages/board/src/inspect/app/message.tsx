@@ -11,7 +11,8 @@ import { BlockCard } from './blocks.tsx'
 import * as board from './board.ts'
 import { setEditing, toast, useEditing } from './chrome.ts'
 import { Ago } from './nav.tsx'
-import { bodyParts, continues, schemaOf, sourcePlatform, type Groupable, type Pending, type ReplySummary } from './store.ts'
+import { bodyParts, continues, isTask, schemaOf, sourcePlatform, type Groupable, type Pending, type ReplySummary, type State } from './store.ts'
+import { TaskLine } from './task.tsx'
 import { authorName, fileSize, shownName, timingWords } from './words.ts'
 import { ContextMenuArea, EmojiPicker, fieldMenu, LabelEditor, Panel, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
 
@@ -29,6 +30,8 @@ export type RowOptions = {
   summary?: (m: MessageView) => ReplySummary | undefined
   /** Sync key → platform, for each message's source mark. */
   platforms?: Record<string, string>
+  /** The page's state, where a root that's a task shows it in a line; unset in a thread, whose pane shows it in full. */
+  board?: State
   /** The board's schema registry, once read: what each block's fields mean. */
   schemas?: SchemaView[] | null
 }
@@ -311,7 +314,8 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
   const toggle = (emoji: string) => void board.react(m.id, emoji, reacted(emoji))
   const replies = m.re === null ? options.summary?.(m) : undefined
   const thread = m.re ?? m.id
-  const labels = Object.entries(m.labels)
+  // A task's state is its `board.task` label too, which its line already says.
+  const labels = Object.entries(m.labels).filter(([key]) => !(key.startsWith('board.') && m.task))
 
   const items = (
     <>
@@ -385,6 +389,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
               <Links items={m.links} />
             </>
           )}
+          {options.board && isTask(m) && !m.deleted && <TaskLine root={m} state={options.board} />}
           {(labels.length > 0 || Object.keys(m.reactions).length > 0) && (
             <div className="chips">
               {labels.map(([key, value]) => (

@@ -458,6 +458,55 @@ button.file:hover { background: var(--shade-hover); color: var(--bright); }
 .ask .suggest .prefix { margin-right: 8px; font-size: 11px; white-space: nowrap; }
 .ask .send { justify-self: end; }
 
+/* --- tasks: a thread with a state, so one more line on its root --- */
+.task-state { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.task-state svg { flex-shrink: 0; }
+.task-state.ready, .task-state.claimed, .task-state.blocked { color: var(--bright); }
+.task-state.completed { color: var(--dim); }
+.task-state.failed { color: var(--red); }
+.task-state.waiting, .task-state.canceled { color: var(--faint); }
+.task-line, .task-head { display: flex; flex-wrap: wrap; align-items: center; margin-left: -15px; clip-path: inset(0 0 0 15px); }
+/* Each item carries its own separator, and the row clips the ones at its left edge: none starts a line. */
+.task-line > *, .task-head > * { position: relative; padding-left: 15px; }
+.task-line > *::before, .task-head > *::before { content: '\\00b7'; position: absolute; left: 4px; color: var(--faint); font-weight: 400; }
+.task-line { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.task-note { color: var(--dim); overflow-wrap: anywhere; }
+.lease { font-variant-numeric: tabular-nums; }
+.needs { display: inline-flex; flex-wrap: wrap; gap: 0 8px; }
+.need { color: var(--accent); cursor: default; }
+.need:hover { text-decoration: underline; }
+.need-state { margin-left: 4px; color: var(--faint); }
+.need-state.completed { color: var(--muted); }
+.need-state.failed { color: var(--red); }
+
+/* The task in full, under the thread's header: it's part of the header, so the hairline goes under it. */
+.task-card { flex-shrink: 0; display: grid; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--hairline); font-size: 12px; }
+.task-head { color: var(--dim); }
+.task-head .task-state { font-size: 13px; font-weight: 600; }
+.task-card .hint { margin: 0; }
+
+.task-rows { display: grid; }
+.task-row { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto auto 30px; align-items: center; gap: 14px; padding: 5px 20px; outline: none; }
+.task-row:hover, .task-row[aria-current] { background: var(--shade); }
+.task-row:focus-visible { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.task-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.task-title .label { margin-left: 6px; vertical-align: 1px; }
+.task-now { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.task-now .needs { display: inline; }
+.task-now .need + .need { margin-left: 8px; }
+.task-where { color: var(--faint); font-size: 12px; white-space: nowrap; }
+.task-row .time { text-align: right; }
+@media (max-width: 700px) {
+  .task-row { grid-template-columns: 88px minmax(0, 1fr) 30px; row-gap: 0; }
+  .task-where { display: none; }
+  .task-now { grid-column: 2 / -1; grid-row: 2; max-width: none; }
+  .task-now:empty { display: none; }
+}
+
+.composer-task { display: flex; gap: 6px; margin: 8px 8px 0; }
+.composer-task .suggest { flex: 1; }
+.composer-task .prefix { margin-right: 8px; font-size: 11px; white-space: nowrap; }
+
 /* --- blocks: the data a message carries, as a card where its fence was --- */
 .block { max-width: 640px; margin: 6px 0; border: 1px solid var(--hairline); font-size: 12px; }
 .block-head { display: flex; align-items: center; gap: 10px; height: 26px; padding: 0 0 0 10px; background: var(--shade); }

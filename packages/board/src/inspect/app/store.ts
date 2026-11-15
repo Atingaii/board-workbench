@@ -1,4 +1,4 @@
-import type { ActorView, BlockView, BoardEventView, ChannelView, Discovery, GrantView, Me, MessageView, RegistrationView, ScheduleView, SchemaView, ThreadsPage } from '../../api/routes.ts'
+import type { ActorView, BlockView, BoardEventView, ChannelView, Discovery, GrantView, Me, MessageView, RegistrationView, ScheduleView, SchemaView, TaskView, ThreadsPage } from '../../api/routes.ts'
 // `@vercel/board/schemas`, in an app of yours.
 import { findBlocks } from '../../contract/blocks.ts'
 import { canonicalEmoji } from '../../contract/emoji.ts'
@@ -28,6 +28,8 @@ export type Pending = {
   files?: { name: string; size: number }[]
   /** Set for one to send later: when, and how often. It's kept until the board has its schedule. */
   later?: ScheduleTiming
+  /** Set for a thread that starts as a task: what it waits for, and the actor it's for. */
+  task?: { needs: string[]; for: string | null }
   createdAt: string
   error: string | null
 }
@@ -60,6 +62,10 @@ export type State = {
   /** The stream's position: the last event's cursor, to resume from. */
   cursor: string | null
   live: 'connecting' | 'live' | 'reconnecting'
+  /** The claims this tab made, by task: which ones the board still shows as live. */
+  claims: Record<string, Claim>
+  /** Whether every open task is loaded, so the page can count them. */
+  tasksCounted: boolean
   /** Each opened channel's listing, or null on a board whose thread pages have no `older`: it loads by messages. */
   listings: Record<string, Listing | null>
   /** The board's schema registry, once it's read: what a block's fields mean. */
@@ -85,6 +91,8 @@ export const initialState: State = {
   actors: {},
   cursor: null,
   live: 'connecting',
+  claims: {},
+  tasksCounted: false,
   listings: {},
   schemas: null,
   schemasRefused: null,
@@ -153,14 +161,21 @@ export function newest(known: Record<string, MessageView>, views: MessageView[])
 }
 // #endregion
 
-/** Takes in message views, the newer of each, with what a newer view settles: the changes of yours it confirms. */
+/** Takes in message views, the newer of each, with what a newer view settles: your changes it confirms, and a claim it ends. */
 export function merge(state: State, views: MessageView[]): State {
   const messages = newest(state.messages, views)
   if (messages === state.messages) return state
   let ops = state.ops
+  let claims = state.claims
   for (const view of views) {
     // An older view changed nothing.
     if (messages[view.id] !== view) continue
+    // A claim is over once the board shows the task released, settled, held, or claimed again.
+    const claim = claims[view.id]
+    if (claim && !(view.task?.state === 'claimed' && view.task.epoch === claim.epoch)) {
+      claims = { ...claims }
+      delete claims[view.id]
+    }
     const waiting = ops[view.id]
     if (waiting && state.me) {
       const left = waiting.filter(({ op }) => !confirms(view, op, state.me!.actor))
@@ -171,7 +186,7 @@ export function merge(state: State, views: MessageView[]): State {
       }
     }
   }
-  return { ...state, messages, ops }
+  return { ...state, messages, ops, claims }
 }
 
 // #region guide inspector/pending.ts
@@ -468,7 +483,9 @@ export function continues(previous: Groupable | undefined, m: Groupable, hasRepl
 export type Viewer = {
   actor: string
   principal: string
-  may(permission: 'post' | 'manage', channel: string): boolean
+  /** The profile you write as, or null as yourself. */
+  profile: string | null
+  may(permission: 'post' | 'label' | 'manage', channel: string): boolean
   /** `manage` at `*`: what registering a schema and listing grants need. */
   manages: boolean
 }
@@ -485,6 +502,134 @@ export function nameOf(state: State, id: string): string {
   const tail = state.actors[principal]?.name ?? principal.slice(principal.lastIndexOf(':') + 1)
   return plus === -1 ? tail : `${id.slice(plus + 1)} via ${tail}`
 }
+
+// --- tasks: a thread with a state ---------------------------------------------------------
+
+// #region guide inspector/task-state.ts
+export type TaskState = TaskView['state']
+
+/**
+ * A task's state as it stands now. A claim past its lease is over, so its task is ready, whatever
+ * the board last wrote: a board with no timers says `claimed` until something asks.
+ */
+export function stateNow(task: TaskView, now: number): TaskState {
+  return task.state === 'claimed' && task.claim !== null && Date.parse(task.claim.until) <= now ? 'ready' : task.state
+}
+// #endregion
+
+/** A root that's a task. */
+export type TaskRoot = MessageView & { task: TaskView }
+export const isTask = (message: MessageView | null | undefined): message is TaskRoot => !!message?.task
+
+/** A claim this tab made, by the epoch it was made at. Its token, a secret, stays out of the page's state: the data module keeps it. */
+export type Claim = { epoch: number }
+
+/** The states a task can still leave by being worked: what a list shows unless it's asked for more. */
+export const OPEN_STATES: readonly TaskState[] = ['waiting', 'ready', 'claimed', 'blocked']
+
+/** The profiles the board has seen a principal write as, then the usual agents: who a task of its can be for. */
+export function profilesOf(state: State, principal: string): string[] {
+  const seen = Object.keys(state.actors).flatMap((id) => (id.startsWith(`${principal}+`) ? [id.slice(principal.length + 1)] : []))
+  return [...new Set([...seen, 'claude', 'codex'])]
+}
+
+/** Takes in a claim this tab made: the task as the claim left it, and what its writes carry. */
+export function claimed(state: State, view: MessageView, claim: Claim): State {
+  const next = merge({ ...state, claims: { ...state.claims, [view.id]: claim } }, [view])
+  // The feed can be ahead of the claim's answer: a task that has moved on since isn't held.
+  const now = next.messages[view.id]?.task
+  return now?.state === 'claimed' && now.epoch === claim.epoch ? next : unclaimed(next, view.id)
+}
+
+/** Forgets a claim: the board said it's over. */
+export function unclaimed(state: State, task: string): State {
+  if (!state.claims[task]) return state
+  const claims = { ...state.claims }
+  delete claims[task]
+  return { ...state, claims }
+}
+
+/** The claim this tab holds on a task, while it's live: the board still shows it, and its lease hasn't run out. */
+export function holding(state: State, root: TaskRoot, now: number): Claim | undefined {
+  const claim = state.claims[root.id]
+  const { task } = root
+  return claim && task.state === 'claimed' && task.epoch === claim.epoch && task.claim !== null && Date.parse(task.claim.until) > now ? claim : undefined
+}
+
+/**
+ * What the viewer can do to a task now, by the board's rules, so the page offers only that. The
+ * board decides each write all the same: a view can be a moment old.
+ */
+export type Moves = {
+  claim: boolean
+  /** This tab holds its claim: it can renew, release, complete, fail, and block it. */
+  held: boolean
+  /** The viewer holds it, but not from this tab: the claim was made elsewhere, or a reload lost it. */
+  elsewhere: boolean
+  /** As its owner, or with `manage` in its channel. `hold` blocks one no one has claimed. */
+  hold: boolean
+  unblock: boolean
+  reopen: boolean
+  assign: boolean
+  cancel: boolean
+}
+
+export function moves(state: State, root: TaskRoot, viewer: Viewer, now: number): Moves {
+  const { task, channel } = root
+  const current = stateNow(task, now)
+  const finished = current === 'completed' || current === 'failed' || current === 'canceled'
+  // Its owner changes it: the principal itself, as no profile, or the one of its actors that made
+  // it a task (`by`). The owner comes first: another principal's own ID can read the same as `by`.
+  const mine = task.owner === viewer.principal && (viewer.profile === null || task.by === viewer.actor)
+  const owns = viewer.may('manage', channel) || (mine && (viewer.may('post', channel) || viewer.may('label', channel)))
+  const held = holding(state, root, now) !== undefined
+  return {
+    claim: current === 'ready' && !root.deleted && viewer.may('label', channel) && (task.for === null || (task.for === viewer.actor && task.owner === viewer.principal)),
+    held,
+    elsewhere: !held && current === 'claimed' && task.claim?.actor === viewer.actor,
+    hold: owns && (current === 'waiting' || current === 'ready'),
+    unblock: owns && current === 'blocked',
+    reopen: owns && current === 'failed',
+    assign: owns && !finished,
+    cancel: owns && current !== 'completed' && current !== 'canceled',
+  }
+}
+
+/** Which tasks a list shows, as the board's API takes them: `channel` is a channel or, with a trailing `/`, it and what's under it. */
+export type TaskFilter = { channel?: string; state: 'open' | 'all' | TaskState; label: string[]; owner?: string; for?: string }
+
+const inChannel = (channel: string, wanted: string) => (wanted.endsWith('/') ? channel === wanted.slice(0, -1) || channel.startsWith(wanted) : channel === wanted)
+
+/** The board's rules for a task list, for tasks already here, so one that changes state moves in or out as it happens. */
+export function taskMatches(root: TaskRoot, filter: TaskFilter, now: number): boolean {
+  const { task } = root
+  if (root.deleted) return false
+  if (filter.channel && !inChannel(root.channel, filter.channel)) return false
+  // Open is what the task wears; a state by name is what it is now, so a lapsed claim lists as ready.
+  if (filter.state === 'open' ? !OPEN_STATES.includes(task.state) : filter.state !== 'all' && stateNow(task, now) !== filter.state) return false
+  if (filter.owner && task.owner !== filter.owner) return false
+  if (filter.for && task.for !== filter.for) return false
+  return filter.label.every((label) => hasLabel(root.labels, label))
+}
+
+/**
+ * The loaded tasks a filter keeps, oldest first: the order a queue works them in. While the board
+ * has more than it listed, the list ends at `through`, the last one it did, so a new task doesn't
+ * show after a gap.
+ */
+export function tasks(state: State, filter: TaskFilter, now: number, through?: Pick<MessageView, 'createdAt' | 'id'>): TaskRoot[] {
+  const found: TaskRoot[] = []
+  for (const message of Object.values(state.messages)) {
+    if (!isTask(message) || !taskMatches(message, filter, now)) continue
+    if (through && byWritten(message, through) > 0) continue
+    found.push(shown(state, message.id) as TaskRoot)
+  }
+  return found.sort(byWritten)
+}
+
+/** How many tasks are open, once every open one is loaded. */
+export const openTasks = (state: State): number | null =>
+  state.tasksCounted ? Object.values(state.messages).filter((m) => isTask(m) && !m.deleted && OPEN_STATES.includes(m.task.state)).length : null
 
 // --- blocks and schemas -------------------------------------------------------------------
 

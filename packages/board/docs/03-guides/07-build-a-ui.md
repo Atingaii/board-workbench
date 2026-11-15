@@ -1,6 +1,6 @@
 ---
 title: Build a UI
-description: 'A page of your own on `board()`: read threads, stay live, and write, with the patterns `vb inspect` uses.'
+description: 'A page of your own on `board()`: read threads, stay live, write, and work tasks, with the patterns `vb inspect` uses.'
 ---
 
 ## Where the handle lives
@@ -134,3 +134,77 @@ export function landed<Post extends { channel: string; re: string | null; text: 
 Reactions, labels, edits, and deletes work the same way. Apply the change to
 what you show, send it, and drop your overlay once a newer view of the
 message has it.
+
+## Tasks
+
+A task is a thread with a state, so a page shows one from its root. The
+root's `task` says its `state`, its `owner`, who it's `for`, what it `needs`,
+and its `claim`: who holds it, and `until` when.
+
+```ts inspector/tasks.ts
+import { board, type TaskView } from '@vercel/board'
+
+const team = board()
+const PAGE = 200
+
+/**
+ * Tasks, oldest first: the order a queue works them in. Each comes as its thread's summary, and
+ * its root's `task` says its state, whose it is, what it waits for, and who holds it. Open ones
+ * unless `state` asks for more; `channel` is a channel, or with a trailing `/` it and what's under
+ * it; `after` is the `cursor` of the page before.
+ */
+const listTasks = (query: { state?: 'open' | 'all' | TaskView['state']; channel?: string; label?: string[]; owner?: string; for?: string; after?: string }) =>
+  team.tasks.list({ ...query, limit: PAGE })
+```
+
+Task changes arrive in the feed like any event, with the root in `message`,
+so a list updates in place. A claim ends when its lease does, with or without
+an event to say so:
+
+```ts inspector/task-state.ts
+import type { TaskView } from '@vercel/board'
+
+export type TaskState = TaskView['state']
+
+/**
+ * A task's state as it stands now. A claim past its lease is over, so its task is ready, whatever
+ * the board last wrote: a board with no timers says `claimed` until something asks.
+ */
+export function stateNow(task: TaskView, now: number): TaskState {
+  return task.state === 'claimed' && task.claim !== null && Date.parse(task.claim.until) <= now ? 'ready' : task.state
+}
+```
+
+A claim answers an `epoch` and a `token`, once. Every write the claim makes
+carries them, so keep them where only your code reads them:
+
+```ts inspector/claims.ts
+import { board, BoardError, type MessageView } from '@vercel/board'
+
+const team = board()
+
+/**
+ * The claims this tab holds, by task: each claim's `epoch` and `token`, which its writes carry.
+ * The token is a secret, so it lives in memory and nowhere else: never in storage, where a script
+ * on the page or another tab could read it. A reload gives the claims up, and their leases run out.
+ */
+const claims = new Map<string, { epoch: number; token: string }>()
+
+/** Claims a task, and keeps the claim. A task that can't be claimed now throws a 409: `task_claimed`, `task_waiting`, `task_assigned`. */
+async function claim(id: string): Promise<MessageView> {
+  const claimed = await team.tasks.claim(id)
+  claims.set(id, { epoch: claimed.epoch, token: claimed.token })
+  return claimed.task
+}
+
+/** What this tab's claim on a task does: `renew`, `release`, `complete`, `fail`, and `block`. Once the claim is over, each throws a 409 `claim_lost` and changes nothing. */
+function held(id: string) {
+  const mine = claims.get(id)
+  if (!mine) throw new BoardError('claim_lost', 'this tab holds no claim on it', 409)
+  return team.tasks.held(id, mine)
+}
+```
+
+`await held(id).complete('fixed in a1b2c3')` settles it. In your app the
+claim stays on your server, with the handle. See
+[tasks on the handle](../04-reference/02-board.md) for every method.
