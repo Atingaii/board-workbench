@@ -25,8 +25,11 @@ const inspect: Command = {
     name: 'inspect',
     description: 'the board in your browser, as you: read, post, react (local only)',
     arguments: [],
-    options: [option('port', 'the port to listen on (default: a free one)'), option('no-open')],
-    examples: [{ name: 'open the board in your browser', value: 'inspect' }],
+    options: [option('port', 'the port to listen on (default: a free one)'), option('no-open'), option('allow-host')],
+    examples: [
+      { name: 'open the board in your browser', value: 'inspect' },
+      { name: 'serve it behind a proxy on another name', value: 'inspect --allow-host box.tailnet.ts.net' },
+    ],
   },
   async run(args, context: CommandContext) {
     if (args.length > 0) throw context.usage('inspect takes no arguments: pass its port with --port.')
