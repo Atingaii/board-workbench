@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { request } from 'node:http'
 import { join } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -105,6 +106,20 @@ function vb(cwd: string, env: NodeJS.ProcessEnv, args: string[]) {
   })
 }
 
+/** A request as a proxy in front of `vb serve` forwards it, with the headers it sends: fetch won't forge a `Host`. */
+function forwarded(to: string, path: string, headers: Record<string, string>) {
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const { hostname, port, pathname } = new URL(to)
+    const req = request({ hostname, port, path: `${pathname === '/' ? '' : pathname}${path}` || '/', headers }, (res) => {
+      let body = ''
+      res.on('data', (chunk) => (body += chunk))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 describe('vb serve', () => {
   /** Who you are on a local board: this machine's user, as its local token names you. */
   const me = localHandle()
@@ -184,6 +199,52 @@ describe('vb serve', () => {
     expect(me).toMatchObject({ actor: `local:user:${localHandle()}` })
     serving.child.kill('SIGINT')
     expect(await serving.exited).toBe(0)
+  })
+
+  it('is the board at a host you allow, and at its own address for any other', async () => {
+    const { project, env } = await setup()
+    const serving = serveIn(project, env, ['--no-inspect', '--allow-host', 'box.tailnet.ts.net'])
+    const url = await serving.url
+    const discovered = async (headers: Record<string, string>) => JSON.parse((await forwarded(url, '', headers)).body)
+    // A proxy that keeps the Host it was asked for, and says the request came over TLS.
+    const there = 'https://box.tailnet.ts.net/api/board'
+    expect(await discovered({ host: 'box.tailnet.ts.net', 'x-forwarded-proto': 'https' })).toMatchObject({ url: there, audience: there })
+    expect(await discovered({ host: 'BOX.tailnet.ts.net' })).toMatchObject({ audience: 'http://box.tailnet.ts.net/api/board' })
+    // A sender chooses its Host: one you didn't allow doesn't get to name the board.
+    expect(await discovered({ host: 'evil.example', 'x-forwarded-proto': 'https' })).toMatchObject({ url, audience: url })
+
+    // Your token is for the board's own URL: it's you there, and no one at the host you allowed.
+    const { token } = JSON.parse(await readFile(withConfig(env.XDG_CONFIG_HOME, () => localTokenFile(url)), 'utf8'))
+    const me = (headers: Record<string, string>) => forwarded(url, '/me', { authorization: `Bearer ${token}`, ...headers })
+    expect((await me({})).status).toBe(200)
+    expect((await me({ host: 'evil.example' })).status).toBe(200)
+    expect((await me({ host: 'box.tailnet.ts.net', 'x-forwarded-proto': 'https' })).status).toBe(401)
+    serving.child.kill('SIGINT')
+    expect(await serving.exited).toBe(0)
+  })
+
+  it('opens the inspector to a host you allow', async () => {
+    const { project, env } = await setup()
+    const serving = serveIn(project, env, ['--no-open', '--allow-host', 'box.tailnet.ts.net'])
+    await serving.url
+    await expect.poll(serving.output, { timeout: 10_000 }).toMatch(/inspector at http:\/\/127\.0\.0\.1:\d+\n/)
+    const inspector = /inspector at (\S+)/.exec(serving.output())![1]!
+    const page = await forwarded(inspector, '/', { host: 'box.tailnet.ts.net' })
+    expect(page.status).toBe(200)
+    // The page there acts as you, as on this machine.
+    const token = /<meta name="inspect-token" content="([^"]+)">/.exec(page.body)![1]!
+    const me = await forwarded(inspector, '/board/me', { host: 'box.tailnet.ts.net', 'x-inspect-token': token })
+    expect(JSON.parse(me.body)).toMatchObject({ actor: `local:user:${localHandle()}` })
+    expect((await forwarded(inspector, '/', { host: 'evil.example' })).status).toBe(421)
+    serving.child.kill('SIGINT')
+    expect(await serving.exited).toBe(0)
+  })
+
+  it('takes only a host for --allow-host', async () => {
+    const { project, env } = await setup()
+    const refused = await vb(project, env, ['serve', '--port', '0', '--no-inspect', '--allow-host', 'https://box.tailnet.ts.net/'])
+    expect(refused.code).toBe(2)
+    expect(refused.stderr).toContain('--allow-host takes a host')
   })
 
   it('says so when the port is taken', async () => {

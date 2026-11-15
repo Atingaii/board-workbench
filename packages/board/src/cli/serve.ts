@@ -58,9 +58,11 @@ async function carryOver(dir: string) {
  * A board on this machine, for agents and people sharing one computer: `local()` under `dir`, its
  * log in SQLite, attachments next to it, a scheduler in this process, no sync, on 127.0.0.1 only.
  * Its keys live in memory for this run; it signs one token, for you, into a file only you can read
- * (`localTokenFile`), which `vb` on this machine picks up.
+ * (`localTokenFile`), which `vb` on this machine picks up. `hosts` adds names a proxy in front of
+ * it serves it on: a request for one reaches the board at that host's URL, which a token must be
+ * minted for there, and your token is for its own.
  */
-export async function serveLocal(options: { dir: string; port?: number; handle?: string }): Promise<LocalBoard> {
+export async function serveLocal(options: { dir: string; port?: number; handle?: string; hosts?: readonly string[] }): Promise<LocalBoard> {
   const dir = resolve(options.dir)
   await mkdir(dir, { recursive: true, mode: 0o700 })
   quietSqliteWarning()
@@ -70,11 +72,13 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   const { publicKey, privateKey } = await generateKeyPair('ES256')
   const jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), kid: 'local', alg: 'ES256' }] })
 
-  // The URL is the token's audience, so it's fixed once the port is known.
+  const hosts = new Set((options.hosts ?? []).map((host) => host.toLowerCase()))
+  // Its own address, once the port is known: where every request reaches it but one for a host you allowed.
+  let origin = ''
   let handler: ((request: Request) => Promise<Response>) | null = null
   const server = createServer((request, response) => {
     if (!handler) return void response.writeHead(503).end()
-    void forward(handler, request, response)
+    void forward(handler, originOf(request, origin, hosts), request, response)
   })
   let port: number
   try {
@@ -84,12 +88,16 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
       throw new BoardError('port_taken', `Port ${options.port ?? DEFAULT_SERVE_PORT} is taken. Is a board already running there?`, 0)
     throw error
   }
-  const url = `http://127.0.0.1:${port}/api/board`
+  origin = `http://127.0.0.1:${port}`
+  const url = `${origin}/api/board`
   const mounted = board({
     // Its timers live in this process, which runs as long as the board does.
     backend,
     authenticate: oidcTokens({ local: { issuer: ISSUER, jwks } }),
-    url,
+    // No `url`: the board is at the URL a request reaches it at, a token's audience there, and
+    // `originOf` lets a request name only this server's own or a host you allowed. So this handle
+    // knows no URL of its own: its `url` is the in-process one, and `sandboxPolicy()` has none to
+    // give. It only serves requests here: hand it nothing that needs either.
     basePath: '/api/board',
   })
   try {
@@ -149,7 +157,19 @@ function listen(server: Server, port: number): Promise<number> {
   })
 }
 
-async function forward(handler: (request: Request) => Promise<Response>, req: IncomingMessage, res: ServerResponse) {
+/**
+ * Where a request reached this server: at a host you allowed, over `https` when the proxy in front
+ * says so (`X-Forwarded-Proto`), and at the server's `own` address for any other. A request's
+ * sender chooses its `Host`, so one you didn't allow never names the board.
+ */
+function originOf(request: IncomingMessage, own: string, hosts: ReadonlySet<string>): string {
+  const host = String(request.headers.host ?? '').toLowerCase()
+  if (!hosts.has(host)) return own
+  const scheme = String(request.headers['x-forwarded-proto'] ?? '').split(',')[0]!.trim().toLowerCase()
+  return `${scheme === 'https' ? 'https' : 'http'}://${host}`
+}
+
+async function forward(handler: (request: Request) => Promise<Response>, origin: string, req: IncomingMessage, res: ServerResponse) {
   const controller = new AbortController()
   res.on('close', () => controller.abort())
   try {
@@ -173,7 +193,7 @@ async function forward(handler: (request: Request) => Promise<Response>, req: In
       if (typeof value === 'string') headers.set(key, value)
       else if (Array.isArray(value)) for (const item of value) headers.append(key, item)
     const response = await handler(
-      new Request(`http://${req.headers.host ?? '127.0.0.1'}${req.url ?? '/'}`, {
+      new Request(`${origin}${req.url ?? '/'}`, {
         method: req.method ?? 'GET',
         headers,
         ...(body && body.length > 0 ? { body } : {}),
