@@ -92,6 +92,7 @@ export const options = {
   all: { type: 'boolean', short: 'a', description: 'everything, not only what most want' },
   timeout: { type: 'string', value: 'duration', description: 'how long to wait: 30s, 10m, or a bare number of seconds (default: 30m)' },
   'no-open': { type: 'boolean', description: "don't open the browser" },
+  'allow-host': { type: 'string', multiple: true, value: 'host', description: 'also answer requests for this host, from a proxy in front: whoever reaches it there acts as you' },
   in: { type: 'string', value: 'duration', description: 'once, this long from now, e.g. 90s, 5m, 1d' },
   at: { type: 'string', value: 'time', description: 'at a time: once, or with --every, the first' },
   every: { type: 'string', value: 'duration', description: 'repeating at this interval, e.g. 30m' },

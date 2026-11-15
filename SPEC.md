@@ -262,8 +262,8 @@ checked with `@vercel/board/conformance`.
   files (direct uploads too, on URLs the API signs for the bytes' SHA-256),
   and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
   middleware screens a schedule when it's made. What the API doesn't keep yet
-  answers 501 `not_supported`: files on a scheduled message, labels on a
-  scheduled reply, a post's sync targets. Grants go to the API, which takes no `github` or `oidc`
+  answers 501 `not_supported`: files on a scheduled message and a post's sync
+  targets. Grants go to the API, which takes no `github` or `oidc`
   principal in a grant, or explains one (400 `unsupported_principal`: an app,
   which an OIDC exchange policy issues tokens for, stands in); `vercel()`
   says the refusals with a hint. It
@@ -3445,10 +3445,10 @@ Built on `local()`: the `task.*` events and their fold, the `/tasks` routes,
 the handle's `tasks`, the reserved `board.` labels (on every backend, since
 `board()` refuses them), the `tasks` conformance group, and the CLI: `vb tasks`
 and its claims directory, the task line in `vb read`, task events in `vb
-tail`, and the `tasks` command a `reserved_label` failure names. Next: the
-inspector, sync re-rendering a copy when its task changes, and `vercel()`,
-which answers 501 `no_tasks` until it maps the routes onto Vercel's API. On a
-board that keeps no tasks, the board skill's
+tail`, and the `tasks` command a `reserved_label` failure names. `vercel()`
+maps the routes onto Vercel's API. Next: the inspector, and sync re-rendering
+a copy when its task changes. On a board that keeps no tasks, the board
+skill's
 [work-queue reference](skills/board/references/work-queue.md) builds a queue
 from labels, and its queues keep working beside tasks.
 
@@ -3868,10 +3868,11 @@ board that keeps none.
   none, and a claim still checks the clock.
 - **`board()`** refuses a write under `board.` itself, before the backend, so
   it holds on every backend, whatever the board behind it does.
-- **`vercel()`** answers 501 `no_tasks` for now. It will map the routes onto
-  Vercel's API, where a thread carries task state the same way: stored with
-  the thread, with no text, channel, or ID of its own, and each task change a
-  thread event in the feed, in order with the thread's messages. The tasks that API had before, a record of
+- **`vercel()`** maps the routes onto Vercel's API, where a thread carries
+  task state the same way: stored with the thread, with no text, channel, or
+  ID of its own, and each task change a thread event in the feed, in order
+  with the thread's messages. It asks the API nothing first: where the API
+  serves no task routes, a task call fails with the API's own error. The tasks that API had before, a record of
   their own beside threads, aren't board tasks: their routes stay as they are
   for the tools that call them, and `vb tasks` neither lists nor changes
   them. What a caller can notice there, against `local()`:
