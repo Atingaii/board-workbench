@@ -2164,7 +2164,7 @@ computer who don't need it on the internet. No config file: it's flags only.
   word: a request with no token is `tailscale:user:<login>`, a person, by the
   `Tailscale-User-Login` header, which `tailscale serve` sets after dropping
   any its caller sent. The header counts only at that host, never at
-  `127.0.0.1` or an `--allow-host` one, where senders write their own, and
+  `127.0.0.1`, where senders write their own, and
   not on a request a browser marks as another site's (`Sec-Fetch-Site`, or an
   `Origin` that isn't the board's): a 403, since a browser carries its user's
   place on the tailnet for any page. A tagged device and a Funnel request

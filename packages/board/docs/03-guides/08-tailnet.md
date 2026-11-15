@@ -81,7 +81,7 @@ the board is asked.
 - **Tailscale's word, at the name you gave.** `tailscale serve` drops any
   `Tailscale-User-Login` header its caller sent and sets its own. The board
   reads that header only on a request for `--tailscale`'s host, and never at
-  `127.0.0.1` or a host `--allow-host` names, where a sender writes its own.
+  `127.0.0.1`, where a sender writes its own.
 - **This machine.** The board listens on 127.0.0.1, so only Tailscale's proxy
   and this machine's own programs reach it, and one of those could name anyone.
   Run it on a machine whose programs you trust, not a shared host.
