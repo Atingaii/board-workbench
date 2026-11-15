@@ -70,9 +70,15 @@ const CSP = [
  * the per-run token that only the page has, and writes must also come from its
  * origin. Your credential for the board never leaves this process. `hosts` adds
  * names a proxy in front of it serves the page on: whoever reaches the page there
- * acts as you.
+ * acts as you, unless `visitor` says who a request is: a client that acts as them,
+ * or null for one it can't name, which the proxy then refuses.
  */
-export async function createInspector(options: { client: BoardClient; page?: string; hosts?: string[] }): Promise<InspectorPage> {
+export async function createInspector(options: {
+  client: BoardClient
+  page?: string
+  hosts?: string[]
+  visitor?: (request: IncomingMessage) => BoardClient | null | undefined
+}): Promise<InspectorPage> {
   const { client } = options
   const me = await client.me()
   // Who it starts as (`--as claude`): the page's handle says who each request is, from there on.
@@ -98,6 +104,11 @@ export async function createInspector(options: { client: BoardClient; page?: str
       decoded = '..'
     }
     if (/(^|\/)\.\.?(\/|$)|\\/.test(decoded)) return json(response, 400, { error: { code: 'bad_path', message: 'no relative paths' } })
+    // Whose page this is: yours, or where the proxy in front names its visitors, theirs.
+    const visiting = options.visitor?.(request)
+    if (visiting === null)
+      return json(response, 401, { error: { code: 'unauthorized', message: "the proxy in front of this page names no one for this request, so there's no one to act as" } })
+    const acting = visiting ?? client
     const controller = new AbortController()
     streams.add(controller)
     response.on('close', () => controller.abort())
@@ -117,7 +128,7 @@ export async function createInspector(options: { client: BoardClient; page?: str
           return json(response, 400, { error: { code: 'invalid_profile', message: error.message } })
         }
       }
-      const upstream = await client.request(`${path}${url.search}`, {
+      const upstream = await acting.request(`${path}${url.search}`, {
         as,
         method: request.method ?? 'GET',
         headers: {

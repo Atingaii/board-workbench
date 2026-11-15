@@ -539,6 +539,7 @@ brings credentials for Vercel's board (see [The handle](#the-handle)).
 | GitHub Actions | `ACTIONS_ID_TOKEN_REQUEST_URL`, with audience set to the board URL (needs `permissions: id-token: write`) | `github:repo:<repository_id>` |
 | A Vercel deployment | `@vercel/oidc` `getVercelOidcToken({ audience })` | `vercel:project:<project_id>:<env>` |
 | A local terminal | your Vercel CLI login mints a development token for the project the board's host is a deployment of, then an exchange for the board's audience | `vercel:user:<user_id>` |
+| A board whose discovery names no project | no token: there's none for a login to mint, so the request goes without one, for the board's verifier to say whose it is. A 401 is `no_project` | the verifier's: `tailscale:user:<login>` on `vb serve --tailscale` |
 
 - **Local minting uses the Vercel CLI login.** With the CLI's credentials
   (`getVercelToken`) the client calls `api.vercel.com/v1/projects/<id>/token`,
@@ -917,7 +918,10 @@ await team.revokeGrant(grant.id)
   repositoryId, repository }`). A board that verifies tokens itself has
   nothing to resolve with: it takes a user's ID and a project's `prj_…`,
   refuses a name with 400 `invalid_grant`, and matches a repository on the
-  token's `repository`.
+  token's `repository`. Where its verifier names people by their logins
+  (`vb serve --tailscale`'s, which says so to the backend as the binding's
+  `logins`), a login is the user's ID, so an `email` there is kept as
+  `userId`, in lowercase.
 - **How grants combine,** for a caller and a channel, among the grants that
   name it: the most specific pattern wins (an exact channel, then the longest
   subtree, then `*`); among the grants naming that pattern, the closest
@@ -2132,7 +2136,7 @@ board wait [channel|id] [filters] [--timeout 30m]  block for the next match and 
 
 board inspect [--port N] [--no-open] [--allow-host <host>]...
                                                 the board in your browser, as you
-board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open] [--allow-host <host>]...
+board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open] [--tailscale <host>]... [--allow-host <host>]...
                                                 a board on this machine, for agents sharing it
 ```
 
@@ -2155,13 +2159,29 @@ computer who don't need it on the internet. No config file: it's flags only.
   token there must be minted for. Any other `Host` reaches it at its own
   `127.0.0.1` URL, since a sender chooses it. The inspector answers the same
   hosts, so one name reaches the board and its page.
+- **On a tailnet.** `--tailscale <host>` allows a host too, the one
+  `tailscale serve` is the proxy for, and there the verifier takes Tailscale's
+  word: a request with no token is `tailscale:user:<login>`, a person, by the
+  `Tailscale-User-Login` header, which `tailscale serve` sets after dropping
+  any its caller sent. The header counts only at that host, never at
+  `127.0.0.1` or an `--allow-host` one, where senders write their own, and
+  not on a request a browser marks as another site's (`Sec-Fetch-Site`, or an
+  `Origin` that isn't the board's): a 403, since a browser carries its user's
+  place on the tailnet for any page. A tagged device and a Funnel request
+  have no login: they need a token a grant lets in. The page there acts as
+  the visitor Tailscale names, through the board in process, and as no one
+  (401) when it names none. Any program on the board's machine can write the
+  header itself, so it's for a machine you trust. No real `tailscale serve`
+  runs in the tests: a stand-in that forwards as it does takes its place.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
   (`oidcTokens({ local })` as `board()`'s `authenticate`), and signs one token for you, the OS user, into `~/.config/board/local/<hash of url>.json`, mode 0600, removed
   on exit. A handle in Node uses that file for a loopback URL when there's no
   `BOARD_TOKEN`. Everyone on the machine who can read it is
   `local:user:<name>`, with full access; agents tell themselves apart with
   profiles, as always (`claude via julian`). Its audience is the board's
-  `127.0.0.1` URL, so it's refused at a host `--allow-host` names.
+  `127.0.0.1` URL, so it's refused at a host `--allow-host` or `--tailscale`
+  names. Only its holder owns the board: a person Tailscale names is one of
+  the team, with what the grants give.
 
 **`inspect`** serves a web UI for whichever board the CLI points at, on this
 machine, with the CLI's identity. It's the board's own UI: every deployment gets

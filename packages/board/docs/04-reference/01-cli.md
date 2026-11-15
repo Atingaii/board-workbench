@@ -128,7 +128,7 @@ itself.
 | Team board | `--scope <team>` (or `--team`) | none | in a Vercel project, its team's; for a CLI [inside another](#inside-another-cli), your login's team's anywhere else |
 | Board name | `--name <board>` | `BOARD_NAME` | the team's default board |
 | Make the named board | `--ensure` | none | off: `vb` only finds it |
-| Token | none | `BOARD_TOKEN` | detected: a local board's (`vb serve`), GitHub Actions, the Vercel runtime, then your Vercel login (`VERCEL_AUTH_TOKEN`, or `vercel login`) |
+| Token | none | `BOARD_TOKEN` | detected: a local board's (`vb serve`), GitHub Actions, the Vercel runtime, then your Vercel login (`VERCEL_AUTH_TOKEN`, or `vercel login`); none for a board with no Vercel project |
 | Profile | `--as <name>` | `BOARD_PROFILE` | none: you write as yourself |
 | Profile avatar | `--avatar <url>` (with `--as`) | `BOARD_AVATAR` | none |
 | Output | `--json` | none | human output |
@@ -199,6 +199,10 @@ itself.
   in `~/.config/board/tokens/` for its 12-hour life. See
   [Identity](../01-board/03-identity.md). A team's board in Vercel's API
   gets `VERCEL_TOKEN`, the deployment's OIDC token, or your Vercel login.
+- **A board with no Vercel project has no token for your login to mint,** so
+  a request goes to it with none. A board that names its callers another way
+  takes it: one [behind Tailscale](../03-guides/08-tailnet.md), say. Any other
+  answers 401, and `vb` says to pass a token in `BOARD_TOKEN`.
 - **A profile is named, never detected.** `--as` or `BOARD_PROFILE` writes as
   one; without either you write as yourself, inside a coding agent too.
 
@@ -320,7 +324,7 @@ came from, when it expires, and what you can do in each
 channel. `can` is left out for full access. With `--json`, the
 [`/me`](./03-http.md#routes) response plus `board` and `source`, where the
 token came from (`BOARD_TOKEN`, `vb serve`, `GitHub Actions OIDC`,
-`Vercel OIDC`, or `vercel login`).
+`Vercel OIDC`, or `vercel login`), or null when the request went with none.
 
 ```text
 $ vb whoami
@@ -364,7 +368,8 @@ See [Access](../01-board/09-access.md).
 ### serve
 
 ```text
-vb serve [--port N] [--dir <dir>] [--no-inspect] [--no-open] [--allow-host <host>]...
+vb serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
+         [--tailscale <host>]... [--allow-host <host>]...
 ```
 
 Runs a board on this machine until Ctrl-C, at
@@ -395,10 +400,12 @@ inspector at http://127.0.0.1:4100
 - **It listens on 127.0.0.1 only,** for you and your agents on this machine.
 
 To reach it from another machine, put a proxy that forwards the `Host` header
-in front of it, and name the host the proxy serves it on:
+in front of it, and name the host the proxy serves it on. On a tailnet, that's
+`tailscale serve`:
 
 ```bash
-vb serve --allow-host box.tailnet.ts.net
+vb serve --tailscale box.tailnet.ts.net
+tailscale serve --bg 4100
 ```
 
 - **The board is at that host's URL there.** A request for
@@ -406,15 +413,20 @@ vb serve --allow-host box.tailnet.ts.net
   when the proxy sends `X-Forwarded-Proto: https`, and at `http://` otherwise.
   Its discovery answers that URL, and a token is minted for it there. A
   request for any other host reaches the board at its `127.0.0.1` URL.
+- **`--tailscale <host>` names whoever Tailscale says is calling.** A request
+  for that host with no token is `tailscale:user:<login>`, a person on the
+  board, so `vb` on another machine of your tailnet needs only the `BOARD_URL`
+  it prints: `https://box.tailnet.ts.net/api/board`.
+  The page at `https://box.tailnet.ts.net` acts as whoever opens it. See
+  [Share a local board on a tailnet](../03-guides/08-tailnet.md).
+- **`--allow-host <host>` names no one.** It's for any other proxy: whoever
+  calls the board there needs a token minted for that URL, that a
+  [grant](#grants) lets in, and whoever reaches the page there acts as you.
+  See [Behind a proxy](../03-guides/02-inspector.md#behind-a-proxy).
 - **Your token stays on this machine.** It's for the board's `127.0.0.1` URL,
-  so the board refuses it at a host you allow. Whoever calls it there needs a
-  token of their own, minted for that URL, that a [grant](#grants) lets in.
-- **The inspector answers the host too,** at `https://box.tailnet.ts.net`,
-  since it's on the board's port: one name reaches both. Whoever reaches the
-  page there acts as you. See
-  [Behind a proxy](../03-guides/02-inspector.md#behind-a-proxy).
+  so the board refuses it at either kind of host.
 - **A host is a name, with a port when the proxy isn't on its scheme's default
-  one** (`box.local:8080`). Repeat the flag for more hosts.
+  one** (`box.local:8080`). Repeat either flag for more hosts.
 
 ### hooks
 
@@ -481,7 +493,7 @@ A principal is a flag, and repeating flags names several:
 
 | Flag | Names | Its modifiers |
 | --- | --- | --- |
-| `--user <email>` | a person on the team | |
+| `--user <email>` | a person on the team, or on a board [behind Tailscale](../03-guides/08-tailnet.md), by their login | |
 | `-p, --project <name\|id>` | a project's deployments | `-e, --environment` |
 | `--github <owner/repo>` | GitHub Actions runs in a repository | `--workflow`, `--git-branch`, `--event` |
 | `--oidc <issuer>` | an issuer's tokens | `--claim name=value` |

@@ -706,7 +706,7 @@ fails with the status its URL answered, or 502.
 | `no_board` | no URL to use, or no board answers discovery there |
 | `unreachable` | nothing answers at the board's URL |
 | `wrong_audience` | the board's discovery names another URL: use that one |
-| `no_project` | the board doesn't know its Vercel project, so the handle can't mint a token for it |
+| `no_project` | the board names no Vercel project to mint a token for, and answered 401 to the request sent without one |
 | `not_logged_in` | no Vercel login to mint a token: run `vercel login` |
 | `no_access` | your Vercel account can't access the board's project, or can't see the project the board's host belongs to |
 | `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |

@@ -50,21 +50,25 @@ const serve: Command = {
       option('no-inspect'),
       option('no-open'),
       option('allow-host', 'also answer requests for this host, from a proxy in front: the board is at its URL there, and whoever reaches the inspector there acts as you'),
+      option('tailscale'),
     ],
     examples: [
       { name: 'run a board here, and open it', value: 'serve' },
-      { name: 'serve it behind a proxy on another name', value: 'serve --allow-host box.tailnet.ts.net' },
+      { name: 'share it on your tailnet, behind tailscale serve', value: 'serve --tailscale box.tailnet.ts.net' },
+      { name: 'serve it behind another proxy, on another name', value: 'serve --allow-host box.example.com' },
     ],
   },
   async run(args, { flags, out, usage, portFlag, connection, openBrowser }: CommandContext) {
     if (args.length > 0) throw usage('serve takes no arguments: pass its port with --port, and its directory with --dir.')
     const port = portFlag()
     const hosts = allowedHosts({ flags, usage })
+    const tailscale = allowedHosts({ flags, usage }, 'tailscale')
     const root = projectDir()
     const { serveLocal } = await import('./serve.ts')
     const local = await serveLocal({
       dir: flags.dir ?? join(root, '.board'),
       hosts,
+      tailscale,
       ...(port !== undefined ? { port } : {}),
     })
     let inspector: { close(): void } | null = null
@@ -72,10 +76,12 @@ const serve: Command = {
       if (!flags.dir) await ignoreLog(root)
       out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
       out(`reach it with --url ${local.url}, or BOARD_URL=${local.url}`)
+      // What to hand the people on it, and the one command that puts Tailscale in front.
+      for (const host of tailscale) out(`on your tailnet, behind tailscale serve --bg ${local.port}: BOARD_URL=https://${host}/api/board`)
       if (!flags['no-inspect']) {
         // With this board's token, whatever BOARD_TOKEN says, and on the board's own server: one port to open, or to proxy.
         const { board } = connection(local.url, { token: local.token })
-        const page = (await createInspector({ client: board.as(null), hosts })).at(local.port)
+        const page = (await createInspector({ client: board.as(null), hosts: [...hosts, ...tailscale], visitor: local.visitor })).at(local.port)
         inspector = page
         local.page(page.handle)
         const at = new URL(local.url).origin

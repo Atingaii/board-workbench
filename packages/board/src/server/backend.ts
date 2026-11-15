@@ -144,6 +144,11 @@ export type BoardBinding = {
   /** The board's own Vercel project and team, as board() knows them: what discovery names, for clients to mint tokens with. */
   project(): Promise<{ id: string | null; teamId: string | null }>
   /**
+   * Whether board()'s verifier names people by their logins (`ada@example.com`), as a board behind
+   * Tailscale does: a grant then names a user by one, which is that user's ID.
+   */
+  logins: boolean
+  /**
    * A handle through board(), as `caller`: what a backend writes for someone outside a request
    * goes through it, so board()'s middleware sees it, a schedule's send as its creator, say. A
    * verified caller's posts keep the IDs they're given.

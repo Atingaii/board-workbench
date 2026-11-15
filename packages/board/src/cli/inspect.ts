@@ -30,11 +30,11 @@ async function pageOf(): Promise<string> {
   return found
 }
 
-/** The hosts `--allow-host` names: each a host, with its port when that isn't its scheme's default. */
-export function allowedHosts({ flags, usage }: Pick<CommandContext, 'flags' | 'usage'>): string[] {
-  const hosts = flags['allow-host'] ?? []
+/** The hosts `--allow-host`, or `--tailscale`, names: each a host, with its port when that isn't its scheme's default. */
+export function allowedHosts({ flags, usage }: Pick<CommandContext, 'flags' | 'usage'>, flag: 'allow-host' | 'tailscale' = 'allow-host'): string[] {
+  const hosts = flags[flag] ?? []
   const bad = hosts.find((host) => !/^[a-z0-9.-]+(:\d+)?$/i.test(host))
-  if (bad !== undefined) throw usage(`--allow-host takes a host, with a port if it isn't the default, like box.tailnet.ts.net: not ${bad}.`)
+  if (bad !== undefined) throw usage(`--${flag} takes a host, with a port if it isn't the default, like box.tailnet.ts.net: not ${bad}.`)
   return hosts
 }
 
