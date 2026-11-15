@@ -1101,34 +1101,22 @@ describe("vercel()'s tasks", () => {
     expect((await pong.tasks.list({ channel: 'intake', state: 'all' })).tasks.map((task) => task.message.text)).toEqual(['from a form', 'from another form'])
   })
 
-  it("reads as a board that keeps no tasks where the API's /me says nothing of them, and asks it nothing else", async () => {
+  it("asks the API's task routes without asking it first whether it has them: where it serves none, a task call fails with the API's own refusal", async () => {
     const api = fakeMessageboard({ tasks: false })
-    const before = handleOn(api)
-    const root = await before.post('dev', 'fix CVE-123')
-    const reply = await before.reply(root.id, 'on it')
-    const proof = { epoch: 1, token: 'secret' }
     const julian = handleOn(api)
-    for (const [what, attempt] of [
-      ['list', () => julian.tasks.list()],
-      ['create', () => julian.tasks.create('dev', 'a task')],
-      ['create and claim', () => julian.tasks.create('dev', { text: 'a task', claim: true, id: 'once' })],
-      ['create from a thread', () => julian.tasks.create({ re: root.id })],
-      ['claim', () => julian.tasks.claim(root.id)],
-      ['claim the next', () => julian.tasks.claim({ channel: 'dev', wait: 30 })],
-      ['renew', () => julian.tasks.held(root.id, proof).renew()],
-      ['release', () => julian.tasks.held(root.id, proof).release()],
-      ['complete', () => julian.tasks.held(root.id, proof).complete('done')],
-      ['fail', () => julian.tasks.held(root.id, proof).fail('no')],
-      ['block', () => julian.tasks.block(root.id, 'hold')],
-      ['unblock', () => julian.tasks.unblock(root.id)],
-      ['reopen', () => julian.tasks.reopen(root.id)],
-      ['assign', () => julian.tasks.assign(root.id, null)],
-      ['cancel', () => julian.tasks.cancel(root.id, 'no')],
-    ] as const)
-      await expect(attempt(), what).rejects.toMatchObject({ status: 501, code: 'no_tasks' })
-    // Who it is, asked once for its credentials, says whether threads carry tasks: nothing was posted or listed to find out.
-    expect(julian.sent.map((request) => `${request.method} ${request.path}`)).toEqual(['GET /v1/messageboard/me'])
-    expect((await julian.threads({ channel: 'dev' })).threads.map((thread) => [thread.message.id, thread.message.task, thread.last?.id])).toEqual([[root.id, undefined, reply.id]])
+    const root = await julian.post('dev', 'fix CVE-123')
+    julian.sent.length = 0
+    // The API's answer for a route it doesn't have, as any refusal of its comes back: its status and its code.
+    const refused = { status: 404, code: 'not_found' }
+    await expect(julian.tasks.list()).rejects.toMatchObject(refused)
+    await expect(julian.tasks.create('dev', 'a task')).rejects.toMatchObject(refused)
+    await expect(julian.tasks.claim(root.id)).rejects.toMatchObject(refused)
+    // One that would wait for a task fails at once, and isn't asked again.
+    await expect(julian.tasks.claim({ channel: 'dev', wait: 30 })).rejects.toMatchObject(refused)
+    // Each asked its route, and nothing else was asked to find out.
+    expect(julian.sent.map((request) => `${request.method} v${request.version} ${request.path}`)).toEqual(['GET v2 /tasks', 'POST v2 /tasks', `POST v2 /tasks/${threadOf(root.id)}/claim`, 'POST v2 /tasks/claim'])
+    // Its threads read as they do on any board, and none is a task.
+    expect((await julian.threads({ channel: 'dev' })).threads.map((thread) => [thread.message.id, thread.message.task])).toEqual([[root.id, undefined]])
   })
 
   it("leaves no dependent waiting for good when a completion stops short: a claim of one, a list that shows one, and a claim of the next that finds none go on", async () => {

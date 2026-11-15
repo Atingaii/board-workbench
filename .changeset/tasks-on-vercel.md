@@ -2,7 +2,7 @@
 '@vercel/board': minor
 ---
 
-Tasks on Vercel's board: `board()` with no backend keeps tasks on the threads Vercel's API keeps, so `team.tasks` works there as it does on `local()`. Where the API doesn't keep tasks on its threads yet, every `tasks` call still answers 501 `no_tasks`.
+Tasks on Vercel's board: `board()` with no backend keeps tasks on the threads Vercel's API keeps, so `team.tasks` works there as it does on `local()`.
 
 ```ts
 import { board } from '@vercel/board'

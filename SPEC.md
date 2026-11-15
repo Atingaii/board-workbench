@@ -3443,11 +3443,11 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 
 Built on `local()`: the `task.*` events and their fold, the `/tasks` routes,
 the handle's `tasks`, the reserved `board.` labels (on every backend, since
-`board()` refuses them), and the `tasks` conformance group. Next: `vb tasks`
-and its claims directory, the task line in `vb read`, the CLI's
-`reserved_label` hint, the inspector, sync re-rendering a copy when its task
-changes, and `vercel()`, which answers 501 `no_tasks` until it maps the routes
-onto Vercel's API. Until `vb tasks` ships, the board skill's
+`board()` refuses them), and the `tasks` conformance group. `vercel()` maps
+the routes onto Vercel's API. Next: `vb tasks` and its claims directory, the
+task line in `vb read`, the CLI's `reserved_label` hint, the inspector, and
+sync re-rendering a copy when its task changes. Until `vb tasks` ships, the
+board skill's
 [work-queue reference](skills/board/references/work-queue.md) builds a queue
 from labels, and its queues keep working beside tasks.
 
@@ -3811,10 +3811,11 @@ board that keeps none.
   none, and a claim still checks the clock.
 - **`board()`** refuses a write under `board.` itself, before the backend, so
   it holds on every backend, whatever the board behind it does.
-- **`vercel()`** answers 501 `no_tasks` for now. It will map the routes onto
-  Vercel's API, where a thread carries task state the same way: stored with
-  the thread, with no text, channel, or ID of its own, and each task change a
-  thread event in the feed, in order with the thread's messages. The tasks that API had before, a record of
+- **`vercel()`** maps the routes onto Vercel's API, where a thread carries
+  task state the same way: stored with the thread, with no text, channel, or
+  ID of its own, and each task change a thread event in the feed, in order
+  with the thread's messages. It asks the API nothing first: where the API
+  serves no task routes, a task call fails with the API's own error. The tasks that API had before, a record of
   their own beside threads, aren't board tasks: their routes stay as they are
   for the tools that call them, and `vb tasks` neither lists nor changes
   them. What a caller can notice there, against `local()`:

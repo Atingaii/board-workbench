@@ -2128,7 +2128,7 @@ export function fakeMessageboard(
      * to every registrant that syncs its key, another project's included, and `syncThread` lists every target of a thread.
      */
     unscopedSync?: boolean
-    /** `false`: threads carry no tasks, as Vercel's API answered before they did. Its task routes are no routes, and it reads no `task`. */
+    /** `false`: an API that serves no task routes, as Vercel's did before its threads carried tasks. Each is its 404, as any route it doesn't have is. */
     tasks?: boolean
   } = {},
 ) {
@@ -2201,14 +2201,12 @@ export function fakeMessageboard(
     // Sync's routes take none either, but imports.
     if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
     const me = () => {
-      // An API with thread tasks says so, here and on a board's own me: one without says nothing of them.
-      const tasks = shared.tasks ? { tasks: true as const } : {}
-      if (options.me === false) return { teamId, actor, view: viewOf(shared, actor), ...tasks }
+      if (options.me === false) return { teamId, actor, view: viewOf(shared, actor) }
       const role = actor.principal.type === 'user' ? (roles[actor.principal.userId] ?? 'member') : null
       // A deployment's own credential may sync too, which no team role says: where, its grants do.
       const can = role === null ? ['read', 'post', 'react', 'label', ...(actor.principal.type === 'project' ? ['sync'] : [])] : role === 'viewer' ? ['read', 'react'] : ALL
       const says = options.me?.[bearer] ?? { can: { '*': can }, expiresAt: null }
-      return { teamId, actor, view: viewOf(shared, actor), can: says.can, expiresAt: says.expiresAt, ...tasks }
+      return { teamId, actor, view: viewOf(shared, actor), can: says.can, expiresAt: says.expiresAt }
     }
     if (method === 'GET' && path === '/me') return me()
     if (method === 'GET' && path === '/boards') {

@@ -180,7 +180,7 @@ type ApiChange = {
 /**
  * Who these credentials are, as the API says: `can`, what they may do in each channel pattern, in
  * board's words, and `expiresAt`, when they stop working, in milliseconds. An API that says neither
- * leaves them out. It also says whether its threads carry tasks.
+ * leaves them out.
  */
 type ApiMe = {
   teamId: string
@@ -189,8 +189,6 @@ type ApiMe = {
   project?: { id: string; environment: string }
   can?: Record<string, string[]>
   expiresAt?: number | string | null
-  /** True on an API whose threads carry tasks: one from before they did says nothing. */
-  tasks?: boolean
 }
 /** Which messages a watcher sees, in the API's terms: a tail is translated into one. */
 type ApiWatcherFilter = {
@@ -452,7 +450,6 @@ const sendableToken = async (token: string) => (CLAIM_TOKEN.test(token) ? token 
 const TASKS_START = '0'
 /** Whether `value` is shaped like an ID, `<where it's from>:<who>`, as every principal's and actor's is: a handle isn't. */
 const isId = (value: string) => /^[^\s:]+:\S+$/.test(value)
-const noTasks = () => new HttpError(501, 'no_tasks', 'this board keeps no tasks')
 /** The board's task events, by the API's name for each: only a new task's differs, since the API's older tasks have a `task.created` of their own. */
 const TASK_EVENTS: Record<string, BoardEventView['type']> = {
   'task.made': 'task.created',
@@ -2166,16 +2163,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   type Made = { task: ApiTaskOf; claimed?: boolean }
 
   /**
-   * Who a caller of a task method acts as, on an API whose threads carry tasks. Its `/me` says so, which is asked
-   * once for these credentials: one that says nothing of tasks is a board that keeps none, and no task route is asked.
-   */
-  async function tasksAs(caller: Caller): Promise<Who> {
-    const who = whoOf(caller)
-    if ((await self(who)).tasks !== true) throw noTasks()
-    return who
-  }
-
-  /**
    * What the API refused of a task, as a board says it: its codes with a board's statuses, and a
    * thread that isn't there as the message it is here. A lost claim keeps the API's word for why, in
    * its message.
@@ -2819,7 +2806,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     // Tasks live on the API's threads: each method is one of its task routes, the task named by its thread.
     async tasks(caller, query, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       const limit = query.limit ?? 50
       // A list's cursor is the last task it answered, by its ID: the API's list goes on after a thread, in creation
       // order, whether or not that thread is still in the list. Any message's ID reads on from its thread the same way.
@@ -2874,7 +2861,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { tasks, cursor: last ? idAt(last.id, 1) : none.cursor }
     },
     async createTask(caller, input, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       const token = input.claim ? newClaimToken() : null
       const spec = taskSpec(input, token)
       // To a caller that may post but not read, a retry answers the task's ID alone.
@@ -2918,14 +2905,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { task: root, claim: { epoch: task.epoch, token, until: iso(task.claim.until) } }
     },
     async claimTask(caller, { id, lease }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       const token = newClaimToken()
       // The API gives what's asked up to its own cap, and the board's default when nothing is.
       const made = await taskWrite(who, `${await taskPath(who, id, signal)}/claim`, { claimToken: token, leaseSeconds: lease ?? LEASE_DEFAULT_S }, { id, signal })
       return { task: await rootOf(who, made), claim: claimOf(made, token) }
     },
     async claimReadyTask(caller, input, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       // An owner is named by ID, as on any board: a handle is how someone shows, and several can show the same.
       for (const owner of input.from ?? []) if (!isId(owner)) throw badRequest(`from: ${owner} is a handle, which several can share: name the owner by ID`, 'invalid_from')
       if (signal.aborted) return { task: null }
@@ -2970,43 +2957,43 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { task: await rootOf(who, { task }), claim: claimOf({ task }, token) }
     },
     async renewTask(caller, { id, epoch, token, lease }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       const made = await taskWrite(who, `${await taskPath(who, id, signal)}/renew`, { ...(await proofOf({ epoch, token })), leaseSeconds: lease ?? LEASE_DEFAULT_S }, { id, signal })
       return { task: await rootOf(who, made), until: claimOf(made, token).until }
     },
     async releaseTask(caller, { id, epoch, token }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/release`, await proofOf({ epoch, token }), { id, signal })) }
     },
     async completeTask(caller, { id, epoch, token, result }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       const body = { ...(await proofOf({ epoch, token })), ...(result !== undefined ? { result } : {}) }
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/complete`, body, { id, signal })) }
     },
     async failTask(caller, { id, epoch, token, reason }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/fail`, { ...(await proofOf({ epoch, token })), reason }, { id, signal })) }
     },
     async blockTask(caller, { id, reason, kind, epoch, token }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       const proof = epoch !== undefined && token !== undefined ? await proofOf({ epoch, token }) : null
       const body = { reason, ...(kind !== undefined ? { kind } : {}), ...proof }
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/block`, body, { id, signal })) }
     },
     async unblockTask(caller, { id }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/unblock`, {}, { id, signal })) }
     },
     async reopenTask(caller, { id }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/reopen`, {}, { id, signal })) }
     },
     async assignTask(caller, { id, for: actor }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/assign`, { for: actor }, { id, signal })) }
     },
     async cancelTask(caller, { id, reason }, signal) {
-      const who = await tasksAs(caller)
+      const who = whoOf(caller)
       return { task: await rootOf(who, await taskWrite(who, `${await taskPath(who, id, signal)}/cancel`, { reason }, { id, signal })) }
     },
     events: (caller, query, signal) => eventsAs(whoOf(caller), query, signal),
