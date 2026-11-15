@@ -52,9 +52,10 @@ const CSP = [
  * 127.0.0.1. Because the proxy acts as you, it answers only its own page: every
  * request must name this server's host (no DNS rebinding) and carry the per-run
  * token that only the page has, and writes must also come from its origin. Your
- * credential for the board never leaves this process.
+ * credential for the board never leaves this process. `hosts` adds names a proxy in
+ * front of it serves the page on: whoever reaches the page there acts as you.
  */
-export async function startInspector(options: { client: BoardClient; port?: number; page?: string }): Promise<Inspector> {
+export async function startInspector(options: { client: BoardClient; port?: number; page?: string; hosts?: string[] }): Promise<Inspector> {
   const { client } = options
   const me = await client.me()
   // The board it acts on, as that board names itself: a handle on one elsewhere has no URL of its own.
@@ -62,6 +63,7 @@ export async function startInspector(options: { client: BoardClient; port?: numb
   // The page it's given, or the one board is installed with.
   const app = options.page ?? (await bundle())
   const token = randomBytes(24).toString('base64url')
+  let hosts = new Set<string>()
   let origins = new Set<string>()
   const streams = new Set<AbortController>()
 
@@ -115,7 +117,7 @@ export async function startInspector(options: { client: BoardClient; port?: numb
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://inspector')
-    if (!origins.has(`http://${request.headers.host}`)) return send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
+    if (!hosts.has(String(request.headers.host).toLowerCase())) return send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
     if (url.pathname === '/board' || url.pathname.startsWith('/board/'))
       return void proxy(request, response, url).catch(() =>
         response.headersSent ? response.end() : send(response, 500, 'text/plain; charset=utf-8', 'error'),
@@ -130,7 +132,10 @@ export async function startInspector(options: { client: BoardClient; port?: numb
   })
 
   const port = await listen(server, options.port ?? DEFAULT_PORT, options.port === undefined)
-  origins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`])
+  // Hosts you allow are ones a proxy in front serves the page on, over http or https.
+  const allowed = (options.hosts ?? []).map((host) => host.toLowerCase())
+  hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, ...allowed])
+  origins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, ...allowed.flatMap((host) => [`http://${host}`, `https://${host}`])])
   return {
     url: `http://127.0.0.1:${port}`,
     board,

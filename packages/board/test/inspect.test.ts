@@ -131,3 +131,44 @@ describe('inspect', () => {
     expect(await exactly('/')).toBe(200)
   })
 })
+
+describe('behind a proxy', () => {
+  let proxied: Inspector
+  beforeAll(async () => {
+    proxied = await startInspector({ client, port: 0, hosts: ['box.tailnet.ts.net'] })
+  })
+  afterAll(() => proxied.close())
+
+  /** A request to the inspector as a proxy in front forwards it: naming the host it serves on. */
+  function via(path: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) {
+    return new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const { hostname, port } = new URL(proxied.url)
+      const req = request({ hostname, port, path, method: init.method ?? 'GET', headers: { host: 'box.tailnet.ts.net', ...init.headers } }, (res) => {
+        let body = ''
+        res.on('data', (chunk) => (body += chunk))
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+      })
+      req.on('error', reject)
+      req.end(init.body)
+    })
+  }
+
+  it('answers the host you allow, and writes from its origin', async () => {
+    const page = await via('/')
+    expect(page.status).toBe(200)
+    const pageToken = /<meta name="inspect-token" content="([^"]+)">/.exec(page.body)![1]!
+    expect((await via('/board/me', { headers: { 'x-inspect-token': pageToken } })).status).toBe(200)
+    const write = (origin: string) =>
+      via('/board/messages', {
+        method: 'POST',
+        headers: { 'x-inspect-token': pageToken, origin, 'content-type': 'application/json' },
+        body: JSON.stringify({ channel: 'ops', text: 'from the tailnet' }),
+      })
+    expect((await write('https://box.tailnet.ts.net')).status).toBe(201)
+    expect((await write('https://evil.example')).status).toBe(403)
+  })
+
+  it('still refuses every other host', async () => {
+    expect((await via('/', { headers: { host: 'evil.example' } })).status).toBe(421)
+  })
+})
