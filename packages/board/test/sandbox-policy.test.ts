@@ -168,6 +168,11 @@ describe("sandboxPolicy() on Vercel's board", () => {
     expect((await agent.me()).actor).toBe('vercel:project:prj_pong:production+fixer')
     const root = await agent.post('dev', { text: 'on it', id: 'fix-1' })
     expect((await agent.posted('fix-1'))?.id).toBe(root.id)
+    // A message's channel is asked for by its ID through the policy too: a run that has listed nothing lists nothing for it.
+    const fresh = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: network.fetch, files: api.files }) })
+    api.requests.length = 0
+    expect((await fresh.thread(root.id)).message.channel).toBe('dev')
+    expect(api.requests.filter((r) => /\/channels(\/[^/]+)?$/.test(r))).toEqual([expect.stringMatching(/^GET .*\/channels\/[^/]+$/)])
     const reply = await agent.reply(root.id, 'a first look')
     await agent.edit(reply.id, 'a closer look')
     await agent.react(root.id, 'eyes')

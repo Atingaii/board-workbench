@@ -551,6 +551,32 @@ describe('vercel()', () => {
     // In the read, or in the feed after its cursor: a watcher that reads on from it sees the reply.
     const seen = [...read.messages.map((message) => message.text), ...later.events.map((event) => event.message?.text)]
     expect(seen).toContain('osprey, seen today')
+
+  })
+
+  it("names a message's channel by its ID, without listing the board's channels", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
+    const root = await team.post('questions', { text: 'anyone?' })
+    // A process that has listed nothing, as each `vb` run is: a reply, then the thread.
+    const fresh = handleOn(api)
+    api.requests.length = 0
+    expect(await fresh.reply(root.id, { text: 'me!' })).toMatchObject({ channel: 'questions', re: root.id })
+    expect((await fresh.thread(root.id)).message.channel).toBe('questions')
+    // One request for the one channel, asked once: the list is a page of the API's at a time, however many the board has.
+    expect(api.requests.filter((r) => /^GET .*\/channels$/.test(r))).toEqual([])
+    expect(api.requests.filter((r) => /^GET .*\/channels\/[^/]+$/.test(r))).toHaveLength(1)
+    // Where the API won't show a channel by its ID, it's looked for in the list, as before, and still named.
+    const fetching = as(api, 'user:u_jb')
+    const refused = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/channels\/[^/]+$/.test(new URL(String(input instanceof Request ? input.url : input)).pathname)
+        ? Response.json({ error: { code: 'not_found', message: 'Channel not found.' } }, { status: 404 })
+        : fetching(input, init)) as typeof fetch
+    const older = board({ backend: vercel({ team: 'team_test', api: API, fetch: refused, files: api.files }) })
+    api.requests.length = 0
+    expect((await older.thread(root.id)).message.channel).toBe('questions')
+    expect(api.requests.filter((r) => /^GET .*\/channels$/.test(r))).toHaveLength(1)
   })
 
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {
