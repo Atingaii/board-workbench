@@ -401,16 +401,48 @@ describe('cli', () => {
     expect([thread.message, ...thread.replies].map((m: { text: string }) => m.text)).toEqual(['deploy failed on a1b2c3', 'rolled back to d4e5f6'])
   })
 
-  it('posts a mention of a handle no one has as written, and warns about nothing', async () => {
+  it('keeps a handle no one has as typed, and warns that it mentions no one', async () => {
+    const unknown = (handle: string) => `warning: ${handle} names no one here: it stays text, and mentions no one.\n`
     const posted = await vb(['post', 'unknown-mentions', 'ping @tk about it'])
-    expect(posted).toMatchObject({ code: 0, stderr: '' })
+    expect(posted).toMatchObject({ code: 0, stderr: unknown('@tk') })
     const id = posted.stdout.trim()
-    expect(await vb(['reply', id, '@tk and @tk2, see `@code`'])).toMatchObject({ code: 0, stderr: '' })
+    // Once for each handle, and never for what's in code.
+    expect(await vb(['reply', id, '@tk and @tk2, see `@code`, and @tk again'])).toMatchObject({ code: 0, stderr: unknown('@tk') + unknown('@tk2') })
     const edited = await vb(['edit', id, 'ping @tk3', '--json'])
     expect(edited).toMatchObject({ code: 0, stderr: '' })
-    expect(JSON.parse(edited.stdout)).toEqual({ message: { id }, outcome: 'edited' })
+    expect(JSON.parse(edited.stdout)).toEqual({
+      message: { id },
+      outcome: 'edited',
+      mentions: [{ written: '@tk3', actor: null, candidates: [] }],
+      warnings: [{ reason: 'unknown_mention', message: '@tk3 names no one here: it stays text, and mentions no one.' }],
+    })
     const thread = JSON.parse((await vb(['read', id, '--json'])).stdout)
-    expect([thread.message, ...thread.replies].map((m: { text: string }) => m.text)).toEqual(['ping @tk3', '@tk and @tk2, see `@code`'])
+    expect([thread.message, ...thread.replies].map((m: { text: string }) => m.text)).toEqual(['ping @tk3', '@tk and @tk2, see `@code`, and @tk again'])
+  })
+
+  it('says the handle to write for someone who has the one typed only under a name', async () => {
+    // An agent's handle is its profile under its person's: u_julian/claude.
+    const id = (await vb(['post', 'short-mentions', 'hello', '--as', 'claude'])).stdout.trim()
+    const replied = await vb(['reply', id, 'over to @claude'])
+    expect(replied).toMatchObject({ code: 0, stderr: 'warning: @claude mentions no one here, and stays text: write @u_julian/claude.\n' })
+    expect(replied.stdout.trim().split('\n')).toHaveLength(1)
+    const thread = JSON.parse((await vb(['read', id, '--json'])).stdout)
+    expect(thread.replies.map((m: { text: string }) => m.text)).toEqual(['over to @claude'])
+  })
+
+  it('says who a handle mentions, stores them by ID, and shows them by name', async () => {
+    // A Vercel login's handle and name are its user ID, and it's known once it has written.
+    const id = (await vb(['post', 'known-mentions', 'hello'])).stdout.trim()
+    const replied = await vb(['reply', id, 'over to @u_julian', '--as', 'claude'])
+    expect(replied).toMatchObject({ code: 0, stderr: '' })
+    expect(replied.stdout.split('\n').slice(1)).toEqual(['mentioned  u_julian  @u_julian', ''])
+    const thread = JSON.parse((await vb(['read', id, '--json'])).stdout)
+    expect(thread.replies.map((m: { text: string }) => m.text)).toEqual(['over to @[vercel:user:u_julian]'])
+    expect((await vb(['read', id])).stdout).toContain('over to @u_julian')
+    // With --json, it's in the result, beside the message.
+    const again = JSON.parse((await vb(['reply', id, 'and @u_julian again', '--json'])).stdout)
+    expect(again.mentions).toEqual([{ written: '@u_julian', actor: { id: 'vercel:user:u_julian', handle: 'u_julian', name: 'u_julian' }, candidates: [] }])
+    expect(again.message).not.toHaveProperty('mentions')
   })
 
   it('says what each write did, and to which message', async () => {
@@ -541,8 +573,9 @@ describe('cli', () => {
       const { stdout } = await vb(['read', 'pings', ...args, '--json'])
       return (JSON.parse(stdout) as { threads: { message: { text: string } }[] }).threads.map((thread) => thread.message.text)
     }
-    expect(await texts(['--mentions'])).toEqual(['hey @u_julian, look'])
-    expect(await texts(['--mentions', '@u_julian'])).toEqual(['hey @u_julian, look'])
+    // The handle named one actor, so it was stored as a mention of them.
+    expect(await texts(['--mentions'])).toEqual(['hey @[vercel:user:u_julian], look'])
+    expect(await texts(['--mentions', '@u_julian'])).toEqual(['hey @[vercel:user:u_julian], look'])
   })
 
   it('filters by author, with or without the @', async () => {

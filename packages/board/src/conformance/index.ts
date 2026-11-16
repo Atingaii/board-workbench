@@ -651,6 +651,26 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: 'stores a handle one actor has as a mention of them, and keeps one no one has as typed',
+    run: async (ctx) => {
+      check(ctx.root, "posting failed, so there's no thread to reply in")
+      // The caller wrote the root, so the board knows it, and of any who share its handle it's the one in the thread.
+      const { handle, actor } = ctx.me
+      if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)?$/i.test(handle)) return `the caller's handle, ${handle}, isn't one a mention can type`
+      const nobody = `conformance-nobody-${Date.now().toString(36)}`
+      const sent = await reply(ctx, ctx.root.id, `conformance: over to @${handle} and @${nobody}`)
+      const settled = `conformance: over to @[${actor}] and @${nobody}`
+      check(sent.text === settled, `a handle one actor has should be stored as @[actor-id], and one no one has as typed: expected ${show(settled)}, got ${show(sent.text)}`)
+      const [mine, none, ...more] = sent.mentions ?? []
+      check(mine?.written === `@${handle}` && mine.actor?.id === actor, `the answer's mentions should say @${handle} mentions ${actor}, got ${show(mine)}`)
+      check(none?.written === `@${nobody}` && none.actor === null && none.candidates.length === 0, `the answer's mentions should say @${nobody} mentions no one, got ${show(none)}`)
+      check(more.length === 0, `the answer's mentions should have one entry a handle, got ${more.length + 2}`)
+      const kept = (await ctx.board.thread(ctx.root.id)).replies.find((message) => message.id === sent.id)
+      check(kept?.text === settled, `the message should read back as it was stored, got ${show(kept?.text)}`)
+    },
+  },
+  {
+    group: 'core',
     name: "matches text anywhere in a message's own, in any case, as it reads now",
     run: async (ctx) => {
       // Roots of its own: the second matches the first's searches only where % or _ is a wildcard.
@@ -2064,6 +2084,44 @@ const CHECKS: Check[] = [
         await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
         // And a second root, on a board that took one.
         await ctx.board.syncImport({ op: 'delete', author, from: key, origin: { thread, message: '3' } }).catch(() => {})
+        await ctx.board.register({ ...where, watch: {} }).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'sync',
+    name: "meets a platform user an import's text mentions: an actor as one who wrote would be, whom the text names by that actor's ID",
+    run: async (ctx) => {
+      const key = SYNC_KEY
+      const thread = `${key}:${ctx.labels.conformance}:mentioned`
+      const author = { id: `${key}:user:${ctx.labels.conformance}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
+      // Someone the platform knows, who has written nothing here.
+      const cc = { id: `${key}:user:${ctx.labels.conformance}-cc`, handle: 'conformance-cc', name: 'Conformance Cc', avatar: null, isBot: false }
+      const origin = { thread, message: '1' }
+      const registered = await registerSync(ctx)
+      if ('skip' in registered) return registered.skip
+      const { where } = registered
+      try {
+        let imported: { message: string | null }
+        try {
+          imported = await ctx.board.syncImport({
+            op: 'post', author, from: key, channel: ctx.channel, text: `conformance: cc @[${cc.id}]`, mentioned: [cc], labels: ctx.labels, noSync: true,
+            origin: { channel: `${key}:${ctx.labels.conformance}`, thread, subthread: null, message: '1', context: null },
+            id: `conformance-mentioned-${ctx.labels.conformance}`,
+          })
+        } catch (error) {
+          if (error instanceof BoardError && error.status === 403) return `this token can't sync in ${ctx.channel}`
+          throw error
+        }
+        isRef(imported.message, "an import's message")
+        // A sync elsewhere's user is a profile of its principal, mentioned or writing.
+        const actor = `${ctx.me.principal}+${cc.id}`
+        same((await ctx.board.thread(imported.message!)).message.text, `conformance: cc @[${actor}]`, "the import's text, its mention by the actor's ID")
+        const met = (await ctx.board.actors()).find((known) => known.id === actor)
+        check(met !== undefined, `the board should know the user the import mentioned as ${actor}`)
+        same(met?.name, cc.name, "the mentioned user's name")
+      } finally {
+        await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
         await ctx.board.register({ ...where, watch: {} }).catch(() => {})
       }
     },

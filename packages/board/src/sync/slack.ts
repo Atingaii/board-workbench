@@ -6,7 +6,8 @@ import { envelope, eventSchema } from './events.ts'
 import { opensBlock, UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderFile, type ProviderSender, type SyncContext, type ReceivedEvent, type FetchedLink } from './provider.ts'
 import type { SourceJoin, SourceMessage, SourceRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
-import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/external.ts'
+import { LINKS_PER_MESSAGE_MAX, MENTIONED_PER_MESSAGE_MAX, type ExternalLink } from '../contract/external.ts'
+import { extractMentions } from '../contract/mentions.ts'
 import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { connectSlackAdapter } from '@vercel/connect/chat'
@@ -75,7 +76,20 @@ type SlackInternals = Omit<Adapter, 'decodeThreadId'> & {
   }
   /** The adapter's own lookup of a bare `@name` by display name, before it posts: off here, see `literalMentions`. */
   resolveMessageMentions?(message: { markdown: string }, threadId: string): Promise<{ markdown: string }>
+  /** What the adapter writes in place of each user and channel a message it reads mentions: a user's is their ID here, see `literalMentions`. */
+  lookupMentionNames?(users: Set<string>, channels: Set<string>): Promise<{ users: Map<string, string>; channels: Map<string, string> }>
+  /** A Slack user as the adapter knows them, which it asks Slack for once and keeps: how it names a message's author too. */
+  lookupUser?(user: string): Promise<{ displayName?: string; realName?: string; isBot?: boolean } | null>
 }
+
+/**
+ * How a user a Slack message mentions stands in what the adapter reads of it: their ID between two
+ * characters from Unicode's private use area, which nothing along the way escapes or rewrites.
+ */
+const MENTIONED = /@\uF8F0([A-Z0-9_]+)\uF8F1/g
+const mentionedAs = (user: string) => `\uF8F0${user}\uF8F1`
+/** What the adapter read of a Slack message, each user it mentions as board writes a mention: `@[slack:user:U0456]`. */
+const mentionsById = (text: string): string => text.replace(MENTIONED, '@[slack:user:$1]')
 
 /** Each `@` the adapter reads as a mention: one that opens a word, and isn't Slack's own `<@U0456>` or inside a word, as an email's is. */
 const BARE_MENTION = /(?<![<A-Za-z0-9_])@(?=[A-Za-z0-9_])/g
@@ -110,11 +124,21 @@ const literal = new WeakSet<object>()
  * would look a bare `@name` up by display name, and write whatever is left as `<@name>`, which Slack
  * shows as is. So its lookup answers the message it was given, and its converter never sees a bare
  * `@`: it converts the text without them, and they go back in what it made.
+ *
+ * Coming in, the adapter writes each user a message mentions by display name, and their ID is gone
+ * from what it read. Here it writes the ID, in a form `mentionsById` reads back, so a mention on
+ * Slack is a mention of that user on the board.
  */
 function literalMentions(adapter: SlackInternals): void {
   if (literal.has(adapter)) return
   literal.add(adapter)
   if (adapter.resolveMessageMentions) adapter.resolveMessageMentions = async (message) => message
+  const names = adapter.lookupMentionNames
+  if (names)
+    adapter.lookupMentionNames = async (users, channels) => ({
+      channels: (await names.call(adapter, new Set(), channels)).channels,
+      users: new Map([...users].map((user) => [user, mentionedAs(user)])),
+    })
   const converter = adapter.formatConverter
   if (!converter) return
   const { toSlackPayload, toResponseUrlText } = converter
@@ -610,11 +634,23 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       },
       // A forward has no text of its own: it says what it shares.
       markdown(message) {
-        const text = markdownOf(message)
+        const text = mentionsById(markdownOf(message))
         if (text.trim()) return text
         const raw = message.raw as { attachments?: SlackAttachment[] } | null
         const shared = Array.isArray(raw?.attachments) ? raw.attachments.filter((att) => att.is_share) : []
         return shared.length ? forwardText(slackLinks('', '', shared, mrkdwn)) : text
+      },
+      // Who the text mentions, as each would be named had they written: the adapter's own record of them.
+      async mentioned(text) {
+        const users = [...new Set(extractMentions(text).flatMap((token) => (token.kind === 'actor' && token.actor.startsWith('slack:user:') ? [token.actor.slice('slack:user:'.length)] : [])))]
+        return Promise.all(
+          users.slice(0, MENTIONED_PER_MESSAGE_MAX).map(async (user) => {
+            const adapter = options.adapter as SlackInternals
+            const [known, avatar] = await Promise.all([adapter.lookupUser ? adapter.lookupUser(user).catch(() => null) : null, avatarOf(user)])
+            const handle = known?.displayName || user
+            return { id: `slack:user:${user}`, handle, name: known?.realName || handle, avatar, isBot: known?.isBot === true }
+          }),
+        )
       },
       links(key, message) {
         const raw = message.raw as { text?: unknown; attachments?: SlackAttachment[] } | null
@@ -802,13 +838,8 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       },
     }, sync)
     this.web = client
-  }
-
-  /** The adapter, which leaves a message's mentions to board: see `literalMentions`. */
-  protected override async ready() {
-    const adapter = await super.ready()
-    literalMentions(adapter as SlackInternals)
-    return adapter
+    // The adapter leaves a message's mentions to board, going out and coming in: a webhook reaches it without `ready()`.
+    literalMentions(options.adapter as SlackInternals)
   }
 
   /**

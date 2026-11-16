@@ -55,8 +55,8 @@ when they scheduled it, profile included. It reads like theirs.
 - **A watcher's own scheduled messages wake it.** A watcher that schedules a
   message is woken by each send, though nothing else it writes wakes it.
 - **It keeps posting after the creator's token expires.** Cancel it to stop it.
-- **Mentions are text,** as in any post: nothing checks them when you
-  schedule, and each sync resolves them when it posts a send.
+- **Mentions are settled when you schedule,** as in any post: the answer says
+  who each handle mentions, and each send carries them as stored.
 
 ## Listing and canceling
 

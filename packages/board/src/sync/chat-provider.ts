@@ -26,6 +26,8 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   state?: StateAdapter
   findByEmail?(email: string): Promise<ExternalAuthor | null>
   mention?(actor: Actor): string | null
+  /** The platform's users a message's text mentions as `@[<their id>]`, which `markdown` wrote there. */
+  mentioned?(text: string): Promise<ExternalAuthor[]>
   author?(author: ChatAuthor, raw: unknown): ExternalAuthor
   /** A channel's name as its native ID. Without it, a name is the ID. */
   resolveChannel?(key: string): Promise<string>
@@ -174,10 +176,13 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const message = input.message
     const found = this.transport.links?.(key, message) ?? []
     const links = found.length ? { links: found.slice(0, LINKS_PER_MESSAGE_MAX) } : {}
+    const text = this.transport.markdown?.(message) ?? markdownOf(message)
+    const mentioned = (await this.transport.mentioned?.(text)) ?? []
     const common = {
       ...this.locationOf(key, message.threadId), message: message.id,
-      text: this.transport.markdown?.(message) ?? markdownOf(message), author: await this.authorOf(message),
+      text, author: await this.authorOf(message),
       ...links,
+      ...(mentioned.length ? { mentioned } : {}),
     }
     return { dedupe, raw: message.raw, event: input.kind === 'edited' ? { kind: 'edited', ...common } : {
       kind: 'message', ...common,

@@ -120,6 +120,20 @@ describe('vb tasks', () => {
     })
   }, 60_000)
 
+  it("says who a new task's text mentions, and warns for a handle that mentions no one", async () => {
+    // A Vercel login's handle and name are its user ID, and it's known once it has written.
+    await ok(['post', 'mentions', 'hello'])
+    const made = await vb(['tasks', 'create', 'mentions', 'for @u_julian and @nobody'])
+    expect(made).toMatchObject({ code: 0, stderr: 'warning: @nobody names no one here: it stays text, and mentions no one.\n' })
+    const [id, ...said] = made.stdout.trimEnd().split('\n')
+    expect(said).toEqual(['mentioned  u_julian  @u_julian'])
+    expect((await task(id!)).text).toBe('for @[vercel:user:u_julian] and @nobody')
+    // With --json they're in the result, with the warning.
+    const again = JSON.parse((await vb(['tasks', 'create', 'mentions', 'and @u_julian again', '--json'])).stdout)
+    expect(again.mentions).toEqual([{ written: '@u_julian', actor: { id: 'vercel:user:u_julian', handle: 'u_julian', name: 'u_julian' }, candidates: [] }])
+    expect(again.task.text).toBe('and @[vercel:user:u_julian] again')
+  })
+
   it('claims a task by its ID for a lease, and tells a second claim who to ask', async () => {
     const id = await create('claims', 'migrate the table')
     expect(await ok(['tasks', 'claim', `#${id}`, '--lease', '30s'])).toBe(`#${id}  yours for 30s  migrate the table\n`)

@@ -187,6 +187,12 @@ export interface Backend extends ProtocolMethods {
    */
   readonly sendsSchedulesHere?: boolean
   /**
+   * Whether a board behind this backend settles a write's `@handle`s itself, as one at `BOARD_URL`
+   * does: board() then leaves a text as typed and passes on what that board answers of its mentions.
+   * False when left out, as for a backend that only stores, where board() settles them.
+   */
+  readonly settlesMentions?: boolean
+  /**
    * Whether board()'s sync runs its entry `key` here: false for one another deployment holds, as vercel()'s
    * deployments of one project hold each of its keys once (production takes one from a preview). Sync takes webhooks,
    * pulls its inbox, starts threads, and delivers only through the keys it holds. Every key, when left out.

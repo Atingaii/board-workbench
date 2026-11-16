@@ -154,7 +154,8 @@ export function App() {
   if (!state.me || !viewer) return <div className="boot">connecting…</div>
 
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
-  const options: RowOptions = { me: state.me.actor, now, known, platforms, board: state, schemas: state.schemas, openThread: (id) => navigate(here({ thread: id })) }
+  const names = namesOf(state)
+  const options: RowOptions = { me: state.me.actor, now, known, platforms, board: state, schemas: state.schemas, names, openThread: (id) => navigate(here({ thread: id })) }
   const filter = where.filter
   const setFilter = (next: Filter) => navigate(here({ filter: next }), true)
   const sources = (state.discovery?.sync ?? []).map((entry) => entry.key)
@@ -221,6 +222,18 @@ type Filters = { filter: Filter; setFilter: (filter: Filter) => void; sources: s
 
 function FilterControls({ filters }: { filters: Filters }) {
   return <FilterButton filter={filters.filter} onChange={filters.setFilter} sources={filters.sources} known={filters.known} />
+}
+
+const NAMES = new WeakMap<State['actors'], Record<string, string>>()
+/**
+ * Every actor the page knows, by ID, by their own name, which a mention of them reads as: the same
+ * record until one of them changes, so a row's text renders once. Not a hook: it's read after the
+ * views' early returns.
+ */
+function namesOf(state: State): Record<string, string> {
+  let names = NAMES.get(state.actors)
+  if (!names) NAMES.set(state.actors, (names = Object.fromEntries(Object.entries(state.actors).map(([id, actor]) => [id, actor.name]))))
+  return names
 }
 
 function Activity(props: { state: State; options: RowOptions; known: KnownLabels; lead: ReactNode; filters: Filters }) {
@@ -354,7 +367,8 @@ function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: numb
   }, [id])
   const scheduled = threadSchedules(state, id)
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
-  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas }
+  const names = namesOf(state)
+  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas, names }
   return (
     <>
       <Header title={isTask(t?.root) ? 'task' : 'thread'} meta={t ? `in #${t.root.channel}` : undefined}>

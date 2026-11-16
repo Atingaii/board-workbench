@@ -2,7 +2,7 @@ import { derivedId } from '../client/ids.ts'
 import { ALONG_MAX, type BoardEvent } from '../contract/events.ts'
 import type { Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
-import { foldMessages, type ActorsState, type Channel, type Message, type MessagesState, type Task } from '../contract/folds.ts'
+import { foldMessages, type Actor, type ActorsState, type Channel, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { own } from '../contract/own.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
 import { EDITED_HOLD, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
@@ -49,6 +49,21 @@ export type WriteContext = {
 export function seenFor(identity: Identity, actors: ActorsState) {
   const { verified: _verified, ...actor } = identity.actor
   return actorSeen(verifiedAs(identity) ? { ...actor, verified: true } : actor, actors, identity.principal.facts?.issuer === 'host')
+}
+
+/**
+ * The `actor.seen` of each platform user an import's text mentions that the board hasn't met: who
+ * they are, as the import names them. One it knows keeps its record, which their own writes keep
+ * current: a mention only introduces.
+ */
+function metBy(introduces: readonly Actor[] | undefined, actors: ActorsState, author: string) {
+  const met = new Set([author])
+  return (introduces ?? []).flatMap((actor) => {
+    if (met.has(actor.id) || own(actors.byId, actor.id)) return []
+    met.add(actor.id)
+    const seen = actorSeen(actor, actors)
+    return seen ? [seen] : []
+  })
 }
 
 /**
@@ -199,6 +214,8 @@ export type PostInput = WriteOrigin & {
   attachments?: Attachment[]
   /** Platform messages it links to. */
   links?: Link[]
+  /** The platform users an import's text mentions, for the board to meet: see `metBy`. */
+  introduces?: Actor[] | undefined
   /** The schedule send that posts it. */
   schedule?: { id: number; n: number }
   /** The principal of the sync elsewhere that imports it, whose copy its `origin` is. */
@@ -333,6 +350,7 @@ async function commitPost(
   )
   const events: Events = [
     ...(seen ? [seen] : []),
+    ...metBy(input.introduces, actors, identity.actor.id),
     {
       type: 'message.posted',
       ...(id ? { id } : {}),
@@ -641,6 +659,8 @@ export type EditInput = WriteOrigin & {
   asAuthor?: boolean
   /** The message's revision as the caller read it: an edit or a delete since refuses this one. */
   revision?: number | undefined
+  /** As a post's: the platform users an import's text now mentions. */
+  introduces?: Actor[] | undefined
 }
 
 export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<void> {
@@ -658,7 +678,7 @@ export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<vo
 async function commitEdit(ctx: WriteContext, input: EditInput, message: Message): Promise<void> {
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = seenFor(input.identity, actors)
-  const events: Events = [...(seen ? [seen] : []), {
+  const events: Events = [...(seen ? [seen] : []), ...metBy(input.introduces, actors, input.identity.actor.id), {
     type: 'message.edited',
     payload: {
       id: message.id,

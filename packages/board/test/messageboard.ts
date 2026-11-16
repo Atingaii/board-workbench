@@ -1675,6 +1675,18 @@ function fakeBoard(shared: Shared, boardId: string) {
       const via = shared.externalImports ? {} : { via: { name: shared.directory.projects[principal.projectId] ?? null, environment: principal.environment }, platform: platformOf(owner, key) }
       const handle = shared.externalImports || shared.platformHandles ? body.author.handle : importedHandle(shared.directory.projects[principal.projectId] ?? principal.projectId, body.author.handle, userIdOf(body.author.id))
       actors.set(author.id, { id: author.id, kind: 'external', handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), ...via, lastSeenAt: now() })
+      // The platform users a post's or an edit's text mentions, by the actor each is: one the board hasn't met is
+      // recorded as the author is, one it knows keeps its row, and one the text doesn't mention is left out.
+      if ((body.op === 'post' || body.op === 'edit') && body.mentioned !== undefined) {
+        if (!Array.isArray(body.mentioned) || body.mentioned.length > 50) throw new Refused(400, 'invalid_import')
+        for (const user of body.mentioned as { id: string; handle: string; name: string; avatar: string | null }[]) {
+          if (!String(user.id).startsWith(`${key}:`)) throw new Refused(403, 'foreign_author')
+          const id = shared.externalImports ? user.id : `${owner}+${user.id}`
+          if (!String(body.text).includes(`@[${id}]`) || actors.has(id)) continue
+          const named = shared.externalImports || shared.platformHandles ? user.handle : importedHandle(shared.directory.projects[principal.projectId] ?? principal.projectId, user.handle, userIdOf(user.id))
+          actors.set(id, { id, kind: 'external', handle: named, name: user.name, ...(user.avatar ? { avatar: user.avatar } : {}), ...via, lastSeenAt: now() })
+        }
+      }
       if (body.op === 'post') {
         const landed = body.id !== undefined ? importIds.get(`${owner}|${body.id}`) : undefined
         if (landed) return { message: landed }

@@ -274,6 +274,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     routes: [],
     // The log is the board it uses'.
     keeps: false,
+    settlesMentions: true,
     async sandbox({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
       const credential = environment ? await environment.sandbox(remote, token) : token === undefined ? withoutToken(remote) : { authorization: `Bearer ${token}` }
       return { url: remote, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, routes: PROTOCOL_ROUTES }

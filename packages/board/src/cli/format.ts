@@ -2,6 +2,7 @@ import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, Schedul
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
+import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { findBlocks } from '../contract/blocks.ts'
 import { shownName, type Via } from '../contract/profiles.ts'
 import type { CheckResult, ConformanceReport } from '../conformance/index.ts'
@@ -68,6 +69,15 @@ export function reactionNames(messages: MessageView[]): string[] {
   return [...new Set(messages.flatMap((m) => Object.values(m.reactions).flatMap((actors) => actors.slice(0, REACTION_NAMES))))]
 }
 
+/** Each author's handle by ID, and those of `more`: who a mention shows as. */
+const handlesOf = (messages: MessageView[], more: Map<string, string> = new Map()) =>
+  new Map([...more, ...messages.flatMap((m) => (m.author ? [[m.by.actor, m.author.handle] as const] : []))])
+
+/** The actors a thread's texts mention by ID, for looking up the ones who didn't write in it. */
+export function mentionedIn(messages: MessageView[]): string[] {
+  return [...new Set(messages.flatMap((m) => (m.deleted ? [] : extractMentions(m.text).flatMap((token) => (token.kind === 'actor' && !isEmail(token.actor) ? [token.actor] : [])))))]
+}
+
 /** An actor's display name from `/actors`, the way a message's author shows: `claude via julian`. */
 export const actorName = (actor: { name: string; via?: Via | undefined }): string => shownName(actor)
 
@@ -75,10 +85,13 @@ export const actorName = (actor: { name: string; via?: Via | undefined }): strin
  * A message's text as a terminal shows it: a bot's in its readable form, and each block as one
  * line, its schema and its data, where its fence was. A message that is only a block is that line.
  */
-function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks'>): string {
-  const text = displayText(message.text, message.by.actor)
+function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks'>, handles: Map<string, string> = new Map()): string {
+  // A mention is stored as `@[actor-id]`: it reads as the handle of who it mentions, which is what to type for
+  // them, where they're known. `--json` has the ID.
+  const said = replaceMentions(message.text, (token) => (token.kind === 'actor' && handles.has(token.actor) ? `@${handles.get(token.actor)}` : null))
+  const text = displayText(said, message.by.actor)
   // Only what the board lists as blocks: a fence in a platform's text stays as it was written.
-  if (!message.blocks?.length || text !== message.text) return text
+  if (!message.blocks?.length || text !== said) return text
   let out = ''
   let at = 0
   for (const found of findBlocks(text)) {
@@ -106,12 +119,12 @@ function embed(link: NonNullable<MessageView['links']>[number], pad: string): st
 }
 
 /** One message as a block: header line, indented text, reactions. */
-export function formatMessage(message: MessageView, options: { reply?: boolean; names?: Map<string, string>; now?: number } = {}) {
+export function formatMessage(message: MessageView, options: { reply?: boolean; names?: Map<string, string>; handles?: Map<string, string>; now?: number } = {}) {
   const pad = options.reply ? '    ' : '      '
   const head = `${options.reply ? '  ↳ ' : ''}#${message.id}  ${authorName(message)} · ${ago(message.createdAt)}${
     message.editedAt ? ' (edited)' : ''
   }${message.schedule ? ` · scheduled ${message.schedule.id}` : ''}${labels(message)}`
-  const body = message.deleted ? `${pad}(message removed)` : indent(shownText(message), pad)
+  const body = message.deleted ? `${pad}(message removed)` : indent(shownText(message, options.handles), pad)
   const task = message.task ? [`${pad}task  ${taskState(message, message.task, options.names ?? new Map(), options.now ?? Date.now())}`] : []
   const files = (message.attachments ?? []).map((a) => `${pad}file ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
   const links = message.deleted ? [] : (message.links ?? []).flatMap((link) => embed(link, pad))
@@ -193,8 +206,9 @@ export function formatTasks(tasks: ThreadSummaryView[]): string {
 }
 
 /** Threads in order, each root followed by its replies. */
-export function formatThreads(messages: MessageView[], known: Map<string, string> = new Map()): string {
+export function formatThreads(messages: MessageView[], known: Map<string, string> = new Map(), mentioned: Map<string, string> = new Map()): string {
   const names = new Map([...known, ...messages.map((m) => [m.by.actor, authorName(m)] as const)])
+  const handles = handlesOf(messages, mentioned)
   const byRoot = new Map<string, MessageView[]>()
   const roots: MessageView[] = []
   const orphans: MessageView[] = []
@@ -205,17 +219,17 @@ export function formatThreads(messages: MessageView[], known: Map<string, string
   const rootIds = new Set(roots.map((r) => r.id))
   for (const [root, replies] of byRoot) if (!rootIds.has(root)) orphans.push(...replies)
   const blocks = roots.map((root) =>
-    [formatMessage(root, { names }), ...(byRoot.get(root.id) ?? []).map((r) => formatMessage(r, { reply: true, names }))].join('\n'),
+    [formatMessage(root, { names, handles }), ...(byRoot.get(root.id) ?? []).map((r) => formatMessage(r, { reply: true, names, handles }))].join('\n'),
   )
   for (const reply of orphans)
-    blocks.push(`(in thread #${reply.re})\n${formatMessage(reply, { reply: true, names })}`)
+    blocks.push(`(in thread #${reply.re})\n${formatMessage(reply, { reply: true, names, handles })}`)
   return blocks.join('\n\n')
 }
 
 /** A root's first line, cut to `max` characters: 74 fits 80 columns under its header. */
-function firstLine(message: MessageView, max = 74): string {
+function firstLine(message: MessageView, max = 74, handles?: Map<string, string>): string {
   if (message.deleted) return '(message removed)'
-  const text = shownText(message).trim()
+  const text = shownText(message, handles).trim()
   const files = message.attachments?.length ?? 0
   if (!text) return files ? `(${files} ${files === 1 ? 'file' : 'files'})` : '(no text)'
   const [line = '', ...rest] = text.split(/\r?\n/)
@@ -227,8 +241,9 @@ function firstLine(message: MessageView, max = 74): string {
  * One block per thread, for `read <channel>`: the root's header and first line,
  * then how many replies it has and who wrote the latest, and when.
  */
-export function formatThreadSummaries(threads: ThreadSummaryView[], options: { channel?: boolean; now?: number } = {}): string {
+export function formatThreadSummaries(threads: ThreadSummaryView[], options: { channel?: boolean; now?: number; handles?: Map<string, string> } = {}): string {
   const now = options.now ?? Date.now()
+  const handles = handlesOf(threads.flatMap(({ message, last }) => (last ? [message, last] : [message])), options.handles)
   return threads
     .map(({ message, replies, last }) => {
       const where = options.channel ? `${message.channel}  ` : ''
@@ -241,7 +256,7 @@ export function formatThreadSummaries(threads: ThreadSummaryView[], options: { c
         .filter(([, actors]) => actors.length > 0)
         .map(([emoji, actors]) => `${displayEmoji(emoji)} ${actors.length}`)
         .join('   ')
-      return [head, `      ${firstLine(message)}`, ...(counted ? [`      ${counted}`] : []), `      ${activity}`].join('\n')
+      return [head, `      ${firstLine(message, 74, handles)}`, ...(counted ? [`      ${counted}`] : []), `      ${activity}`].join('\n')
     })
     .join('\n\n')
 }

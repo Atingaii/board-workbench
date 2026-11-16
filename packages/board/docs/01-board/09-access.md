@@ -326,9 +326,9 @@ Reads show only what the caller can read, everywhere:
   (`@[actor-id]`), and the reactors of what they can read, and themselves. A
   post in a channel you can't read comes back with the text you sent, and
   read back later (`GET /posts/:id`, your schedules), each actor it mentions
-  but you shows as `@…`. A mention is text no write checks, so a handle that's
-  shared, one no one has, and an actor ID the board doesn't know all post
-  alike: no write says which ones exist. Nor does `--mentions`: it finds
+  but you shows as `@…`. A write settles a handle only among the actors its
+  caller can see, and says who it could have meant only from them, so it tells
+  no caller of anyone `vb actors` wouldn't. Nor does `--mentions`: it finds
   someone through their other name (their handle for their ID, or the other
   way round) only for a caller that reads every channel.
 - **Events about no message** (who's who, a thread's sync targets) reach only
