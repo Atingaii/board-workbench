@@ -855,8 +855,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * A read of the one channel `name` names, with the name itself: the API finds the channel, so the
    * read costs no lookup before it. An API from before `channel=` takes no parameter it doesn't know
    * and answers 400: the channel is looked up and read by its ID, as before, and it's never asked
-   * again. So is a name the API finds nothing for, no channel's or one the caller can't read: null
-   * when the lookup finds none either.
+   * again. Whatever else the API refuses the name with is looked up and read by its ID too, this
+   * once, so it answers as it did before names: a name it finds nothing for or won't show the caller
+   * (404, 403) is null when the lookup finds none either, and any other 400 but a cursor's is the
+   * read's own by its ID.
    */
   async function inNamed<T>(who: Who, name: string, read: (channel: ChannelRef) => Promise<T>): Promise<T | null> {
     if (readsByName && !named.has(name))
@@ -864,7 +866,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         return await read({ name })
       } catch (error) {
         if (unknownParameter(error, 'channel')) readsByName = false
-        else if (!(error instanceof HttpError && error.code === 'channel_not_found')) throw error
+        else if (!(error instanceof HttpError && (error.code === 'channel_not_found' || error.status === 403 || (error.status === 400 && error.code !== 'invalid_cursor')))) throw error
       }
     const channel = await channelNamed(who, name)
     return channel ? read(channel) : null
@@ -949,7 +951,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /**
    * A message, and its channel, which the API answers with it, so naming it costs no request of its
    * own. An API from before `include=channel` takes no parameter it doesn't know and answers 400: the
-   * channel is asked for by its ID, as before, and it's never asked with the message again.
+   * channel is asked for by its ID, as before, and it's never asked with the message again. Any other
+   * 400 or 403 for the two together reads them apart this once.
    */
   async function messageIn(who: Who, id: string, signal?: AbortSignal): Promise<{ thread: ApiThread; message: ApiMessage; channel: ApiChannel }> {
     if (messagesWithChannel)
@@ -958,8 +961,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         if (channel) learn(channel)
         return { ...found, channel: channel ? { id: channel.id, name: channel.name } : await channelById(who, found.thread.channelId) }
       } catch (error) {
-        if (!unknownParameter(error, 'include')) throw error
-        messagesWithChannel = false
+        if (unknownParameter(error, 'include')) messagesWithChannel = false
+        else if (!(error instanceof HttpError && (error.status === 400 || error.status === 403))) throw error
       }
     const found = await messageById(who, id, signal)
     return { ...found, channel: await channelById(who, found.thread.channelId) }

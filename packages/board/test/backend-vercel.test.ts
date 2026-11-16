@@ -708,6 +708,30 @@ describe('vercel()', () => {
     expect(named.slice(3)).toEqual([['dev', 'general', 'secret'], ['hi dev'], null])
   })
 
+  it("reads as it did before names whatever the API refuses a name or a message's channel with", async () => {
+    // What an API might answer the new parameters, beside the 400 Vercel's gives today: each read is the one `main` made.
+    for (const [status, code, message] of [[403, 'forbidden', "You can't read `dev/web`."], [400, 'bad_request', 'Invalid request: missing required property `channelId`.'], [400, 'bad_request', 'Invalid request: `include` should be equal to one of the allowed values "messages".']] as const) {
+      const api = fakeMessageboard({ inlineThreadMessages: true })
+      const seed = handleOn(api)
+      const root = await seed.post('dev/web', { text: 'first' })
+      await seed.schedule('dev/web', { text: 'later', in: '1h' })
+      const fetching = as(api, 'user:u_jb')
+      const refusing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input instanceof Request ? input.url : input))
+        return url.searchParams.has('channel') || url.searchParams.get('include') === 'channel' ? Response.json({ error: { code, message } }, { status }) : fetching(input, init)
+      }) as typeof fetch
+      const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: refusing, files: api.files }) })
+      expect([status, (await team.threads({ channel: 'dev/web' })).threads.map((t) => t.message.text)]).toEqual([status, ['first']])
+      expect((await team.messages({ channel: 'dev/web' })).messages.map((m) => m.text)).toEqual(['first'])
+      expect((await team.poll({ channel: 'dev/web' })).events).toEqual([])
+      expect((await team.schedules({ channel: 'dev/web' })).map((s) => s.channel)).toEqual(['dev/web'])
+      expect((await team.thread(root.id)).message.channel).toBe('dev/web')
+      // And a channel that isn't there is still nothing, not the refusal.
+      expect((await team.threads({ channel: 'nope' })).threads).toEqual([])
+      expect((await team.messages({ channel: 'nope' })).messages).toEqual([])
+    }
+  })
+
   it("names a message's channel from the message's own answer where the API sends it, asking for no channel", async () => {
     const api = fakeMessageboard({ channelNames: true })
     const team = handleOn(api)
@@ -779,8 +803,8 @@ describe('vercel()', () => {
     landing = true
     const page = await team.threads({ channel: 'busy', limit: 25 })
     const order = sent.map((url) => url.pathname.split('/').at(-1)).filter((last) => last === 'changes' || last === 'threads')
-    // The feed's head, then the list. Before them, the head asked for by the channel's name, which Vercel's API today refuses.
-    expect(order.slice(-2)).toEqual(['changes', 'threads'])
+    // The head asked for by the channel's name, which Vercel's API today refuses, then the feed's head, then the list.
+    expect(order).toEqual(['changes', 'changes', 'threads'])
     // The page may show it too: a cursor behind the page reads it again rather than past it.
     const { events } = await team.poll({ channel: 'busy', after: page.cursor })
     expect(events.filter((event) => event.type === 'message.posted').map((event) => event.message?.text)).toEqual(['landed in between'])
