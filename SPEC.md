@@ -2171,7 +2171,8 @@ board schemas [list]                           the built-in schemas, then the bo
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
 board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
 board grants [list]                            the board's grants; needs manage at *
-board grants create <principal>... --can <pattern=permissions>... [--and …]... [--lock-me-out]   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each; --and starts another grant, all made in one write
+board grants create <principal>... --can <pattern=permissions>... [--lock-me-out]   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
+board grants create --file <path> [--lock-me-out]   several grants in one write, from a JSON array of them; - reads stdin
 board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]... [--lock-me-out]   --can replaces
 board grants explain [<principal>] <channel>   which grant decides, for you or someone else
 board grants revoke <grant> [--lock-me-out]    e.g. g3; --lock-me-out goes ahead with a change you couldn't take back

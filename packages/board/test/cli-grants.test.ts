@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { env, url, useBoard, vb } from './cli-harness.ts'
 import { localUserToken, personToken, workflowToken } from './tokens.ts'
@@ -147,10 +150,17 @@ describe('cli grants', () => {
     expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(3)
   }, 30_000)
 
-  it('makes the grant on each side of an --and in one write, and without one, reads the flags as it always did', async () => {
-    const made = await vb(['grants', 'create', '--everyone', '--can', 'security/=none', '--and', '--user', 'u_alice', '--user', 'u_bob', '--can', 'security/=all', '--can', 'dev/=read', '--and', '--can', 'security/=read', '-p', 'prj_sec', '-e', 'preview'])
+  it('makes the grants a --file holds in one write, from a path or from stdin, or none of them', async () => {
+    const grants = [
+      { principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } },
+      { principals: [{ kind: 'user', userId: 'u_alice' }, { kind: 'user', userId: 'u_bob' }], can: { 'security/': 'all', 'dev/': ['read'] } },
+      { principals: [{ kind: 'project', project: 'prj_sec', environments: ['preview'] }], can: { 'security/': ['read'] } },
+    ]
+    const path = join(await mkdtemp(join(tmpdir(), 'board-grants-')), 'grants.json')
+    await writeFile(path, JSON.stringify(grants))
+    const made = await vb(['grants', 'create', '--file', path])
     expect(made).toMatchObject({ code: 0, stderr: '' })
-    // One line each, in the order given, with IDs that count up.
+    // One line each, in the file's order, with IDs that count up.
     const rows = made.stdout.trimEnd().split('\n')
     const first = Number(/^created g(\d+) /.exec(rows[0]!)![1])
     expect(rows).toEqual([
@@ -158,23 +168,24 @@ describe('cli grants', () => {
       `created g${first + 1}  --user u_alice --user u_bob  dev/=read security/=all`,
       `created g${first + 2}  --project prj_sec --environment preview  security/=read`,
     ])
-    const json = JSON.parse((await vb(['grants', 'create', '--user', 'u_carol', '--can', 'dev/=read', '--and', '--user', 'u_dan', '--can', 'dev/=post', '--json'])).stdout)
+    const two = JSON.stringify([{ principals: [{ kind: 'user', userId: 'u_carol' }], can: { 'dev/': ['read'] } }, { principals: [{ kind: 'user', userId: 'u_dan' }], can: { 'dev/': ['post'] } }])
+    const json = JSON.parse((await vb(['grants', 'create', '--file', '-', '--json'], {}, two)).stdout)
     expect(json).toMatchObject({ outcome: 'created', grants: [{ id: `g${first + 3}`, can: { 'dev/': ['read'] } }, { id: `g${first + 4}`, can: { 'dev/': ['post'] } }] })
-    // No --and: one grant for everyone it names, with every --can, wherever each flag sits.
+    // A command's own flags are one grant, wherever each sits, as they always were.
     const one = await vb(['grants', 'create', '--can', 'ops/=none', '--user', 'u_erin', '--can', 'dev/=all', '--user', 'u_frank'])
     expect([one.code, one.stdout]).toEqual([0, `created g${first + 5}  --user u_erin --user u_frank  dev/=all ops/=none\n`])
-    const refused = async (...args: string[]) => {
-      const { code, stderr } = await vb(['grants', 'create', ...args])
+    const refused = async (stdin: string, ...args: string[]) => {
+      const { code, stderr } = await vb(['grants', 'create', ...args], {}, stdin)
       return [code, stderr.split('\n')[0]]
     }
-    // One of them refused, and none is made.
-    expect(await refused('--user', 'u_gail', '--can', 'dev/=read', '--and', '--user', 'not a user', '--can', 'dev/=post')).toEqual([2, "error: Can't create the grant."])
-    // Each side of an --and is a grant, with whom it names and what they may do.
-    const between = "error: --and goes between two grants, each with its principals and its --can: --everyone --can 'ci/=read' --and --user ada@acme.com --can 'ci/=all'."
-    expect(await refused('--user', 'u_gail', '--can', 'dev/=read', '--and')).toEqual([2, between])
-    expect(await refused('--and', '--user', 'u_gail', '--can', 'dev/=read')).toEqual([2, between])
-    expect(await refused('--user', 'u_gail', '--can', 'dev/=read', '--and', '--user', 'u_hal')).toEqual([2, between])
-    expect(await refused('--user', 'u_gail', '--and', '--user', 'u_hal', '--can', 'dev/=read')).toEqual([2, between])
+    // One of them refused by the board, and none is made.
+    expect(await refused(JSON.stringify([{ principals: [{ kind: 'user', userId: 'u_gail' }], can: { 'dev/': ['read'] } }, { principals: [{ kind: 'user', userId: 'not a user' }], can: { 'dev/': ['post'] } }]), '--file', '-')).toEqual([2, "error: Can't create the grants."])
+    // What isn't a list of grants, or is too many, never reaches the board.
+    expect(await refused('{', '--file', '-')).toEqual([2, "error: stdin isn't JSON."])
+    expect(await refused('[]', '--file', '-')).toEqual([2, 'error: stdin holds no grants. It\'s a JSON array of them: [{"principals": [{"kind": "everyone"}], "can": {"ci/": ["read"]}}].'])
+    expect(await refused(JSON.stringify(Array.from({ length: 17 }, () => grants[2])), '--file', '-')).toEqual([2, 'error: stdin holds 17 grants, and one write makes 16 at most.'])
+    expect(await refused('', '--file', join(tmpdir(), 'no-such-grants.json'))).toEqual([2, `error: Can't read ${join(tmpdir(), 'no-such-grants.json')}. There's no such file.`])
+    expect(await refused(two, '--file', '-', '--user', 'u_gail')).toEqual([2, 'error: --file holds the grants: each one in it names its own principals and can, so it goes without theirs.'])
     expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(9)
   }, 30_000)
 
@@ -191,25 +202,39 @@ describe('cli grants', () => {
         "error: Can't create the grant: it would lock you out.",
         '  this grant would leave you unable to manage grants in factory/',
         '',
-        '  Keep manage there yourself, in the same write:',
+        '  Keep manage there yourself first:',
         // Whoever runs it, as a grant would name them: here a repository's runs.
-        "    vb grants create --everyone --can factory/=read --can factory/memory/=none --and --github acme/web --can 'factory/=all;factory/memory/=all'",
+        "    vb grants create --github acme/web --can 'factory/=all;factory/memory/=all'",
         '  Make it anyway:',
         '    vb grants create --everyone --can factory/=read --can factory/memory/=none --lock-me-out',
         '',
       ].join('\n'),
     ])
     expect(JSON.parse((await vb([...lock, '--json'], run)).stderr)).toMatchObject({ status: 'error', reason: 'grant_lockout', data: { error: { code: 'grant_lockout', status: 409 } } })
-    // A person is named as a person, and that command, run as it's printed, makes both.
+    // A person is named as a person, on the board the run named, and once that grant is made, the lock is no lockout.
     const ada = { BOARD_TOKEN: await personToken('u_ada', url) }
-    const asked = await vb(['grants', 'create', '--everyone', '--can', 'attic/=none'], ada)
-    expect(asked.stderr.split('\n')[4]).toBe('    vb grants create --everyone --can attic/=none --and --user u_ada --can attic/=all')
-    expect((await vb(['grants', 'create', '--everyone', '--can', 'attic/=none', '--and', '--user', 'u_ada', '--can', 'attic/=all'], ada)).code).toBe(0)
+    const asked = await vb(['grants', 'create', '--everyone', '--can', 'attic/=none', '--url', url], ada)
+    expect(asked.stderr.split('\n')[4]).toBe(`    vb grants create --user u_ada --can attic/=all --url ${url}`)
+    expect((await vb(['grants', 'create', '--user', 'u_ada', '--can', 'attic/=all'], ada)).code).toBe(0)
+    expect((await vb(['grants', 'create', '--everyone', '--can', 'attic/=none'], ada)).code).toBe(0)
+    // From a file, the grant that keeps its maker in goes in the file.
+    const filed = await vb(['grants', 'create', '--file', '-'], ada, JSON.stringify([{ principals: [{ kind: 'everyone' }], can: { 'cellar/': 'none' } }]))
+    expect([filed.code, ...filed.stderr.split('\n').slice(0, 4)]).toEqual([
+      1,
+      "error: Can't create the grants: it would lock you out.",
+      '  this grant would leave you unable to manage grants in cellar/',
+      '',
+      '  Keep manage there yourself: add a grant to the file that names you, with all there',
+    ])
     await startOver()
     await create('--github', 'acme/web', '--can', '*=all')
     expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(4)
     // With the grant that keeps the run in, in the same command, it's made, and the run's to change.
-    const kept = await vb([...lock, '--and', '--github', 'acme/web', '--can', 'factory/=all;factory/memory/=all'], run)
+    const both = JSON.stringify([
+      { principals: [{ kind: 'everyone' }], can: { 'factory/': ['read'], 'factory/memory/': 'none' } },
+      { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'factory/': 'all', 'factory/memory/': 'all' } },
+    ])
+    const kept = await vb(['grants', 'create', '--file', '-'], run, both)
     const [closes, keeps] = [...kept.stdout.matchAll(/^created (g\d+) /gm)].map((found) => found[1]!)
     expect([kept.code, kept.stdout]).toEqual([0, `created ${closes}  --everyone  factory/=read factory/memory/=none\ncreated ${keeps}  --github acme/web  factory/=all factory/memory/=all\n`])
     // Revoking or narrowing what keeps it in is the same lockout, until it's told to go ahead.
@@ -233,7 +258,7 @@ describe('cli grants', () => {
     expect((await vb(['grants', 'revoke', closes!, '--lock-me-out'], run)).code).toBe(1)
     expect((await vb(['grants', 'revoke', closes!])).stdout).toBe(`revoked ${closes}\n`)
     // A revoke told to go ahead is done.
-    const attic = await vb(['grants', 'create', '--everyone', '--can', 'attic/=none', '--and', '--github', 'acme/web', '--can', 'attic/=all'], run)
+    const attic = await vb(['grants', 'create', '--file', '-'], run, JSON.stringify([{ principals: [{ kind: 'everyone' }], can: { 'attic/': 'none' } }, { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'attic/': 'all' } }]))
     const inAttic = /^created (g\d+)  --github/m.exec(attic.stdout)![1]!
     expect((await vb(['grants', 'revoke', inAttic], run)).code).toBe(1)
     expect((await vb(['grants', 'revoke', inAttic, '--lock-me-out'], run)).stdout).toBe(`revoked ${inAttic}\n`)

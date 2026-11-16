@@ -128,29 +128,6 @@ function inputOf(started: Started): PrincipalInput {
   }
 }
 
-/**
- * The grants `grants create`'s flags name: one, or with `--and` between them, several that one
- * write makes together: a lock, say, and the grant that keeps whoever makes it in. Each side of an
- * `--and` is a grant of its own, its principals and its `--can`s in any order, as a command
- * without one reads them. A command with no `--and` is one grant, which may lack its principals
- * or its `--can`: its caller says which.
- */
-export function grantsIn(tokens: readonly OptionToken[]): { principals: PrincipalInput[]; can: GrantCan }[] {
-  const sides: OptionToken[][] = [[]]
-  for (const token of tokens) {
-    if (token.name === 'and') sides.push([])
-    else sides.at(-1)!.push(token)
-  }
-  const grants = sides.map((side) => ({
-    principals: principalsIn(side, ['']).map(({ principal }) => principal),
-    can: grantCanOf(side.filter((token) => token.name === 'can').map((token) => token.value ?? '')),
-  }))
-  // Each side of an --and names whom it lets in and what they may do, or it's no grant.
-  if (grants.length > 1 && grants.some((grant) => grant.principals.length === 0 || Object.keys(grant.can).length === 0))
-    throw new GrantMisuse("--and goes between two grants, each with its principals and its --can: --everyone --can 'ci/=read' --and --user ada@acme.com --can 'ci/=all'.")
-  return grants
-}
-
 /** Each pattern `--can` flags name, as typed: what a grant made with them reaches. */
 export const patternsIn = (values: readonly string[]): string[] => [
   ...new Set(values.flatMap((value) => value.split(';')).map((entry) => entry.slice(0, Math.max(entry.indexOf('='), 0)).trim()).filter(Boolean)),

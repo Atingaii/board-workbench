@@ -88,7 +88,7 @@ deployments.
 | --- | --- |
 | `vb grants` | `team.grants()` |
 | `vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'` | `team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }, { kind: 'user', email: 'bob@acme.com' }], can: { 'security/': 'all' } })` |
-| `vb grants create --everyone --can 'security/=none' --and --user alice@acme.com --can 'security/=all'` | `team.createGrants([{ principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } }, { principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } }])` |
+| `vb grants create --file grants.json` | `team.createGrants([{ principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } }, { principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } }])` |
 | `vb grants create --everyone --can 'attic/=none' --lock-me-out` | `team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'attic/': 'none' } }, { lockMeOut: true })` |
 | `vb grants create --project sec --environment production,preview --can 'security/=read,post'` | `team.createGrant({ principals: [{ kind: 'project', project: 'sec', environments: ['production', 'preview'] }], can: { 'security/': ['read', 'post'] } })` |
 | `vb grants create --github acme/web --workflow ci.yml --git-branch main --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })` |
@@ -209,7 +209,7 @@ more specific pattern decides first.
   given. Each needs what it would alone, on the grants as they are, and what
   they leave you with is judged with all of them made. So a lock and the
   grant that keeps you in pass together, whichever comes first.
-  `vb grants create` makes the grant on each side of an `--and`.
+  `vb grants create --file` makes the ones a JSON file holds.
 - **Naming an `oidc` principal takes `manage` everywhere,** since the board
   then fetches its issuer's keys. Listing grants takes `manage` at `*`.
 - **Owners always may.** On Vercel's API, the team's owners. On a local board,
@@ -466,12 +466,15 @@ win, being closer. The board's owners always may.
 ### Why won't the board let me close a channel to everyone?
 
 Because that closes it to you too, and then you couldn't open it again:
-lifting a lock takes `manage` where it applies. Name yourself in the same
-command, and it stays yours to change:
+lifting a lock takes `manage` where it applies. Make the grant that keeps you
+in first, and it stays yours to change:
 
 ```bash
-vb grants create --everyone --can 'security/=none' --and --user you@acme.com --can 'security/=all'
+vb grants create --user you@acme.com --can 'security/=all'
+vb grants create --everyone --can 'security/=none'
 ```
+
+`vb grants create --file` makes both in one write.
 
 `--lock-me-out` makes it anyway. Then only an owner, or someone a grant names
 there with `manage`, can change it.
