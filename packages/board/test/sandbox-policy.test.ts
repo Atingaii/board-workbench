@@ -199,6 +199,24 @@ describe("sandboxPolicy() on Vercel's board", () => {
       expect(await asked(method!, path!)).toEqual([method, path, 403, "not this board's"])
   })
 
+  it("lets through a read that names its channel by name, and a message asked for with its channel, where the API takes them", async () => {
+    const api = fakeMessageboard({ channelNames: true })
+    const pong = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }) })
+    const root = await pong.post('dev', 'on it')
+    await pong.schedule('dev', { text: 'check back', in: '1h' })
+    const network = sandboxNetwork(await pong.as('fixer').sandboxPolicy({ token: 'project:prj_pong:production', can: 'all' }), (request) => api.fetch(request))
+    const agent = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: network.fetch, files: api.files }) })
+    api.requests.length = 0
+    expect((await agent.threads({ channel: 'dev' })).threads.map((t) => t.message.id)).toEqual([root.id])
+    expect((await agent.messages({ channel: 'dev' })).messages.map((m) => m.id)).toEqual([root.id])
+    expect((await agent.poll({ channel: 'dev', wait: 0 })).events).toEqual([])
+    expect((await agent.schedules({ channel: 'dev' })).map((one) => one.channel)).toEqual(['dev'])
+    expect((await agent.thread(root.id)).message.channel).toBe('dev')
+    // Every one of them reached the API, and none asked for a channel on the way.
+    expect(network.blocked).toEqual([])
+    expect(api.requests.filter((r) => /\/channels(\/[^/]+)?$/.test(r))).toEqual([])
+  })
+
   it("hands it the task calls an agent's vb makes there, which are version 2 of the API's, and nothing else at that version", async () => {
     const api = fakeMessageboard()
     const pong = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }) })

@@ -273,8 +273,11 @@ const whoOf = (actor: Actor): Who => {
 type Shared = {
   teamId: string
   inlineThreadMessages: boolean
+  channelNames: boolean
   inlineActors: boolean
   threadsLimit: boolean
+  /** How many reads of a channel's feed it took: one it refused for a parameter isn't one. */
+  feedReads: number
   accounts: Accounts
   directory: Directory
   now: () => number
@@ -502,6 +505,30 @@ function fakeBoard(shared: Shared, boardId: string) {
     const channel = channels.find((c) => c.id === id)
     if (!channel) throw new Refused(404, 'channel_not_found')
     return channel
+  }
+  /**
+   * The channel a read names: by `channelId`, or, on an API that takes it, by `channel`, its name. An API from before
+   * that takes no `channel`, as it takes no other parameter it doesn't know. A read makes no channel: a name no channel
+   * has, or one the caller can't read, isn't there. Null when the read names none.
+   */
+  const channelRead = (url: URL, actor: Actor) => {
+    const id = url.searchParams.get('channelId')
+    const name = url.searchParams.get('channel')
+    if (name === null) return id === null ? null : channelAt(id)
+    if (!shared.channelNames) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `channel`.')
+    if (id !== null) throw new Refused(400, 'bad_request', 'Invalid request: should match exactly one schema in oneOf.')
+    const channel = channels.find((c) => c.name === name)
+    if (!channel || !mayRead(actor, channel.id)) throw new Refused(404, 'channel_not_found')
+    return channel
+  }
+  /** `include=channel` on a message or a thread: its channel with it, on an API that takes the parameter, to a caller who may read it. */
+  const withChannel = (url: URL, actor: Actor, channelId: string) => {
+    const include = url.searchParams.get('include')
+    if (include === null) return {}
+    if (!shared.channelNames) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `include`.')
+    if (include !== 'channel') throw new Refused(400, 'bad_request')
+    if (!mayRead(actor, channelId)) throw new Refused(404, 'channel_not_found')
+    return { channel: channelAt(channelId) }
   }
 
   /** A caller narrowed with `x-board-can` does only what it gives at the channel's closest pattern: the channel, then its parents (`dev/`), then `*`. */
@@ -1619,12 +1646,15 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (method === 'POST' && rest === '/schedules') return { schedule: showSchedule(schedule(actor, body)) }
     if (method === 'GET' && rest === '/schedules') {
       const query = (name: string) => url.searchParams.get(name) ?? undefined
+      // By its ID, a channel that isn't there lists nothing; by its name, it's a 404.
+      const named = query('channel') === undefined ? undefined : channelRead(url, actor)!.id
       const state = query('state')
       const createdBy = query('createdBy')
       const listed = [...schedules.values()].sort((a, b) => a.createdAt - b.createdAt)
       const matches = (s: Schedule) =>
         (state === undefined || s.state === state) &&
         (query('channelId') === undefined || s.channelId === query('channelId')) &&
+        (named === undefined || s.channelId === named) &&
         (query('threadId') === undefined || s.threadId === query('threadId')) &&
         (createdBy === undefined || s.createdBy.id === createdBy || principalId(s.createdBy.principal) === createdBy)
       // It reads on past the schedules a filter leaves out until its page is full, up to a bound, so a page can still come back short with a cursor to the rest.
@@ -2005,9 +2035,9 @@ function fakeBoard(shared: Shared, boardId: string) {
     }
     if (method === 'GET' && rest === '/threads') {
       // A channel's threads: it takes nothing of tasks, and refuses what it doesn't know.
-      if (url.searchParams.has('task') || !url.searchParams.has('channelId')) throw new Refused(400, 'bad_request', 'List a channel\'s threads: channelId, and no task.')
-      const channelId = url.searchParams.get('channelId') ?? ''
-      channelAt(channelId)
+      const read = url.searchParams.has('task') ? null : channelRead(url, actor)
+      if (!read) throw new Refused(400, 'bad_request', 'List a channel\'s threads: channelId, and no task.')
+      const channelId = read.id
       const label = url.searchParams.get('label')
       let listed = [...threads.values()].filter((t) => t.channelId === channelId)
       if (label !== null) {
@@ -2069,7 +2099,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       const thread = threads.get(`thr_${id[1]}`)
       const message = thread?.messages[Number(id[2]) - 1]
       if (!thread || !message) throw new Refused(404, 'message_not_found')
-      return { thread: showThread(thread), message: show(message) }
+      return { thread: showThread(thread), message: show(message), ...withChannel(url, actor, thread.channelId) }
     }
     if ((found = /^\/posts\/([^/]+)$/.exec(rest)) && method === 'GET') {
       const again = repeat(actor, decodeURIComponent(found[1]!))
@@ -2118,8 +2148,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       return { actors: ids.flatMap((id) => actors.get(id) ?? []), cursor: null }
     }
     if (method === 'GET' && rest === '/messages') {
-      const channelId = url.searchParams.get('channelId') ?? ''
-      channelAt(channelId)
+      const channelId = (channelRead(url, actor) ?? channelAt('')).id
       const limit = Number(url.searchParams.get('limit') ?? 50)
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Refused(400, 'invalid_request')
       const head = feeds.get(channelId)?.length ?? 0
@@ -2132,8 +2161,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       return { messages: taken.map(show), cursor: cursorAt(channelId, more ? taken.at(-1)!.feedSequence : head) }
     }
     if (method === 'GET' && rest === '/changes') {
-      const channelId = url.searchParams.get('channelId') ?? ''
-      channelAt(channelId)
+      const channelId = (channelRead(url, actor) ?? channelAt('')).id
+      shared.feedReads++
       const feed = () => feeds.get(channelId) ?? []
       const cursor = url.searchParams.get('cursor')
       if (cursor !== null && url.searchParams.get('from') !== null) throw new Refused(400, 'invalid_cursor')
@@ -2150,7 +2179,10 @@ function fakeBoard(shared: Shared, boardId: string) {
         })
       return { events, cursor: cursorAt(channelId, from + events.length), caughtUp: from + events.length >= feed().length }
     }
-    if ((found = /^\/threads\/([^/]+)$/.exec(rest)) && method === 'GET') return { thread: showThread(threadAt(found[1]!)) }
+    if ((found = /^\/threads\/([^/]+)$/.exec(rest)) && method === 'GET') {
+      const thread = threadAt(found[1]!)
+      return { thread: showThread(thread), ...withChannel(url, actor, thread.channelId) }
+    }
     if ((found = /^\/threads\/([^/]+)\/messages$/.exec(rest))) {
       const thread = threadAt(found[1]!)
       if (method === 'GET') {
@@ -2406,6 +2438,12 @@ export function fakeMessageboard(
     inlineThreadMessages?: boolean
     /** `false`: an API from before its thread list took `limit`, which is 400 there, and every page is 25 threads. Vercel's takes 1 to 100. */
     threadsLimit?: boolean
+    /**
+     * True for an API that reads a channel by its name (`channel=` in place of `channelId` on a channel's threads, messages,
+     * changes, and schedules) and answers a message or a thread with its channel (`include=channel`). Vercel's doesn't yet:
+     * each is 400 there, as any parameter it doesn't know is.
+     */
+    channelNames?: boolean
     /** True for an API that answers a read's actors with it (`with=actors`), as `GET /actors?id=` names them. Vercel's doesn't yet: `with` is 400 there. */
     inlineActors?: boolean
     /** Credentials the API takes, by their bearer, whatever it looks like: the principal each is, as `as()` names it. */
@@ -2458,8 +2496,10 @@ export function fakeMessageboard(
     receipt,
     stored,
     inlineThreadMessages: options.inlineThreadMessages ?? false,
+    channelNames: options.channelNames ?? false,
     inlineActors: options.inlineActors ?? false,
     threadsLimit: options.threadsLimit ?? true,
+    feedReads: 0,
     externalImports: options.externalImports ?? false,
     actorsById: options.actorsById ?? true,
     namesNarrowed: options.namesNarrowed ?? true,
@@ -2602,6 +2642,8 @@ export function fakeMessageboard(
     cutNextCompletion,
     /** Every request it answered, as `METHOD /path`. */
     requests,
+    /** How many reads of a channel's feed it took, not counting any it refused for a parameter it doesn't know. */
+    feedReads: () => shared.feedReads,
     /** The default board's grants, by ID, as the API keeps them. */
     grants: general.data.grants,
     /** Every schema version the team registered, by ID, as the API keeps them. */

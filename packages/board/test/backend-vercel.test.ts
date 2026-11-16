@@ -627,6 +627,171 @@ describe('vercel()', () => {
     return { team, sent }
   }
 
+  it("reads one channel by the name it was given where the API takes one, and looks its ID up first where it doesn't, asking once", async () => {
+    const run = async (channelNames: boolean) => {
+      const api = fakeMessageboard({ channelNames, inlineThreadMessages: true })
+      const seed = handleOn(api)
+      for (const channel of ['dev', 'ops']) await seed.post(channel, { text: `hi ${channel}` })
+      const root = await seed.post('dev/web', { text: 'first' })
+      const { cursor } = await seed.messages({ channel: 'dev/web' })
+      await seed.reply(root.id, { text: 'second' })
+      await seed.schedule('dev/web', { text: 'later', in: '1h' })
+      type Team = ReturnType<typeof handleOn>
+      const reads: Record<string, (team: Team) => Promise<unknown>> = {
+        threads: async (team) => (await team.threads({ channel: 'dev/web' })).threads.map((t) => [t.message.channel, t.message.text, t.last?.text]),
+        messages: async (team) => (await team.messages({ channel: 'dev/web' })).messages.map((m) => [m.channel, m.text]),
+        poll: async (team) => (await team.poll({ channel: 'dev/web', after: cursor })).events.map((e) => [e.type, e.message?.channel, e.message?.text]),
+        schedules: async (team) => (await team.schedules({ channel: 'dev/web' })).map((s) => [s.channel, s.text]),
+      }
+      const out: Record<string, { answer: unknown; lookups: number; byName: number; lookupsAgain: number; byNameAgain: number }> = {}
+      for (const [name, read] of Object.entries(reads)) {
+        // Each read as a process that has read nothing, as each `vb` run is.
+        const { team, sent } = recording(api)
+        const count = () => ({
+          lookups: sent.filter((url) => /\/channels(\/[^/]+)?$/.test(url.pathname)).length,
+          byName: sent.filter((url) => url.searchParams.has('channel')).length,
+        })
+        const answer = await read(team)
+        const first = count()
+        sent.length = 0
+        expect(await read(team)).toEqual(answer)
+        out[name] = { answer, ...first, lookupsAgain: count().lookups, byNameAgain: count().byName }
+      }
+      return out
+    }
+    const named = await run(true)
+    const today = await run(false)
+    expect(named.threads!.answer).toEqual([['dev/web', 'first', 'second']])
+    expect(named.messages!.answer).toEqual([['dev/web', 'first'], ['dev/web', 'second']])
+    expect(named.poll!.answer).toEqual([['message.posted', 'dev/web', 'second']])
+    expect(named.schedules!.answer).toEqual([['dev/web', 'later']])
+    for (const read of ['threads', 'messages', 'poll', 'schedules']) {
+      // The same answer either way.
+      expect([read, today[read]!.answer]).toEqual([read, named[read]!.answer])
+      // Where the API takes the name, nothing asks for the channel: not by its name, and not by the ID a schedule or a thread names.
+      expect([read, named[read]!.lookups, named[read]!.lookupsAgain]).toEqual([read, 0, 0])
+      // Vercel's API today refuses the name once: the channel is looked up, as before, and the name isn't sent again. A read
+      // that also asks for its actors is refused those first, then the name: one request for each parameter it doesn't take.
+      const refused = read === 'messages' || read === 'poll' ? 2 : 1
+      expect([read, today[read]!.byName, today[read]!.lookups, today[read]!.byNameAgain, today[read]!.lookupsAgain]).toEqual([read, refused, 1, 0, 0])
+    }
+  })
+
+  it("answers for a channel that isn't there, or one it can't read, as it did when it looked the name up", async () => {
+    const run = async (channelNames: boolean) => {
+      const api = fakeMessageboard({ channelNames })
+      const seed = handleOn(api)
+      await seed.post('dev', { text: 'hi dev' })
+      const secret = await seed.post('secret', { text: 'shh' })
+      await seed.schedule('secret', { text: 'later', in: '1h' })
+      const { cursor } = await seed.messages({ channel: 'dev' })
+      const fixer = handleOn(api).as('fixer', { can: { 'dev/': ['read'] } })
+      const out: unknown[] = []
+      for (const [team, channel] of [[handleOn(api), 'nope'], [fixer, 'secret'], [fixer, 'nope']] as const) {
+        out.push([
+          channel,
+          (await team.threads({ channel })).threads,
+          (await team.messages({ channel })).messages,
+          await team.schedules({ channel }),
+          (await team.poll({ channel })).events,
+          await team.messages({ channel, after: cursor }).then(() => 'read', (error: { status?: number; code?: string }) => [error.status, error.code]),
+        ])
+      }
+      // A read makes no channel.
+      out.push((await seed.channels()).map((channel) => channel.path).sort())
+      // What it can read still reads, and a message in a channel it can't read names none.
+      out.push((await fixer.messages({ channel: 'dev' })).messages.map((m) => m.text))
+      out.push(await fixer.thread(secret.id).then((thread) => thread.message.channel, () => null))
+      return out
+    }
+    const named = await run(true)
+    expect(named).toEqual(await run(false))
+    expect(named.slice(0, 3)).toEqual(['nope', 'secret', 'nope'].map((channel) => [channel, [], [], [], [], [400, 'invalid_request']]))
+    expect(named.slice(3)).toEqual([['dev', 'general', 'secret'], ['hi dev'], null])
+  })
+
+  it("reads a channel by its name with its authors in the same answer, and is refused each parameter an older API doesn't take once", async () => {
+    const run = async (options: Parameters<typeof fakeMessageboard>[0]) => {
+      const api = fakeMessageboard(options)
+      const seed = handleOn(api, 'user:u_ada')
+      const root = await seed.post('dev/web', { text: 'first' })
+      await seed.reply(root.id, { text: 'second' })
+      const reads: Record<string, (team: ReturnType<typeof handleOn>) => Promise<unknown>> = {
+        threads: async (team) => (await team.threads({ channel: 'dev/web' })).threads.map((t) => [t.message.channel, t.message.text, t.message.author?.handle, t.last?.text]),
+        messages: async (team) => (await team.messages({ channel: 'dev/web' })).messages.map((m) => [m.channel, m.text, m.author?.handle]),
+        thread: async (team) => [(await team.thread(root.id)).message].map((m) => [m.channel, m.text, m.author?.handle]),
+      }
+      const out: Record<string, { answer: unknown; sent: string[]; refused: string[] }> = {}
+      for (const [name, read] of Object.entries(reads)) {
+        // Each read as a process that has read nothing, as each `vb` run is.
+        const fetching = as(api, 'user:u_jb')
+        const sent: string[] = []
+        const refused: string[] = []
+        const counting = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(String(input instanceof Request ? input.url : input))
+          const response = await fetching(input, init)
+          const last = url.pathname.replace(/^.*\/boards\/[^/]+/, '').replace(/(msg|thr|chn)_[^/]+/, ':id')
+          sent.push(last)
+          if (response.status === 400) refused.push(`${last} ${((await response.clone().json()) as { error: { message: string } }).error.message.match(/`(\w+)`/)?.[1]}`)
+          return response
+        }) as typeof fetch
+        const answer = await read(board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: counting, files: api.files }) }))
+        out[name] = { answer, sent, refused }
+      }
+      return out
+    }
+    const all = await run({ channelNames: true, inlineActors: true, inlineThreadMessages: true })
+    const today = await run({})
+    expect(all.threads!.answer).toEqual([['dev/web', 'first', 'ada', 'second']])
+    expect(all.messages!.answer).toEqual([['dev/web', 'first', 'ada'], ['dev/web', 'second', 'ada']])
+    expect(all.thread!.answer).toEqual([['dev/web', 'first', 'ada']])
+    // With the name, the channel, and the authors all in the read's own answers, nothing else is asked.
+    expect(all.threads).toMatchObject({ sent: ['/changes', '/threads'], refused: [] })
+    expect(all.messages).toMatchObject({ sent: ['/messages'], refused: [] })
+    expect(all.thread).toMatchObject({ sent: ['/messages/:id', '/threads/:id/messages'], refused: [] })
+    // An API that takes none of them answers the same, and refuses each parameter once, not once for each of the others.
+    for (const read of ['threads', 'messages', 'thread']) expect([read, today[read]!.answer]).toEqual([read, all[read]!.answer])
+    expect([...today.threads!.refused].sort()).toEqual(['/changes channel', '/threads include', '/threads with'])
+    expect([...today.messages!.refused].sort()).toEqual(['/messages channel', '/messages with'])
+    expect([...today.thread!.refused].sort()).toEqual(['/messages/:id include', '/messages/:id with'])
+  })
+
+  it("reads as it did before names whatever the API refuses a name or a message's channel with", async () => {
+    // What an API might answer the new parameters, beside the 400 Vercel's gives today: each read is the one `main` made.
+    for (const [status, code, message] of [[403, 'forbidden', "You can't read `dev/web`."], [400, 'bad_request', 'Invalid request: missing required property `channelId`.'], [400, 'bad_request', 'Invalid request: `include` should be equal to one of the allowed values "messages".']] as const) {
+      const api = fakeMessageboard({ inlineThreadMessages: true })
+      const seed = handleOn(api)
+      const root = await seed.post('dev/web', { text: 'first' })
+      await seed.schedule('dev/web', { text: 'later', in: '1h' })
+      const fetching = as(api, 'user:u_jb')
+      const refusing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input instanceof Request ? input.url : input))
+        return url.searchParams.has('channel') || url.searchParams.get('include') === 'channel' ? Response.json({ error: { code, message } }, { status }) : fetching(input, init)
+      }) as typeof fetch
+      const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: refusing, files: api.files }) })
+      expect([status, (await team.threads({ channel: 'dev/web' })).threads.map((t) => t.message.text)]).toEqual([status, ['first']])
+      expect((await team.messages({ channel: 'dev/web' })).messages.map((m) => m.text)).toEqual(['first'])
+      expect((await team.poll({ channel: 'dev/web' })).events).toEqual([])
+      expect((await team.schedules({ channel: 'dev/web' })).map((s) => s.channel)).toEqual(['dev/web'])
+      expect((await team.thread(root.id)).message.channel).toBe('dev/web')
+      // And a channel that isn't there is still nothing, not the refusal.
+      expect((await team.threads({ channel: 'nope' })).threads).toEqual([])
+      expect((await team.messages({ channel: 'nope' })).messages).toEqual([])
+    }
+  })
+
+  it("names a message's channel from the message's own answer where the API sends it, asking for no channel", async () => {
+    const api = fakeMessageboard({ channelNames: true })
+    const team = handleOn(api)
+    const root = await team.post('questions', { text: 'anyone?' })
+    // A process that has listed nothing, as each `vb` run is: a reply, then the thread.
+    const fresh = handleOn(api)
+    api.requests.length = 0
+    expect(await fresh.reply(root.id, { text: 'me!' })).toMatchObject({ channel: 'questions', re: root.id })
+    expect((await fresh.thread(root.id)).message.channel).toBe('questions')
+    expect(api.requests.filter((r) => /\/channels(\/[^/]+)?$/.test(r))).toEqual([])
+  })
+
   it("pages a channel's threads back with the API's own cursor, each of its pages in one read", async () => {
     const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true })
     const { team, sent } = recording(api)
@@ -752,6 +917,44 @@ describe('vercel()', () => {
     }
   })
 
+  it("lists a channel it reads by name 100 threads to a request, and is refused a page's limit once however many it reads by name at once", async () => {
+    const channels = ['dev', 'ops', 'ci', 'docs']
+    for (const options of [{ channelNames: true }, { channelNames: false }, { channelNames: true, threadsLimit: false }, { channelNames: false, threadsLimit: false }]) {
+      const api = fakeMessageboard({ ...options, inlineThreadMessages: true, inlineActors: true })
+      const author = handleOn(api, 'user:u_ada')
+      for (let i = 0; i < 120; i++) await author.post('queue', { text: `task ${i}` })
+      for (const channel of channels) await author.post(channel, { text: `in ${channel}` })
+      const inner = as(api, 'user:u_jb')
+      const listed: URL[] = []
+      const refused: string[] = []
+      const julian = board({
+        backend: vercel({
+          team: 'team_test',
+          api: API,
+          fetch: async (input, init) => {
+            const url = new URL(String(input))
+            const response = await inner(input, init)
+            if (!url.pathname.endsWith('/threads') || (init?.method ?? 'GET') !== 'GET') return response
+            listed.push(url)
+            if (response.status === 400) refused.push(/`(\w+)`/.exec(((await response.clone().json()) as { error: { message: string } }).error.message)?.[1] ?? '?')
+            return response
+          },
+        }),
+      })
+      const label = JSON.stringify(options)
+      // Each channel by its name, all at once: an API that refuses `limit` refuses it once, and each reads its own threads.
+      const read = await Promise.all(channels.map((channel) => julian.threads({ channel })))
+      expect(read.map(({ threads }) => threads.map((thread) => thread.message.text)), label).toEqual(channels.map((channel) => [`in ${channel}`]))
+      expect(refused.filter((name) => name === 'limit'), label).toHaveLength(options.threadsLimit === false ? 1 : 0)
+      // A long one, by its name where the API takes it, a page of 100 where it takes `limit`.
+      listed.length = 0
+      expect((await julian.threads({ channel: 'queue', limit: 120 })).threads, label).toHaveLength(120)
+      const sent = listed.map((url) => [url.searchParams.has('channel') ? 'channel' : 'channelId', url.searchParams.get('limit')])
+      if (options.threadsLimit === false) expect(sent, label).toEqual(Array(5).fill([options.channelNames ? 'channel' : 'channelId', null]))
+      else expect(sent, label).toEqual([[options.channelNames ? 'channel' : 'channelId', '100'], [options.channelNames ? 'channel' : 'channelId', '20']])
+    }
+  })
+
   it("refuses a before that was never one of the channel's pages, as invalid_cursor, without asking the API with it", async () => {
     const api = fakeMessageboard({ inlineThreadMessages: true })
     const { team, sent } = recording(api)
@@ -784,7 +987,8 @@ describe('vercel()', () => {
     landing = true
     const page = await team.threads({ channel: 'busy', limit: 25 })
     const order = sent.map((url) => url.pathname.split('/').at(-1)).filter((last) => last === 'changes' || last === 'threads')
-    expect(order).toEqual(['changes', 'threads'])
+    // The head asked for by the channel's name, which Vercel's API today refuses, then the feed's head, then the list.
+    expect(order).toEqual(['changes', 'changes', 'threads'])
     // The page may show it too: a cursor behind the page reads it again rather than past it.
     const { events } = await team.poll({ channel: 'busy', after: page.cursor })
     expect(events.filter((event) => event.type === 'message.posted').map((event) => event.message?.text)).toEqual(['landed in between'])
@@ -831,6 +1035,8 @@ describe('vercel()', () => {
     const first = await team.post('busy', { text: 'one' })
     await team.reply(first.id, { text: 'two' })
     await team.post('busy', { text: 'three' })
+    // A first read finds this API reads no channel by its name (below), and no later one asks.
+    await team.messages({ channel: 'busy', limit: 1 })
     api.requests.length = 0
     const latest = await team.messages({ channel: 'busy', limit: 2 })
     expect(latest.messages.map((m) => m.text)).toEqual(['two', 'three'])
@@ -1456,7 +1662,8 @@ describe('vercel()', () => {
       return { backend, team: board({ backend, url: 'http://localhost:3000/api/board', watch }) }
     }
     /** Until its tails have read the head of the feed: what's posted after that, they run. */
-    const following = (api: ReturnType<typeof fakeMessageboard>) => vi.waitFor(() => expect(api.requests.some((request) => request.endsWith('/changes'))).toBe(true))
+    // A read of the feed the API took: one it refuses for a parameter it doesn't know has read no head.
+    const following = (api: ReturnType<typeof fakeMessageboard>) => vi.waitFor(() => expect(api.feedReads()).toBeGreaterThan(0))
 
     it('run in this process as tails from the head, registering nothing, and never on their own writes', async () => {
       const api = fakeMessageboard()
@@ -3083,7 +3290,7 @@ describe('naming the authors on a page', () => {
           const url = new URL(String(input))
           if (url.pathname.endsWith('/actors')) asked.push(url.searchParams.getAll('id'))
           const response = await inner(input, init)
-          if (!url.searchParams.has('with')) return response
+          if (!url.searchParams.has('with') || !response.ok) return response
           const read = (await response.json()) as { actors: { id: string }[] }
           return Response.json({ ...read, actors: read.actors.filter(({ id }) => id !== 'vercel:user:u_ada') })
         },
