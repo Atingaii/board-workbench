@@ -717,8 +717,8 @@ describe('vercel()', () => {
       const root = await seed.post('dev/web', { text: 'first' })
       await seed.reply(root.id, { text: 'second' })
       const reads: Record<string, (team: ReturnType<typeof handleOn>) => Promise<unknown>> = {
-        threads: async (team) => (await team.threads({ channel: 'dev/web' })).threads.map((t) => [t.message.channel, t.message.text, t.message.author.handle, t.last?.text]),
-        messages: async (team) => (await team.messages({ channel: 'dev/web' })).messages.map((m) => [m.channel, m.text, m.author.handle]),
+        threads: async (team) => (await team.threads({ channel: 'dev/web' })).threads.map((t) => [t.message.channel, t.message.text, t.message.author?.handle, t.last?.text]),
+        messages: async (team) => (await team.messages({ channel: 'dev/web' })).messages.map((m) => [m.channel, m.text, m.author?.handle]),
         thread: async (team) => [(await team.thread(root.id)).message].map((m) => [m.channel, m.text, m.author?.handle]),
       }
       const out: Record<string, { answer: unknown; sent: string[]; refused: string[] }> = {}
