@@ -278,13 +278,15 @@ function parse(argv: string[]) {
  * inline), it says where that goes instead.
  */
 function renamedOption(name: string, word: string | undefined, argv: string[]): Failed | undefined {
-  // Only where the command takes a file at all: anywhere else the old name is as unknown as any.
-  if (!optionsOf(word).includes('file')) return undefined
-  if (name === 'text-file' && word === 'tasks')
+  // Only where the old option was: anywhere else its name is as unknown as any, and --file may
+  // be no option there, or another thing (a claim has none, and a grant's is its grants).
+  const creates = word !== undefined && argv[argv.indexOf(word) + 1] === 'create'
+  if (name === 'text-file' && word === 'tasks' && creates)
     return usage('--text-file is gone from tasks create.', { reason: 'unknown_option', next: [{ instruction: 'Pass the text, or - to read it from stdin: --file there is a plan of several' }] })
-  if (name === 'schema' && word === 'schemas')
+  if (name === 'schema' && word === 'schemas' && creates)
     return usage('--schema is --file now.', { reason: 'unknown_option', next: [{ instruction: 'Name the file without the @, or - for stdin', argv: [...cli(), 'schemas', 'create', '<SCHEMA>', '--file', '<PATH>'] }] })
-  if (name !== 'text-file' && name !== 'tasks-file') return undefined
+  const was = (name === 'text-file' && word !== undefined && TEXT.has(word)) || (name === 'tasks-file' && word === 'tasks' && creates)
+  if (!was) return undefined
   const again = argv.map((arg) => (arg === `--${name}` ? '--file' : arg.startsWith(`--${name}=`) ? `--file=${arg.slice(name.length + 3)}` : arg))
   return usage(`--${name} is --file now.`, { reason: 'unknown_option', next: [{ instruction: 'Run it with --file', argv: [...cli(), ...again] }] })
 }
@@ -1915,7 +1917,8 @@ async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
   try {
     parsed = JSON.parse(source)
   } catch {
-    throw usage(`${where} isn't JSON.`, { next: [planHelp()] })
+    // The likeliest slip is --file carried over from post, where it's the text.
+    throw usage(`${where} isn't JSON: --file on tasks create is a plan of tasks.`, { next: [{ instruction: "For one task's text, pass it, or - to read it from stdin" }, planHelp()] })
   }
   const shape = 'A plan is a JSON array of tasks: [{"key": "fix", "text": "…"}, {"text": "…", "needs": [{"key": "fix"}]}].'
   if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((task) => typeof task !== 'object' || task === null || Array.isArray(task))) throw usage(`${where} holds no tasks. ${shape}`, { next: [planHelp()] })

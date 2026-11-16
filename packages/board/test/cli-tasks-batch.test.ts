@@ -74,7 +74,8 @@ describe('vb tasks create --file', () => {
     }
     const plan = await planFile([{ text: 'one task' }])
     expect(await misused(['none', '--file', '/nowhere/plan.json'])).toBe("error: Can't read /nowhere/plan.json. There's no such file.")
-    expect(await misused(['none', '--file', await planFile('not json', 'notes.txt')])).toMatch(/^error: \S+notes\.txt isn't JSON\.$/)
+    // A file of prose is the likeliest slip, --file carried over from post: it says what --file is here.
+    expect(await misused(['none', '--file', await planFile('not json', 'notes.txt')])).toMatch(/^error: \S+notes\.txt isn't JSON: --file on tasks create is a plan of tasks\.$/)
     expect(await misused(['none', '--file', '-'], '{"text": "one task"}')).toBe('error: stdin holds no tasks. A plan is a JSON array of tasks: [{"key": "fix", "text": "…"}, {"text": "…", "needs": [{"key": "fix"}]}].')
     expect(await misused(['none', '--file', await planFile([])])).toMatch(/ holds no tasks\. A plan is a JSON array of tasks/)
     expect(await misused(['none', '--file', await planFile(['a task'])])).toMatch(/ holds no tasks\. A plan is a JSON array of tasks/)
@@ -85,6 +86,12 @@ describe('vb tasks create --file', () => {
     // The options' old names say what they are now, and make nothing.
     expect(await misused(['none', '--tasks-file', plan])).toBe('error: --tasks-file is --file now.')
     expect(await misused(['none', '--text-file', plan])).toBe('error: --text-file is gone from tasks create.')
+    // Only where they were: a claim never took either, and a grant's --file is its grants, not a plan.
+    const first = async (args: string[]) => (await vb(args)).stderr.split('\n')[0]
+    expect(await first(['tasks', 'claim', '1', '--tasks-file', plan])).toBe('error: Unknown option --tasks-file for vb tasks.')
+    expect(await first(['tasks', 'claim', '1', '--text-file', plan])).toBe('error: Unknown option --text-file for vb tasks.')
+    expect(await first(['grants', 'create', '--tasks-file', plan])).toBe('error: Unknown option --tasks-file for vb grants.')
+    expect(await first(['grants', 'create', '--text-file', plan])).toBe('error: Unknown option --text-file for vb grants.')
     const thread = await create('elsewhere', 'a thread that is there')
     expect(await misused([thread, '--file', plan])).toBe(`error: --file holds a plan, which starts threads in a channel, and #${thread} is a thread.`)
     expect(await ok(['channels'])).not.toMatch(/^none\b/m)
