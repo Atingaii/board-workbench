@@ -1954,7 +1954,6 @@ function fakeBoard(shared: Shared, boardId: string) {
     return undefined
   }
 
-  /** A request to this board, at `rest` under `/boards/:id`, from a caller who may use it. */
   /** The reads that answer the actors they name with `with=actors`: threads, messages, and a channel's changes. */
   const NAMING = /^\/(threads|messages|changes|messages\/[^/]+|threads\/[^/]+\/messages)$/
   /** Everyone a read's answer names: who started each thread and wrote its messages, and who each change is by. */
@@ -1963,6 +1962,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     ...(read.messages ?? (read.message ? [read.message] : [])).map((m) => m.createdBy),
     ...(read.events ?? []).flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]),
   ]
+  /** A request to this board, at `rest` under `/boards/:id`, from a caller who may use it. */
   async function route(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor, signal?: AbortSignal, version: 1 | 2 = 1): Promise<unknown> {
     let found: RegExpExecArray | null
 

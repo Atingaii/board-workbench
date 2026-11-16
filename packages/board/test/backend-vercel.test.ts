@@ -2957,8 +2957,9 @@ describe('naming the authors on a page', () => {
   })
 
   it('names someone the API left out of a read\'s actors by their principal, and does not ask for them', async () => {
-    const { api, asked } = await reading({ inlineActors: true })
+    const { api } = await reading({ inlineActors: true })
     const inner = as(api, 'user:u_jb')
+    const asked: string[][] = []
     // An API that sends the actors of a read, but not Ada: it has no view of her yet.
     const julian = board({
       backend: vercel({
@@ -2966,6 +2967,7 @@ describe('naming the authors on a page', () => {
         api: API,
         fetch: async (input, init) => {
           const url = new URL(String(input))
+          if (url.pathname.endsWith('/actors')) asked.push(url.searchParams.getAll('id'))
           const response = await inner(input, init)
           if (!url.searchParams.has('with')) return response
           const read = (await response.json()) as { actors: { id: string }[] }
@@ -2976,6 +2978,46 @@ describe('naming the authors on a page', () => {
     // She's named by her principal, as anyone the API doesn't have, and not asked for: the read said it has no view of her.
     expect(handles((await julian.messages({ channel: 'dev' })).messages)).toEqual(['julian', 'user-u_ada'])
     expect(asked).toEqual([])
+  })
+
+  it('is refused the actors once by an API that does not send them, however many channels a read goes to at once', async () => {
+    const api = fakeMessageboard()
+    const channels = ['dev', 'ops', 'ci', 'docs']
+    for (const channel of channels) await handleOn(api, 'user:u_ada').post(channel, { text: `in ${channel}` })
+    const inner = as(api, 'user:u_jb')
+    /** A process of its own, with every read it sent with `with` and was refused, and every read of that route. */
+    const process = () => {
+      const refused: string[] = []
+      const sent: string[] = []
+      const julian = board({
+        backend: vercel({
+          team: 'team_test',
+          api: API,
+          fetch: async (input, init) => {
+            const url = new URL(String(input))
+            const route = url.pathname.split('/').at(-1)!
+            const response = await inner(input, init)
+            if ((init?.method ?? 'GET') === 'GET') sent.push(route)
+            if (url.searchParams.has('with') && response.status === 400) refused.push(route)
+            return response
+          },
+        }),
+      })
+      return { julian, refused, sent }
+    }
+    // The whole board's latest messages: a read of each channel, all at once.
+    const messages = process()
+    expect((await messages.julian.messages({})).messages.map((message) => message.text).sort()).toEqual(channels.map((channel) => `in ${channel}`).sort())
+    expect(messages.refused).toEqual(['messages'])
+    // One read a channel, the board's own general among them, and the one refused.
+    expect(messages.sent.filter((route) => route === 'messages')).toHaveLength((await messages.julian.channels()).length + 1)
+    // The whole board's events since a cursor: each channel's feed, all at once.
+    const { cursor } = await process().julian.poll({})
+    for (const channel of channels) await handleOn(api, 'user:u_ada').post(channel, { text: `more in ${channel}` })
+    const events = process()
+    expect((await events.julian.poll({ after: cursor })).events.map((event) => event.message?.text)).toEqual(expect.arrayContaining(channels.map((channel) => `more in ${channel}`)))
+    expect(events.sent.filter((route) => route === 'changes').length).toBeGreaterThan(channels.length)
+    expect(events.refused).toEqual(['changes'])
   })
 
   it('keeps asking for a thread list with its messages on an API that takes that and not the actors', async () => {

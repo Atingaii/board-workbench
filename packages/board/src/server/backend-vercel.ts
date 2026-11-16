@@ -1057,24 +1057,43 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     ...(read.messages ?? (read.message ? [read.message] : [])).map((message) => message.createdBy),
     ...(read.events ?? []).flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]),
   ]
-  /** Whether the API answers a read's actors with it (`with=actors`): until it refuses the parameter, it's asked. */
-  let actorsWithReads = true
+  /** Whether the API answers a read's actors with it (`with=actors`): unknown until a read with the parameter is answered, and false once one is refused it. */
+  let actorsWithReads: boolean | undefined
+  /** The first read that asks for them, while it's out: reads that start meanwhile wait for its answer, so an API that refuses the parameter refuses it once. */
+  let askingActors: Promise<void> | null = null
   /**
    * A read of threads, messages, or changes, with the actors it names where the API sends them, so naming
    * them costs no request of its own: they're kept as if each had been asked for by ID, one the API left out
    * as one it doesn't have. An API from before `with=actors` takes no parameter it doesn't know and answers
-   * 400: the read is made again without it, and it's never asked again.
+   * 400: the read is made again without it, and it's never asked again. Reads that go out together, one a
+   * channel, wait for the first of them to learn which API this is. A long-poll holds nobody: it may take its
+   * whole wait to answer.
    */
   async function reading<T extends Named>(who: Who, path: string, init: { query?: Record<string, string | undefined>; signal?: AbortSignal } = {}): Promise<T> {
-    if (!actorsWithReads || !namesById) return api<T>(who, 'GET', path, init)
+    if (!namesById) return api<T>(who, 'GET', path, init)
+    while (actorsWithReads === undefined && askingActors) await askingActors
+    if (actorsWithReads === false) return api<T>(who, 'GET', path, init)
+    let answered = () => {}
+    if (actorsWithReads === undefined && init.query?.wait === undefined) {
+      const first = new Promise<void>((resolve) => {
+        answered = () => {
+          if (askingActors === first) askingActors = null
+          resolve()
+        }
+      })
+      askingActors = first
+    }
     let read: T
     try {
       read = await api<T>(who, 'GET', path, { ...init, query: { ...init.query, with: 'actors' } })
+      actorsWithReads = true
     } catch (error) {
-      // It names the parameter it doesn't take: one that refuses another is that one's asker's to hear.
+      // It names the parameter it doesn't take: one that refuses another is that one's asker's to hear, and says nothing of this one.
       if (!(error instanceof HttpError && error.status === 400 && /additional property\W*with\b/i.test(error.message))) throw error
       actorsWithReads = false
       return api<T>(who, 'GET', path, init)
+    } finally {
+      answered()
     }
     if (!read.actors) return read
     const views = new Map(read.actors.map((view) => [view.id, view] as const))
