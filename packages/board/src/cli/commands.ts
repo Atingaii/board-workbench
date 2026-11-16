@@ -82,8 +82,9 @@ export const options = {
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
   attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file, up to 10 per message' },
-  'text-file': { type: 'string', value: 'path', description: 'the text, from a file: - reads stdin' },
-  'tasks-file': { type: 'string', value: 'path', description: 'several tasks, from a JSON file: - reads stdin' },
+  // What a command takes from a file: a message's text, a plan of tasks, several grants, a schema. Each says which.
+  file: { type: 'string', value: 'path', description: 'from a file: - reads stdin' },
+  data: { type: 'string', value: 'json', description: 'as JSON, written inline' },
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
   if: { type: 'string', multiple: true, value: 'k=v', description: 'only while the message has this label now' },
   'if-unset': { type: 'string', multiple: true, value: 'k', description: "only while the message doesn't have this label" },
@@ -103,7 +104,6 @@ export const options = {
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
   can: { type: 'string', multiple: true, value: 'pattern=perms', description: 'what they may do, repeated: perms, all, or none' },
   'lock-me-out': { type: 'boolean', description: "go ahead with a change you couldn't take back" },
-  file: { type: 'string', value: 'path', description: 'several grants, made in one write, from a JSON file: - reads stdin' },
   // Grants: whom one names, each flag a principal, with the modifiers after it.
   user: { type: 'string', multiple: true, value: 'email', description: 'a person on the team' },
   project: { type: 'string', multiple: true, short: 'p', value: 'name|id', description: "a project's deployments" },
@@ -138,7 +138,7 @@ export const options = {
   'remove-all-apps': { type: 'boolean', description: 'remove every app on the team' },
   'remove-everyone': { type: 'boolean', description: 'remove everyone' },
   private: { type: 'boolean', description: 'closed to everyone but you, in the same write' },
-  schema: { type: 'string', value: 'json|@file', description: 'its JSON Schema: inline, @<file>, or - for stdin' },
+  schema: { type: 'string', value: 'schema', description: 'the text is JSON for this schema, such as sandbox@1' },
   description: { type: 'string', value: 'text', description: 'what it holds, in a sentence' },
   port: { type: 'string', value: 'N', description: 'the port to listen on' },
   dir: { type: 'string', value: 'dir', description: 'where the board keeps its log (default: .board/)' },
@@ -177,7 +177,7 @@ export const globalOptions: readonly CliOption[] = (['url', 'scope', 'name', 'en
 )
 
 const id = (description = 'a message ID, as read shows it (#812)'): CliArgument => ({ name: 'id', required: true, description })
-const text = (description = 'what it says: - reads it from stdin, and it may be left out when you --attach or --text-file'): CliArgument => ({
+const text = (description = 'what it says: - reads it from stdin, and it may be left out when you --attach or --file'): CliArgument => ({
   name: 'text',
   required: false,
   description,
@@ -231,7 +231,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           option('environment', 'where its --project runs (default: production)'),
           ...(['workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name)),
           option('can', 'what they may do, repeated: perms, all, or none', 'pattern=perms'),
-          option('file'),
+          option('file', 'several grants, made in one write, from a JSON file: - reads stdin'),
           option('lock-me-out'),
         ],
         examples: [
@@ -333,10 +333,10 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         name: 'create',
         description: 'register a version, for good: the same definition again changes nothing',
         arguments: [{ name: 'schema', required: true, description: 'its name and version, such as sandbox@1' }],
-        options: [option('schema'), option('description')],
+        options: [option('file', 'its JSON Schema, from a file: - reads stdin'), option('data', 'its JSON Schema, written inline'), option('description')],
         examples: [
-          { name: 'register a version from a file', value: "schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'" },
-          { name: 'or inline', value: `schemas create ping@1 --schema '{"type":"object","required":["at"],"properties":{"at":{"type":"string","format":"date-time"}}}'` },
+          { name: 'register a version from a file', value: "schemas create sandbox@1 --file sandbox.schema.json --description 'What a sandbox did.'" },
+          { name: 'or inline', value: `schemas create ping@1 --data '{"type":"object","required":["at"],"properties":{"at":{"type":"string","format":"date-time"}}}'` },
         ],
       },
     ],
@@ -376,7 +376,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     brief: '[--label k=v]... [--attach file]...',
     description: 'a new thread in a channel, or with an ID, a reply in its thread',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
+    options: [option('label', 'label it', 'k=v'), option('file', 'the text, from a file: - reads stdin'), option('schema'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
     examples: [
       { name: 'start a thread', value: 'post dev "deploys are green again"' },
       { name: 'start a labeled thread', value: 'post dev "checkout times out" --label kind=bug' },
@@ -388,7 +388,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'reply',
     description: 'a reply in a thread',
     arguments: [id('the ID of a message in the thread'), text()],
-    options: [option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
+    options: [option('label', 'label it', 'k=v'), option('file', 'the text, from a file: - reads stdin'), option('schema'), option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
     examples: [
       { name: 'reply in a thread', value: 'reply 812 "on it"' },
       { name: 'reply with a label', value: 'reply 812 "fixed in a1b2c3" --label step=fix' },
@@ -401,7 +401,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     brief: '(--in 5m | --at time | --every 30m)',
     description: 'post later, as you: once (--in or --at), or repeating (--every) until a stop or until canceled',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('attach'), option('no-sync')],
+    options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('file', 'the text, from a file: - reads stdin'), option('schema'), option('attach'), option('no-sync')],
     examples: [
       { name: 'reply in a thread tomorrow', value: 'schedule 812 "still broken?" --in 1d' },
       { name: 'post every morning', value: 'schedule dev "standup" --at 2026-11-02T09:00:00Z --every 1d' },
@@ -430,8 +430,8 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     group: 'messages',
     name: 'edit',
     description: "change a message's text",
-    arguments: [id(), { name: 'text', required: false, description: 'its new text: - reads it from stdin, and it may be left out when you --text-file' }],
-    options: [option('text-file'), option('schema', 'the text is JSON for this schema, such as sandbox@1', 'schema'), option('if-revision')],
+    arguments: [id(), { name: 'text', required: false, description: 'its new text: - reads it from stdin, and it may be left out when you --file' }],
+    options: [option('file', 'the text, from a file: - reads stdin'), option('schema'), option('if-revision')],
     examples: [
       { name: 'fix a typo', value: 'edit 812 "deploys are green again"' },
       { name: 'only if no one changed it since you read it', value: 'edit 812 "step 3 of 5" --if-revision 820' },
@@ -563,10 +563,10 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     subcommands: [
       {
         name: 'create',
-        description: 'start a thread as a task, or with an ID, make that thread one: you own it. With --tasks-file, a plan of them',
+        description: 'start a thread as a task, or with an ID, make that thread one: you own it. With --file, a plan of them',
         arguments: [
           { name: 'channel|id', required: true, description: "a channel, or a thread's ID to make a task of it as it is" },
-          { name: 'text', required: false, description: 'what to do, for a new thread: - reads it from stdin, and it may be left out when you --text-file or --tasks-file' },
+          { name: 'text', required: false, description: 'what to do, for a new thread: - reads it from stdin, and --file takes its place' },
         ],
         options: [
           option('label', 'label it, to route it', 'k=v'),
@@ -574,8 +574,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           option('for', 'only this profile of yours claims it', 'profile'),
           claimNow,
           option('lease', 'with --claim: how long to hold it'),
-          option('text-file'),
-          option('tasks-file', 'a JSON array of tasks, each { key?, text, labels?, needs?, for?, noSync?, attachments? }: all of them, in as many writes as it takes'),
+          option('file', 'a plan, from a JSON file (- reads stdin): an array of tasks, each { key?, text, labels?, needs?, for?, noSync?, attachments? }, all made, in as many writes as it takes'),
           option('no-sync'),
           option('idempotency-key', 'sending the same one again makes it once'),
         ],
@@ -583,7 +582,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           { name: 'hand a fix to whoever takes fixes', value: 'tasks create work "fix CVE-123 in acme/web" --label step=fix' },
           { name: 'a review that waits for it', value: 'tasks create work "review the fix for CVE-123" --label step=review --needs 812' },
           { name: 'make a task of a thread that is there', value: 'tasks create 812' },
-          { name: 'a plan of tasks that wait for each other', value: 'tasks create work --tasks-file plan.json --idempotency-key migration-7' },
+          { name: 'a plan of tasks that wait for each other', value: 'tasks create work --file plan.json --idempotency-key migration-7' },
         ],
       },
       {

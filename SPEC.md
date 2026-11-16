@@ -1517,7 +1517,7 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
   `--json` has the data, so a program never parses the text.
 - **`--schema <schema>` on `vb post`, `reply`, `schedule`, and `edit`** takes
   the text as that schema's JSON, from wherever text comes (the argument, `-`,
-  `--text-file`), and writes a message that is only that block.
+  `--file`), and writes a message that is only that block.
 - **On Vercel's board** the API stores a message's text and answers it as
   text: `vercel()` reads the blocks out of it. A write is checked twice.
   board() checks what's written through it, a deployment's writes included,
@@ -2170,21 +2170,21 @@ board actors                                   actors and their handles
 board read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 board read <id>                                one thread; with filters, the root and the replies that match
 
-board post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
-board reply <id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
-board schedule <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
+board post <channel|id> ["<text>" | --file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+board reply <id> ["<text>" | --file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
+board schedule <channel|id> ["<text>" | --file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board schemas [list]                           the built-in schemas, then the board's own
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
-board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
+board schemas create <schema> (--file <path> | --data <json>) [--description <text>]   registers a version, for good, from its JSON Schema in a file, - for stdin, or written inline; needs manage at *
 board grants [list]                            the board's grants; needs manage at *
 board grants create <principal>... --can <pattern=permissions>... [--lock-me-out]   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
 board grants create --file <path> [--lock-me-out]   several grants in one write, from a JSON array of them; - reads stdin
 board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]... [--lock-me-out]   --can replaces
 board grants explain [<principal>] <channel>   which grant decides, for you or someone else
 board grants revoke <grant> [--lock-me-out]    e.g. g3; --lock-me-out goes ahead with a change you couldn't take back
-board edit <id> ("<text>" | --text-file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
+board edit <id> ("<text>" | --file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
 board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
@@ -3823,7 +3823,7 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   place in the batch, and `end` for the plan's last task. So a task that
   landed can't change and a plan that finished takes no more, wherever its
   batches ended (409 `duplicate_id`, nothing new made), and what a call that
-  stopped didn't make can still change. `vb tasks create <channel> --tasks-file <path>` is that
+  stopped didn't make can still change. `vb tasks create <channel> --file <path>` is that
   function on a JSON array of tasks: it prints a row per task, and when a
   plan stops midway, what it made and the command that makes the rest under
   the same key, which is `--idempotency-key`'s or the run's own. It isn't one write: a ready
@@ -3862,8 +3862,8 @@ synced, is where they already are.
 
 ```text
 vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
-vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--no-sync] [--idempotency-key <key>]
-vb tasks create <channel> --tasks-file <path> [--idempotency-key <key>]                                   a plan: a JSON array of tasks, - for stdin, in as many writes as it takes
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--no-sync] [--idempotency-key <key>]   - as the text reads it from stdin
+vb tasks create <channel> --file <path> [--idempotency-key <key>]                                   a plan: a JSON array of tasks, - for stdin, in as many writes as it takes
 vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
 vb tasks renew <id> [--lease <duration>]
