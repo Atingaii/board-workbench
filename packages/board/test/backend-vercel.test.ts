@@ -1602,6 +1602,22 @@ describe('vercel()', () => {
     expect((await pong.schedules({ all: true })).find((s) => s.id === done.id)).toMatchObject({ state: 'done', next: null, sent: 1 })
   })
 
+  it("lists the caller's own schedules without paging through everyone else's", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    for (let n = 0; n < 9; n++) await pong.schedule('ops', { text: `ops ${n}`, in: '1h' })
+    const claude = await pong.as('claude').schedule('ops', { text: 'claude', in: '1h' })
+    const listing = (request: string) => request === 'GET /boards/brd_test/schedules'
+    api.requests.length = 0
+    expect((await pong.schedules({})).map((s) => s.id)).toHaveLength(10)
+    const everyones = api.requests.filter(listing).length
+    api.requests.length = 0
+    expect((await pong.as('claude').schedules({ by: 'me' })).map((s) => s.id)).toEqual([claude.id])
+    // The fake API reads six schedules a request, and fills a page with two.
+    expect(everyones).toBe(5)
+    expect(api.requests.filter(listing)).toHaveLength(2)
+  })
+
   it('cancels a schedule once, as the API answers it, and shows who did', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
