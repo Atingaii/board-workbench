@@ -3020,6 +3020,41 @@ describe('naming the authors on a page', () => {
     expect(events.refused).toEqual(['changes'])
   })
 
+  it("stops a read that waits on another read's answer about the actors as soon as its own caller stops it", async () => {
+    const api = fakeMessageboard()
+    for (const channel of ['dev', 'ops']) await handleOn(api, 'user:u_ada').post(channel, { text: `in ${channel}` })
+    const inner = as(api, 'user:u_jb')
+    // An API that holds the first read sent with `with` until it's let go.
+    let release = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let out = () => {}
+    const sent = new Promise<void>((resolve) => (out = resolve))
+    const backend = vercel({
+      team: 'team_test',
+      api: API,
+      fetch: async (input, init) => {
+        if (new URL(String(input)).searchParams.has('with')) {
+          out()
+          await held
+        }
+        return inner(input, init)
+      },
+    })
+    const julian = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
+    const first = backend.messages(julian, { channel: 'dev' }, new AbortController().signal)
+    await sent
+    const stop = new AbortController()
+    const waiting = backend.messages(julian, { channel: 'ops' }, stop.signal)
+    const outcome = Promise.race([waiting.then(() => 'answered', (error: Error) => error.name), new Promise((resolve) => setTimeout(() => resolve('still waiting'), 500))])
+    // The waiter has reached the wait: its own lookups are behind it.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    stop.abort()
+    expect(await outcome).toBe('AbortError')
+    // The first read is nobody's to stop but its caller's: let go, it answers.
+    release()
+    expect((await first).messages.map((message) => message.text)).toEqual(['in dev'])
+  })
+
   it('keeps asking for a thread list with its messages on an API that takes that and not the actors', async () => {
     const api = fakeMessageboard({ inlineThreadMessages: true })
     const team = handleOn(api)

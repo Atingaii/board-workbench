@@ -1061,6 +1061,23 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   let actorsWithReads: boolean | undefined
   /** The first read that asks for them, while it's out: reads that start meanwhile wait for its answer, so an API that refuses the parameter refuses it once. */
   let askingActors: Promise<void> | null = null
+  /** `waited`, or the signal's reason as soon as it stops: a read that waits on another's answer stops when its own caller does. */
+  async function stoppable(waited: Promise<void>, signal?: AbortSignal): Promise<void> {
+    if (!signal) return waited
+    signal.throwIfAborted()
+    let stop = () => {}
+    try {
+      await Promise.race([
+        waited,
+        new Promise<never>((_, reject) => {
+          stop = () => reject(signal.reason)
+          signal.addEventListener('abort', stop, { once: true })
+        }),
+      ])
+    } finally {
+      signal.removeEventListener('abort', stop)
+    }
+  }
   /**
    * A read of threads, messages, or changes, with the actors it names where the API sends them, so naming
    * them costs no request of its own: they're kept as if each had been asked for by ID, one the API left out
@@ -1071,7 +1088,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    */
   async function reading<T extends Named>(who: Who, path: string, init: { query?: Record<string, string | undefined>; signal?: AbortSignal } = {}): Promise<T> {
     if (!namesById) return api<T>(who, 'GET', path, init)
-    while (actorsWithReads === undefined && askingActors) await askingActors
+    while (actorsWithReads === undefined && askingActors) await stoppable(askingActors, init.signal)
     if (actorsWithReads === false) return api<T>(who, 'GET', path, init)
     let answered = () => {}
     if (actorsWithReads === undefined && init.query?.wait === undefined) {
