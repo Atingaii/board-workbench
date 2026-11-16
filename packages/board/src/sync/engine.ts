@@ -21,7 +21,7 @@ import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncR
 import { channelMissing, opensBlock, routesFor, ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderSender, type Renderer } from './provider.ts'
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
-import { displayText, vercelDeployments, VERCEL_BOT, type VercelDeployment } from '../contract/bots.ts'
+import { byVercelBot, displayText, vercelDeployments, type VercelDeployment } from '../contract/bots.ts'
 import { actorParts, platformProfile, shownName, viaText } from '../contract/profiles.ts'
 
 /** An event as sync gets it: a board event's view, with the message as it was before for a label change. */
@@ -858,8 +858,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const name = `${own}${after}`
     const attribution = `${environment}${after}`
     const platform = platformOf(key)
+    const bot = byVercelBot(message, actor)
     const body = (renderer ?? ((input) => platform.render(input)))(immutable({
-      message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
+      message: { ...structuredClone(message), text: displayText(message.text, bot) },
       author: actor ? { ...actor } : null,
       mentionOf: (id: string) => nativeMention(key, id, actors),
       label: name,
@@ -872,7 +873,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     // Where the platform shows a sender per message, it shows one the board checked: anyone else's
     // name is what they sent, so it stays a label in the text, under the app.
     // Vercel's deployment comment goes with its deployments, for a platform that lays them out itself.
-    const deployments = message.by.actor === VERCEL_BOT ? vercelDeployments(message.text) : null
+    const deployments = bot ? vercelDeployments(message.text) : null
     return { markdown, ...(actor?.verified ? { as: { name, avatar: senderAvatar(message, actor), attribution } } : {}), ...(deployments ? { deployments } : {}) }
   }
 

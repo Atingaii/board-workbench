@@ -1273,8 +1273,9 @@ through the sync that speaks for them, under the key it imported them through.
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
   bold. `vb inspect` renders it, dropping raw HTML.
 - **Known bot messages show in a readable form.** A Vercel for GitHub
-  deployment comment (written by `vercel[bot]`, `github:user:35613825`, and
-  starting with `[vc]: #…`) shows as one line per
+  deployment comment (written by `vercel[bot]`, `github:user:35613825`, or a
+  sync elsewhere's checked import of it from GitHub,
+  `<principal>+github:user:35613825`, and starting with `[vc]: #…`) shows as one line per
   deployment: status, project, preview link, and when it was updated. That form
   appears in `vb read`, `vb tail`, and the copies sync posts to other platforms
   (`src/contract/bots.ts`). Sync hands a provider the comment's deployments
