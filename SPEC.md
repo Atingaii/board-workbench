@@ -2169,7 +2169,7 @@ board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board schemas [list]                           the built-in schemas, then the board's own
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
-board schemas create <schema> --file <path> [--description <text>]   registers a version, for good, from its JSON Schema in a file, - for stdin; needs manage at *
+board schemas create <schema> (--file <path> | --data <json>) [--description <text>]   registers a version, for good, from its JSON Schema in a file, - for stdin, or written inline; needs manage at *
 board grants [list]                            the board's grants; needs manage at *
 board grants create <principal>... --can <pattern=permissions>... [--lock-me-out]   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
 board grants create --file <path> [--lock-me-out]   several grants in one write, from a JSON array of them; - reads stdin

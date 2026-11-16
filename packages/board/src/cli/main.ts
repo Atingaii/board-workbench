@@ -283,8 +283,16 @@ function renamedOption(name: string, word: string | undefined, argv: string[]): 
   const creates = word !== undefined && argv[argv.indexOf(word) + 1] === 'create'
   if (name === 'text-file' && word === 'tasks' && creates)
     return usage('--text-file is gone from tasks create.', { reason: 'unknown_option', next: [{ instruction: 'Pass the text, or - to read it from stdin: --file there is a plan of several' }] })
-  if (name === 'schema' && word === 'schemas' && creates)
-    return usage('--schema is --file now.', { reason: 'unknown_option', next: [{ instruction: 'Name the file without the @, or - for stdin', argv: [...cli(), 'schemas', 'create', '<SCHEMA>', '--file', '<PATH>'] }] })
+  if (name === 'schema' && word === 'schemas' && creates) {
+    // What it held says which it is now: a file as @<path> and stdin as - are --file's, and JSON written inline is --data's.
+    const at = argv.findIndex((arg) => arg === '--schema' || arg.startsWith('--schema='))
+    const joined = argv[at]?.startsWith('--schema=') ?? false
+    const given = joined ? argv[at]!.slice('--schema='.length) : argv[at + 1]
+    if (at === -1 || given === undefined) return usage('--schema is --file now, or --data for JSON written inline.', { reason: 'unknown_option' })
+    const [option, value] = given === '-' ? ['--file', '-'] : given.startsWith('@') ? ['--file', given.slice(1)] : ['--data', given]
+    const again = [...argv.slice(0, at), option, value, ...argv.slice(at + (joined ? 1 : 2))]
+    return usage(`--schema is ${option} now.`, { reason: 'unknown_option', next: [{ instruction: `Run it with ${option}`, argv: [...cli(), ...again] }] })
+  }
   const was = (name === 'text-file' && word !== undefined && TEXT.has(word)) || (name === 'tasks-file' && word === 'tasks' && creates)
   if (!was) return undefined
   const again = argv.map((arg) => (arg === `--${name}` ? '--file' : arg.startsWith(`--${name}=`) ? `--file=${arg.slice(name.length + 3)}` : arg))
@@ -698,14 +706,16 @@ async function given(value: string | undefined, options: { optional?: boolean })
   return block(schema, data as Record<string, unknown>)
 }
 
-/** A schema's JSON Schema, from the file `--file` names, or stdin for `-`. */
+/** A schema's JSON Schema: from the file `--file` names, or stdin for `-`, or written inline as `--data`. */
 async function definition(): Promise<Record<string, unknown>> {
-  const file = flags.file
-  if (file === undefined) throw usage('Missing --file: its JSON Schema, from a file, or - for stdin.', { reason: 'missing_arguments' })
+  const { file, data: inline } = flags
+  if (file !== undefined && inline !== undefined) throw usage('--file and --data both give the JSON Schema: pass one.')
+  if (file === undefined && inline === undefined) throw usage('Missing its JSON Schema: --file <path>, - for stdin, or --data <json>.', { reason: 'missing_arguments' })
   let source: string
-  if (file === '-') source = await io.stdin()
+  if (inline !== undefined) source = inline
+  else if (file === '-') source = await io.stdin()
   else {
-    const data = await io.readFile(file)
+    const data = await io.readFile(file!)
     if (!data) throw usage(`Can't read ${file}. There's no such file.`, { reason: 'file_not_found', next: [] })
     source = new TextDecoder().decode(data)
   }
@@ -713,7 +723,9 @@ async function definition(): Promise<Record<string, unknown>> {
   try {
     parsed = JSON.parse(source)
   } catch {
-    throw usage(`${file === '-' ? 'stdin' : file} isn't JSON.`)
+    if (inline === undefined) throw usage(`${file === '-' ? 'stdin' : file} isn't JSON.`)
+    // A path, or - for stdin, is the likeliest slip: those are --file's.
+    throw usage(`--data takes the JSON itself, and ${inline.length > 40 ? `${inline.slice(0, 40)}…` : inline} isn't JSON.`, { next: [{ instruction: 'A file, or - for stdin, goes in --file' }] })
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw usage('A schema is a JSON object: {"type":"object", …}.')
   return parsed as Record<string, unknown>

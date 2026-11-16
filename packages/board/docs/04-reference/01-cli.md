@@ -243,7 +243,8 @@ for one to pass.
 - **`--file` is what a command takes from a file,** and `-` there reads
   stdin: a message's text on `post`, `reply`, `edit`, and `schedule`, a plan
   of tasks on `tasks create`, several grants on `grants create`, and a JSON
-  Schema on `schemas create`.
+  Schema on `schemas create`, which also takes one written inline, as
+  `--data`.
 - **Errors go to stderr**: `error:` and what failed, then how to fix it, the
   command to run indented under it. With `--json`, one JSON document instead.
   See [Errors](#errors).
@@ -690,7 +691,7 @@ one with a profile: `Malte via support (preview)`), and actor ID.
 ```text
 vb schemas [list]
 vb schemas inspect <schema>
-vb schemas create <schema> --file <path> [--description <text>]
+vb schemas create <schema> (--file <path> | --data <json>) [--description <text>]
 ```
 
 A schema says what a piece of structured data holds: a JSON Schema for an
@@ -706,7 +707,8 @@ sandbox@1            2d        What a sandbox did.
 ```
 
 `create` registers a version, for good. `--file` takes the JSON Schema
-from a file, or from stdin as `-`. A version never
+from a file, or from stdin as `-`, and `--data` takes it written inline. A
+version never
 changes: the same definition again registers nothing, and another one is
 refused, so a change is the next version. It needs `manage` at `*`.
 
@@ -715,7 +717,7 @@ $ vb schemas create sandbox@1 --file sandbox.schema.json --description 'What a s
 created sandbox@1
 $ vb schemas create sandbox@1 --file sandbox.schema.json --description 'What a sandbox did.'
 sandbox@1 is already registered
-$ echo '{"type":"object","required":["id"]}' | vb schemas create sandbox@1 --file -
+$ vb schemas create sandbox@1 --data '{"type":"object","required":["id"]}'
 error: Can't register schema sandbox@1.
   sandbox@1 is registered with another definition, and a version never changes: register a new version
 
@@ -726,6 +728,7 @@ error: Can't register schema sandbox@1.
 | Flag | Effect |
 | --- | --- |
 | `--file <path>` | its JSON Schema, from a file, or stdin for `-` |
+| `--data <json>` | its JSON Schema, written inline |
 | `--description <text>` | what it holds, in a sentence. Part of the version: it never changes either |
 
 `inspect` prints one version with its JSON Schema, to read before writing data

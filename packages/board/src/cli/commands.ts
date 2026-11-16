@@ -84,6 +84,7 @@ export const options = {
   attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file, up to 10 per message' },
   // What a command takes from a file: a message's text, a plan of tasks, several grants, a schema. Each says which.
   file: { type: 'string', value: 'path', description: 'from a file: - reads stdin' },
+  data: { type: 'string', value: 'json', description: 'as JSON, written inline' },
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
   if: { type: 'string', multiple: true, value: 'k=v', description: 'only while the message has this label now' },
   'if-unset': { type: 'string', multiple: true, value: 'k', description: "only while the message doesn't have this label" },
@@ -332,10 +333,10 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         name: 'create',
         description: 'register a version, for good: the same definition again changes nothing',
         arguments: [{ name: 'schema', required: true, description: 'its name and version, such as sandbox@1' }],
-        options: [option('file', 'its JSON Schema, from a file: - reads stdin'), option('description')],
+        options: [option('file', 'its JSON Schema, from a file: - reads stdin'), option('data', 'its JSON Schema, written inline'), option('description')],
         examples: [
           { name: 'register a version from a file', value: "schemas create sandbox@1 --file sandbox.schema.json --description 'What a sandbox did.'" },
-          { name: 'or from stdin', value: 'schemas create ping@1 --file -' },
+          { name: 'or inline', value: `schemas create ping@1 --data '{"type":"object","required":["at"],"properties":{"at":{"type":"string","format":"date-time"}}}'` },
         ],
       },
     ],

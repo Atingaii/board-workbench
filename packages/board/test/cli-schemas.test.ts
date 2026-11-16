@@ -59,8 +59,8 @@ describe('cli schemas', () => {
     )
   }, 30_000)
 
-  it('takes the JSON Schema from stdin, and answers --json with what it registered', async () => {
-    const inline = await vb(['schemas', 'create', 'ping@1', '--file', '-', '--json'], {}, '{"type":"object","required":["at"]}')
+  it('takes the JSON Schema inline or from stdin, and answers --json with what it registered', async () => {
+    const inline = await vb(['schemas', 'create', 'ping@1', '--data', '{"type":"object","required":["at"]}', '--json'])
     expect(JSON.parse(inline.stdout)).toMatchObject({ outcome: 'created', schema: { id: 'ping@1', name: 'ping', version: 1, description: null, schema: { type: 'object', required: ['at'] }, builtIn: false } })
     const again = await vb(['schemas', 'create', 'ping@1', '--file', '-', '--json'], {}, '{ "required": ["at"], "type": "object" }\n')
     expect(JSON.parse(again.stdout)).toMatchObject({ outcome: 'unchanged', schema: { id: 'ping@1' } })
@@ -70,17 +70,17 @@ describe('cli schemas', () => {
   }, 30_000)
 
   it("says what the board refused, and how to see a version that's there with another definition", async () => {
-    expect((await vb(['schemas', 'create', 'taken@1', '--file', '-'], {}, '{"type":"object"}')).code).toBe(0)
-    const changed = await vb(['schemas', 'create', 'taken@1', '--file', '-'], {}, '{"type":"object","required":["id"]}')
+    expect((await vb(['schemas', 'create', 'taken@1', '--data', '{"type":"object"}'])).code).toBe(0)
+    const changed = await vb(['schemas', 'create', 'taken@1', '--data', '{"type":"object","required":["id"]}'])
     expect(changed).toMatchObject({ code: 1, stdout: '' })
     expect(changed.stderr).toMatch(/^error: Can't register schema taken@1\.\n {2}taken@1 is registered with another definition[^\n]*\n\n {2}See what it's registered as:\n {4}vb schemas inspect taken@1\n$/)
 
-    const invalid = await vb(['schemas', 'create', 'refs@1', '--file', '-'], {}, '{"type":"object","properties":{"next":{"$ref":"#"}}}')
+    const invalid = await vb(['schemas', 'create', 'refs@1', '--data', '{"type":"object","properties":{"next":{"$ref":"#"}}}'])
     expect(invalid).toMatchObject({ code: 2, stdout: '' })
     expect(invalid.stderr).toMatch(/^error: Can't register schema refs@1\.\n {2}schemas don't take "\$ref"/)
     expect((await vb(['schemas', 'inspect', 'refs@1'])).stderr).toBe("error: Couldn't find schema refs@1.\n")
 
-    const reserved = await vb(['schemas', 'create', 'git-commit@2', '--file', '-', '--json'], {}, '{"type":"object"}')
+    const reserved = await vb(['schemas', 'create', 'git-commit@2', '--data', '{"type":"object"}', '--json'])
     expect(reserved.code).toBe(1)
     expect(JSON.parse(reserved.stderr)).toMatchObject({ status: 'error', reason: 'reserved_schema' })
   }, 30_000)
@@ -93,10 +93,15 @@ describe('cli schemas', () => {
     const misuses: [string[], RegExp][] = [
       [['schemas', 'create'], /^error: Missing the schema to create: its name and version, like sandbox@1\.\n/],
       [['schemas', 'create', 'sandbox'], /^error: sandbox doesn't name a schema\. One is name@version, like sandbox@1\.\n/],
-      [['schemas', 'create', 'sandbox@9'], /^error: Missing --file: its JSON Schema, from a file, or - for stdin\.\n/],
+      [['schemas', 'create', 'sandbox@9'], /^error: Missing its JSON Schema: --file <path>, - for stdin, or --data <json>\.\n/],
       [['schemas', 'create', 'sandbox@9', '--file', 'notes.md'], /^error: notes\.md isn't JSON\.\n/],
-      // The option's old name, and its old way to name a file.
-      [['schemas', 'create', 'sandbox@9', '--schema', '@sandbox.schema.json'], /^error: --schema is --file now\.\n\n {2}Name the file without the @, or - for stdin:\n {4}vb schemas create <SCHEMA> --file <PATH>\n$/],
+      // A path given as the JSON is the likeliest slip, and one schema comes one way.
+      [['schemas', 'create', 'sandbox@9', '--data', 'sandbox.schema.json'], /^error: --data takes the JSON itself, and sandbox\.schema\.json isn't JSON\.\n\n {2}A file, or - for stdin, goes in --file\n$/],
+      [['schemas', 'create', 'sandbox@9', '--file', 'sandbox.schema.json', '--data', '{"type":"object"}'], /^error: --file and --data both give the JSON Schema: pass one\.\n/],
+      // The option's old name says which it is now, by what it held: a file as @<path>, stdin, or JSON written inline.
+      [['schemas', 'create', 'sandbox@9', '--schema', '@sandbox.schema.json'], /^error: --schema is --file now\.\n\n {2}Run it with --file:\n {4}vb schemas create sandbox@9 --file sandbox\.schema\.json\n$/],
+      [['schemas', 'create', 'sandbox@9', '--schema', '-', '--json'], /"reason":"unknown_option".*"argv":\["vb","schemas","create","sandbox@9","--file","-","--json"\]/],
+      [['schemas', 'create', 'sandbox@9', '--schema={"type":"object"}'], /^error: --schema is --data now\.\n\n {2}Run it with --data:\n {4}vb schemas create sandbox@9 --data '\{"type":"object"\}'\n$/],
       [['schemas', 'create', 'sandbox@9', '--file', 'nowhere.json'], /^error: Can't read nowhere\.json\. There's no such file\.\n/],
       [['schemas', 'create', 'sandbox@9', '--file', 'list.json'], /^error: A schema is a JSON object: \{"type":"object", …\}\.\n/],
       [['schemas', 'inspect'], /^error: Missing the schema to inspect: its name and version, like sandbox@1\.\n/],

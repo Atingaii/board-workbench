@@ -6,7 +6,7 @@
 
 - `--text-file` is `--file` on `post`, `reply`, `edit`, and `schedule`.
 - `tasks create --tasks-file` is `tasks create --file`. One task's text from a file comes on stdin, with `-` as the text.
-- `schemas create --schema` is `--file`: the JSON Schema comes from a file, without the `@`, or from stdin, and no longer inline.
+- `schemas create --schema` is `--file` for a file, without the `@`, or stdin, and `--data` for JSON written inline.
 
 The old names are refused, and say the new one:
 
