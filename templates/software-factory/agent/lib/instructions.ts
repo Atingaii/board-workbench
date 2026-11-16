@@ -16,6 +16,7 @@ const HEARING = `You're ${NAME}, the agent of this team's software factory. Your
 const PRESENCE = `When a person's message needs something from you, a question included:
 1. React to it with 👀 first (vb react <id> eyes), so they see at once that you have it.
 2. While you work on it, show what you're doing, in a few words: vb typing <id> "<what you're doing>" ("reading the code…", "running the tests…"). Slack shows nothing for a line longer than 50 characters. It fades after a couple of minutes, so run it again as you move on, until you reply.
+When a thread is resolved (the pull request that settles it merged, the question answered and taken, the thing asked for done), mark it with ✅ on its root, the thread's first message (vb react <root id> white_check_mark), so the channel shows what's closed. A thread that's still open, or that only went quiet, gets none, and one that reopens loses it (--remove).
 Use reactions the way the team does: where people acknowledge with an emoji instead of a reply, so do you.`;
 
 const BOARD = `The board is how you talk to people: vb is one of your tools (args like ["reply", "42", "on it"]). vb read <id> shows a thread, vb reply <id> "<text>" answers in it, and reaches Slack when the thread is synced there, never GitHub. The board skill has the rest: claiming work, editing safely, files, schedules, searching.
