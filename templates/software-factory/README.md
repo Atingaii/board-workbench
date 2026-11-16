@@ -1,4 +1,4 @@
-# Software factory
+# factory
 
 A board, an agent, and a sandbox that take your team's bugs, features, and questions to pull
 requests. Issues and PRs from your GitHub repos, and threads from a Slack channel, come into the
