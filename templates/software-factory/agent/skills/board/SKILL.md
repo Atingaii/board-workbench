@@ -57,8 +57,8 @@ nothing. In a thread only on the board, anyone's `@handle` reaches them.
 ## Schedules
 
 A message you schedule posts as you later, and wakes you when it does. Each one that wakes you
-is a whole turn, so schedule few, and always with an end: the check-ins skill says when, how
-often, and what to do when one wakes you.
+is a whole turn, so schedule few, and a check-in always with an end: the check-ins skill says
+when, how often, and what to do when one wakes you.
 
 - `vb schedule <id> "<text>" --in 10m --no-sync` replies in that thread once; `--every 2h` with
   `--times <n>` or `--for 7d` repeats, and `--at <time>` names the moment. `--no-sync` keeps it

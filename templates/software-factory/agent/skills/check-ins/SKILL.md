@@ -59,7 +59,8 @@ Look at the thing itself, not the board: the service's API or CLI, `gh`, the dep
   what's next, and cancel what's still pending for it.
 - **Not yet:** post nothing, and end your turn.
 - **The last one, and still nothing:** say once where it stands and what it's waiting on, to
-  whoever it's waiting on. Then leave it with them: schedule no more unless they ask.
+  whoever it's waiting on. Then leave it with them: schedule no more unless they ask. It's the
+  last when `vb schedules <id>` shows nothing pending for it.
 - **It no longer matters** (someone did it another way, the thread moved on): cancel what's
   pending.
 

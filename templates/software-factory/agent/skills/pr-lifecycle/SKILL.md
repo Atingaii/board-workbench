@@ -51,6 +51,7 @@ Then move it forward:
 - **Merged or closed:** say so in one line, and cancel its check-ins: `vb schedules <id>`, then
   `vb schedule cancel <schedule>` for each.
 - **The last check-in, and it's still open:** say once where it stands and who it's waiting on,
-  and ask whether to keep it. Schedule more only if someone wants it kept.
+  and ask whether to keep it. Schedule more only if someone wants it kept. It's the last when
+  `vb schedules <id>` shows none pending for the PR: the first two sets end long before.
 
 A check-in that finds nothing new posts nothing.
