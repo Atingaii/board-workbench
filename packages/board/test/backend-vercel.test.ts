@@ -1846,6 +1846,25 @@ describe('vercel()', () => {
     await vi.waitFor(() => expect(pongSlack.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**pong**: <@U_G1>, over to you']))
   })
 
+  it("mentions a Slack user the board has never met from their ID alone: the short ID or this project's profile of them, never another project's", async () => {
+    const api = fakeMessageboard()
+    const pongSlack = fakePlatform('slack')
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: pongSlack.adapter }, channels({ C1: 'general' })) },
+    })
+    await pong.fetch(new Request(`${PONG_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'who knows billing?', user: 'U_ADA', name: 'ada' }) }))
+    const agent = pong.as(null, { can: { 'general/': ['read', 'post'] } })
+    await vi.waitFor(async () => expect((await agent.messages({ channel: 'general' })).messages).toHaveLength(1))
+    const [asked] = (await agent.messages({ channel: 'general' })).messages
+    // None of the three has written or been mentioned on the board.
+    await agent.reply(asked!.id, 'cc @[slack:user:U_NEW], @[vercel:project:prj_pong:production+slack:user:U_KAI] and @[vercel:project:prj_other:production+slack:user:U_ZED]')
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await vi.waitFor(() => expect(pongSlack.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**pong**: cc <@U_NEW>, <@U_KAI> and @[vercel:project:prj_other:production+slack:user:U_ZED]']))
+  })
+
   it("names a mention of any key the board runs in a write its sync makes as a user, as a2() does", async () => {
     const api = fakeMessageboard()
     const pong = board({

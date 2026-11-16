@@ -150,9 +150,17 @@ export function keyedId(key: string, platform: string, id: string): string {
 }
 
 /**
+ * A platform's text, each of its users it mentions by ID (`@[slack:user:U0456]`, as a provider
+ * writes one) named under `key`: a mention by the platform's name would be of another sync's user.
+ */
+function keyedText(key: string, platform: string, text: string): string {
+  if (key === platform) return text
+  return replaceMentions(text, (token) => (token.kind === 'actor' && token.actor.startsWith(`${platform}:`) ? `@[${keyedId(key, platform, token.actor)}]` : null))
+}
+
+/**
  * A platform event with its author named under `key`, and every user its text mentions there too:
- * the ones `mentioned` describes, and any it has no room for, since a mention by the platform's
- * name would be of another sync's user.
+ * the ones `mentioned` describes, and any it has no room for.
  */
 function keyedEvent(key: string, platform: string, event: ExternalEvent): ExternalEvent {
   if (!('author' in event)) return event
@@ -162,7 +170,7 @@ function keyedEvent(key: string, platform: string, event: ExternalEvent): Extern
     ...event,
     author,
     ...(event.mentioned ? { mentioned: event.mentioned.map((user) => ({ ...user, id: keyedId(key, platform, user.id) })) } : {}),
-    text: replaceMentions(event.text, (token) => (token.kind === 'actor' && token.actor.startsWith(`${platform}:`) ? `@[${keyedId(key, platform, token.actor)}]` : null)),
+    text: keyedText(key, platform, event.text),
   }
 }
 
@@ -791,8 +799,21 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       if (token.kind === 'handle') return null
       if (found.has(token.actor)) return found.get(token.actor) ?? token.actor
       const actor = actorNamed(token.actor, actors)
-      return actor ? (nativeMention(key, actor.id, actors) ?? actor.name) : null
+      return actor ? (nativeMention(key, actor.id, actors) ?? actor.name) : unmetMention(key, token.actor, actors)
     })
+  }
+
+  /**
+   * How entry `key`'s platform mentions one of its users the board has no actor for, by the ID
+   * they'd have (`@[slack:user:U0456]`, or this sync's `<principal>+slack:user:U0456`): where an ID
+   * is all the platform needs. Null for anyone else's user, and on a platform whose mention needs
+   * more, so the text goes as written.
+   */
+  function unmetMention(key: string, id: string, actors: Actors): string | null {
+    const user = userOf(key, id, actors)
+    if (user === null) return null
+    const platform = platformOf(key)
+    return platform.mentionById(`${platform.platform}:${user}`)
   }
 
   /**
@@ -1290,7 +1311,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function readSource(key: string, target: string, limit: number, after: string | null) {
     const platform = platformOf(key)
     try {
-      return await platform.read(target, { limit, after })
+      // What it read mentions the platform's users by ID, named under the key as an import's are.
+      const read = await platform.read(target, { limit, after })
+      return { ...read, messages: read.messages.map((message) => ({ ...message, text: keyedText(key, platform.platform, message.text) })) }
     } catch (error) {
       if (error instanceof UnreadableError) throw new HttpError(unreadableStatus(error.code), error.code, error.message)
       throw badRequest(`can't read ${target} from ${key}: ${describe(error)}`, 'platform_error')

@@ -26,6 +26,8 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   state?: StateAdapter
   findByEmail?(email: string): Promise<ExternalAuthor | null>
   mention?(actor: Actor): string | null
+  /** As `SyncProvider.mentionById`: a user's mention from their ID alone, where the platform takes one. */
+  mentionById?(id: string): string | null
   /** The platform's users a message's text mentions as `@[<their id>]`, which `markdown` wrote there. */
   mentioned?(text: string): Promise<ExternalAuthor[]>
   author?(author: ChatAuthor, raw: unknown): ExternalAuthor
@@ -281,6 +283,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   }
   override async findByEmail(email: string) { return this.transport.findByEmail?.(email) ?? null }
   override mention(actor: Actor) { return this.transport.mention?.(actor) ?? null }
+  override mentionById(id: string) { return this.transport.mentionById?.(id) ?? null }
   override async fetchRoot(thread: string): Promise<SyncRoot | null> {
     const root = await this.transport.fetchRoot?.(thread)
     return root ? { ...root, raw: root.raw ?? null } : null

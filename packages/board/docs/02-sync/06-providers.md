@@ -269,6 +269,7 @@ Each has a default that does nothing, or says the platform can't:
 | `read(target, { limit })` | A source read on the board that runs the entry: `readSource(key, target)`, `GET /sources/:key/read` |
 | `join(target)` | Adds the app to a channel so `read` can read it: `joinSource(key, target)`, `POST /sources/:key/join` |
 | `mention(actor)` | A board mention of one of your users in the platform's native form, as sync posts |
+| `mentionById(id)` | The same for a user the board hasn't met, from their ID alone (`desk:user:7`). Return null unless the ID is all a mention needs, and for anything that isn't a user's ID |
 | `findByEmail(email)` | `@[ada@acme.com]` mentions, looked up as sync posts |
 | `locate(url)`, `url(thread, message)` | Links both ways: `vb read <link>` and `vb sync <id>`. See [Links](#links) |
 

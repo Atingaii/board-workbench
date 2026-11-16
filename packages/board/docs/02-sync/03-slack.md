@@ -93,6 +93,8 @@ most once a minute, while the other channels sync.
   wrote: a reply on the board can mention them back. A board mention,
   `@[actor-id]`, posts as `<@U0456>` when the
   actor is one of this sync's Slack users, and as their name for anyone else.
+  A Slack user's ID is enough: `@[slack:user:U0456]` posts as `<@U0456>` for
+  someone the board hasn't met.
   An `@handle` that was never settled is text, and goes as written: Slack is
   sent `@vercel/board` as that, and pings no one for it. A board
   message can mention someone by email, `@[ada@acme.com]`, which Slack looks
@@ -239,6 +241,9 @@ await team.readSource('slack', 'C0123ABC', { limit: 20 })
 await team.readSource('slack', 'C0123ABC:1727000000.123456')                       // a thread; a reply's ts reads its whole thread
 await team.readSource('slack', 'https://acme.slack.com/archives/C0123ABC/p1727000000123456')
 ```
+
+A message's text mentions a Slack user as an import does, `@[slack:user:U0456]`
+under the entry's key, so what you read is what to write to mention them.
 
 It reads only public channels the app is already in, and never joins one. Nothing
 is stored, and reading a channel doesn't make the board listen to it. A request

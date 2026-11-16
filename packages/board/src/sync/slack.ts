@@ -88,6 +88,18 @@ type SlackInternals = Omit<Adapter, 'decodeThreadId'> & {
  */
 const MENTIONED = /@\uF8F0([A-Z0-9_]+)\uF8F1/g
 const mentionedAs = (user: string) => `\uF8F0${user}\uF8F1`
+/** A user's mention in Slack's own mrkdwn, with the name Slack may give it: `<@U0456>`, `<@U0456|ada>`. */
+const SLACK_MENTION = /<@([A-Z0-9_]+)(?:\|[^<>]*)?>/g
+/** A Slack user's ID, as `<@U0456>` names one. */
+const SLACK_USER_ID = /^[A-Z0-9_]+$/
+/**
+ * A Slack user as Slack mentions them, from their ID alone. Only a user's ID: anything else between
+ * `<@` and `>` could close the mention and open Slack's own markup (`<!channel>`).
+ */
+function slackMention(id: string): string | null {
+  const user = id.startsWith('slack:user:') ? id.slice('slack:user:'.length) : null
+  return user !== null && SLACK_USER_ID.test(user) ? `<@${user}>` : null
+}
 /** What the adapter read of a Slack message, each user it mentions as board writes a mention: `@[slack:user:U0456]`. */
 const mentionsById = (text: string): string => text.replace(MENTIONED, '@[slack:user:$1]')
 
@@ -563,6 +575,16 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         return text
       }
     }
+    // What a source read shows: each user a message mentions by their ID, as an import brings one in.
+    const mrkdwnById = (text: string) => {
+      const asIs = () => text.replace(SLACK_MENTION, '@[slack:user:$1]')
+      if (!converter) return asIs()
+      try {
+        return mentionsById(stringifyMarkdown(converter.toAst(text.replace(SLACK_MENTION, (_, user: string) => `<@${user}|${mentionedAs(user)}>`))).trim())
+      } catch {
+        return asIs()
+      }
+    }
     const names = new Map<string, Promise<string>>()
     function nameOf(user: string): Promise<string> {
       let promise = names.get(user)
@@ -622,7 +644,8 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           isBot: user.is_bot === true,
         }
       },
-      mention: (actor) => actor.id.startsWith('slack:user:') ? `<@${actor.id.slice('slack:user:'.length)}>` : null,
+      mention: (actor) => slackMention(actor.id),
+      mentionById: slackMention,
       // `#name` is looked up by name; anything else is a channel ID.
       async resolveChannel(key) {
         if (!key.startsWith('#')) return key
@@ -763,7 +786,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           id: m.ts!,
           thread: `${channel}:${m.thread_ts ?? m.ts}`,
           author: (m.user ? await nameOf(m.user) : m.username || m.bot_profile?.name || 'someone').slice(0, 256),
-          text: mrkdwn(m.text ?? '').slice(0, MESSAGE_TEXT_MAX),
+          text: mrkdwnById(m.text ?? '').slice(0, MESSAGE_TEXT_MAX),
           createdAt: tsTime(m.ts),
           replies: m.reply_count ?? 0,
           files: filesOf(m.files),
