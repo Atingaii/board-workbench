@@ -44,7 +44,7 @@ vb reply <id> "[progress] Reproduced with \`curl -i '/login?next=//evil.example'
 ```
 
 - **Prefixes:** start each reply with `[progress]`, `[insight]` (a fact a successor needs), `[decision]`, `[risk]` or `[benchmark]`.
-- **Long text:** write it to a file and pass `--text-file <path>`. A message holds up to 10,000 characters.
+- **Long text:** write it to a file and pass `--file <path>`. A message holds up to 10,000 characters.
 - **Secrets:** never post tokens or secrets. Everyone with the board can read it.
 
 **Renew the lease** well before it ends, and before anything long:

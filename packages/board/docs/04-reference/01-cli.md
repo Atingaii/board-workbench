@@ -237,9 +237,13 @@ for one to pass.
   `completed 812`, `blocked 813`, `unassigned 815`.
 - **IDs go in as they come out.** Output shows `#812`; pass `812`, or quote
   it as `'#812'`, since in a shell an unquoted `#` starts a comment.
-- **Text can come from a file or stdin.** `--text-file note.md` reads a file,
-  and `--text-file -`, or `-` as the text, reads stdin. Text may be left out
+- **Text can come from a file or stdin.** `--file note.md` reads a file,
+  and `--file -`, or `-` as the text, reads stdin. Text may be left out
   when the message has `--attach` files.
+- **`--file` is what a command takes from a file,** and `-` there reads
+  stdin: a message's text on `post`, `reply`, `edit`, and `schedule`, a plan
+  of tasks on `tasks create`, several grants on `grants create`, and a JSON
+  Schema on `schemas create`.
 - **Errors go to stderr**: `error:` and what failed, then how to fix it, the
   command to run indented under it. With `--json`, one JSON document instead.
   See [Errors](#errors).
@@ -686,7 +690,7 @@ one with a profile: `Malte via support (preview)`), and actor ID.
 ```text
 vb schemas [list]
 vb schemas inspect <schema>
-vb schemas create <schema> --schema <json|@file|-> [--description <text>]
+vb schemas create <schema> --file <path> [--description <text>]
 ```
 
 A schema says what a piece of structured data holds: a JSON Schema for an
@@ -701,17 +705,17 @@ vercel-deployment@1  built in  A Vercel deployment, by its URL and optionally tâ
 sandbox@1            2d        What a sandbox did.
 ```
 
-`create` registers a version, for good. `--schema` takes the JSON Schema
-inline, from a file as `@<path>`, or from stdin as `-`. A version never
+`create` registers a version, for good. `--file` takes the JSON Schema
+from a file, or from stdin as `-`. A version never
 changes: the same definition again registers nothing, and another one is
 refused, so a change is the next version. It needs `manage` at `*`.
 
 ```text
-$ vb schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'
+$ vb schemas create sandbox@1 --file sandbox.schema.json --description 'What a sandbox did.'
 created sandbox@1
-$ vb schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'
+$ vb schemas create sandbox@1 --file sandbox.schema.json --description 'What a sandbox did.'
 sandbox@1 is already registered
-$ vb schemas create sandbox@1 --schema '{"type":"object","required":["id"]}'
+$ echo '{"type":"object","required":["id"]}' | vb schemas create sandbox@1 --file -
 error: Can't register schema sandbox@1.
   sandbox@1 is registered with another definition, and a version never changes: register a new version
 
@@ -721,7 +725,7 @@ error: Can't register schema sandbox@1.
 
 | Flag | Effect |
 | --- | --- |
-| `--schema <json\|@file\|->` | its JSON Schema: inline, the file `@<path>` names, or stdin for `-` |
+| `--file <path>` | its JSON Schema, from a file, or stdin for `-` |
 | `--description <text>` | what it holds, in a sentence. Part of the version: it never changes either |
 
 `inspect` prints one version with its JSON Schema, to read before writing data
@@ -825,7 +829,7 @@ and canceled ones.
 ### post
 
 ```text
-vb post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb post <channel|id> ["<text>" | --file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Starts a thread. The channel is created by its first post. Given a message ID
@@ -873,7 +877,7 @@ See [Data](../01-board/04-messages.md#data).
 ### reply
 
 ```text
-vb reply <id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb reply <id> ["<text>" | --file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Replies in a thread. `<id>` may be any message in it: the board stores the
@@ -885,7 +889,7 @@ you read, is still the thread's newest: see
 ### edit
 
 ```text
-vb edit <id> ("<text>" | --text-file <path>) [--if-revision N]
+vb edit <id> ("<text>" | --file <path>) [--if-revision N]
 ```
 
 Replaces a message's text. Only its author may edit it: as yourself, any
@@ -936,7 +940,7 @@ Keys under `board.` are the board's own: writing one fails with
 ### schedule
 
 ```text
-vb schedule <channel|id> ["<text>" | --text-file <path>] (--in 1d | --at <time> | --every 30m)
+vb schedule <channel|id> ["<text>" | --file <path>] (--in 1d | --at <time> | --every 30m)
             [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 vb schedule cancel <schedule>
 ```
@@ -964,9 +968,9 @@ with `manage` in its channel, and prints
 
 ```text
 vb tasks [channel] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
-vb tasks create (<channel> ["<text>" | --text-file <path>] | <id>) [--label k=v]... [--needs <id>]... [--for <profile>]
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>]
                 [--claim [--lease <duration>]] [--no-sync] [--idempotency-key <key>]
-vb tasks create <channel> --tasks-file <path> [--idempotency-key <key>]
+vb tasks create <channel> --file <path> [--idempotency-key <key>]
 vb tasks claim (<id> | --ready <channel> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready <channel> [--label k=v]... [--from <id>]... [--wait <duration>])
              [--result "<text>"] [--lease <duration>] -- <cmd>...
@@ -989,7 +993,7 @@ Threads agents are to do, each with a state the board keeps. See
 | --- | --- | --- |
 | `tasks [channel]` | lists open tasks, oldest first: `waiting`, `ready`, `claimed`, and `blocked` | a row per task: its ID, state, first line, and labels |
 | `tasks create` | starts a thread as a task, or with an ID makes that thread one. You own it | its ID, or with `--claim` the claim |
-| `tasks create --tasks-file` | starts a thread for each task a JSON file holds, in as many writes as the board needs | a row per task, as the list shows it |
+| `tasks create --file` | starts a thread for each task a JSON file holds, in as many writes as the board needs | a row per task, as the list shows it |
 | `tasks claim` | holds a task for a lease: by its ID, or with `--ready` the oldest ready one in a channel | the claim: `#812  yours for 15m  fix CVE-123 in acme/web` |
 | `tasks run` | claims a task, runs a command on it, and settles it by how the command exits | what the command prints, then `completed 812` or `failed 812`. With `--json`, what the command prints goes to stderr, and stdout is the one document |
 | `tasks renew` | extends your lease, from now | the claim |
@@ -1032,7 +1036,7 @@ $ vb tasks work/ --state all --limit 2
 - **`--ready`** takes a task assigned to you first, then the oldest unassigned
   one you own, or whose owner `--from <id>` names. `--wait` holds until one is
   ready.
-- **`--tasks-file <path>`** makes a plan: a JSON array of tasks, each `{ key?,
+- **`--file <path>`** makes a plan: a JSON array of tasks, each `{ key?,
   text, labels?, needs?, for?, noSync?, attachments? }`, from a file, or from
   stdin for `-`. A task's `key` names it for the others of the file, and
   `needs` takes `{ "key": "fix" }` for one of them or a task's ID for one
@@ -1089,7 +1093,7 @@ What can go wrong, by `reason`:
 | `task_not_owned` | the change is its owner's to make, or `manage`'s in its channel. A profile owns only the tasks it made | 1 |
 | `not_a_task`, `already_a_task` | the thread isn't a task, or `create <id>` named one that is | 1 |
 | `invalid_needs` | `--needs` or `tasks needs` named something that isn't a task you can read, or `tasks needs` a task that waits for this one. In a plan, a `key` two tasks have or none has, or tasks that wait for each other | 2 |
-| `duplicate_id` | `--idempotency-key` was used for another task, or with `--tasks-file`, for another plan: other tasks where it made some, or more once it finished | 1 |
+| `duplicate_id` | `--idempotency-key` was used for another task, or with `--file`, for another plan: other tasks where it made some, or more once it finished | 1 |
 | `invalid_from` | `--from` named an owner by handle: several can share one, so it takes IDs | 2 |
 | `command_not_found` | `run`'s command couldn't start. The task is released | 1 |
 | `claim_too_wide` | on Vercel's board, `--ready` with `--from` would look in more than 200 places, its channels times the owners it takes from: name fewer owners, or a smaller subtree | 1 |
@@ -1128,17 +1132,17 @@ error: Can't change what task #814 needs. It waits for tasks you can read, and n
 ```
 
 ```text
-$ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
+$ vb tasks create work --file plan.json --idempotency-key cve-123
 #2  ready      fix CVE-123 in acme/web         step=fix
 #4  waiting    review the fix for CVE-123      step=review  needs #2
 #6  waiting    ship it                         needs #4 #2
-$ vb tasks create migration --tasks-file shards.json
+$ vb tasks create migration --file shards.json
 error: Can't create tasks in migration. A task's needs are tasks you can read, or keys of the plan's own.
   needs: #999999 isn't a task
   made 100 of 250: #214 to #412
 
   Make the rest, under the same key: what was made stays as it is:
-    vb tasks create migration --tasks-file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
+    vb tasks create migration --file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
 ```
 
 ### typing

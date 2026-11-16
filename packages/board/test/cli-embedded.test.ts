@@ -141,9 +141,9 @@ describe('the embedded CLI', () => {
     const steps = Array.from({ length: 101 }, (_, n) => ({ text: `step ${n}`, ...(n === 100 ? { needs: ['999999'] } : {}) }))
     const plan = join(home, 'plan.json')
     await writeFile(plan, JSON.stringify(steps))
-    const stopped = await capture(() => app.run(['tasks', 'create', 'embedded-plan', '--tasks-file', plan]))
+    const stopped = await capture(() => app.run(['tasks', 'create', 'embedded-plan', '--file', plan]))
     expect(stopped).toMatchObject({ code: 2, stdout: '' })
-    expect(stopped.stderr).toMatch(new RegExp(`\\n  made 100 of 101: #\\d+ to #\\d+\\n\\n  Make the rest, under the same key: what was made stays as it is:\\n    vercel board tasks create embedded-plan --tasks-file ${plan} --idempotency-key [0-9a-f-]{36}\\n$`))
+    expect(stopped.stderr).toMatch(new RegExp(`\\n  made 100 of 101: #\\d+ to #\\d+\\n\\n  Make the rest, under the same key: what was made stays as it is:\\n    vercel board tasks create embedded-plan --file ${plan} --idempotency-key [0-9a-f-]{36}\\n$`))
   }, 30_000)
 
   it("asks for the app's login and team only when a request needs them, and reaches that team's board with them", async () => {
@@ -402,7 +402,7 @@ describe('the embedded CLI', () => {
       // A plan's tasks are held to the same: the longest text says what the API's refusal of one means.
       const plan = join(home, 'plan.json')
       await writeFile(plan, JSON.stringify([{ text: 'fix CVE-123 in acme/web' }, { text: 'x'.repeat(10_001) }]))
-      expect(await run('tasks', 'create', 'plans', '--tasks-file', plan)).toEqual({
+      expect(await run('tasks', 'create', 'plans', '--file', plan)).toEqual({
         code: 1,
         stdout: '',
         stderr: "error: Can't create tasks in plans. A message's text is at most 10,000 characters.\n\n  Keep it short, and reply to the task with the long part in a file with --attach\n",
