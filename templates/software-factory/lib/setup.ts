@@ -418,18 +418,32 @@ async function slackStep(deps: Deps, project: Project): Promise<Step> {
   const slack = async <T>(method: string, query = "") => {
     const response = await deps.fetch(`https://slack.com/api/${method}${query}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
     const data = (await response.json()) as T & { ok: boolean; error?: string };
-    if (!data.ok) throw new Error(`Slack's ${method}: ${data.error ?? response.status}`);
+    if (!data.ok) throw Object.assign(new Error(`Slack's ${method}: ${data.error ?? response.status}`), { code: data.error });
     return data;
   };
+  const failed = (error: unknown) => (error instanceof Error ? error : new Error(String(error)));
+  const unasked = (error: Error) => step("slack", [done(CONNECT), todo("Couldn't ask Slack which channels the app is in", { hint: message(error) })], true);
   type Checked = [{ team: string; user: string }, { channels: { id: string; name: string }[] }];
   const checked: Checked | Error = await Promise.all([
     slack<Checked[0]>("auth.test"),
     // Public channels only: Connect's Slack app can read those (channels:read), not private ones (groups:read).
     slack<Checked[1]>("users.conversations", "?types=public_channel&exclude_archived=true&limit=200"),
-  ]).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
-  if (checked instanceof Error) return step("slack", [done(CONNECT), todo("Couldn't ask Slack which channels the app is in", { hint: message(checked) })], true);
+  ]).catch(failed);
+  if (checked instanceof Error) return unasked(checked);
   const [who, mine] = checked;
-  const missing = wanted.filter((name) => !mine.channels.some((candidate) => candidate.id === name || candidate.name === name.replace(/^#/, "")));
+  const listed = (name: string) => mine.channels.some((candidate) => candidate.id === name || candidate.name === name.replace(/^#/, ""));
+  // A private channel never shows in that list, so one mapped by its ID is asked about directly:
+  // the app can read it (groups:history) once it's in it. Before, Slack says channel_not_found for
+  // a private channel and not_in_channel for a public one. Anything else is Slack not answering.
+  const outside = (error: unknown) => ["channel_not_found", "not_in_channel"].includes((error as { code?: string }).code ?? "");
+  const readable = (id: string) =>
+    slack("conversations.history", `?channel=${id}&limit=1`).then(
+      () => true,
+      (error: unknown) => (outside(error) ? false : Promise.reject(error)),
+    );
+  const inIt: boolean[] | Error = await Promise.all(wanted.map(async (name) => listed(name) || (/^[CG][A-Z0-9]+$/.test(name) && (await readable(name))))).catch(failed);
+  if (inIt instanceof Error) return unasked(inIt);
+  const missing = wanted.filter((_, index) => !inIt[index]);
   if (missing.length) return step("slack", [done(CONNECT), invite(missing, `/invite @${who.user}`)], true);
   return step("slack", [done(CONNECT), done(INVITE(wanted))], true);
 }
