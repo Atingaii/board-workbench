@@ -90,11 +90,15 @@ const MENTIONED = /@\uF8F0([A-Z0-9_]+)\uF8F1/g
 const mentionedAs = (user: string) => `\uF8F0${user}\uF8F1`
 /** A user's mention in Slack's own mrkdwn, with the name Slack may give it: `<@U0456>`, `<@U0456|ada>`. */
 const SLACK_MENTION = /<@([A-Z0-9_]+)(?:\|[^<>]*)?>/g
-/** A Slack user's ID, as `<@U0456>` names one. */
-const SLACK_USER_ID = /^[A-Z0-9_]+$/
+/**
+ * A Slack user's ID, as `<@U0456>` names one: `U…`, or `W…` on Enterprise Grid. A bot's own ID
+ * (`B…`, the author of an app's messages) isn't one, and Slack shows `<@B0456>` as it's written.
+ */
+const SLACK_USER_ID = /^[UW][A-Z0-9_]+$/
 /**
  * A Slack user as Slack mentions them, from their ID alone. Only a user's ID: anything else between
- * `<@` and `>` could close the mention and open Slack's own markup (`<!channel>`).
+ * `<@` and `>` could close the mention and open Slack's own markup (`<!channel>`), and a bot's ID
+ * shows as markup, so the mention stays text.
  */
 function slackMention(id: string): string | null {
   const user = id.startsWith('slack:user:') ? id.slice('slack:user:'.length) : null
