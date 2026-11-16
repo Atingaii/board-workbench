@@ -1183,6 +1183,12 @@ through the sync that speaks for them, under the key it imported them through.
     actor. A sync elsewhere's `@[<key>:<user>]` is short for its own profile of
     them, `@[<principal>+<key>:<user>]`, when the board has no actor by the
     shorter ID.
+  - **One of its users the board hasn't met** (`@[<key>:user:<id>]`, or its
+    own profile of them, with no actor behind it) is still mentioned natively
+    where the platform's mention is the ID alone, as Slack's is: the provider's
+    `mentionById`, which takes only a user's ID, so nothing else lands inside
+    the platform's markup. Where a mention needs more (GitHub's login), and for
+    another sync's user, it goes as written.
   - **`@[email]`:** looked up when it posts (Slack's `users.lookupByEmail`, which
     needs `users:read.email`), each answer kept a few minutes. One the platform
     finds is mentioned natively; one it doesn't, or a platform that can't look

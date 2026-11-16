@@ -306,8 +306,10 @@ warning: @nobody names no one here: it stays text, and mentions no one.
 - **Each sync delivers by ID.** One of its own users, the platform users it
   brought in under the key it posts through, becomes a native mention:
   `<@U0456>` on Slack, `@login` on GitHub. Anyone else, a board person
-  included, is their name as plain text. A handle that stayed text goes out
-  as written, and pings no one. On Slack, `@[ada@vercel.com]` needs
+  included, is their name as plain text. Slack mentions by ID, so
+  `@[slack:user:U0456]` pings that user even before the board has met them;
+  GitHub needs a login, so there it goes as written. A handle that stayed text
+  goes out as written, and pings no one. On Slack, `@[ada@vercel.com]` needs
   `users:read.email`: `<@U0456>` when Slack finds her, and the plain email
   when it doesn't.
 - **Reading.** `vb read` shows a mention as the handle to type for them
