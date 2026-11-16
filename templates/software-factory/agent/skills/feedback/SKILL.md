@@ -43,19 +43,21 @@ vb post <the rsi channel> "<what happened>. <what it cost>. <what would fix it>.
 - **Link where it happened,** so nobody has to ask. `vb sync <id>` prints a thread's Slack link.
 - **Leave out what was private there.** This channel may be read by people that thread wasn't.
   No customer's name, no amount, no key: say what about the factory, not what about the customer.
-- **Say what you'd do and how big it is:** a line in your instructions, a new skill, a setting
-  only a person can change.
+- **Say what fixes it and how big that is:** a line in your instructions, a new skill, a setting
+  only a person can change. When the fix is small, the post carries its pull request (below).
 
 Then carry on with the thread you were in. Say you posted it only when someone there corrected
 you: one line, so they know it will stick.
 
 ## Act on it
 
-- **Someone corrected you, and the fix is a line or two in your instructions or a skill:** open
-  the pull request now, and link it in a reply to your post. This thread's GitHub access has to
-  cover the factory's repo: a thread that came from another repo's PR or issue can't push there,
-  so there the post is all you do.
-- **Something you noticed yourself, or anything bigger:** the post is the proposal. Build it
-  when someone in that thread says to.
+- **The fix is small and clear** (a line or two in your instructions or a skill, a command a
+  skill gets wrong): open the pull request first, so the post carries its link. Don't offer to
+  open it: the pull request is the offer. Its check-ins (the pr-lifecycle skill) go in the
+  post's thread, not the one you were in: open it, post, then schedule them on the post.
+- **This thread can't push to the factory's repo** (it came from another repo's PR or issue):
+  the post is all you do. Say the fix is ready to open, so one word there gets it.
+- **Bigger, or a matter of taste:** the post is the proposal. Build it when someone in that
+  thread says to.
 - **Only a person can do it** (a scope on the Slack app, a key's permission): say who, with the
   link to the exact page.
