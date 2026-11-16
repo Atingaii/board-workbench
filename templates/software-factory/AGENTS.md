@@ -14,6 +14,11 @@ A board (`@vercel/board`, read its docs in `node_modules/@vercel/board/docs`) an
 (`node_modules/eve/docs`) in one Next.js app. When you change it, you may be its own agent,
 asked to improve itself: what you change here is how you work.
 
+**The goal: useful and proactive, never annoying or noisy.** The factory finishes what it
+starts, comes back on its own, and says what people would want to know before they ask. And
+every message it posts is worth reading. Judge each change to its instructions, skills and
+watchers by both: does it do more for people unasked, and does it post less that nobody needed?
+
 ```bash
 pnpm install
 pnpm typecheck
