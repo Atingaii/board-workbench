@@ -147,6 +147,84 @@ describe('cli grants', () => {
     expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(3)
   }, 30_000)
 
+  it('makes each run of principals and the --can after it a grant, all in one write', async () => {
+    const made = await vb(['grants', 'create', '--everyone', '--can', 'security/=none', '--user', 'u_alice', '--user', 'u_bob', '--can', 'security/=all', '--can', 'dev/=read', '-p', 'prj_sec', '-e', 'preview', '--can', 'security/=read'])
+    expect(made).toMatchObject({ code: 0, stderr: '' })
+    // One line each, in the order given, with IDs that count up.
+    const rows = made.stdout.trimEnd().split('\n')
+    const first = Number(/^created g(\d+) /.exec(rows[0]!)![1])
+    expect(rows).toEqual([
+      `created g${first}  --everyone  security/=none`,
+      `created g${first + 1}  --user u_alice --user u_bob  dev/=read security/=all`,
+      `created g${first + 2}  --project prj_sec --environment preview  security/=read`,
+    ])
+    const json = JSON.parse((await vb(['grants', 'create', '--user', 'u_carol', '--can', 'dev/=read', '--user', 'u_dan', '--can', 'dev/=post', '--json'])).stdout)
+    expect(json).toMatchObject({ outcome: 'created', grants: [{ id: `g${first + 3}`, can: { 'dev/': ['read'] } }, { id: `g${first + 4}`, can: { 'dev/': ['post'] } }] })
+    // One of them refused, and none is made.
+    const refused = async (...args: string[]) => {
+      const { code, stderr } = await vb(['grants', 'create', ...args])
+      return [code, stderr.split('\n')[0]]
+    }
+    expect(await refused('--user', 'u_erin', '--can', 'dev/=read', '--user', 'not a user', '--can', 'dev/=post')).toEqual([2, "error: Can't create the grant."])
+    // A principal after a --can starts another grant, so each needs its own, after it.
+    expect(await refused('--can', 'dev/=read', '--user', 'u_erin')).toEqual([2, "error: --can goes after the principals it's for: a principal after it starts another grant."])
+    expect(await refused('--user', 'u_erin', '--can', 'dev/=read', '--user', 'u_frank')).toEqual([2, "error: --user u_frank has no --can after it: say what it lets them do, like --can 'ci/=read,post'."])
+    expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(8)
+  }, 30_000)
+
+  it("refuses a grant change its caller couldn't take back, with the command that keeps them in and the one that goes ahead", async () => {
+    // A run a grant lets manage everything is no owner: closing factory/ to everyone closes it to the run too.
+    await create('--github', 'acme/web', '--can', '*=all')
+    const run = { BOARD_TOKEN: await workflowToken({}, url) }
+    const lock = ['grants', 'create', '--everyone', '--can', 'factory/=read', '--can', 'factory/memory/=none']
+    const refused = await vb(lock, run)
+    expect([refused.code, refused.stdout, refused.stderr]).toEqual([
+      1,
+      '',
+      [
+        "error: Can't create the grant: it would lock you out.",
+        '  this grant would leave you unable to manage grants in factory/',
+        '',
+        '  Keep manage there yourself, in the same write:',
+        "    vb grants create --everyone --can factory/=read --can factory/memory/=none --user <YOU> --can 'factory/=all;factory/memory/=all'",
+        '  Make it anyway:',
+        '    vb grants create --everyone --can factory/=read --can factory/memory/=none --lock-me-out',
+        '',
+      ].join('\n'),
+    ])
+    expect(JSON.parse((await vb([...lock, '--json'], run)).stderr)).toMatchObject({ status: 'error', reason: 'grant_lockout', data: { error: { code: 'grant_lockout', status: 409 } } })
+    expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(4)
+    // With the grant that keeps the run in, in the same command, it's made, and the run's to change.
+    const kept = await vb([...lock, '--github', 'acme/web', '--can', 'factory/=all;factory/memory/=all'], run)
+    const [closes, keeps] = [...kept.stdout.matchAll(/^created (g\d+) /gm)].map((found) => found[1]!)
+    expect([kept.code, kept.stdout]).toEqual([0, `created ${closes}  --everyone  factory/=read factory/memory/=none\ncreated ${keeps}  --github acme/web  factory/=all factory/memory/=all\n`])
+    // Revoking or narrowing what keeps it in is the same lockout, until it's told to go ahead.
+    const revoked = await vb(['grants', 'revoke', keeps!], run)
+    expect([revoked.code, revoked.stderr]).toEqual([
+      1,
+      [
+        `error: Can't revoke grant ${keeps}: it would lock you out.`,
+        `  revoking ${keeps} would leave you unable to manage grants in factory/`,
+        '',
+        '  Keep manage there first, with another grant that names you',
+        '  Revoke it anyway:',
+        `    vb grants revoke ${keeps} --lock-me-out`,
+        '',
+      ].join('\n'),
+    ])
+    const updated = await vb(['grants', 'update', keeps!, '--can', 'factory/=read'], run)
+    expect([updated.code, updated.stderr.split('\n')[0], updated.stderr.split('\n').at(-2)]).toEqual([1, `error: Can't update grant ${keeps}: it would lock you out.`, `    vb grants update ${keeps} --can factory/=read --lock-me-out`])
+    expect((await vb(['grants', 'update', keeps!, '--can', 'factory/=read', '--lock-me-out'], run)).stdout).toBe(`updated ${keeps}  --github acme/web  factory/=read\n`)
+    // Locked out, it lifts nothing there, whatever it says: the owner does.
+    expect((await vb(['grants', 'revoke', closes!, '--lock-me-out'], run)).code).toBe(1)
+    expect((await vb(['grants', 'revoke', closes!])).stdout).toBe(`revoked ${closes}\n`)
+    // A revoke told to go ahead is done.
+    const attic = await vb(['grants', 'create', '--everyone', '--can', 'attic/=none', '--github', 'acme/web', '--can', 'attic/=all'], run)
+    const inAttic = /^created (g\d+)  --github/m.exec(attic.stdout)![1]!
+    expect((await vb(['grants', 'revoke', inAttic], run)).code).toBe(1)
+    expect((await vb(['grants', 'revoke', inAttic, '--lock-me-out'], run)).stdout).toBe(`revoked ${inAttic}\n`)
+  }, 30_000)
+
   it('explains which grant decides a channel, for you or for a principal it names', async () => {
     const closed = await create('--everyone', '--can', 'security/=none')
     const people = await create('--user', 'u_alice', '--user', 'u_bob', '--can', 'security/=all')

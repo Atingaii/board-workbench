@@ -207,3 +207,29 @@ describe('grants, from the handle', () => {
     expect(updated.grant).toMatchObject({ principals: [{ projectId: 'prj_web' }, { projectId: 'prj_api', environments: ['production'] }], can: { 'ci/': [] } })
   })
 })
+
+describe('grants made together, from the handle', () => {
+  it("makes several in one write, and goes ahead with one its caller couldn't take back only when it's told to", async () => {
+    const team = testBoard()
+    const julian = handleAs(team.fetch, () => personToken())
+    const lock = { principals: [{ kind: 'everyone' }], can: { 'vault/': 'none' } } as const
+    // A person on the team closing vault/ to everyone closes it to themselves.
+    await expect(julian.createGrant(lock)).rejects.toMatchObject({ status: 409, code: 'grant_lockout', origin: 'board', message: expect.stringContaining('vault/') })
+    await expect(julian.createGrants([lock])).rejects.toMatchObject({ status: 409, code: 'grant_lockout' })
+    // With the grant that keeps them in, in either order, and `none` as the wire's [].
+    const { grants } = await julian.createGrants([lock, { principals: [{ kind: 'user', userId: 'u_julian' }], can: { 'vault/': 'all' } }])
+    expect(grants.map((grant) => [grant.principals[0]?.kind, grant.can])).toEqual([
+      ['everyone', { 'vault/': [] }],
+      ['user', { 'vault/': 'all' }],
+    ])
+    expect((await julian.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3', ...grants.map((grant) => grant.id)])
+    const [closes, keeps] = grants
+    await expect(julian.revokeGrant(keeps!.id)).rejects.toMatchObject({ status: 409, code: 'grant_lockout' })
+    await expect(julian.updateGrant(keeps!.id, { can: { 'vault/': ['read'] } })).rejects.toMatchObject({ status: 409, code: 'grant_lockout' })
+    expect((await julian.updateGrant(keeps!.id, { can: { 'vault/': ['read'] } }, { lockMeOut: true })).grant.can).toEqual({ 'vault/': ['read'] })
+    // Locked out now, they lift nothing there, whatever they say; the board's own code does.
+    await expect(julian.revokeGrant(closes!.id, { lockMeOut: true })).rejects.toMatchObject({ status: 403 })
+    expect(await team.revokeGrant(closes!.id)).toEqual({ revoked: true })
+    expect((await julian.createGrant({ principals: [{ kind: 'everyone' }], can: { 'attic/': 'none' } }, { lockMeOut: true })).grant.can).toEqual({ 'attic/': [] })
+  })
+})

@@ -499,10 +499,10 @@ options every command takes: board help
 
 ```text
 vb grants [list]
-vb grants create <principal>... --can <pattern=permissions>...
-vb grants update <grant> [--add-<kind> <name>]... [--remove-<kind> <name>]... [--can <pattern=permissions>]...
+vb grants create (<principal>... --can <pattern=permissions>...)... [--lock-me-out]
+vb grants update <grant> [--add-<kind> <name>]... [--remove-<kind> <name>]... [--can <pattern=permissions>]... [--lock-me-out]
 vb grants explain [<principal>] <channel>
-vb grants revoke <grant>
+vb grants revoke <grant> [--lock-me-out]
 ```
 
 `vb grants` lists each grant's ID, the principals it names as the flags that
@@ -534,7 +534,11 @@ comma-separated list, `all`, or `none`. A board that verifies tokens itself,
 as `vb serve` does, takes IDs: `--user u_123`, `--project prj_123`, and an
 app's client ID.
 
-`create` prints the grant it made as its row. `update` takes `--add-<kind>` and
+`--can` goes after the principals it's for, and a principal after it starts
+another grant. `create` makes them all in one write, or none of them, so a
+lock and the grant that keeps you in go in one command, in either order.
+
+`create` prints each grant it made as its row. `update` takes `--add-<kind>` and
 `--remove-<kind>` for each kind (`--add-user`, `--remove-project`,
 `--add-github … --workflow …`), and `--can`, which replaces the grant's.
 Adding a project it names already adds the environments; to narrow one,
@@ -542,9 +546,8 @@ remove it and add it back in the same update. Each needs `manage` at the
 patterns the grant names, before and after. `revoke` stops one.
 
 ```text
-$ vb grants create --everyone --can 'security/=none'
+$ vb grants create --everyone --can 'security/=none' --user alice@acme.com --user bob@acme.com --can 'security/=all'
 created g4  --everyone  security/=none
-$ vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'
 created g5  --user alice@acme.com --user bob@acme.com  security/=all
 $ vb grants create --project sec --environment production,preview --can 'security/=read,post'
 created g6  --project sec --environment production,preview  security/=read,post
@@ -554,6 +557,23 @@ $ vb grants update g6 --remove-project sec --add-project sec --environment produ
 updated g6  --project sec --environment production  security/=read
 $ vb grants revoke g4
 revoked g4
+```
+
+A change you couldn't take back is refused, with reason `grant_lockout`:
+closing a channel to everyone closes it to you, and lifting that takes
+`manage` there. It says how to keep yourself in, and `--lock-me-out` goes
+ahead. Revoking or narrowing the grant that keeps you in is refused the same
+way. An owner is never locked out.
+
+```text
+$ vb grants create --everyone --can factory/=read
+error: Can't create the grant: it would lock you out.
+  this grant would leave you unable to manage grants in factory/
+
+  Keep manage there yourself, in the same write:
+    vb grants create --everyone --can factory/=read --user <YOU> --can factory/=all
+  Make it anyway:
+    vb grants create --everyone --can factory/=read --lock-me-out
 ```
 
 Vercel's board takes no `--github` or `--oidc` principal: a workflow gets in

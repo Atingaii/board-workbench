@@ -17,7 +17,7 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
-import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
+import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, grantsIn, KINDS, patternsIn, principalsIn, type OptionToken } from './grants.ts'
 import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
@@ -527,6 +527,22 @@ function grantFlags<T>(read: () => T): T {
   }
 }
 
+/** `--lock-me-out`, as a grant write takes it: go ahead with a change this caller couldn't take back. */
+const lockMeOut = () => (flags['lock-me-out'] ? { lockMeOut: true } : {})
+
+/**
+ * The ways out of a grant change the board refused as a lockout. A new grant: the same command
+ * with a grant that keeps manage, for whoever runs it, at each pattern it names, which one write
+ * then makes together. Any of them: the same command, told to go ahead.
+ */
+function lockoutRecoveries(): Recovery[] {
+  const [verb] = current.args
+  const anyway: Recovery = { instruction: verb === 'create' ? 'Make it anyway' : verb === 'revoke' ? 'Revoke it anyway' : 'Update it anyway', argv: rerun('--lock-me-out') }
+  if (verb !== 'create') return [{ instruction: 'Keep manage there first, with another grant that names you' }, anyway]
+  const patterns = patternsIn(flags.can ?? [])
+  return [{ instruction: 'Keep manage there yourself, in the same write', argv: rerun('--user', '<YOU>', '--can', patterns.map((pattern) => `${pattern}=all`).join(';')) }, anyway]
+}
+
 /** Refuses the principal flags `verb` doesn't take: plain ones on update, `--add-` and `--remove-` ones elsewhere. */
 function onlyPrincipalFlags(verb: 'create' | 'update' | 'explain') {
   for (const { name } of ordered) {
@@ -847,6 +863,8 @@ function failureOf(error: unknown): Failure {
     return thing ? { ...theirs('not_found', specific('not_found'), `Couldn't find ${thing}.`), details: [] } : theirs('not_found', specific('not_found'), `Can't ${doing()}.`)
   }
   if (status === 409) {
+    // A grant change this caller couldn't take back: it keeps itself in, or says to go ahead.
+    if (code === 'grant_lockout' && current.command === 'grants') return theirs('conflict', code, `Can't ${doing()}: it would lock you out.`, lockoutRecoveries())
     // A reply's --after: what's newer is in its thread, after the message it named.
     const { args } = current
     const newer = code === 'newer_message' && flags.after !== undefined && args[0] !== undefined
@@ -1356,14 +1374,20 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (verb === 'create') {
         if (rest.length > 0) throw usage(`grants create takes no arguments: ${rest[0]} is one too many.`)
         onlyPrincipalFlags('create')
-        const principals = grantFlags(() => principalsIn(ordered, [''])).map(({ principal }) => principal)
-        if (principals.length === 0)
+        // Each run of principals and the --can after it is a grant: several are made in one write.
+        const named = grantFlags(() => grantsIn(ordered))
+        if (named[0]!.principals.length === 0)
           throw usage('A grant names whom it lets in: --user, --project, --github, --oidc, --all-users, --all-projects, or --everyone.', { reason: 'missing_arguments' })
-        const can = grantFlags(() => grantCanOf(flags.can ?? []))
-        if (Object.keys(can).length === 0) throw usage("A grant says what it lets them do: --can pattern=permissions, like --can 'ci/=read,post'.", { reason: 'missing_arguments' })
-        const { grant } = await client().createGrant({ principals, can })
-        if (flags.json) result({ grant, outcome: 'created' })
-        else out(`created ${grantRow(grant)}`)
+        if (Object.keys(named[0]!.can).length === 0) throw usage("A grant says what it lets them do: --can pattern=permissions, like --can 'ci/=read,post'.", { reason: 'missing_arguments' })
+        if (named.length === 1) {
+          const { grant } = await client().createGrant(named[0]!, lockMeOut())
+          if (flags.json) result({ grant, outcome: 'created' })
+          else out(`created ${grantRow(grant)}`)
+          return 0
+        }
+        const { grants } = await client().createGrants(named, lockMeOut())
+        if (flags.json) result({ grants, outcome: 'created' })
+        else for (const grant of grants) out(`created ${grantRow(grant)}`)
         return 0
       }
       if (verb === 'update') {
@@ -1388,7 +1412,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const can = flags.can !== undefined ? grantFlags(() => grantCanOf(flags.can!)) : undefined
         if (add.length === 0 && remove.length === 0 && can === undefined)
           throw usage(`grants update ${id} changes nothing: add or remove a principal (--add-user, --remove-project, …), or give --can.`, { reason: 'missing_arguments' })
-        const { grant } = await client().updateGrant(id, { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}), ...(can !== undefined ? { can } : {}) })
+        const { grant } = await client().updateGrant(id, { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}), ...(can !== undefined ? { can } : {}) }, lockMeOut())
         if (flags.json) result({ grant, outcome: 'updated' })
         else out(`updated ${grantRow(grant)}`)
         return 0
@@ -1406,7 +1430,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (verb === 'revoke') {
         const id = grantId(rest[0])
-        const { revoked } = await client().revokeGrant(id)
+        const { revoked } = await client().revokeGrant(id, lockMeOut())
         if (flags.json) result({ grant: id, outcome: revoked ? 'revoked' : 'unchanged' })
         else out(revoked ? `revoked ${id}` : `${id} is already gone`)
         return 0

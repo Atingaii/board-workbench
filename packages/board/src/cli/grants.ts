@@ -128,6 +128,34 @@ function inputOf(started: Started): PrincipalInput {
   }
 }
 
+/**
+ * The grants `grants create`'s flags name: each run of principals, with the `--can`s after it. A
+ * principal after a `--can` starts the next grant, so one command makes several in one write: a
+ * lock, say, and the grant that keeps whoever makes it in. A command with one run is one grant,
+ * which may lack its principals or its `--can`: its caller says which.
+ */
+export function grantsIn(tokens: readonly OptionToken[]): { principals: PrincipalInput[]; can: GrantCan }[] {
+  const runs: { tokens: OptionToken[]; can: string[] }[] = [{ tokens: [], can: [] }]
+  for (const token of tokens) {
+    if ((KINDS as readonly string[]).includes(token.name) && runs.at(-1)!.can.length > 0) runs.push({ tokens: [], can: [] })
+    const run = runs.at(-1)!
+    if (token.name === 'can') run.can.push(token.value ?? '')
+    else run.tokens.push(token)
+  }
+  const grants = runs.map((run) => ({ principals: principalsIn(run.tokens, ['']).map(({ principal }) => principal), can: grantCanOf(run.can) }))
+  if (grants.length > 1) {
+    if (grants[0]!.principals.length === 0) throw new GrantMisuse("--can goes after the principals it's for: a principal after it starts another grant.")
+    const open = runs.find((run) => run.can.length === 0)?.tokens.find((token) => (KINDS as readonly string[]).includes(token.name))
+    if (open) throw new GrantMisuse(`--${open.name}${open.value !== undefined ? ` ${open.value}` : ''} has no --can after it: say what it lets them do, like --can 'ci/=read,post'.`)
+  }
+  return grants
+}
+
+/** Each pattern `--can` flags name, as typed: what a grant made with them reaches. */
+export const patternsIn = (values: readonly string[]): string[] => [
+  ...new Set(values.flatMap((value) => value.split(';')).map((entry) => entry.slice(0, Math.max(entry.indexOf('='), 0)).trim()).filter(Boolean)),
+]
+
 const WORDS: readonly string[] = [...PERMISSIONS, 'all', 'none']
 
 /**

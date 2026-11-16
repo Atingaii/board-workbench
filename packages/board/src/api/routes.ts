@@ -378,11 +378,36 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
 /** What a grant lets its principals do: a map from channel pattern to `'all'` or a list, `[]` for none. Kept as written. */
 export const GrantCan = z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), CanGrant)
 
+/**
+ * Says to go ahead with a grant change its caller couldn't take back: one that takes their own
+ * `manage` at a pattern it names, which is 409 `grant_lockout` without it.
+ */
+const LockMeOut = z.boolean().optional()
+
 /** A grant: who it names, and one `can` for all of them. The same principals again are another grant. */
-export const GrantBody = z.strictObject({
+const GrantSpec = z.strictObject({
   principals: z.array(PrincipalInput).min(1).max(32),
   can: GrantCan,
 })
+
+/** What `POST /grants` takes: a grant, and `lockMeOut` to make one its caller couldn't take back. */
+export const GrantBody = GrantSpec.extend({ lockMeOut: LockMeOut })
+
+/** How many grants one write makes. */
+export const GRANT_BATCH_MAX = 16
+
+/**
+ * Several grants made in one write, all of them or none, judged together: each by the grants as
+ * they are, and what it leaves its caller with by the grants as they'd be with all of them. So a
+ * lock and the grant that keeps its maker in go in one request, in any order.
+ */
+export const CreateGrantsBody = z.strictObject({
+  grants: z.array(GrantSpec).min(1).max(GRANT_BATCH_MAX),
+  lockMeOut: LockMeOut,
+})
+
+/** What revoking a grant takes: nothing, or `lockMeOut`. */
+export const RevokeGrantBody = z.strictObject({ lockMeOut: LockMeOut }).optional()
 
 /**
  * Which grant decides a channel, and what it gives, for the caller or a principal it names: a
@@ -415,6 +440,7 @@ export const UpdateGrantBody = z
     add: z.array(PrincipalInput).min(1).max(32).optional(),
     remove: z.array(PrincipalInput).min(1).max(32).optional(),
     can: GrantCan.optional(),
+    lockMeOut: LockMeOut,
   })
   .refine((body) => body.add !== undefined || body.remove !== undefined || body.can !== undefined, 'name principals to add or remove, or a can')
 
@@ -715,8 +741,13 @@ export type PrincipalInput = z.input<typeof PrincipalInput>
 export type CanAt = 'all' | 'none' | readonly Permission[]
 /** A grant's `can`, as a handle takes it: each channel pattern and what it gives. */
 export type GrantCan = Readonly<Record<string, CanAt>>
-/** What `createGrant` takes. */
+/** A grant, as a handle takes it: who it names, and what they may do. */
 export type GrantInput = { principals: readonly PrincipalInput[]; can: GrantCan }
+/**
+ * What a grant write takes beside its change. `lockMeOut` goes ahead with one you couldn't take
+ * back: it takes your own `manage` at a pattern it names, and is 409 `grant_lockout` without it.
+ */
+export type GrantWriteOptions = { lockMeOut?: boolean }
 /** What `updateGrant` takes: principals to add, principals to remove (by who they are, environments aside), and a `can` that replaces the grant's. */
 export type UpdateGrantInput = { add?: readonly PrincipalInput[]; remove?: readonly PrincipalInput[]; can?: GrantCan }
 /** What `createSchema` takes: a version's name, its number, and its JSON Schema. */
@@ -1163,10 +1194,12 @@ export const routes = {
   /** Listing grants needs manage at `*`; changing one, manage at each pattern its `can` names. Team owners always may. */
   grants: { method: 'GET', path: '/grants' },
   createGrant: { method: 'POST', path: '/grants', body: GrantBody },
+  /** Several grants in one write, all or none, judged together. */
+  createGrants: { method: 'POST', path: '/grants/batch', body: CreateGrantsBody },
   updateGrant: { method: 'PATCH', path: '/grants/:id', body: UpdateGrantBody },
   /** Which grant decides a channel, for the caller or, with `manage` at `*`, a principal it names. */
   explain: { method: 'GET', path: '/grants/explain', query: ExplainQuery },
-  revokeGrant: { method: 'POST', path: '/grants/:id/revoke' },
+  revokeGrant: { method: 'POST', path: '/grants/:id/revoke', body: RevokeGrantBody },
   /** Every schema: the built-ins, then the board's own. Anyone the board lets in reads them. */
   schemas: { method: 'GET', path: '/schemas' },
   /** One schema version, by `name@version`. */

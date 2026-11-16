@@ -102,6 +102,7 @@ export const options = {
   for: { type: 'string', value: 'duration', description: 'repeating for this long, e.g. 24h' },
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
   can: { type: 'string', multiple: true, value: 'pattern=perms', description: 'what they may do, repeated: perms, all, or none' },
+  'lock-me-out': { type: 'boolean', description: "go ahead with a change you couldn't take back" },
   // Grants: whom one names, each flag a principal, with the modifiers after it.
   user: { type: 'string', multiple: true, value: 'email', description: 'a person on the team' },
   project: { type: 'string', multiple: true, short: 'p', value: 'name|id', description: "a project's deployments" },
@@ -222,17 +223,17 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
       },
       {
         name: 'create',
-        description: 'let principals do what --can says, where it says',
+        description: 'let principals do what the --can after them says',
         arguments: [],
         options: [
           ...(['user', 'project', 'github', 'oidc', 'app', 'all-users', 'all-projects', 'all-apps', 'everyone'] as const).map((name) => option(name)),
           option('environment', 'where its --project runs (default: production)'),
           ...(['workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name)),
-          option('can', 'what they may do, repeated: perms, all, or none', 'pattern=perms'),
+          option('can', 'what the principals before it may do: perms, all, or none', 'pattern=perms'),
+          option('lock-me-out'),
         ],
         examples: [
-          { name: 'close security/ to everyone', value: "grants create --everyone --can 'security/=none'" },
-          { name: 'and let two people in', value: "grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'" },
+          { name: 'close security/ to everyone but two people, in one write', value: "grants create --everyone --can 'security/=none' --user alice@acme.com --user bob@acme.com --can 'security/=all'" },
           { name: "a project's production and previews", value: "grants create --project sec --environment production,preview --can 'security/=read,post'" },
           { name: "two repositories' workflows", value: "grants create --github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml --can 'ci/=post'" },
           { name: "another issuer's tokens", value: "grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'" },
@@ -245,6 +246,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         options: [
           ...(['add-user', 'add-project', 'add-github', 'add-oidc', 'add-app', 'add-all-users', 'add-all-projects', 'add-all-apps', 'add-everyone', 'remove-user', 'remove-project', 'remove-github', 'remove-oidc', 'remove-app', 'remove-all-users', 'remove-all-projects', 'remove-all-apps', 'remove-everyone', 'environment', 'workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name)),
           option('can', 'replaces what it lets them do', 'pattern=perms'),
+          option('lock-me-out'),
         ],
         examples: [
           { name: 'let another person in', value: 'grants update g4 --add-user carol@acme.com' },
@@ -265,7 +267,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         name: 'revoke',
         description: 'stop letting them in',
         arguments: [{ name: 'grant', required: true, description: 'its ID, as grants shows it (g3)' }],
-        options: [],
+        options: [option('lock-me-out')],
         examples: [{ name: 'revoke a grant', value: 'grants revoke g3' }],
       },
     ],

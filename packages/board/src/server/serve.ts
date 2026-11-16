@@ -30,7 +30,9 @@ import {
   Ref,
   RegisterBody,
   ScheduleBody,
+  CreateGrantsBody,
   GrantBody,
+  RevokeGrantBody,
   UpdateGrantBody,
   ExplainQuery,
   SchemaBody,
@@ -128,7 +130,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'cancelSchedule':
     case 'unblockTask':
     case 'reopenTask':
-    case 'revokeGrant':
     case 'schema':
     case 'attachment':
     case 'uploadFinish':
@@ -190,8 +191,12 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return { id, ...CancelTaskBody.parse(await body()) }
     case 'createGrant':
       return GrantBody.parse(await body())
+    case 'createGrants':
+      return CreateGrantsBody.parse(await body())
     case 'updateGrant':
       return { id, ...UpdateGrantBody.parse(await body()) }
+    case 'revokeGrant':
+      return { id, ...(RevokeGrantBody.parse(await body()) ?? {}) }
     case 'explain':
       return ExplainQuery.parse(queryObject(url))
     case 'createSchema':
