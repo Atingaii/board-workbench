@@ -30,6 +30,7 @@ import type {
   TasksPage,
   TasksQueryInput,
   GrantInput,
+  GrantWriteOptions,
   GrantView,
   UpdateGrantInput,
   Explanation,
@@ -301,6 +302,12 @@ function wireCan<T>(can: T): T {
 const withEnvironments = (principal: PrincipalInput): PrincipalInput =>
   (principal.kind === 'project' || principal.kind === 'all-projects') && principal.environments === undefined ? { ...principal, environments: ['production'] } : principal
 
+/** A grant as the wire takes it. */
+const wireGrant = (input: GrantInput) => ({ principals: input.principals.map(withEnvironments), can: wireCan(input.can) })
+
+/** What a grant write's body says to go ahead with a lockout: nothing, unless it was asked to. */
+const goAhead = ({ lockMeOut }: GrantWriteOptions): { lockMeOut?: true } => (lockMeOut ? { lockMeOut: true } : {})
+
 /**
  * The principal a private channel lets its creator in as, from what `/me` says it is: a person's
  * user, or a deployment's project in the environment it runs in. Anyone else is refused before
@@ -541,6 +548,15 @@ export function createBoardClient(options: ClientOptions) {
           { hint: `Close it with a grant: everyone at ${pattern} with 'none'.` },
         )
       const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
+      // Taking back a grant it made, when the channel isn't to be its own after all. Where someone
+      // else's lock has landed, that's its last manage there, a lockout: it means it, and says so.
+      const takeBack = (id: string) => {
+        const revoke = (body: { lockMeOut?: true }) => call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body })
+        return revoke({}).catch((error: unknown) => {
+          if (error instanceof BoardError && error.code === 'grant_lockout') return revoke({ lockMeOut: true })
+          throw error
+        })
+      }
       // What reaches the path besides its own grants as it made them: one someone changed (adding
       // themselves to it, or opening the lock) lets them in as much as a grant of their own would.
       const others = (grants: GrantView[], mine: GrantView[]) =>
@@ -552,7 +568,7 @@ export function createBoardClient(options: ClientOptions) {
       // most one of them keeps a way in, and if each finds the other, neither does.
       const raced = others(await reaching(), [own.grant])
       if (raced.length > 0) {
-        await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(own.grant.id)}/revoke`, { body: {} })
+        await takeBack(own.grant.id)
         throw granted(raced, [own.grant])
       }
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
@@ -561,7 +577,7 @@ export function createBoardClient(options: ClientOptions) {
       // it isn't private, and both of its grants go, the lock first.
       const late = others(await reaching(), [own.grant, closed.grant])
       if (late.length > 0) {
-        for (const id of [closed.grant.id, own.grant.id]) await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body: {} })
+        for (const id of [closed.grant.id, own.grant.id]) await takeBack(id)
         throw granted(late, [own.grant, closed.grant])
       }
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
@@ -647,12 +663,22 @@ export function createBoardClient(options: ClientOptions) {
      * (`[]` for none). The same principals again are another grant. At each channel, the most
      * specific pattern among the grants that name a caller decides, then the closest principal,
      * and grants tied there add up. Needs manage at each pattern `can` names.
+     *
+     * One you couldn't take back, since it takes your own manage at a pattern it names (closing
+     * `security/` to `everyone` closes it to you), is 409 `grant_lockout`: keep yourself in with
+     * `createGrants`, or pass `lockMeOut` to make it anyway. Every grant write takes it.
      */
-    createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: { principals: input.principals.map(withEnvironments), can: wireCan(input.can) } }),
+    createGrant: (input: GrantInput, options: GrantWriteOptions = {}) => call<{ grant: GrantView }>('POST', '/grants', { body: { ...wireGrant(input), ...goAhead(options) } }),
+    /**
+     * Several grants in one write, all of them or none, judged together: each needs what
+     * `createGrant` does on the grants as they are, and what they leave you with is judged with
+     * all of them made. So a lock and the grant that keeps you in go together, in any order.
+     */
+    createGrants: (inputs: readonly GrantInput[], options: GrantWriteOptions = {}) => call<{ grants: GrantView[] }>('POST', '/grants/batch', { body: { grants: inputs.map(wireGrant), ...goAhead(options) } }),
     /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs what `checkGrantChange` says, for the grant as it was and as it'd be. */
-    updateGrant: (id: string, { add, remove, can }: UpdateGrantInput) =>
+    updateGrant: (id: string, { add, remove, can }: UpdateGrantInput, options: GrantWriteOptions = {}) =>
       call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, {
-        body: { ...(add ? { add: add.map(withEnvironments) } : {}), ...(remove ? { remove } : {}), ...(can ? { can: wireCan(can) } : {}) },
+        body: { ...(add ? { add: add.map(withEnvironments) } : {}), ...(remove ? { remove } : {}), ...(can ? { can: wireCan(can) } : {}), ...goAhead(options) },
       }),
     /**
      * Which grants decide `channel`, and what they give: for you, or with manage at `*`, for the
@@ -669,7 +695,7 @@ export function createBoardClient(options: ClientOptions) {
     /** The board's grants. Needs manage at `*`, or a team owner. */
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
-    revokeGrant: (id: string) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: {} }),
+    revokeGrant: (id: string, options: GrantWriteOptions = {}) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: goAhead(options) }),
     /** Every schema: the built-ins, then the board's own, by name and version. */
     schemas: async () => (await call<{ schemas: SchemaView[] }>('GET', '/schemas')).schemas,
     /** One schema version, by its ID: `sandbox@1`. */

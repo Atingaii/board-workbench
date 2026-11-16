@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
-import type { MessageView } from '../api/routes.ts'
+import { GRANT_BATCH_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
 import type { Mentioned } from '../contract/mentions.ts'
@@ -17,7 +17,7 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
-import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
+import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, patternsIn, principalsIn, type OptionToken } from './grants.ts'
 import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
@@ -527,6 +527,73 @@ function grantFlags<T>(read: () => T): T {
   }
 }
 
+/** `--lock-me-out`, as a grant write takes it: go ahead with a change this caller couldn't take back. */
+const lockMeOut = () => (flags['lock-me-out'] ? { lockMeOut: true } : {})
+
+/** Whoever runs this, as the flags that name them in a grant, once a lockout has asked: null when no flag does. */
+let self: string[] | null = null
+
+/** The flags that name a caller in a grant: a person, a project's deployment where it runs, an app, or a repository's runs. */
+function selfFlags({ principal, handle }: Pick<Me, 'principal' | 'handle'>): string[] | null {
+  const [source, kind, ...rest] = principal.split(':')
+  if ((source === 'vercel' || source === 'local') && kind === 'user' && rest.length > 0) return ['--user', rest.join(':')]
+  if (source === 'vercel' && kind === 'project' && rest.length === 2) return ['--project', rest[0]!, '--environment', rest[1]!]
+  if (source === 'vercel' && kind === 'app' && rest.length > 0) return ['--app', rest.join(':')]
+  if (source === 'github' && kind === 'repo' && /^[^/\s]+\/[^/\s]+$/.test(handle)) return ['--github', handle]
+  return null
+}
+
+/** A grant write's refusal, on its way out: a lockout's way out names whoever runs this, which is a read away. */
+async function namingSelf(error: unknown): Promise<never> {
+  if ((error as { code?: unknown } | null)?.code === 'grant_lockout') self = await client().me().then(selfFlags, () => null)
+  throw error
+}
+
+/** The options that say which board this run acts on, as it was given them: a command suggested for the same board carries them. */
+const onSameBoard = (): string[] => [
+  ...(flags.url !== undefined ? ['--url', flags.url] : []),
+  ...(flags.scope !== undefined || flags.team !== undefined ? ['--scope', (flags.scope ?? flags.team)!] : []),
+  ...(flags.name !== undefined ? ['--name', flags.name] : []),
+]
+
+/**
+ * The ways out of a grant change the board refused as a lockout. A new grant: first, the grant
+ * that keeps manage, for whoever runs this, at each pattern it names, after which this one is no
+ * lockout. Any of them: the same command, told to go ahead.
+ */
+function lockoutRecoveries(): Recovery[] {
+  const [verb] = current.args
+  const anyway: Recovery = { instruction: verb === 'create' ? 'Make it anyway' : verb === 'revoke' ? 'Revoke it anyway' : 'Update it anyway', argv: rerun('--lock-me-out') }
+  if (verb !== 'create') return [{ instruction: 'Keep manage there first, with another grant that names you' }, anyway]
+  // A file's grants go together: the one that keeps its maker in belongs in it.
+  if (flags.file !== undefined) return [{ instruction: 'Keep manage there yourself: add a grant to the file that names you, with all there' }, anyway]
+  const all = patternsIn(flags.can ?? []).map((pattern) => `${pattern}=all`).join(';')
+  // Whoever no grant flag names (the board's own code, another issuer's token) is told what to make.
+  return [self ? { instruction: 'Keep manage there yourself first', argv: [...cli(), 'grants', 'create', ...self, '--can', all, ...onSameBoard()] } : { instruction: `Keep manage there yourself first, with a grant that names you: --can '${all}'` }, anyway]
+}
+
+/** The grants a `--file` holds: a JSON array, from the file or from stdin for `-`, each as `createGrants` takes one. The board checks what's in them. */
+async function grantsFrom(path: string): Promise<GrantInput[]> {
+  const where = path === '-' ? 'stdin' : path
+  let source: string
+  if (path === '-') source = await io.stdin()
+  else {
+    const data = await io.readFile(path)
+    if (!data) throw usage(`Can't read ${path}. There's no such file.`, { reason: 'file_not_found', next: [] })
+    source = new TextDecoder().decode(data)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    throw usage(`${where} isn't JSON.`)
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((grant) => typeof grant !== 'object' || grant === null || Array.isArray(grant)))
+    throw usage(`${where} holds no grants. It's a JSON array of them: [{"principals": [{"kind": "everyone"}], "can": {"ci/": ["read"]}}].`)
+  if (parsed.length > GRANT_BATCH_MAX) throw usage(`${where} holds ${parsed.length} grants, and one write makes ${GRANT_BATCH_MAX} at most.`)
+  return parsed as GrantInput[]
+}
+
 /** Refuses the principal flags `verb` doesn't take: plain ones on update, `--add-` and `--remove-` ones elsewhere. */
 function onlyPrincipalFlags(verb: 'create' | 'update' | 'explain') {
   for (const { name } of ordered) {
@@ -683,7 +750,7 @@ function doing(): string {
       return `${a} ${one}`
     }
     case 'grants':
-      return a === 'create' ? 'create the grant' : a === 'update' ? `update grant ${b}` : a === 'explain' ? `explain ${b ?? 'the channel'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
+      return a === 'create' ? (flags.file !== undefined ? 'create the grants' : 'create the grant') : a === 'update' ? `update grant ${b}` : a === 'explain' ? `explain ${b ?? 'the channel'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
     case 'schemas':
       return a === 'create' ? `register schema ${b ?? ''}`.trimEnd() : a === 'inspect' ? `read schema ${b ?? ''}`.trimEnd() : 'list schemas'
     case 'sources':
@@ -847,6 +914,8 @@ function failureOf(error: unknown): Failure {
     return thing ? { ...theirs('not_found', specific('not_found'), `Couldn't find ${thing}.`), details: [] } : theirs('not_found', specific('not_found'), `Can't ${doing()}.`)
   }
   if (status === 409) {
+    // A grant change this caller couldn't take back: it keeps itself in, or says to go ahead.
+    if (code === 'grant_lockout' && current.command === 'grants') return theirs('conflict', code, `Can't ${doing()}: it would lock you out.`, lockoutRecoveries())
     // A reply's --after: what's newer is in its thread, after the message it named.
     const { args } = current
     const newer = code === 'newer_message' && flags.after !== undefined && args[0] !== undefined
@@ -1357,11 +1426,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         if (rest.length > 0) throw usage(`grants create takes no arguments: ${rest[0]} is one too many.`)
         onlyPrincipalFlags('create')
         const principals = grantFlags(() => principalsIn(ordered, [''])).map(({ principal }) => principal)
+        // Several grants, from a file: one write makes them all, or none.
+        if (flags.file !== undefined) {
+          if (principals.length > 0 || flags.can !== undefined) throw usage("--file holds the grants: each one in it names its own principals and can, so it goes without theirs.")
+          const { grants } = await client().createGrants(await grantsFrom(flags.file), lockMeOut()).catch(namingSelf)
+          if (flags.json) result({ grants, outcome: 'created' })
+          else for (const grant of grants) out(`created ${grantRow(grant)}`)
+          return 0
+        }
         if (principals.length === 0)
           throw usage('A grant names whom it lets in: --user, --project, --github, --oidc, --all-users, --all-projects, or --everyone.', { reason: 'missing_arguments' })
         const can = grantFlags(() => grantCanOf(flags.can ?? []))
         if (Object.keys(can).length === 0) throw usage("A grant says what it lets them do: --can pattern=permissions, like --can 'ci/=read,post'.", { reason: 'missing_arguments' })
-        const { grant } = await client().createGrant({ principals, can })
+        const { grant } = await client().createGrant({ principals, can }, lockMeOut()).catch(namingSelf)
         if (flags.json) result({ grant, outcome: 'created' })
         else out(`created ${grantRow(grant)}`)
         return 0
@@ -1388,7 +1465,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const can = flags.can !== undefined ? grantFlags(() => grantCanOf(flags.can!)) : undefined
         if (add.length === 0 && remove.length === 0 && can === undefined)
           throw usage(`grants update ${id} changes nothing: add or remove a principal (--add-user, --remove-project, …), or give --can.`, { reason: 'missing_arguments' })
-        const { grant } = await client().updateGrant(id, { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}), ...(can !== undefined ? { can } : {}) })
+        const { grant } = await client().updateGrant(id, { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}), ...(can !== undefined ? { can } : {}) }, lockMeOut())
         if (flags.json) result({ grant, outcome: 'updated' })
         else out(`updated ${grantRow(grant)}`)
         return 0
@@ -1406,7 +1483,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (verb === 'revoke') {
         const id = grantId(rest[0])
-        const { revoked } = await client().revokeGrant(id)
+        const { revoked } = await client().revokeGrant(id, lockMeOut())
         if (flags.json) result({ grant: id, outcome: revoked ? 'revoked' : 'unchanged' })
         else out(revoked ? `revoked ${id}` : `${id} is already gone`)
         return 0
@@ -2418,6 +2495,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
   warnings = []
   reached = null
   sentLength = 0
+  self = null
   try {
     parse(argv)
     if (flags.version) {

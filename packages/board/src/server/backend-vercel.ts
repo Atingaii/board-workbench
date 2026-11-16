@@ -3062,6 +3062,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { grant } = await api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(grantRefused)
       return { grant: grantFrom(grant) }
     },
+    async createGrants(caller, input, signal) {
+      const who = whoOf(caller)
+      const { grants } = await api<Protocol['createGrants']['output']>(who, 'POST', await onBoard(who, '/grants/batch'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(grantRefused)
+      return { grants: grants.map(grantFrom) }
+    },
     async updateGrant(caller, { id, ...change }, signal) {
       const who = whoOf(caller)
       const { grant } = await api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) }).catch(grantRefused)
@@ -3075,9 +3080,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const explained = await api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {}).catch(explainRefused)
       return { ...explained, grants: explained.grants.map(grantFrom) }
     },
-    async revokeGrant(caller, { id }, signal) {
+    async revokeGrant(caller, { id, ...options }, signal) {
       const who = whoOf(caller)
-      return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
+      return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId(), ...options }, ...(signal ? { signal } : {}) })
     },
     // Schemas are the team's in the API: every board on it shares one registry. They're read through
     // the board, which whoever it lets in may do, a deployment included; registering is the team's.

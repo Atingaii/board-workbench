@@ -881,8 +881,11 @@ import { board } from '@vercel/board'
 
 const team = board() // with BOARD_URL set to a board that keeps grants: vb serve's, say
 
-await team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': [] } })
-const { grant } = await team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } })
+// Closed to everyone but Alice, in one write: made alone, the lock would close it to its maker too.
+const { grants: [, grant] } = await team.createGrants([
+  { principals: [{ kind: 'everyone' }], can: { 'security/': [] } },
+  { principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } },
+])
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }] })
 const grants = await team.grants()
 await team.revokeGrant(grant.id)
@@ -985,7 +988,16 @@ await team.revokeGrant(grant.id)
   principals from one, or updating it, as it was, is judged by reach alone:
   lifting what it held back widens whoever it named, though it lets no one
   new in. So a caller narrowed out of `secret/` can't revoke `{ project } '*': []`,
-  and a member shut out of `security/` by a lock can't lift it. Naming an
+  and a member shut out of `security/` by a lock can't lift it, the member
+  who made it included. So a change that passes, and takes its caller's own
+  `manage` at a pattern it names, is a **lockout**, one the caller couldn't
+  take back: making a lock no grant keeps them in, or revoking or narrowing
+  the grant that does. It's 409 `grant_lockout`, with nothing written, unless
+  the write says `lockMeOut: true`, which every grant write takes. It's
+  judged on the grants as the write would leave them, by the caller's access
+  with every grant and without `everyone`'s, at the patterns of the grant as
+  it was and as it'd be; `checkGrantChange` judges it when it's given that
+  access (`then`). Nothing locks an owner out. Naming an
   `oidc` principal takes `manage` everywhere, since the board then fetches its
   issuer's keys. A refusal names a stored grant's patterns only to a caller
   that may list the grants, and tells no one else whether a grant is there:
@@ -997,6 +1009,13 @@ await team.revokeGrant(grant.id)
   narrows them: the team's owners on Vercel's API, and on a local board its local
   user (`local:user:<name>`, whom only its local issuer mints for). Reading a
   closed channel still takes a grant, an owner's too.
+- **Several grants go in one write:** `POST /grants/batch { grants,
+  lockMeOut? }` makes 1 to 16, all of them or none, in the order given, each
+  with its own ID. Each is judged by reach on the grants the write appends
+  to, and admission and a lockout on the grants with all of them made. So a
+  lock and the grant that keeps its maker in pass together, whichever comes
+  first, where one at a time the lock would have to come second. An issuer
+  one of them names counts for the ones after it.
 - **Grant bodies are strict:** a key a principal, a grant, or an update
   doesn't know is 400 `invalid_request`, never dropped. Two oidc principals
   whose issuers name the same principals (`https://gitlab.com` and
@@ -1027,9 +1046,9 @@ when boards issued tokens, fold into nothing. `http()` forwards them to the boar
 own handle: they're that board's.
 `vercel()`
 forwards grants to Vercel's API as the protocol has them
-(`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
-`/boards/:id/grants/explain`, each write with an
-`operationId`), and adapts only times, which the API answers in milliseconds
+(`/boards/:id/grants`, `/boards/:id/grants/batch`,
+`PATCH /boards/:id/grants/:id`, `/boards/:id/grants/explain`, each write with
+an `operationId`, and `lockMeOut` where it's said), and adapts only times, which the API answers in milliseconds
 and the protocol as ISO strings (a grant's `at`).
 The API looks up the names people type and answers views with IDs and names,
 so a board on `vercel()` fails the conformance kit's `grants` group wherever
@@ -1861,10 +1880,11 @@ status.
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants](#grants)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants](#grants) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
+| POST | `/grants` | `{ principals, can, lockMeOut? }`: a new grant. Needs what [Grants](#grants) says making one takes; 409 `grant_lockout` for one its caller couldn't take back, unless it says `lockMeOut`. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| POST | `/grants/batch` | `{ grants, lockMeOut? }`: 1 to 16 grants in one write, all or none, judged together. Answers `{ grants }`, in the order given |
+| PATCH | `/grants/:id` | `{ add?, remove?, can?, lockMeOut? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, capped, can }` |
-| POST | `/grants/:id/revoke` | Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
+| POST | `/grants/:id/revoke` | No body, or `{ lockMeOut }`. Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
 | GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |
 | GET | `/schemas/:id` | One version, by `name@version`: `{ schema }`. 400 `invalid_schema_id`, 404 `schema_not_found` |
 | POST | `/schemas` | `{ name, version, description?, schema }`: registers a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition; another is 409 `schema_immutable`, a built-in's name 409 `reserved_schema`, and a definition the board won't keep 400 `invalid_schema` |
@@ -2159,10 +2179,11 @@ board schemas [list]                           the built-in schemas, then the bo
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
 board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
 board grants [list]                            the board's grants; needs manage at *
-board grants create <principal>... --can <pattern=permissions>...   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
-board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]...   --can replaces
+board grants create <principal>... --can <pattern=permissions>... [--lock-me-out]   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
+board grants create --file <path> [--lock-me-out]   several grants in one write, from a JSON array of them; - reads stdin
+board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]... [--lock-me-out]   --can replaces
 board grants explain [<principal>] <channel>   which grant decides, for you or someone else
-board grants revoke <grant>                    e.g. g3
+board grants revoke <grant> [--lock-me-out]    e.g. g3; --lock-me-out goes ahead with a change you couldn't take back
 board edit <id> ("<text>" | --text-file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
 board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]

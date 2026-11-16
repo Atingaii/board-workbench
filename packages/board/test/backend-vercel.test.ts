@@ -149,6 +149,9 @@ describe('vercel()', () => {
       'paging: refuses to page threads back and forward at once': 'passed',
       "grants: lets no caller narrowed with x-board-can grant past its can, even where everyone's grant closes it": 'passed',
       'grants: lets no caller narrowed with x-board-can let anyone in where everyone gets more than it has': 'passed',
+      // The run is a team owner, whom nothing locks out.
+      "grants: refuses a grant its maker couldn't take back, unless it says lockMeOut": 'skipped',
+      'grants: makes several grants in one write, or none of them, a lock with the grant that keeps its maker in': 'passed',
       'grants: lets a member grant on a pattern after a lock under it': 'skipped',
       'grants: lets a project on another team in, in its environments': 'skipped',
       'schemas: lists the built-in schemas first, and reads a schema by its ID': 'passed',
@@ -2465,6 +2468,25 @@ describe('vercel()', () => {
     const pong = handleOn(fakeMessageboard(), 'project:prj_pong:production')
     await expect(pong.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', origin: 'board' })
     await expect(pong.createGrant({ principals: [{ kind: 'everyone' }], can: { 'dev/': [] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', message: expect.stringContaining('takes manage') })
+  })
+
+  it("gives back a lockout Vercel's API refuses as the board's, and sends lockMeOut and a batch through to it", async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createGrant({ principals: [{ kind: 'app', app: 'deploy' }], can: { '*': 'all' } })
+    // An app is no team owner: what it manages, a grant can take from it.
+    const app = handleOn(api, 'app:oac_2')
+    const lock = { principals: [{ kind: 'everyone' }], can: { 'dev/': ['read'] } } as const
+    await expect(app.createGrant(lock)).rejects.toMatchObject({ status: 409, code: 'grant_lockout', origin: 'board', message: expect.stringContaining('dev/') })
+    const { grants } = await app.createGrants([lock, { principals: [{ kind: 'app', app: 'deploy' }], can: { 'dev/': 'all' } }])
+    expect(grants.map((grant) => [grant.principals[0]?.kind, grant.can])).toEqual([
+      ['everyone', { 'dev/': ['read'] }],
+      ['app', { 'dev/': 'all' }],
+    ])
+    const [, keeps] = grants
+    await expect(app.revokeGrant(keeps!.id)).rejects.toMatchObject({ status: 409, code: 'grant_lockout' })
+    await expect(app.updateGrant(keeps!.id, { can: { 'dev/': ['read'] } })).rejects.toMatchObject({ status: 409, code: 'grant_lockout' })
+    expect(await app.revokeGrant(keeps!.id, { lockMeOut: true })).toEqual({ revoked: true })
+    await expect(app.createGrant({ principals: [{ kind: 'app', app: 'deploy' }], can: { 'dev/': 'all' } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
   })
 
   it("sends grants to Vercel's API as people name their principals, and gives back what it answers, IDs and names", async () => {

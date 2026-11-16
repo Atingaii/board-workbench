@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { BoardEventView, Explanation, GrantInput, InboxEntry, Me, MessageView, SchemaInput, SyncedView, TaskView } from '../../api/routes.ts'
+import type { BoardEventView, Explanation, GrantInput, GrantWriteOptions, InboxEntry, Me, MessageView, SchemaInput, SyncedView, TaskView } from '../../api/routes.ts'
 // `@vercel/board/access`, in an app of yours.
 import { compileAccess } from '../../server/access.ts'
 import { board, BoardError, type Attachment, type EventsState, type ExplainPrincipal, type PostOptions, type ScheduleTiming } from '../../server/index.default.ts'
@@ -559,23 +559,41 @@ export async function loadGrants() {
   }
 }
 
+/** Whether the board refused a grant change as one its caller couldn't take back: it takes their own `manage` where it reaches. */
+const lockout = (error: unknown) => error instanceof BoardError && error.code === 'grant_lockout'
+
+/**
+ * A grant change, asked about first when the board refuses it as a lockout: it's sent again with
+ * `lockMeOut` on a yes, and a no leaves the board's refusal as it was.
+ */
+async function askingFirst<T>(write: (options: GrantWriteOptions) => Promise<T>): Promise<T> {
+  try {
+    return await write({})
+  } catch (error) {
+    if (!lockout(error) || !confirm(`${said(error)}: only someone who still manages grants there could change it then. Go ahead?`)) throw error
+    return write({ lockMeOut: true })
+  }
+}
+
 /** A new grant. Answers what the board refused it for, in its words, or null once it's made. */
 export async function createGrant(input: GrantInput): Promise<string | null> {
   try {
-    await team.createGrant(input)
+    await askingFirst((options) => team.createGrant(input, options))
     await loadGrants()
     return null
   } catch (error) {
-    return said(error)
+    // Kept open on a lockout they said no to, with what would avoid it.
+    return lockout(error) ? `${said(error)}. Make a grant that names you there first.` : said(error)
   }
 }
 
 /** Revokes a grant: its principals' next requests are refused. */
 export async function revokeGrant(id: string) {
   try {
-    await team.revokeGrant(id)
+    await askingFirst((options) => team.revokeGrant(id, options))
   } catch (error) {
-    toast(`couldn't revoke ${id}: ${said(error)}`)
+    // A lockout they said no to is no failure: nothing was asked of the board again.
+    if (!lockout(error)) toast(`couldn't revoke ${id}: ${said(error)}`)
   }
   await loadGrants()
 }
