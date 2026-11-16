@@ -5,6 +5,7 @@
 /** app/api/board/[[...path]]/channels.ts, before any repo is onboarded. */
 export const CHANNELS = `import { ownRepo } from "../../../../lib/github.ts";
 import { channel, slackChannel } from "../../../../lib/project.ts";
+import type { ServiceName } from "../../../../agent/lib/services.ts";
 
 // Which repos and Slack channels come into the board, and where. This is the file to edit, and the
 // agent edits it when you ask it to onboard a repo. This factory's channels are all under one
@@ -25,6 +26,16 @@ export const slackChannels: Record<string, string> = {
   // for this factory's Vercel project, #factory-rsi for one named factory.
   [slackChannel("-rsi")]: channel("rsi"),
   // "#web": channel("web"),
+};
+
+/**
+ * Each board channel and the services (agent/lib/services.ts) its threads reach, with the keys in
+ * the Vercel project's env. A thread anywhere else reaches none. Every thread in the channel does,
+ * a PR's or an issue's included: give a channel whose repo is public only what a stranger's issue
+ * may use.
+ */
+export const serviceChannels: Record<string, readonly ServiceName[]> = {
+  // [channel("web")]: ["stripe"],
 };
 `;
 

@@ -38,7 +38,7 @@ pnpm build
   nothing to edit, and neither hears the other.
 - **Instructions are for every turn, skills for some.** `agent/lib/instructions.ts` holds the
   judgment every turn needs, with a line pointing at each skill; a procedure the agent needs only
-  sometimes (reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, demos, onboarding a repo) is a skill in `agent/skills/`.
+  sometimes (reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, reaching a service, demos, onboarding a repo) is a skill in `agent/skills/`.
 - **The board sees the agent only through `wakeAgent` (`agent/lib/wake.ts`).** Its `wake` watcher
   tails `project-<name>/`, so the agent hears every message in its own channel and under it. It hands each wake-up to
   eve's own channel (`agent/channels/eve.ts`, at `/eve/v1`), opening the session with the
@@ -78,7 +78,9 @@ pnpm build
   agent, and the agent's `setup_steps` tool the page's steps, through Deployment Protection's
   Trusted Sources, which let a project call its own environment and no other.
 - **Real credentials never enter the sandbox.** `agent/lib/credentials.ts` puts them in its network
-  policy, which swaps them in on the way out. Keep it that way.
+  policy, which swaps them in on the way out. Keep it that way. A service besides GitHub is a line
+  in `agent/lib/services.ts` (its env var and hosts), with its key in the project's env, and it
+  reaches only the threads of the channels `serviceChannels` in `channels.ts` gives it.
 - **GitHub signs the agent's commits, so there's no signing key.** The sandbox's `git`
   (`agent/lib/git/`, which `agent/sandbox.ts` installs) makes each pushed commit again through GitHub's API.
   `test/git-push.test.ts` runs it against real git and a fake GitHub backed by a bare repo.

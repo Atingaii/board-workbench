@@ -4,14 +4,14 @@ import { channels, slack } from "@vercel/board/sync-slack";
 import { WATCHER } from "../../../../agent/lib/identity.ts";
 import { wakeAgent } from "../../../../agent/lib/wake.ts";
 import { channel, projectName } from "../../../../lib/project.ts";
-import { repoChannels, slackChannels } from "./channels.ts";
+import { repoChannels, serviceChannels, slackChannels } from "./channels.ts";
 import { appLogin, withoutForksOrOwn } from "./github.ts";
 
 // The factory's board: your team's board in Vercel's API, which keeps its messages, files, and
 // schedules. This deployment keeps nothing: it runs the board's sync and its watchers.
 
-/** Which repos and Slack channels come in, and where: channels.ts is the file to edit. */
-export { repoChannels, slackChannels };
+/** Which repos and Slack channels come in, and where, and which channels reach which services: channels.ts is the file to edit. */
+export { repoChannels, serviceChannels, slackChannels };
 
 /** This factory's Vercel Connect connectors, named for its Vercel project: a team has one connector per name. */
 export const connectors = { github: `github/${projectName()}`, slack: `slack/${projectName()}` };
