@@ -3001,7 +3001,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }
       // `by` names an actor, a principal and its agents, or a profile, as a read's does; `me` is the actor itself.
       if (query.by?.startsWith('vercel:')) filter.createdBy = query.by
-      // The API reads past the schedules a filter leaves out, so naming the caller there lists their own in a request or two.
+      // Naming the caller narrows the list on the API's side, as an actor ID does.
       if (query.by === 'me') filter.createdBy = await actorOf(who)
       const by = await byOf(who, query.by)
       const created = (actor: ApiActor) => by === undefined || by(actor)
