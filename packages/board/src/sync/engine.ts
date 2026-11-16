@@ -149,9 +149,18 @@ export function keyedId(key: string, platform: string, id: string): string {
   return `${key}:${id.startsWith(`${platform}:`) ? id.slice(platform.length + 1) : id}`
 }
 
-/** A platform event with its author named under `key`. */
+/** A platform event with its author named under `key`, and the users its text mentions, there too. */
 function keyedEvent(key: string, platform: string, event: ExternalEvent): ExternalEvent {
-  return 'author' in event ? ({ ...event, author: { ...event.author, id: keyedId(key, platform, event.author.id) } } as ExternalEvent) : event
+  if (!('author' in event)) return event
+  const author = { ...event.author, id: keyedId(key, platform, event.author.id) }
+  if (!('mentioned' in event) || !event.mentioned?.length) return { ...event, author } as ExternalEvent
+  const keyed = new Map(event.mentioned.map((user) => [user.id, keyedId(key, platform, user.id)]))
+  return {
+    ...event,
+    author,
+    mentioned: event.mentioned.map((user) => ({ ...user, id: keyed.get(user.id)! })),
+    text: replaceMentions(event.text, (token) => (token.kind === 'actor' && keyed.has(token.actor) ? `@[${keyed.get(token.actor)}]` : null)),
+  }
 }
 
 /**
@@ -622,6 +631,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       noSync?: boolean
       attachments?: Attachment[]
       links?: ImportLink[]
+      mentioned?: ExternalAuthor[]
       origin?: Origin
       id: string
     }
@@ -671,6 +681,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         const links = await resolveLinks(platform, event.links ?? [], { thread: event.subthread ?? event.thread, message: event.message }, synced?.channel ?? channel)
         const base = {
           ...(links.length ? { links } : {}),
+          ...(event.mentioned?.length ? { mentioned: event.mentioned } : {}),
           author: event.author,
           text: clampText(withNotes(overrides.text ?? event.text, notes), attachments.length > 0),
           ...(attachments.length ? { attachments } : {}),
@@ -709,7 +720,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         else if (event.kind === 'edited') {
           const stored = await messageOf(id)
           const text = clampText(withNotes(overrides.text ?? event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
-          if (stored && !event.linksOnly && stored.text !== text) await screened(await call('syncImport', { op: 'edit', author, from: key, origin, text, source: from }))
+          const mentioned = event.mentioned?.length ? { mentioned: event.mentioned } : {}
+          if (stored && !event.linksOnly && stored.text !== text) await screened(await call('syncImport', { op: 'edit', author, from: key, origin, text, source: from, ...mentioned }))
           const links = stored ? await resolveLinks(platform, event.links ?? [], origin, stored.channel, stored.links) : []
           if (stored && !sameLinks(links, stored.links)) await call('syncImport', { op: 'links', author, from: key, origin, links })
         } else {

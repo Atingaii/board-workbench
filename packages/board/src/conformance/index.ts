@@ -2090,6 +2090,44 @@ const CHECKS: Check[] = [
   },
   {
     group: 'sync',
+    name: "meets a platform user an import's text mentions: an actor as one who wrote would be, whom the text names by that actor's ID",
+    run: async (ctx) => {
+      const key = SYNC_KEY
+      const thread = `${key}:${ctx.labels.conformance}:mentioned`
+      const author = { id: `${key}:user:${ctx.labels.conformance}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
+      // Someone the platform knows, who has written nothing here.
+      const cc = { id: `${key}:user:${ctx.labels.conformance}-cc`, handle: 'conformance-cc', name: 'Conformance Cc', avatar: null, isBot: false }
+      const origin = { thread, message: '1' }
+      const registered = await registerSync(ctx)
+      if ('skip' in registered) return registered.skip
+      const { where } = registered
+      try {
+        let imported: { message: string | null }
+        try {
+          imported = await ctx.board.syncImport({
+            op: 'post', author, from: key, channel: ctx.channel, text: `conformance: cc @[${cc.id}]`, mentioned: [cc], labels: ctx.labels, noSync: true,
+            origin: { channel: `${key}:${ctx.labels.conformance}`, thread, subthread: null, message: '1', context: null },
+            id: `conformance-mentioned-${ctx.labels.conformance}`,
+          })
+        } catch (error) {
+          if (error instanceof BoardError && error.status === 403) return `this token can't sync in ${ctx.channel}`
+          throw error
+        }
+        isRef(imported.message, "an import's message")
+        // A sync elsewhere's user is a profile of its principal, mentioned or writing.
+        const actor = `${ctx.me.principal}+${cc.id}`
+        same((await ctx.board.thread(imported.message!)).message.text, `conformance: cc @[${actor}]`, "the import's text, its mention by the actor's ID")
+        const met = (await ctx.board.actors()).find((known) => known.id === actor)
+        check(met !== undefined, `the board should know the user the import mentioned as ${actor}`)
+        same(met?.name, cc.name, "the mentioned user's name")
+      } finally {
+        await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
+        await ctx.board.register({ ...where, watch: {} }).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'sync',
     name: "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked",
     run: async (ctx) => {
       const registered = await registerSync(ctx)

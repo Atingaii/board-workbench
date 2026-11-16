@@ -225,6 +225,13 @@ under the entry's key instead, so a provider under key `support` brings
 `support:user:7`, and `mention(actor)` gets them back with your prefix
 (`desk:user:7`). A user is the key's, and renaming a key changes its users' IDs.
 
+**Mentions.** When a message mentions one of your users, write them in its
+`text` as `@[desk:user:7]` and list them in the event's `mentioned`, each shaped
+like an `author`, on a `message` or an `edited` event. The board names them
+under the key as it does authors, and meets each one it hasn't seen, so people
+can mention them back before they've written. Up to 50 a message; one the text
+doesn't mention is left out.
+
 **Dedupe.** `dedupe` is the identity of one occurrence. A platform redelivering the
 same event must produce the same value, so the retry does nothing; a later
 identical action (a reaction added, removed, and added again) must produce a new

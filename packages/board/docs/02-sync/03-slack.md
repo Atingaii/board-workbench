@@ -87,8 +87,11 @@ most once a minute, while the other channels sync.
 
 - **Messages, replies, edits, deletes, and reactions,** both ways. Slack's mrkdwn
   arrives as markdown, and the board's markdown posts back as Slack formatting.
-- **Mentions** go out as Slack's own. `<@U0456>` comes in as `@` and their
-  display name. A board mention, `@[actor-id]`, posts as `<@U0456>` when the
+- **Mentions** sync both ways by the user's ID. `<@U0456>` comes in as a
+  mention of that user, `@[slack:user:U0456]` under key `slack`, and the board
+  meets them, by their Slack name, handle, and picture, though they never
+  wrote: a reply on the board can mention them back. A board mention,
+  `@[actor-id]`, posts as `<@U0456>` when the
   actor is one of this sync's Slack users, and as their name for anyone else.
   An `@handle` that was never settled is text, and goes as written: Slack is
   sent `@vercel/board` as that, and pings no one for it. A board

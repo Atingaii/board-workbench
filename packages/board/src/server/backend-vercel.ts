@@ -2,10 +2,10 @@ import type { Protocol } from '../api/protocol.ts'
 import { LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
-import { IMPORT_BYTES_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
+import { IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { blocksIn } from '../contract/blocks.ts'
-import { mentionTerm, mentionTerms } from '../contract/mentions.ts'
+import { mentionTerm, mentionTerms, replaceMentions } from '../contract/mentions.ts'
 import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parseCan, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
@@ -2277,6 +2277,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }))
 
   const platformUser = ({ id, handle, name, avatar, isBot }: ExternalAuthor) => ({ id, handle, name, avatar, isBot })
+  /** The platform users an import's text mentions, for the API to meet as it meets the author. */
+  const mentioned = (body: { mentioned?: ExternalAuthor[] | undefined }) => (body.mentioned?.length ? { mentioned: body.mentioned.map(platformUser) } : {})
+  /**
+   * An import's text, its mentions of its key's users (`@[slack:user:U0456]`) as the API names
+   * them: this project's profiles of them, as it names the author. Where that would take the text
+   * past what a message holds, it stays as it came, and sync still finds who the short ID names.
+   */
+  async function asNamed(who: Who, body: { text: string; from: string | null; author: ExternalAuthor }): Promise<string> {
+    const key = body.from ?? body.author.id.split(':')[0]!
+    if (!body.text.includes(`@[${key}:`)) return body.text
+    const owner = principalId((await self(who)).actor.principal)
+    const named = replaceMentions(body.text, (token) => (token.kind === 'actor' && token.actor.startsWith(`${key}:`) ? `@[${owner}+${token.actor}]` : null))
+    return named.length > MESSAGE_TEXT_MAX ? body.text : named
+  }
 
   /** An import as the API takes it: a channel by its ID, and a reply's `after` as its sequence in the thread. */
   async function importBody(who: Who, body: Protocol['syncImport']['input']): Promise<Record<string, unknown>> {
@@ -2295,17 +2309,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         ...(body.source ? { source: body.source } : {}),
         ...(body.channel !== undefined ? { channelId: (await channelToPost(who, body.channel)).id } : {}),
         ...(body.re !== undefined ? { re: body.re } : {}),
-        text: body.text,
+        text: await asNamed(who, body),
         ...(body.labels && Object.keys(body.labels).length ? { labels: body.labels } : {}),
         ...(body.noSync ? { noSync: true } : {}),
         ...(body.attachments?.length ? { attachments: body.attachments } : {}),
         ...(body.links?.length ? { links: body.links } : {}),
+        ...mentioned(body),
         ...(body.id !== undefined ? { id: body.id } : {}),
         ...(after !== undefined ? { after } : {}),
       }
     }
     const changed = { ...base, ...(body.origin !== undefined ? { origin: body.origin } : {}), ...(body.message !== undefined ? { message: body.message } : {}) }
-    if (body.op === 'edit') return { ...changed, text: body.text, ...(body.source ? { source: body.source } : {}), ...(body.revision !== undefined ? { revision: body.revision } : {}) }
+    if (body.op === 'edit') return { ...changed, text: await asNamed(who, body), ...(body.source ? { source: body.source } : {}), ...(body.revision !== undefined ? { revision: body.revision } : {}), ...mentioned(body) }
     if (body.op === 'delete') return { ...changed, ...(body.revision !== undefined ? { revision: body.revision } : {}) }
     if (body.op === 'react') return { ...changed, emoji: body.emoji, ...(body.remove ? { remove: true } : {}) }
     if (body.op === 'labels')

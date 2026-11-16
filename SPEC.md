@@ -1147,6 +1147,16 @@ through the sync that speaks for them, under the key it imported them through.
     another (`http()`) leaves it to that board. A platform's import is not
     settled: what someone typed there is its text. Nor is a schedule's send,
     which goes as it was settled when the schedule was made.
+  - **A platform's own mention comes in as one.** A provider writes each user
+    a message mentions as `@[<their id>]` in its text and lists them in the
+    event's `mentioned`, as it describes an author (Slack's `<@U0456>` is
+    `@[slack:user:U0456]`). The import carries them (`mentioned` on a post
+    or an edit), and the backend meets each one it doesn't know: an actor as
+    one who wrote would be, under the import's key, never someone the board
+    signs in. One it knows keeps its record, which their own writes keep
+    current, and one the landed text doesn't mention is left out. A sync
+    elsewhere's are its profiles, and the text names them so, unless the
+    longer ID would take it past what a message holds.
   - **An ID is longer than a handle.** Where settling would take a text past
     the 10,000 characters a message holds, the text stays as typed, and each
     handle's actor is a candidate: no write is refused for a length its writer

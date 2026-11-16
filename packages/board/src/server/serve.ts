@@ -702,6 +702,18 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   }
 
   /**
+   * An import with only the platform users its text mentions, as it lands: one the sync function or
+   * the middleware wrote out of it isn't introduced to the board.
+   */
+  function introducing(body: Protocol['syncImport']['input']): Protocol['syncImport']['input'] {
+    if ((body.op !== 'post' && body.op !== 'edit') || !body.mentioned?.length) return body
+    const named = new Set(extractMentions(body.text).flatMap((token) => (token.kind === 'actor' ? [token.actor] : [])))
+    const { mentioned: all, ...rest } = body
+    const mentioned = all.filter((user) => named.has(user.id))
+    return mentioned.length ? { ...rest, mentioned } : rest
+  }
+
+  /**
    * An import, through the middleware when it's a post or an edit that would land: what the
    * middleware passed on, or what it responded when it dropped it, for sync to tell the author on
    * the platform. A retry of one that landed stands.
@@ -716,7 +728,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     if (written !== null) await checkBlocks(written)
     const send = async (patched: Protocol['syncImport']['input']) => {
       if (written !== null && (patched.op === 'post' || patched.op === 'edit') && patched.text !== written) await checkBlocks(patched.text)
-      return backend.syncImport(caller, patched, signal)
+      return backend.syncImport(caller, introducing(patched), signal)
     }
     if (middleware.length === 0 || caller.origin.via?.kind === 'middleware' || (body.op !== 'post' && body.op !== 'edit')) return send(body)
     const access = accessOf(caller)

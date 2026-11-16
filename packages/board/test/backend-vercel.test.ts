@@ -160,6 +160,7 @@ describe('vercel()', () => {
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'skipped',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'skipped',
       "sync: keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
+      "sync: meets a platform user an import's text mentions: an actor as one who wrote would be, whom the text names by that actor's ID": 'skipped',
       "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'skipped',
       "sync: takes an edit of a long message in its sync's inbox, under the longest event ID the protocol allows, and refuses a longer one": 'skipped',
       'sync: hands a sync each message change as a match of its @sync watcher': 'skipped',
@@ -1480,6 +1481,7 @@ describe('vercel()', () => {
     const report = await conformance(handleOn(api, 'project:prj_pong:production'), { withHeaders: withHeadersOn(api, 'project:prj_pong:production') })
     expect(Object.fromEntries(report.checks.filter((check) => check.group === 'sync').map((check) => [check.name, check.status]))).toEqual({
       "keeps sync's records: an import as a profile of its importer, its lookups by platform ID, a receipt, and where it's synced": 'passed',
+      "meets a platform user an import's text mentions: an actor as one who wrote would be, whom the text names by that actor's ID": 'passed',
       "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
       "takes an edit of a long message in its sync's inbox, under the longest event ID the protocol allows, and refuses a longer one": 'passed',
       'hands a sync each message change as a match of its @sync watcher': 'passed',
@@ -1814,6 +1816,44 @@ describe('vercel()', () => {
     // Slack gets its own user as a mention, and the handle no one has as it was typed.
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await vi.waitFor(() => expect(pongSlack.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**pong**: sure, <@U_M1> and @nobody']))
+  })
+
+  it("meets a Slack user a message cc's, who never wrote: an agent held to the channel reads who they are and mentions them back, natively", async () => {
+    const api = fakeMessageboard()
+    const pongSlack = fakePlatform('slack')
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: pongSlack.adapter }, channels({ C1: 'general' })) },
+    })
+    await pong.fetch(new Request(`${PONG_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'who knows billing?', user: 'U_ADA', name: 'ada' }) }))
+    const agent = pong.as(null, { can: { 'general/': ['read', 'post'] } })
+    await vi.waitFor(async () => expect((await agent.messages({ channel: 'general' })).messages).toHaveLength(1))
+    const [asked] = (await agent.messages({ channel: 'general' })).messages
+    // Ada cc's Grace in the thread, as the Slack provider brings a mention in: by his ID, with who he is.
+    const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'ada', avatar: null, isBot: false }
+    const cc = { id: 'slack:user:U_G1', handle: 'grace', name: 'Grace Hopper', avatar: null, isBot: false }
+    await pong.syncImport({ op: 'post', author: ada, from: 'slack', re: asked!.id, text: 'cc @[slack:user:U_G1]', mentioned: [cc], origin: { thread: 'slack:C1:300', subthread: null, message: '301', context: null } })
+    const grace = 'vercel:project:prj_pong:production+slack:user:U_G1'
+    expect((await agent.thread(asked!.id)).replies.map((reply) => reply.text)).toEqual([`cc @[${grace}]`])
+    expect((await agent.actors()).find((actor) => actor.id === grace)).toMatchObject({ handle: 'pong/grace', name: 'Grace Hopper' })
+    // The agent answers him by the handle it read, and Slack gets its own user as a mention.
+    const reply = await agent.reply(asked!.id, '@pong/grace, over to you')
+    expect(reply.mentions).toEqual([{ written: '@pong/grace', actor: { id: grace, handle: 'pong/grace', name: 'Grace Hopper' }, candidates: [] }])
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await vi.waitFor(() => expect(pongSlack.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**pong**: <@U_G1>, over to you']))
+  })
+
+  it("keeps an import's mention as it came where naming it under its project would outgrow a message", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'ada', avatar: null, isBot: false }
+    // 10,000 characters as it came: the project's ID in the mention would make it longer.
+    const text = `${'x'.repeat(9_981)} @[slack:user:U_G1]`
+    const { message } = await pong.syncImport({ op: 'post', author: ada, from: 'slack', channel: 'general', text })
+    expect((await pong.thread(message!)).message.text === text).toBe(true)
   })
 
   it("asks an API that names a caller no one once, by ID and for its list, and not again on every page it reads", async () => {

@@ -298,6 +298,11 @@ warning: @nobody names no one here: it stays text, and mentions no one.
 - **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
   even someone the board hasn't seen. Each sync looks it up when it posts.
 - **Mentions in inline code or code blocks don't count.**
+- **A mention on a platform comes in as one.** Slack's `<@U0456>` is
+  `@[slack:user:U0456]` on the board, and the board meets that user by the
+  names Slack gives them, though they never wrote here. So `@malte` in a reply
+  finds them, and Slack gets its own mention back. A name someone typed there
+  (`@malte`) is text.
 - **Each sync delivers by ID.** One of its own users, the platform users it
   brought in under the key it posts through, becomes a native mention:
   `<@U0456>` on Slack, `@login` on GitHub. Anyone else, a board person
