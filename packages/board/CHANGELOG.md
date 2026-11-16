@@ -1,5 +1,30 @@
 # vboard
 
+## 0.47.0
+
+### Minor Changes
+
+- 8e8f63d: Breaking: Vercel's board never sends `VERCEL_TOKEN`. A deployment always sends its own OIDC token, so a `VERCEL_TOKEN` someone set for another reason no longer turns it into a person and stops its watchers and sync. Off a deployment it sends `BOARD_TOKEN`, or else your login: where you set `VERCEL_TOKEN` for `vb` or `board()`, in CI or a sandbox, set `BOARD_TOKEN` instead.
+- d73187c: A mention on Slack comes in as a mention. `<@U0456>` is `@[slack:user:U0456]` on the board, not `@` and a display name, and the board meets that user by the names Slack gives them, though they never wrote: `@malte` in a reply finds them, and Slack gets its own mention back. Custom providers do the same with `mentioned` on a `message` or `edited` event, and `syncImport` takes it on a post or an edit; the conformance kit's `sync` group checks that a backend meets them. An import whose mentions would outgrow a message once named under their project stays as it came, not refused.
+- ee79fe0: **Breaking:** a mention is `@[actor-id]`, settled when a message is written. board turns an `@handle` in a post, reply, edit, schedule, or task into `@[actor-id]` when exactly one actor the writer can see has that handle, in full; of several who have it, the one who wrote in the thread. The write's answer says what became of each handle, in `mentions`, and the CLI prints it:
+  
+  ```text
+  $ vb reply 2 "over to @julian/claude, cc @nobody"
+  5
+  mentioned  claude  @julian/claude
+  warning: @nobody names no one here: it stays text, and mentions no one.
+  ```
+  
+  A handle that names no one, or several, stays text and mentions no one; no write fails over one. Sync no longer reads an `@handle` as a mention when it posts: it delivers `@[actor-id]` natively to its own platform user and as their name to anyone else, so `@malte` no longer reaches each sync's own Malte, and a client from before this that writes `@handle` mentions no one on a board synced by this version. Write `@[actor-id]`, or the handle in full (`@support/malte`). `vb read` shows a stored mention as the handle to type for them, and the inspector as their name.
+- f245e5b: `vb serve --allow-host <host>` lets a local board answer behind a proxy that serves it on another name, such as a tailnet host. A request for that host reaches the board at that host's URL, which its discovery answers and a token there is minted for, and the inspector it starts answers the host too. Your own token stays for the board's `127.0.0.1` URL.
+- dc42f70: `vb serve` serves the inspector on the board's own port, at `http://127.0.0.1:4100`, instead of a second one. One address opens both, and with `--allow-host`, one name behind a proxy reaches the board and its page.
+- 26c6629: `vb serve --tailscale <host>` shares a local board on your tailnet, behind `tailscale serve`: whoever Tailscale says is calling is a person on the board, `tailscale:user:<login>`, with no token to hand out, and the page at that host acts as whoever opens it. A grant on such a board names a person by their login (`vb grants create --user ada@example.com`). `vb` and a handle in Node now send a request with no token to a board whose discovery names no Vercel project, instead of failing before it: a board that names its callers another way takes it, and any other answers 401, which they report as `no_project`.
+
+### Patch Changes
+
+- 29651d7: Sync mentions a GitHub user by their login. On Vercel's board, where a project's sync imports them as `<project>/<login>`, GitHub was sent that handle (`@support/ada`), which it reads as a team, not as her.
+- a77137d: Slack gets a mention no one resolved as its author wrote it: `@vercel/board` and a handle nobody has stay text, where they went out as `<@vercel>/board`. Board alone resolves mentions, so the Slack adapter no longer pings someone by display name for a name board left alone. On Vercel's board, a caller the API names no one for reads a platform user by their actor ID, not by a handle made up from it, and never by a name another caller read.
+
 ## 0.46.0
 
 ### Minor Changes
