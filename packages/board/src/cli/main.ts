@@ -560,7 +560,7 @@ function lockoutRecoveries(): Recovery[] {
   if (verb !== 'create') return [{ instruction: 'Keep manage there first, with another grant that names you' }, anyway]
   const all = patternsIn(flags.can ?? []).map((pattern) => `${pattern}=all`).join(';')
   // Whoever no grant flag names (the board's own code, another issuer's token) is told what to add.
-  return [self ? { instruction: 'Keep manage there yourself, in the same write', argv: rerun(...self, '--can', all) } : { instruction: `Keep manage there yourself: name yourself in the same command, with --can '${all}'` }, anyway]
+  return [self ? { instruction: 'Keep manage there yourself, in the same write', argv: rerun('--and', ...self, '--can', all) } : { instruction: `Keep manage there yourself: add --and, then yourself, with --can '${all}'` }, anyway]
 }
 
 /** Refuses the principal flags `verb` doesn't take: plain ones on update, `--add-` and `--remove-` ones elsewhere. */
@@ -1394,7 +1394,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (verb === 'create') {
         if (rest.length > 0) throw usage(`grants create takes no arguments: ${rest[0]} is one too many.`)
         onlyPrincipalFlags('create')
-        // Each run of principals and the --can after it is a grant: several are made in one write.
+        // One grant, or with --and between them, several made in one write.
         const named = grantFlags(() => grantsIn(ordered))
         if (named[0]!.principals.length === 0)
           throw usage('A grant names whom it lets in: --user, --project, --github, --oidc, --all-users, --all-projects, or --everyone.', { reason: 'missing_arguments' })

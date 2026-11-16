@@ -103,6 +103,7 @@ export const options = {
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
   can: { type: 'string', multiple: true, value: 'pattern=perms', description: 'what they may do, repeated: perms, all, or none' },
   'lock-me-out': { type: 'boolean', description: "go ahead with a change you couldn't take back" },
+  and: { type: 'boolean', description: 'another grant after it, made in the same write' },
   // Grants: whom one names, each flag a principal, with the modifiers after it.
   user: { type: 'string', multiple: true, value: 'email', description: 'a person on the team' },
   project: { type: 'string', multiple: true, short: 'p', value: 'name|id', description: "a project's deployments" },
@@ -223,17 +224,19 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
       },
       {
         name: 'create',
-        description: 'let principals do what the --can after them says',
+        description: 'let principals do what --can says, where it says',
         arguments: [],
         options: [
           ...(['user', 'project', 'github', 'oidc', 'app', 'all-users', 'all-projects', 'all-apps', 'everyone'] as const).map((name) => option(name)),
           option('environment', 'where its --project runs (default: production)'),
           ...(['workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name)),
-          option('can', 'what the principals before it may do: perms, all, or none', 'pattern=perms'),
+          option('can', 'what they may do, repeated: perms, all, or none', 'pattern=perms'),
+          option('and'),
           option('lock-me-out'),
         ],
         examples: [
-          { name: 'close security/ to everyone but two people, in one write', value: "grants create --everyone --can 'security/=none' --user alice@acme.com --user bob@acme.com --can 'security/=all'" },
+          { name: 'let two people into security/', value: "grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'" },
+          { name: 'close it to everyone but them, in one write', value: "grants create --everyone --can 'security/=none' --and --user alice@acme.com --user bob@acme.com --can 'security/=all'" },
           { name: "a project's production and previews", value: "grants create --project sec --environment production,preview --can 'security/=read,post'" },
           { name: "two repositories' workflows", value: "grants create --github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml --can 'ci/=post'" },
           { name: "another issuer's tokens", value: "grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'" },

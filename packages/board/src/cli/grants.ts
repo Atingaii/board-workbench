@@ -129,25 +129,25 @@ function inputOf(started: Started): PrincipalInput {
 }
 
 /**
- * The grants `grants create`'s flags name: each run of principals, with the `--can`s after it. A
- * principal after a `--can` starts the next grant, so one command makes several in one write: a
- * lock, say, and the grant that keeps whoever makes it in. A command with one run is one grant,
- * which may lack its principals or its `--can`: its caller says which.
+ * The grants `grants create`'s flags name: one, or with `--and` between them, several that one
+ * write makes together: a lock, say, and the grant that keeps whoever makes it in. Each side of an
+ * `--and` is a grant of its own, its principals and its `--can`s in any order, as a command
+ * without one reads them. A command with no `--and` is one grant, which may lack its principals
+ * or its `--can`: its caller says which.
  */
 export function grantsIn(tokens: readonly OptionToken[]): { principals: PrincipalInput[]; can: GrantCan }[] {
-  const runs: { tokens: OptionToken[]; can: string[] }[] = [{ tokens: [], can: [] }]
+  const sides: OptionToken[][] = [[]]
   for (const token of tokens) {
-    if ((KINDS as readonly string[]).includes(token.name) && runs.at(-1)!.can.length > 0) runs.push({ tokens: [], can: [] })
-    const run = runs.at(-1)!
-    if (token.name === 'can') run.can.push(token.value ?? '')
-    else run.tokens.push(token)
+    if (token.name === 'and') sides.push([])
+    else sides.at(-1)!.push(token)
   }
-  const grants = runs.map((run) => ({ principals: principalsIn(run.tokens, ['']).map(({ principal }) => principal), can: grantCanOf(run.can) }))
-  if (grants.length > 1) {
-    if (grants[0]!.principals.length === 0) throw new GrantMisuse("--can goes after the principals it's for: a principal after it starts another grant.")
-    const open = runs.find((run) => run.can.length === 0)?.tokens.find((token) => (KINDS as readonly string[]).includes(token.name))
-    if (open) throw new GrantMisuse(`--${open.name}${open.value !== undefined ? ` ${open.value}` : ''} has no --can after it: say what it lets them do, like --can 'ci/=read,post'.`)
-  }
+  const grants = sides.map((side) => ({
+    principals: principalsIn(side, ['']).map(({ principal }) => principal),
+    can: grantCanOf(side.filter((token) => token.name === 'can').map((token) => token.value ?? '')),
+  }))
+  // Each side of an --and names whom it lets in and what they may do, or it's no grant.
+  if (grants.length > 1 && grants.some((grant) => grant.principals.length === 0 || Object.keys(grant.can).length === 0))
+    throw new GrantMisuse("--and goes between two grants, each with its principals and its --can: --everyone --can 'ci/=read' --and --user ada@acme.com --can 'ci/=all'.")
   return grants
 }
 

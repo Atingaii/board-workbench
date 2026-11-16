@@ -499,7 +499,7 @@ options every command takes: board help
 
 ```text
 vb grants [list]
-vb grants create (<principal>... --can <pattern=permissions>...)... [--lock-me-out]
+vb grants create <principal>... --can <pattern=permissions>... [--and <principal>... --can …]... [--lock-me-out]
 vb grants update <grant> [--add-<kind> <name>]... [--remove-<kind> <name>]... [--can <pattern=permissions>]... [--lock-me-out]
 vb grants explain [<principal>] <channel>
 vb grants revoke <grant> [--lock-me-out]
@@ -534,9 +534,10 @@ comma-separated list, `all`, or `none`. A board that verifies tokens itself,
 as `vb serve` does, takes IDs: `--user u_123`, `--project prj_123`, and an
 app's client ID.
 
-`--can` goes after the principals it's for, and a principal after it starts
-another grant. `create` makes them all in one write, or none of them, so a
-lock and the grant that keeps you in go in one command, in either order.
+`--and` starts another grant: `create` makes the one on each side of it in
+one write, or none of them, so a lock and the grant that keeps you in go in
+one command, in either order. Without it, a command is one grant, wherever
+its flags sit.
 
 `create` prints each grant it made as its row. `update` takes `--add-<kind>` and
 `--remove-<kind>` for each kind (`--add-user`, `--remove-project`,
@@ -546,7 +547,7 @@ remove it and add it back in the same update. Each needs `manage` at the
 patterns the grant names, before and after. `revoke` stops one.
 
 ```text
-$ vb grants create --everyone --can 'security/=none' --user alice@acme.com --user bob@acme.com --can 'security/=all'
+$ vb grants create --everyone --can 'security/=none' --and --user alice@acme.com --user bob@acme.com --can 'security/=all'
 created g4  --everyone  security/=none
 created g5  --user alice@acme.com --user bob@acme.com  security/=all
 $ vb grants create --project sec --environment production,preview --can 'security/=read,post'
@@ -572,7 +573,7 @@ error: Can't create the grant: it would lock you out.
   this grant would leave you unable to manage grants in factory/
 
   Keep manage there yourself, in the same write:
-    vb grants create --everyone --can factory/=read --user u_julian --can factory/=all
+    vb grants create --everyone --can factory/=read --and --user u_julian --can factory/=all
   Make it anyway:
     vb grants create --everyone --can factory/=read --lock-me-out
 ```
