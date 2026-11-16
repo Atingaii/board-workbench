@@ -11,7 +11,7 @@ const thread = 'C1:1700000000.000100'
 const LABEL = '**vercel[bot] (github)**: '
 
 /** Vercel's comment as sync hands it to a platform: the markdown that lists its deployments a line each, and the deployments. */
-const comment = (text: string, label = LABEL) => ({ markdown: `${label}${displayText(text, VERCEL_BOT)}`, deployments: vercelDeployments(text)! })
+const comment = (text: string, label = LABEL) => ({ markdown: `${label}${displayText(text, true)}`, deployments: vercelDeployments(text)! })
 /** Vercel's comment about one project, with its status changed. */
 const withStatus = (status: string) => VERCEL_BUILDING.replaceAll('Building', status).replaceAll('building', status.toLowerCase())
 

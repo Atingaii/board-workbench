@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { displayText as display, vercelDeployments, VERCEL_BOT } from '../src/contract/bots.ts'
+import { byVercelBot, displayText as display, vercelDeployments, VERCEL_BOT } from '../src/contract/bots.ts'
 import { formatMessage } from '../src/cli/format.ts'
 import type { MessageView } from '../src/api/routes.ts'
 import { VERCEL_BUILDING, VERCEL_WITH_SKIPPED } from './vercel-fixtures.ts'
 
-const displayText = (text: string) => display(text, VERCEL_BOT)
+const displayText = (text: string) => display(text, true)
 
 describe('known bot messages', () => {
   it('reads the deployments out of a Vercel for GitHub comment', () => {
@@ -48,9 +48,22 @@ describe('known bot messages', () => {
   })
 
   it('only reads Vercel comments that Vercel wrote', () => {
-    expect(display(VERCEL_BUILDING, 'github:user:42')).toBe(VERCEL_BUILDING)
-    expect(display(VERCEL_BUILDING, 'slack:user:U1')).toBe(VERCEL_BUILDING)
-    expect(display(VERCEL_BUILDING, VERCEL_BOT)).toContain('- ⏳ **[vboard-factory]')
+    expect(display(VERCEL_BUILDING, false)).toBe(VERCEL_BUILDING)
+    expect(display(VERCEL_BUILDING, true)).toContain('- ⏳ **[vboard-factory]')
+  })
+
+  it("takes a sync's checked import of the bot from GitHub for the bot, and nothing that only looks like it", () => {
+    const sync = 'vercel:project:prj_web:production'
+    const by = (profile: string | null, actor = profile === null ? VERCEL_BOT : `${sync}+${profile}`) => ({ actor, profile })
+    const imported = { kind: 'external', platform: 'github', verified: true as const }
+    expect(byVercelBot({ by: by(null), from: 'github' }, null)).toBe(true)
+    expect(byVercelBot({ by: by(VERCEL_BOT), from: 'github' }, imported)).toBe(true)
+    // Another GitHub user, one the board didn't check, one from another platform, and a write that isn't an import.
+    expect(byVercelBot({ by: by('github:user:42'), from: 'github' }, imported)).toBe(false)
+    expect(byVercelBot({ by: by(VERCEL_BOT), from: 'github' }, { kind: 'external', platform: 'github' })).toBe(false)
+    expect(byVercelBot({ by: by(VERCEL_BOT), from: 'github' }, { ...imported, platform: 'slack' })).toBe(false)
+    expect(byVercelBot({ by: by(VERCEL_BOT), from: null }, imported)).toBe(false)
+    expect(byVercelBot({ by: by(VERCEL_BOT), from: 'github' }, { ...imported, kind: 'agent' })).toBe(false)
   })
 
   it('reads a comment with CRLF line endings', () => {

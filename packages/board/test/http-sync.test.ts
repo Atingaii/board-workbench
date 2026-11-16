@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import type { Can } from '../src/access/index.ts'
-import { slack } from '../src/sync/slack.ts'
+import { slack, SlackProvider } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import { fakePlatform } from './sync-fixtures.ts'
+import { VERCEL_BUILDING } from './vercel-fixtures.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import { REGISTRY_SESSION } from '../src/contract/contract.ts'
 import { board } from '../src/server/index.ts'
@@ -453,6 +454,39 @@ describe('who an import is by', () => {
     expect([refused.status, refused.body.error.message]).toEqual([403, 'only the author can edit a message'])
     expect((await edit(malte)).status).toBe(200)
     expect((await read(await julianOn(team.fetch), 'firehose')).map((m) => m.text)).toEqual(['changed'])
+  })
+
+  it("shows Vercel's deployment comment a sync elsewhere imported from GitHub as its deployments, and a look-alike under another GitHub user as written", async () => {
+    const asked = vi.spyOn(SlackProvider.prototype, 'post')
+    try {
+      const s = fakePlatform('slack')
+      const team = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
+      await grant(team, 'prj_support', 'all')
+      const support = caller(team.fetch, await supportToken())
+      expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'github', platform: 'github' }] })).status).toBe(200)
+      const bot = { id: 'github:user:35613825', handle: 'vercel[bot]', name: 'vercel[bot]', avatar: null, isBot: true }
+      const lookAlike = { ...bot, id: 'github:user:999' }
+      const ids: string[] = []
+      for (const author of [bot, lookAlike]) {
+        const imported = await support('POST', '/sync/imports', { op: 'post', author, from: 'github', channel: 'firehose', text: VERCEL_BUILDING })
+        expect(imported.status).toBe(200)
+        ids.push(imported.body.message)
+      }
+      await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(2))
+      const [vercel, other] = asked.mock.calls.map(([, , body]) => body)
+      expect(vercel!.markdown).toContain('**▲ Vercel**\n- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building]')
+      expect(vercel!.deployments).toMatchObject([{ project: 'vboard-factory', status: 'Building' }])
+      expect(other!.markdown).toContain('| Project |')
+      expect(other).not.toHaveProperty('deployments')
+      const vbRead = await vbOn(team)
+      const [botsRead, othersRead] = [(await vbRead(['read', ids[0]!])).stdout, (await vbRead(['read', ids[1]!])).stdout]
+      expect(botsRead).toContain('▲ Vercel')
+      expect(botsRead).not.toContain('| Project |')
+      expect(othersRead).toContain('| Project |')
+      expect(othersRead).not.toContain('▲ Vercel')
+    } finally {
+      asked.mockRestore()
+    }
   })
 })
 

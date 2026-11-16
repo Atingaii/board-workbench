@@ -1,7 +1,7 @@
 import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, TaskView, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
-import { displayText } from '../contract/bots.ts'
+import { byVercelBot, displayText } from '../contract/bots.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { findBlocks } from '../contract/blocks.ts'
 import { shownName, type Via } from '../contract/profiles.ts'
@@ -85,11 +85,11 @@ export const actorName = (actor: { name: string; via?: Via | undefined }): strin
  * A message's text as a terminal shows it: a bot's in its readable form, and each block as one
  * line, its schema and its data, where its fence was. A message that is only a block is that line.
  */
-function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks'>, handles: Map<string, string> = new Map()): string {
+function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks' | 'from' | 'author'>, handles: Map<string, string> = new Map()): string {
   // A mention is stored as `@[actor-id]`: it reads as the handle of who it mentions, which is what to type for
   // them, where they're known. `--json` has the ID.
   const said = replaceMentions(message.text, (token) => (token.kind === 'actor' && handles.has(token.actor) ? `@${handles.get(token.actor)}` : null))
-  const text = displayText(said, message.by.actor)
+  const text = displayText(said, byVercelBot(message, message.author))
   // Only what the board lists as blocks: a fence in a platform's text stays as it was written.
   if (!message.blocks?.length || text !== said) return text
   let out = ''
@@ -382,7 +382,7 @@ export function formatSchedule(schedule: ScheduleView, options: { pad?: string; 
         : 'done'
   const sent = schedule.sent > 0 ? ` · ${schedule.sent} sent` : ''
   const files = schedule.attachments.length ? ` · ${schedule.attachments.length} ${schedule.attachments.length === 1 ? 'file' : 'files'}` : ''
-  const text = displayText(schedule.text, schedule.by.actor)
+  const text = displayText(schedule.text, byVercelBot(schedule, null))
   return [
     `${pad}${schedule.id}  ${where} · ${repeat}${stop} · ${when}${sent}${files} · by ${authorName(schedule)}`,
     indent(text || '(no text)', `${pad}    `),
