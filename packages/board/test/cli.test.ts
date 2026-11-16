@@ -260,9 +260,10 @@ describe('cli', () => {
 
     // A board that moved: same-origin and cross-origin hops are followed, and only the board's origin gets the token and bypass.
     const board = testBoard({ url: undefined })
-    const seen = { moved: [] as (string | null)[], board: [] as (string | null)[] }
+    const seen = { moved: [] as (string | null)[], board: [] as { path: string; authorization: string | null; bypass: string | null }[] }
     const target = await serve(async (request) => {
-      seen.board.push(request.headers.get('authorization'), request.headers.get('x-vercel-protection-bypass'))
+      const { pathname: path } = new URL(request.url)
+      seen.board.push({ path, authorization: request.headers.get('authorization'), bypass: request.headers.get('x-vercel-protection-bypass') })
       return board.fetch(request)
     })
     const moved = await serve(async (request) => {
@@ -277,7 +278,10 @@ describe('cli', () => {
       const me = await vb(['whoami', '--json'], { BOARD_URL: at, BOARD_TOKEN: token, VERCEL_AUTOMATION_BYPASS_SECRET: 's3cret' })
       // Its discovery, which sends nothing, and /me, whose token stays on the origin it was asked for.
       expect(seen.moved.filter(Boolean)).toEqual([`Bearer ${token}`, `Bearer ${token}`])
-      expect(seen.board).toEqual([null, null, null, null])
+      // /me reaches the board bare, and turned away, it ends the command: its discovery, sent
+      // alongside, may not have got there yet, but whatever did came with no credentials either.
+      expect(seen.board).toContainEqual({ path: '/api/board/me', authorization: null, bypass: null })
+      expect(seen.board.filter((request) => request.authorization !== null || request.bypass !== null)).toEqual([])
       expect(me.code).toBe(1)
     } finally {
       await Promise.all([moved.close(), target.close()])

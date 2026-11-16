@@ -274,6 +274,9 @@ type Shared = {
   teamId: string
   inlineThreadMessages: boolean
   channelNames: boolean
+  inlineActors: boolean
+  /** How many reads of a channel's feed it took: one it refused for a parameter isn't one. */
+  feedReads: number
   accounts: Accounts
   directory: Directory
   now: () => number
@@ -1647,17 +1650,18 @@ function fakeBoard(shared: Shared, boardId: string) {
       const state = query('state')
       const createdBy = query('createdBy')
       const listed = [...schedules.values()].sort((a, b) => a.createdAt - b.createdAt)
-      // Filters apply within each page, so a page can come back short with a cursor to the rest.
-      const { items, cursor } = page(listed, url.searchParams.get('cursor'), 2)
-      const kept = items.filter(
-        (s) =>
-          (state === undefined || s.state === state) &&
-          (query('channelId') === undefined || s.channelId === query('channelId')) &&
-          (named === undefined || s.channelId === named) &&
-          (query('threadId') === undefined || s.threadId === query('threadId')) &&
-          (createdBy === undefined || s.createdBy.id === createdBy || principalId(s.createdBy.principal) === createdBy),
-      )
-      return { schedules: kept.map(showSchedule), cursor }
+      const matches = (s: Schedule) =>
+        (state === undefined || s.state === state) &&
+        (query('channelId') === undefined || s.channelId === query('channelId')) &&
+        (named === undefined || s.channelId === named) &&
+        (query('threadId') === undefined || s.threadId === query('threadId')) &&
+        (createdBy === undefined || s.createdBy.id === createdBy || principalId(s.createdBy.principal) === createdBy)
+      // It reads on past the schedules a filter leaves out until its page is full, up to a bound, so a page can still come back short with a cursor to the rest.
+      let at = Number(url.searchParams.get('cursor') ?? 0)
+      const bound = Math.min(listed.length, at + 6)
+      const kept: Schedule[] = []
+      for (; at < bound && kept.length < 2; at++) if (matches(listed[at]!)) kept.push(listed[at]!)
+      return { schedules: kept.map(showSchedule), cursor: at < listed.length ? String(at) : null }
     }
     if ((found = /^\/schedules\/([^/]+)\/cancel$/.exec(rest)) && method === 'POST') {
       const target = schedules.get(decodeURIComponent(found[1]!))
@@ -1981,9 +1985,28 @@ function fakeBoard(shared: Shared, boardId: string) {
     return undefined
   }
 
+  /** The reads that answer the actors they name with `with=actors`: threads, messages, and a channel's changes. */
+  const NAMING = /^\/(threads|messages|changes|messages\/[^/]+|threads\/[^/]+\/messages)$/
+  /** Everyone a read's answer names: who started each thread and wrote its messages, and who each change is by. */
+  const namedIn = (read: { threads?: any[]; thread?: any; messages?: any[]; message?: any; events?: any[] }): Actor[] => [
+    ...(read.threads ?? (read.thread ? [read.thread] : [])).flatMap((t) => [t.createdBy, ...[t.lastMessage, t.rootMessage, t.latestMessage].flatMap((m) => (m ? [m.createdBy] : []))]),
+    ...(read.messages ?? (read.message ? [read.message] : [])).map((m) => m.createdBy),
+    ...(read.events ?? []).flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]),
+  ]
   /** A request to this board, at `rest` under `/boards/:id`, from a caller who may use it. */
   async function route(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor, signal?: AbortSignal, version: 1 | 2 = 1): Promise<unknown> {
     let found: RegExpExecArray | null
+
+    if (url.searchParams.has('with')) {
+      // An API from before `with=actors` takes no `with`, as no route that names nobody does, and no other parameter it doesn't know.
+      if (!shared.inlineActors || method !== 'GET' || version !== 1 || !NAMING.test(rest)) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `with`.')
+      if (url.searchParams.get('with') !== 'actors') throw new Refused(400, 'bad_request')
+      const plain = new URL(url)
+      plain.searchParams.delete('with')
+      const read = (await route(method, rest, plain, body, actor, signal, version)) as Record<string, unknown>
+      // Each one once, as the actors route answers them by ID: one it has no view of is left out.
+      return { ...read, actors: [...new Set(namedIn(read).map(({ id }) => id))].flatMap((id) => actors.get(id) ?? []) }
+    }
 
     if (method === 'GET' && rest === '/channels') {
       const name = url.searchParams.get('name')
@@ -2133,6 +2156,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     }
     if (method === 'GET' && rest === '/changes') {
       const channelId = (channelRead(url, actor) ?? channelAt('')).id
+      shared.feedReads++
       const feed = () => feeds.get(channelId) ?? []
       const cursor = url.searchParams.get('cursor')
       if (cursor !== null && url.searchParams.get('from') !== null) throw new Refused(400, 'invalid_cursor')
@@ -2412,6 +2436,8 @@ export function fakeMessageboard(
      * each is 400 there, as any parameter it doesn't know is.
      */
     channelNames?: boolean
+    /** True for an API that answers a read's actors with it (`with=actors`), as `GET /actors?id=` names them. Vercel's doesn't yet: `with` is 400 there. */
+    inlineActors?: boolean
     /** Credentials the API takes, by their bearer, whatever it looks like: the principal each is, as `as()` names it. */
     tokens?: Record<string, string>
     /** An import's author is the platform user alone (`principal: { type: 'external' }`), as Vercel's API named them before platform profiles. */
@@ -2463,6 +2489,8 @@ export function fakeMessageboard(
     stored,
     inlineThreadMessages: options.inlineThreadMessages ?? false,
     channelNames: options.channelNames ?? false,
+    inlineActors: options.inlineActors ?? false,
+    feedReads: 0,
     externalImports: options.externalImports ?? false,
     actorsById: options.actorsById ?? true,
     namesNarrowed: options.namesNarrowed ?? true,
@@ -2605,6 +2633,8 @@ export function fakeMessageboard(
     cutNextCompletion,
     /** Every request it answered, as `METHOD /path`. */
     requests,
+    /** How many reads of a channel's feed it took, not counting any it refused for a parameter it doesn't know. */
+    feedReads: () => shared.feedReads,
     /** The default board's grants, by ID, as the API keeps them. */
     grants: general.data.grants,
     /** Every schema version the team registered, by ID, as the API keeps them. */
