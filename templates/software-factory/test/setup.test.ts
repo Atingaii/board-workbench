@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { agentPrompt, joinPrompt, markdown } from "../lib/markdown.ts";
-import { channel } from "../lib/project.ts";
+import { channel, projectName, slackChannel } from "../lib/project.ts";
 import { runningOf } from "../lib/running.ts";
 import { boardDeps, hasApp, isDone, setup, stepsView, type Deps, type Step, type Task } from "../lib/setup.ts";
+import { CHANNELS, FACTORY, README as TEMPLATE_README } from "./fresh.ts";
 
 // The launcher's steps, driven as the page drives them, against a fake network: what a person sees is
 // each step's tasks, done or with what helps do them, and what the outside world sees is the requests it sends.
@@ -96,11 +96,7 @@ const labels = (tasks: Task[]) => tasks.map((task) => task.label);
 const commands = (step: Step) => todo(step).flatMap((task) => task.commands ?? []);
 const links = (step: Step) => todo(step).flatMap((task) => (task.link ? [task.link.href] : []));
 
-/** The files the launcher links to, as this checkout has them: what a fresh factory deploys. */
-const CHANNELS = readFileSync(new URL("../app/api/board/[[...path]]/channels.ts", import.meta.url), "utf8");
-const FACTORY = readFileSync(new URL("../app/api/board/[[...path]]/factory.ts", import.meta.url), "utf8");
-/** The template's README, Deploy button and all, and one a team has made its own. */
-const TEMPLATE_README = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+/** The files the launcher links to are a fresh factory's (fresh.ts), its README the template's. This is one a team has made its own. */
 const OWN_README = "# Acme's factory\n\nIt works on acme/web.\n";
 const REPO_URL = "https://github.com/acme/factory/blob/main/app/api/board/%5B%5B...path%5D%5D";
 const CHANNELS_URL = `${REPO_URL}/channels.ts`;
@@ -560,43 +556,48 @@ test("a channels.ts that can't be read, or doesn't name the channel on a line, i
   assert.deepEqual(links((await shown(uninvited(() => "export const slackChannels = {\n  // none yet\n};\n"))).slack!), [CHANNELS_URL]);
 });
 
-/** The board's config as a deployment with `env` loads it: its connectors, the Slack channels it mirrors, and the board channels they and its own repo come into. */
-function configured(env: Record<string, string>): { connectors: Record<string, string>; slack: string[]; board: string[]; hears: string } {
-  const script = `
-    const { connectors, hears } = await import("./app/api/board/[[...path]]/factory.ts");
-    const { repoChannels, slackChannels } = await import("./app/api/board/[[...path]]/channels.ts");
-    console.log(JSON.stringify({ connectors, slack: Object.keys(slackChannels), board: [...new Set([...Object.values(repoChannels), ...Object.values(slackChannels)])], hears }));`;
-  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: new URL("..", import.meta.url), env: { PATH: process.env.PATH, NODE_ENV: "test", ...env }, encoding: "utf8" });
-  return JSON.parse(out.trim().split("\n").at(-1)!);
-}
-
-test("a factory's connectors, Slack channel and board channels are named for its Vercel project, so two on a team don't collide", () => {
-  // Its own repo, on a deployment from Git, and its Slack channel both come into the channel where it changes itself.
-  const git = { VERCEL_GIT_REPO_OWNER: "acme", VERCEL_GIT_REPO_SLUG: "factory" };
-  assert.deepEqual(configured({ VERCEL_PROJECT_NAME: "acme-factory", ...git }), {
-    connectors: { github: "github/acme-factory", slack: "slack/acme-factory" },
-    slack: ["#acme-factory-rsi"],
-    board: ["project-acme-factory/rsi"],
-    // The agent hears its own channels and no other factory's.
-    hears: "project-acme-factory/",
-  });
+test("what's named for the Vercel project follows its name, so two factories on a team don't collide", () => {
+  // Vercel names the project on a deployment.
+  assert.equal(projectName({ VERCEL_PROJECT_NAME: "acme-factory" }), "acme-factory");
   // A dev server has no VERCEL_PROJECT_NAME: its project is the one the token it pulled names.
-  assert.deepEqual(configured({ VERCEL_OIDC_TOKEN: jwt({ owner: "acme", project: "web-factory" }) }), {
-    connectors: { github: "github/web-factory", slack: "slack/web-factory" },
-    slack: ["#web-factory-rsi"],
-    board: ["project-web-factory/rsi"],
-    hears: "project-web-factory/",
-  });
-  // Vercel takes a dot in a project's name and 100 characters. Slack takes neither in a channel's: 80 at most.
-  assert.deepEqual(configured({ VERCEL_PROJECT_NAME: "acme.factory" }).slack, ["#acme-factory-rsi"]);
-  const [long] = configured({ VERCEL_PROJECT_NAME: "f".repeat(100) }).slack;
-  assert.equal(long, `#${"f".repeat(76)}-rsi`);
+  assert.equal(projectName({ VERCEL_OIDC_TOKEN: jwt({ owner: "acme", project: "web-factory" }) }), "web-factory");
   // Signed out, with nothing to name it for.
-  assert.deepEqual(configured({}), { connectors: { github: "github/factory", slack: "slack/factory" }, slack: ["#factory-rsi"], board: ["project-factory/rsi"], hears: "project-factory/" });
+  assert.equal(projectName({}), "factory");
+  assert.equal(slackChannel("-rsi", { VERCEL_PROJECT_NAME: "acme-factory" }), "#acme-factory-rsi");
+  // Vercel takes a dot in a project's name and 100 characters. Slack takes neither in a channel's: 80 at most.
+  assert.equal(slackChannel("-rsi", { VERCEL_PROJECT_NAME: "acme.factory" }), "#acme-factory-rsi");
+  assert.equal(slackChannel("-rsi", { VERCEL_PROJECT_NAME: "f".repeat(100) }), `#${"f".repeat(76)}-rsi`);
   // A board's channel takes no dot either, and 80 characters with what's under it.
   assert.equal(channel(undefined, { VERCEL_PROJECT_NAME: "acme.factory" }), "project-acme-factory");
   assert.equal(channel("web", { VERCEL_PROJECT_NAME: "acme.factory" }), "project-acme-factory/web");
   assert.equal(channel("web", { VERCEL_PROJECT_NAME: "f".repeat(100) }), `project-${"f".repeat(40)}/web`);
+});
+
+/** This checkout's own config as a deployment with `env` loads it: where each repo and Slack channel comes in, and what its agent hears. */
+function configured(env: Record<string, string>): { repos: Record<string, string>; slack: Record<string, string>; hears: string } {
+  const script = `
+    const { hears } = await import("./app/api/board/[[...path]]/factory.ts");
+    const { repoChannels, slackChannels } = await import("./app/api/board/[[...path]]/channels.ts");
+    console.log(JSON.stringify({ repos: repoChannels, slack: slackChannels, hears }));`;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: new URL("..", import.meta.url), env: { PATH: process.env.PATH, NODE_ENV: "test", ...env }, encoding: "utf8" });
+  return JSON.parse(out.trim().split("\n").at(-1)!);
+}
+
+test("this factory's own channels.ts, whatever it has onboarded, brings everything in where its agent hears and no other factory does", () => {
+  // The one test that reads this checkout's config. It names nothing a factory adds, so it holds
+  // once repos are onboarded, and fails for one that comes in where the agent wouldn't hear it.
+  const git = { VERCEL_GIT_REPO_OWNER: "acme", VERCEL_GIT_REPO_SLUG: "factory" };
+  const into = (config: ReturnType<typeof configured>) => [...new Set([...Object.values(config.repos), ...Object.values(config.slack)])];
+  const acme = configured({ VERCEL_PROJECT_NAME: "acme-factory", ...git });
+  assert.equal(acme.hears, "project-acme-factory/");
+  // Its own repo, on a deployment from Git, comes into the channel where it changes itself.
+  assert.equal(acme.repos["acme/factory"], "project-acme-factory/rsi");
+  assert.deepEqual(into(acme).filter((to) => !to.startsWith(acme.hears)), []);
+  // The same code as the team's second factory, on a dev server: channels of its own, none shared.
+  const web = configured({ VERCEL_OIDC_TOKEN: jwt({ owner: "acme", project: "web-factory" }), ...git });
+  assert.equal(web.hears, "project-web-factory/");
+  assert.equal(web.repos["acme/factory"], "project-web-factory/rsi");
+  assert.deepEqual(into(web).filter((to) => !to.startsWith(web.hears)), []);
 });
 
 test("a Slack channel that mirrors a repo's channel is said to be that, not the factory's own", async () => {

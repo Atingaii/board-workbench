@@ -1,17 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
 import { firstTask, ownRequest, startFirstTask, templateReadme } from "../lib/first-task.ts";
 import { pageBoard } from "../lib/page-board.ts";
+import { README as TEMPLATE_README } from "./fresh.ts";
 
 // The factory's first task, started as the page starts it, on a real board kept in memory: what
 // lands on the board is what people see, and what the agent's watcher hears.
 
-const TEMPLATE_README = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-
-test("the template's own README is the template's, and one without its Deploy button isn't", () => {
+test("a README with the template's Deploy button is the template's, and one without it isn't", () => {
   assert.equal(templateReadme(TEMPLATE_README), true);
   assert.equal(templateReadme("# Acme's factory\n\nIt works on acme/web.\n"), false);
   // A README that can't be read is nobody's to rewrite.
