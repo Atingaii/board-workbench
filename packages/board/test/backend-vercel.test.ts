@@ -628,7 +628,7 @@ describe('vercel()', () => {
   }
 
   it("pages a channel's threads back with the API's own cursor, each of its pages in one read", async () => {
-    const api = fakeMessageboard({ inlineThreadMessages: true })
+    const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true })
     const { team, sent } = recording(api)
     for (let i = 0; i < 60; i++) await team.post('busy', { text: `thread ${i}` })
     const listed = () => sent.filter((url) => url.pathname.endsWith('/threads'))
@@ -672,7 +672,7 @@ describe('vercel()', () => {
   })
 
   it("answers a page's cursor at or behind what its threads saw, so a poll after it gets a post that landed while it read", async () => {
-    const api = fakeMessageboard({ inlineThreadMessages: true })
+    const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true })
     const other = handleOn(api)
     let landing = false
     const { team, sent } = recording(api, async (url) => {
@@ -2841,7 +2841,9 @@ describe('naming the authors on a page', () => {
       if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency))
       return inner(input, init)
     }
-    return { api, asked, lists, julian: board({ backend: vercel({ team: 'team_test', api: API, fetch }) }) }
+    /** Julian in a process of his own, which has read nothing yet, as each run of the CLI is. */
+    const fresh = () => board({ backend: vercel({ team: 'team_test', api: API, fetch }) })
+    return { api, asked, lists, julian: fresh(), fresh }
   }
   const handles = (messages: { author?: { handle: string } | null }[]) => messages.map((message) => message.author?.handle).sort()
 
@@ -2917,5 +2919,153 @@ describe('naming the authors on a page', () => {
     await handleOn(api, 'user:u_val').post('dev', { text: 'late' })
     expect(handles((await refused.messages({ channel: 'dev' })).messages)).toContain('u_val')
     expect(asked.at(-1)).toEqual(['vercel:user:u_val'])
+  })
+
+  /** A channel's messages, its threads, one thread, and its events, each read by a process of its own: who each shows, and the requests they made in all, the ones for actors apart. */
+  const reads = async (options: Parameters<typeof fakeMessageboard>[0]) => {
+    const { api, fresh, asked, lists } = await reading(options)
+    const { id: root } = await handleOn(api, 'user:u_val').post('dev', { text: 'a thread' })
+    for (const principal of ['user:u_tom', 'user:u_kim']) await handleOn(api, principal).reply(root, { text: 'me too' })
+    const { cursor } = await fresh().poll({ channel: 'dev' })
+    await handleOn(api, 'user:u_lee').post('dev', { text: 'since' })
+    api.requests.length = 0
+    const shown = {
+      messages: handles((await fresh().messages({ channel: 'dev' })).messages),
+      threads: handles((await fresh().threads({ channel: 'dev' })).threads.flatMap((thread) => [thread.message, ...(thread.last ? [thread.last] : [])])),
+      thread: handles((await fresh().thread(root)).replies),
+      events: handles((await fresh().poll({ channel: 'dev', after: cursor })).events.map((event) => event.message!)),
+    }
+    return { shown, requests: api.requests.length, actors: asked.length + lists.length }
+  }
+
+  it('names them from the read itself where the API answers a read with its actors, and asks for nobody', async () => {
+    const inline = await reads({ inlineThreadMessages: true, inlineActors: true })
+    const today = await reads({ inlineThreadMessages: true })
+    expect(inline.shown).toEqual({
+      messages: ['ada', 'julian', 'u_kim', 'u_lee', 'u_tom', 'u_val'],
+      threads: ['ada', 'julian', 'u_kim', 'u_lee', 'u_val'],
+      thread: ['u_kim', 'u_tom'],
+      events: ['u_lee'],
+    })
+    // The same names either way.
+    expect(inline.shown).toEqual(today.shown)
+    // With them, no process asks for an actor, by ID or in the list.
+    expect(inline.actors).toBe(0)
+    // Vercel's API today refuses the parameter: each process reads once more without it, and asks for its authors by ID as before.
+    expect(today.actors).toBe(4)
+    expect(today.requests).toBe(inline.requests + 4 + 4)
+  })
+
+  it('names someone the API left out of a read\'s actors by their principal, and does not ask for them', async () => {
+    const { api } = await reading({ inlineActors: true })
+    const inner = as(api, 'user:u_jb')
+    const asked: string[][] = []
+    // An API that sends the actors of a read, but not Ada: it has no view of her yet.
+    const julian = board({
+      backend: vercel({
+        team: 'team_test',
+        api: API,
+        fetch: async (input, init) => {
+          const url = new URL(String(input))
+          if (url.pathname.endsWith('/actors')) asked.push(url.searchParams.getAll('id'))
+          const response = await inner(input, init)
+          if (!url.searchParams.has('with')) return response
+          const read = (await response.json()) as { actors: { id: string }[] }
+          return Response.json({ ...read, actors: read.actors.filter(({ id }) => id !== 'vercel:user:u_ada') })
+        },
+      }),
+    })
+    // She's named by her principal, as anyone the API doesn't have, and not asked for: the read said it has no view of her.
+    expect(handles((await julian.messages({ channel: 'dev' })).messages)).toEqual(['julian', 'user-u_ada'])
+    expect(asked).toEqual([])
+  })
+
+  it('is refused the actors once by an API that does not send them, however many channels a read goes to at once', async () => {
+    const api = fakeMessageboard()
+    const channels = ['dev', 'ops', 'ci', 'docs']
+    for (const channel of channels) await handleOn(api, 'user:u_ada').post(channel, { text: `in ${channel}` })
+    const inner = as(api, 'user:u_jb')
+    /** A process of its own, with every read it sent with `with` and was refused, and every read of that route. */
+    const process = () => {
+      const refused: string[] = []
+      const sent: string[] = []
+      const julian = board({
+        backend: vercel({
+          team: 'team_test',
+          api: API,
+          fetch: async (input, init) => {
+            const url = new URL(String(input))
+            const route = url.pathname.split('/').at(-1)!
+            const response = await inner(input, init)
+            if ((init?.method ?? 'GET') === 'GET') sent.push(route)
+            if (url.searchParams.has('with') && response.status === 400) refused.push(route)
+            return response
+          },
+        }),
+      })
+      return { julian, refused, sent }
+    }
+    // The whole board's latest messages: a read of each channel, all at once.
+    const messages = process()
+    expect((await messages.julian.messages({})).messages.map((message) => message.text).sort()).toEqual(channels.map((channel) => `in ${channel}`).sort())
+    expect(messages.refused).toEqual(['messages'])
+    // One read a channel, the board's own general among them, and the one refused.
+    expect(messages.sent.filter((route) => route === 'messages')).toHaveLength((await messages.julian.channels()).length + 1)
+    // The whole board's events since a cursor: each channel's feed, all at once.
+    const { cursor } = await process().julian.poll({})
+    for (const channel of channels) await handleOn(api, 'user:u_ada').post(channel, { text: `more in ${channel}` })
+    const events = process()
+    expect((await events.julian.poll({ after: cursor })).events.map((event) => event.message?.text)).toEqual(expect.arrayContaining(channels.map((channel) => `more in ${channel}`)))
+    expect(events.sent.filter((route) => route === 'changes').length).toBeGreaterThan(channels.length)
+    expect(events.refused).toEqual(['changes'])
+  })
+
+  it("stops a read that waits on another read's answer about the actors as soon as its own caller stops it", async () => {
+    const api = fakeMessageboard()
+    for (const channel of ['dev', 'ops']) await handleOn(api, 'user:u_ada').post(channel, { text: `in ${channel}` })
+    const inner = as(api, 'user:u_jb')
+    // An API that holds the first read sent with `with` until it's let go.
+    let release = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let out = () => {}
+    const sent = new Promise<void>((resolve) => (out = resolve))
+    const backend = vercel({
+      team: 'team_test',
+      api: API,
+      fetch: async (input, init) => {
+        if (new URL(String(input)).searchParams.has('with')) {
+          out()
+          await held
+        }
+        return inner(input, init)
+      },
+    })
+    const julian = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
+    const first = backend.messages(julian, { channel: 'dev' }, new AbortController().signal)
+    await sent
+    const stop = new AbortController()
+    const waiting = backend.messages(julian, { channel: 'ops' }, stop.signal)
+    const outcome = Promise.race([waiting.then(() => 'answered', (error: Error) => error.name), new Promise((resolve) => setTimeout(() => resolve('still waiting'), 500))])
+    // The waiter has reached the wait: its own lookups are behind it.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    stop.abort()
+    expect(await outcome).toBe('AbortError')
+    // The first read is nobody's to stop but its caller's: let go, it answers.
+    release()
+    expect((await first).messages.map((message) => message.text)).toEqual(['in dev'])
+  })
+
+  it('keeps asking for a thread list with its messages on an API that takes that and not the actors', async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true })
+    const team = handleOn(api)
+    for (let i = 0; i < 3; i++) await team.reply((await team.post('busy', { text: `thread ${i}` })).id, { text: 'reply' })
+    // A process that has read nothing yet.
+    const reader = handleOn(api)
+    api.requests.length = 0
+    await reader.threads({ channel: 'busy' })
+    await reader.threads({ channel: 'busy' })
+    // Refused once for the actors, then listed with its messages each time: no message is read by its ID.
+    expect(api.requests.filter((r) => /\/threads$/.test(r))).toHaveLength(3)
+    expect(api.requests.filter((r) => /\/messages\/msg_/.test(r))).toEqual([])
   })
 })

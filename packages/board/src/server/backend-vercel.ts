@@ -907,7 +907,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   async function messageById(who: Who, id: string, signal?: AbortSignal): Promise<{ thread: ApiThread; message: ApiMessage }> {
     if (!locate(id)) throw notFound(`message not found: ${id}`, 'message_not_found')
     try {
-      return await api(who, 'GET', await onBoard(who, `/messages/${encodeURIComponent(id)}`), signal ? { signal } : {})
+      return await reading(who, await onBoard(who, `/messages/${encodeURIComponent(id)}`), signal ? { signal } : {})
     } catch (error) {
       if (error instanceof HttpError && error.code === 'thread_not_found') throw notFound(`message not found: ${id}`, 'message_not_found')
       throw error
@@ -941,8 +941,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** A message's labels: a deleted message keeps none, though the API still holds them. */
   const labelsOf = (message: ApiMessage): Labels => (message.deletedAt === undefined ? { ...message.labels } : {})
 
-  const threadMessages = async (who: Who, threadId: string, signal?: AbortSignal) =>
-    all<ApiMessage>(who, await onBoard(who, `/threads/${encodeURIComponent(threadId)}/messages`), 'messages', {}, signal)
+  const threadMessages = async (who: Who, threadId: string, signal?: AbortSignal) => {
+    const path = await onBoard(who, `/threads/${encodeURIComponent(threadId)}/messages`)
+    const messages: ApiMessage[] = []
+    let cursor: string | undefined
+    do {
+      const page = await reading<{ messages: ApiMessage[]; cursor: string | null }>(who, path, { query: { cursor }, ...(signal ? { signal } : {}) })
+      messages.push(...page.messages)
+      cursor = page.cursor ?? undefined
+    } while (cursor)
+    return messages
+  }
 
   /** Who reacted with each emoji. The API counts them on the message and lists them apart. */
   async function reactors(who: Who, message: ApiMessage): Promise<Record<string, string[]>> {
@@ -1036,6 +1045,84 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** Asks for `actors` by ID together, before each is named: a page's authors, or a page of changes', in one request. */
   const naming = (who: Who, actors: Iterable<ApiActor>) => {
     if (namesById) for (const actor of actors) void byId(who, actor.id)
+  }
+  /** What a read answers that names actors: threads, messages, and a feed's events, and with `with=actors` who they are. */
+  type Named = { actors?: ApiActorView[]; threads?: ApiThread[]; thread?: ApiThread; messages?: ApiMessage[]; message?: ApiMessage; events?: ApiChange[] }
+  /** Everyone a read's answer names, the actors the API answers with it when asked. */
+  const namedIn = (read: Named): ApiActor[] => [
+    ...(read.threads ?? (read.thread ? [read.thread] : [])).flatMap((thread) => [
+      thread.createdBy,
+      ...[thread.lastMessage, thread.rootMessage, thread.latestMessage].flatMap((message) => (message ? [message.createdBy] : [])),
+    ]),
+    ...(read.messages ?? (read.message ? [read.message] : [])).map((message) => message.createdBy),
+    ...(read.events ?? []).flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]),
+  ]
+  /** Whether the API answers a read's actors with it (`with=actors`): unknown until a read with the parameter is answered, and false once one is refused it. */
+  let actorsWithReads: boolean | undefined
+  /** The first read that asks for them, while it's out: reads that start meanwhile wait for its answer, so an API that refuses the parameter refuses it once. */
+  let askingActors: Promise<void> | null = null
+  /** `waited`, or the signal's reason as soon as it stops: a read that waits on another's answer stops when its own caller does. */
+  async function stoppable(waited: Promise<void>, signal?: AbortSignal): Promise<void> {
+    if (!signal) return waited
+    signal.throwIfAborted()
+    let stop = () => {}
+    try {
+      await Promise.race([
+        waited,
+        new Promise<never>((_, reject) => {
+          stop = () => reject(signal.reason)
+          signal.addEventListener('abort', stop, { once: true })
+        }),
+      ])
+    } finally {
+      signal.removeEventListener('abort', stop)
+    }
+  }
+  /**
+   * A read of threads, messages, or changes, with the actors it names where the API sends them, so naming
+   * them costs no request of its own: they're kept as if each had been asked for by ID, one the API left out
+   * as one it doesn't have. An API from before `with=actors` takes no parameter it doesn't know and answers
+   * 400: the read is made again without it, and it's never asked again. Reads that go out together, one a
+   * channel, wait for the first of them to learn which API this is. A long-poll holds nobody: it may take its
+   * whole wait to answer.
+   */
+  async function reading<T extends Named>(who: Who, path: string, init: { query?: Record<string, string | undefined>; signal?: AbortSignal } = {}): Promise<T> {
+    if (!namesById) return api<T>(who, 'GET', path, init)
+    while (actorsWithReads === undefined && askingActors) await stoppable(askingActors, init.signal)
+    if (actorsWithReads === false) return api<T>(who, 'GET', path, init)
+    let answered = () => {}
+    if (actorsWithReads === undefined && init.query?.wait === undefined) {
+      const first = new Promise<void>((resolve) => {
+        answered = () => {
+          if (askingActors === first) askingActors = null
+          resolve()
+        }
+      })
+      askingActors = first
+    }
+    let read: T
+    try {
+      read = await api<T>(who, 'GET', path, { ...init, query: { ...init.query, with: 'actors' } })
+      actorsWithReads = true
+    } catch (error) {
+      // It names the parameter it doesn't take: one that refuses another is that one's asker's to hear, and says nothing of this one.
+      if (!(error instanceof HttpError && error.status === 400 && /additional property\W*with\b/i.test(error.message))) throw error
+      actorsWithReads = false
+      return api<T>(who, 'GET', path, init)
+    } finally {
+      answered()
+    }
+    if (!read.actors) return read
+    const views = new Map(read.actors.map((view) => [view.id, view] as const))
+    const { asked } = namesOf(who)
+    const at = Date.now()
+    if (asked.size >= 10_000) asked.clear()
+    for (const { id } of namedIn(read)) {
+      const view = views.get(id)
+      // Someone the API left out this time keeps a name read a moment ago.
+      if (view || !asked.has(id) || at - asked.get(id)!.at > NAMES_FRESH_MS) asked.set(id, { at, view: Promise.resolve(view) })
+    }
+    return read
   }
   /**
    * An actor as the API names them, asked for by ID with everyone else named in the same turn: the
@@ -1465,12 +1552,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     type Page = { threads: ApiThread[]; cursor: string | null }
     if (threadsWithMessages)
       try {
-        return await api<Page>(who, 'GET', path, { query: { ...query, include: 'messages' }, signal })
+        return await reading<Page>(who, path, { query: { ...query, include: 'messages' }, signal })
       } catch (error) {
         if (!(error instanceof HttpError && error.status === 400 && /additional property/i.test(error.message))) throw error
         threadsWithMessages = false
       }
-    return api<Page>(who, 'GET', path, { query, signal })
+    return reading<Page>(who, path, { query, signal })
   }
 
   /**
@@ -1677,7 +1764,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const pages = await Promise.all(
       listed.map(async (channel) => ({
         channel,
-        ...(await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, limit: String(asked) }, signal })),
+        ...(await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { channelId: channel.id, limit: String(asked) }, signal })),
       })),
     )
     const full = pages.filter((page) => page.messages.length === asked)
@@ -1771,7 +1858,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         const from = position.feeds[channel.id]
         // A channel the position doesn't know reads from its oldest change kept, after the position's time.
         // Each change comes with its message as it is now, so showing one costs no read of its own.
-        const page = await api<{ events: ApiChange[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, include: 'message', ...(from?.at ? { cursor: from.at } : {}) }, signal })
+        const page = await reading<{ events: ApiChange[]; cursor: string }>(who, path, { query: { channelId: channel.id, include: 'message', ...(from?.at ? { cursor: from.at } : {}) }, signal })
         const skip = from?.skip ?? 0
         const events = page.events
           .map((change, i) => ({ change, i }))
@@ -1858,13 +1945,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const kept: ApiMessage[] = []
     if (query.after === undefined) {
       // Without a cursor, the newest: a filtered read looks among the channel's latest page.
-      const page = await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, limit: String(narrowed ? PAGE_MAX : Math.min(limit, PAGE_MAX)) }, signal })
+      const page = await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { channelId: channel.id, limit: String(narrowed ? PAGE_MAX : Math.min(limit, PAGE_MAX)) }, signal })
       for (const message of page.messages) if (await keep(message)) kept.push(message)
       return { messages: kept.slice(-limit), cursor: page.cursor }
     }
     let cursor = query.after
     for (let pages = 0; pages < SCAN_PAGES && kept.length < limit; pages++) {
-      const page = await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, after: cursor, limit: String(Math.min(limit - kept.length, PAGE_MAX)) }, signal })
+      const page = await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { channelId: channel.id, after: cursor, limit: String(Math.min(limit - kept.length, PAGE_MAX)) }, signal })
       cursor = page.cursor
       for (const message of page.messages) if (await keep(message)) kept.push(message)
       if (page.messages.length === 0) break
@@ -1881,7 +1968,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     let cursor = query.after
     for (;;) {
       const wait = Math.min(WAIT_MAX_S, Math.max(0, Math.ceil((until - Date.now()) / 1000)))
-      const page = await api<{ events: ApiChange[]; cursor: string }>(who, 'GET', path, {
+      const page = await reading<{ events: ApiChange[]; cursor: string }>(who, path, {
         query: { channelId: channel.id, include: 'message', ...(cursor === undefined ? { from: 'latest' } : { cursor }), ...(wait > 0 ? { wait: String(wait) } : {}) },
         signal,
       })
