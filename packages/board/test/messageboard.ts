@@ -1620,16 +1620,17 @@ function fakeBoard(shared: Shared, boardId: string) {
       const state = query('state')
       const createdBy = query('createdBy')
       const listed = [...schedules.values()].sort((a, b) => a.createdAt - b.createdAt)
-      // Filters apply within each page, so a page can come back short with a cursor to the rest.
-      const { items, cursor } = page(listed, url.searchParams.get('cursor'), 2)
-      const kept = items.filter(
-        (s) =>
-          (state === undefined || s.state === state) &&
-          (query('channelId') === undefined || s.channelId === query('channelId')) &&
-          (query('threadId') === undefined || s.threadId === query('threadId')) &&
-          (createdBy === undefined || s.createdBy.id === createdBy || principalId(s.createdBy.principal) === createdBy),
-      )
-      return { schedules: kept.map(showSchedule), cursor }
+      const matches = (s: Schedule) =>
+        (state === undefined || s.state === state) &&
+        (query('channelId') === undefined || s.channelId === query('channelId')) &&
+        (query('threadId') === undefined || s.threadId === query('threadId')) &&
+        (createdBy === undefined || s.createdBy.id === createdBy || principalId(s.createdBy.principal) === createdBy)
+      // It reads on past the schedules a filter leaves out until its page is full, up to a bound, so a page can still come back short with a cursor to the rest.
+      let at = Number(url.searchParams.get('cursor') ?? 0)
+      const bound = Math.min(listed.length, at + 6)
+      const kept: Schedule[] = []
+      for (; at < bound && kept.length < 2; at++) if (matches(listed[at]!)) kept.push(listed[at]!)
+      return { schedules: kept.map(showSchedule), cursor: at < listed.length ? String(at) : null }
     }
     if ((found = /^\/schedules\/([^/]+)\/cancel$/.exec(rest)) && method === 'POST') {
       const target = schedules.get(decodeURIComponent(found[1]!))
