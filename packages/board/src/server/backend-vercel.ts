@@ -417,6 +417,27 @@ function retryWait(attempt: number, retryAfter: string | null): number {
   return Math.min(asked, RETRY_MS * 2 ** attempt * (1 + Math.random()))
 }
 
+/**
+ * A 429 the API still answered after `retries` tries again in `ms`: how many requests a minute it
+ * takes (`x-ratelimit-limit`), from whom, and when to send again. That's when its window resets
+ * (`x-ratelimit-reset`, in Unix seconds), or what `Retry-After` asks where it doesn't say.
+ */
+function throttled(response: Response, code: string, retries: number, ms: number): HttpError {
+  const header = (name: string) => {
+    const value = response.headers.get(name)
+    return value !== null && /^\d{1,12}$/.test(value) ? Number(value) : undefined
+  }
+  const reset = header('x-ratelimit-reset')
+  const untilReset = reset !== undefined ? reset - Math.floor(Date.now() / 1000) : undefined
+  const retryAfter = untilReset !== undefined && untilReset > 0 && untilReset <= 3600 ? untilReset : header('retry-after')
+  const limit = header('x-ratelimit-limit')
+  const tried = retries > 0 ? `rate-limited ${retries + 1} tries in ${Math.max(1, Math.round(ms / 1000))}s` : 'rate-limited it'
+  const takes = limit !== undefined ? `takes ${limit} requests a minute` : 'limits requests'
+  return new HttpError(429, code, `Vercel's API ${tried}. It ${takes} per login or token, for all its agents and profiles together.`, {
+    ...(retryAfter !== undefined ? { retryAfter } : {}),
+  })
+}
+
 /** `ms` passing, or `signal` stopping it first. */
 const pause = (ms: number, signal?: AbortSignal) =>
   ms <= 0 || signal?.aborted
@@ -690,6 +711,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const headers: Record<string, string> = { 'content-type': 'application/json', ...apiProfileHeaders(who.profile), ...(who.can !== undefined ? { 'x-board-can': who.can } : {}) }
     // A 429 did nothing. A 503 may have: only a request the API can tell it has seen goes again.
     const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'
+    const started = Date.now()
     for (let attempt = 0; ; attempt++) {
       let response: Response
       try {
@@ -716,6 +738,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         continue
       }
       const error = (body as { error?: { code?: string; message?: string; reason?: unknown } } | undefined)?.error
+      if (response.status === 429) throw throttled(response, error?.code ?? 'rate_limited', attempt, Date.now() - started)
       const refused = new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
       // What a code says more of: why a claim was lost.
       if (typeof error?.reason === 'string' && /^[a-z_]{1,64}$/.test(error.reason)) reasons.set(refused, error.reason)

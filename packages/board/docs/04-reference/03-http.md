@@ -883,6 +883,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 409 | `stale_lease` | an ack whose lease ran out: the match or inbox event was pulled again |
 | 413 | `too_large` | an upload over 4 MB, or a direct upload over 100 MB |
 | 429 | `ratelimited` | the platform rate-limited a source read |
+| 429 | `rate_limited`, … | on Vercel's board, its API rate-limited the caller, after four retries: `Retry-After` says how many seconds to wait, and the message what the limit is |
 | 500 | `no_store` | a local board that can't open its file, in a directory it can't write: the message says where |
 | 500 | `internal` | anything else; the board logs it |
 | 501 | `no_scheduler` | a schedule on a board that keeps no schedules |

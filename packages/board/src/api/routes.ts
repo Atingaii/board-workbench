@@ -83,6 +83,10 @@ export const MessagesQuery = Filters.extend({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
+/** How many threads a read lists without a `limit`, and with one at most. */
+export const THREADS_LIMIT_DEFAULT = 50
+export const THREADS_LIMIT_MAX = 500
+
 /**
  * `limit` counts threads: each thread with a matching message, by its latest reply. `before` is a page's
  * `older`, for the threads last active before it; it pages backward, so it takes no `after`.
@@ -90,7 +94,7 @@ export const MessagesQuery = Filters.extend({
 export const ThreadsQuery = Filters.extend({
   after: Ref.optional(),
   before: z.string().min(1).max(1024).optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
+  limit: z.coerce.number().int().min(1).max(THREADS_LIMIT_MAX).optional(),
 }).refine((query) => query.before === undefined || query.after === undefined, {
   message: '`before` pages back from a page\'s `older`, and `after` reads forward: pass one',
   path: ['before'],

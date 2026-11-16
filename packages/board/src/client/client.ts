@@ -66,13 +66,16 @@ export class BoardError extends Error {
   readonly status: number
   readonly hint: string | undefined
   readonly origin: ErrorOrigin
-  constructor(code: string, message: string, status: number, options: { hint?: string; origin?: ErrorOrigin } = {}) {
+  /** For a 429, how many seconds the board asked to wait before sending again (its `Retry-After`), when it said. */
+  readonly retryAfter: number | undefined
+  constructor(code: string, message: string, status: number, options: { hint?: string; origin?: ErrorOrigin; retryAfter?: number } = {}) {
     super(message)
     this.name = 'BoardError'
     this.code = code
     this.status = status
     this.hint = options.hint
     this.origin = options.origin ?? 'handle'
+    this.retryAfter = options.retryAfter
   }
 }
 
@@ -868,10 +871,13 @@ export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Me,
 async function toError(response: Response): Promise<BoardError> {
   try {
     const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown } }
+    // Retry-After in seconds, as a 429 says it: its date form isn't one a board sends.
+    const retryAfter = response.status === 429 ? /^\d{1,6}$/.exec(response.headers.get('retry-after') ?? '')?.[0] : undefined
     if (body.error?.message)
       return new BoardError(body.error.code ?? 'error', body.error.message, response.status, {
         ...(typeof body.error.hint === 'string' ? { hint: body.error.hint } : {}),
         origin: handleErrors.has(response) ? 'handle' : 'board',
+        ...(retryAfter !== undefined ? { retryAfter: Number(retryAfter) } : {}),
       })
   } catch {}
   return new BoardError('http_error', `The board answered ${`${response.status} ${response.statusText}`.trim()}.`, response.status)

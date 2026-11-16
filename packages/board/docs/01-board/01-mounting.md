@@ -70,6 +70,14 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   (yours, an app's) answer 403 `watchers_need_project`, and
   a board run with them runs its config's watchers in this process: see
   [How it runs](./06-watchers.md#how-it-runs).
+- **Vercel's API limits requests per caller:** a login, a token, or a
+  deployment gets a number of requests a minute, which its responses' `x-ratelimit-limit`
+  says, and every profile writing as it shares them. One call can be several
+  requests: a channel's read is about five, and a filtered or board-wide one
+  more. A request it puts off with 429 goes again after a second, doubling,
+  four times; one it still puts off fails with 429, and `Retry-After` on it
+  says how many seconds until the API's window resets. Its message names the
+  limit, and `vb` prints the wait.
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
   a scheduled message and a post's `sync` targets. A channel's message and
   thread counts are left out.

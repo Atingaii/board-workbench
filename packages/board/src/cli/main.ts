@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
-import type { MessageView } from '../api/routes.ts'
+import { THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
 import type { Mentioned } from '../contract/mentions.ts'
@@ -733,11 +733,12 @@ function missing(): string | undefined {
 function failureOf(error: unknown): Failure {
   if (error instanceof Failed) return error.failure
   const message = error instanceof Error ? error.message : String(error)
-  const { code, status, hint, origin } = error as { code?: unknown; status?: unknown; hint?: unknown; origin?: unknown }
+  const { code, status, hint, origin, retryAfter } = error as { code?: unknown; status?: unknown; hint?: unknown; origin?: unknown; retryAfter?: unknown }
   // Not the board's or the handle's: the system's (a file it couldn't write), or a bug.
   if (typeof code !== 'string' || typeof status !== 'number')
     return { class: 'unknown', reason: 'unexpected_error', message: `Failed to ${doing()}.`, details: [message] }
-  const said = { error: { code, message, status, ...(typeof hint === 'string' ? { hint } : {}) } }
+  const wait = typeof retryAfter === 'number' && Number.isInteger(retryAfter) && retryAfter >= 0 ? retryAfter : undefined
+  const said = { error: { code, message, status, ...(typeof hint === 'string' ? { hint } : {}), ...(wait !== undefined ? { retryAfter: wait } : {}) } }
   if (origin === 'handle') {
     const fix: Recovery[] = typeof hint === 'string' ? [{ instruction: hint }] : []
     const own = (kind: Failure['class'], reason: string, next: Recovery[] = fix): Failure => ({
@@ -866,11 +867,21 @@ function failureOf(error: unknown): Failure {
           : [])
   }
   if (status === 413) return theirs('limit', 'payload_too_large', `Can't ${doing()}. It's too large for the board.`)
-  if (status === 429) return theirs('rate_limit', 'rate_limited', 'Too many requests to the board. Try again in a minute.')
+  // A file too big for one request, on a board whose store takes none bigger: a limit, which the board's words give.
+  if (status === 501 && code === 'no_direct_uploads')
+    return theirs('limit', 'payload_too_large', `Can't ${doing()}. The file is too large for this board.`, [{ instruction: 'Compress it, or split it into smaller files' }])
+  // How long to wait is what the board said, when it said: a minute is only a guess.
+  if (status === 429)
+    return theirs('rate_limit', 'rate_limited', `Can't ${doing()}. Too many requests to the board.`, [
+      { instruction: wait !== undefined ? `Wait ${waitFor(wait)}, then run it again` : 'Wait a minute, then run it again' },
+    ])
   if (status === 501) return theirs('platform', specific('not_supported'), `Can't ${doing()}. This board doesn't support it.`)
   if (code === 'unreachable') return theirs('network', 'network_error', "Couldn't reach the board.")
   return theirs('platform', 'api_error', `Failed to ${doing()}.`)
 }
+
+/** `42s`, `2m`: a wait the way people say it. */
+const waitFor = (seconds: number) => (seconds < 120 ? `${Math.max(1, seconds)}s` : `${Math.ceil(seconds / 60)}m`)
 
 /** How this run ends with `failure`: shown on stderr, or by the app, and its exit code. */
 function report(failure: Failure, json: boolean): number {
@@ -1219,14 +1230,20 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         if (!narrowed) for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
         return 0
       }
-      const query = { ...filters(target), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }
+      const limit = flags.limit ? Number(flags.limit) : THREADS_LIMIT_DEFAULT
+      // One thread more than asked for, where a read lists that many, tells whether the page is all of them.
+      const peek = Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
+      const query = { ...filters(target), ...(peek ? { limit: limit + 1 } : flags.limit ? { limit } : {}) }
       // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
       const old = outdated("This board can't list threads.")
       // Only a board's own "no route" is one without the route: any other 404 says what it is.
-      const page = await board.threads(query).catch((error: unknown) => {
+      const listed = await board.threads(query).catch((error: unknown) => {
         throw error instanceof BoardError && error.status === 404 && /^no route: /.test(error.message) ? old : error
       })
-      if (!Array.isArray((page as { threads?: unknown }).threads)) throw old
+      if (!Array.isArray((listed as { threads?: unknown }).threads)) throw old
+      // The latest activity comes last: the one more is the oldest, or after a cursor, the newest.
+      const more = listed.threads.length > limit || (!peek && listed.threads.length === limit)
+      const page = listed.threads.length > limit ? { ...listed, threads: flags.after !== undefined ? listed.threads.slice(0, limit) : listed.threads.slice(-limit) } : listed
       // Nothing in a channel that doesn't exist is a typo, not an empty channel.
       if (!page.threads.length && target) {
         const channels = (await board.channels()).map((c) => c.path)
@@ -1252,6 +1269,20 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const handles = new Map(unnamed.length ? (await client().actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, a.handle]) : [])
         out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/'), handles }))
       }
+      // A page that isn't all of them says where the rest are. Without --after, they're older: a bigger
+      // --limit reaches them. After a cursor, they're newer than the page, and its cursor is past them
+      // too: what reads on is --after the newest message of the page's last thread, the latest active.
+      const latest = page.threads.at(-1)
+      if (more && flags.after !== undefined && latest) {
+        out(`\nmore since then: ${commandLine(rerunWithout(['--after'], '--after', (latest.last ?? latest.message).id))}`)
+        return 0
+      }
+      if (more)
+        out(
+          limit < THREADS_LIMIT_MAX
+            ? `\n(older not shown: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))})`
+            : `\n(older not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label, --by, or --text)`,
+        )
       // The cursor is where this read stopped: the next command is the one that reads on from it.
       // It's this run as typed, its board, identity and filters included, from where it stopped.
       out(`\nnew since then: ${commandLine(rerunWithout(['--after'], '--after', String(page.cursor)))}`)

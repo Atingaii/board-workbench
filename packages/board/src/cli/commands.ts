@@ -81,7 +81,7 @@ export const options = {
   'idempotency-key': { type: 'string', value: 'key', description: 'sending the same one again posts once' },
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
-  attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file, up to 10 per message' },
+  attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file: up to 10 per message, each up to 100 MB (4 MB on some boards)' },
   'text-file': { type: 'string', value: 'path', description: 'the text, from a file: - reads stdin' },
   'tasks-file': { type: 'string', value: 'path', description: 'several tasks, from a JSON file: - reads stdin' },
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
@@ -354,7 +354,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         description: "a channel (every channel without one), a message's ID, or a Slack or GitHub link the board synced",
       },
     ],
-    options: [option('limit', 'threads to list (default: 50)')],
+    options: [option('limit', 'threads to list (default: 50, at most 500)')],
     filters: true,
     examples: [
       { name: "list a channel's latest threads", value: 'read dev' },
@@ -453,7 +453,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'label',
     brief: '[--if-unset k] [--unset k]',
     description: 'set labels on a message, or remove them',
-    arguments: [id(), { name: 'k=v', required: false, multiple: true, description: 'a label to set' }],
+    arguments: [id(), { name: 'k=v', required: false, multiple: true, description: 'a label to set: a key of up to 64 lowercase letters, numbers, ., _, and -, starting with a letter or number, and a value of up to 256 characters' }],
     options: [option('unset'), option('if'), option('if-unset')],
     examples: [
       { name: 'mark a bug fixed', value: 'label 812 state=fixed --unset wip' },
