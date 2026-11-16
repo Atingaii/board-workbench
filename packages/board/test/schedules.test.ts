@@ -405,17 +405,23 @@ describe('scheduled messages', () => {
       return fresh(deployed.fetch, 'u_julian', {})
     }
     const first = instance()
+    // The first instance takes over before the schedule exists. Its first call starts the takeover
+    // without waiting for it, and a takeover that reads the schedules after one was created arms
+    // its send again, under the takeover's name, beside the timer its creation armed.
+    await first('GET', '/me')
+    const takeovers = async () => (await store.log.read(`board-schedules\u001f${SCHEDULES_SESSION}`)).filter((e) => e.type === 'schedule.takeover')
+    await vi.waitFor(async () => expect(await takeovers()).toHaveLength(1))
     await first('POST', '/schedules', { channel: 'dev', text: 'a week later', in: '8d' })
     await vi.waitFor(() => expect(queue.timers).toHaveLength(1))
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    // The next instance arms it again under the takeover's name, which every instance after it shares.
     vi.setSystemTime(T0 + MINUTE)
     await instance()('GET', '/me')
-    await settle()
-    const armed = queue.timers.length
+    await vi.waitFor(() => expect(queue.timers).toHaveLength(2))
     vi.setSystemTime(T0 + 2 * MINUTE)
     await instance()('GET', '/me')
     await settle()
-    expect(queue.timers).toHaveLength(armed)
+    expect(queue.timers).toHaveLength(2)
   })
 
   it('send one created on the newest deployment when an earlier one catches up on it first', async () => {
