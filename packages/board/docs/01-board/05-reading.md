@@ -175,8 +175,12 @@ instead of the cursor, which is past the threads the page left out:
 more since then: vb read firehose-www --after 840
 ```
 
+With a filter on messages (`--by`, `--text`, `--mentions`, `--re`,
+`--source`), a thread may be placed by its newest match, which the page
+doesn't show, so the line reads the same cursor again with a bigger `--limit`.
+
 With `--json`, a page of `--limit` threads may not be all of them: read again
-after the newest message of its last thread before you move on to its
+after the same cursor with a bigger `--limit` before you move on to its
 `cursor`.
 
 ## In code

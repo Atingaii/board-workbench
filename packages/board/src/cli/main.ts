@@ -1232,7 +1232,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       const limit = flags.limit ? Number(flags.limit) : THREADS_LIMIT_DEFAULT
       // One thread more than asked for, where a read lists that many, tells whether the page is all of them.
-      const peek = Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
+      // Not for --json, which is the board's page as it answered, its `older` included: that pages back
+      // from the last thread the board listed, which would be the one more, never shown.
+      const peek = !flags.json && Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
       const query = { ...filters(target), ...(peek ? { limit: limit + 1 } : flags.limit ? { limit } : {}) }
       // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
       const old = outdated("This board can't list threads.")
@@ -1272,9 +1274,15 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       // A page that isn't all of them says where the rest are. Without --after, they're older: a bigger
       // --limit reaches them. After a cursor, they're newer than the page, and its cursor is past them
       // too: what reads on is --after the newest message of the page's last thread, the latest active.
+      // With a filter on messages, a board may place a thread by its newest match, which its summary
+      // doesn't show (`last` is its latest reply, whoever wrote it), so nothing on the page says where
+      // it stopped: a bigger page after the same cursor is what's sure to miss none.
       const latest = page.threads.at(-1)
       if (more && flags.after !== undefined && latest) {
-        out(`\nmore since then: ${commandLine(rerunWithout(['--after'], '--after', (latest.last ?? latest.message).id))}`)
+        const byMessage = ['re', 'by', 'mentions', 'from', 'text'].some((key) => key in query)
+        if (!byMessage) out(`\nmore since then: ${commandLine(rerunWithout(['--after'], '--after', (latest.last ?? latest.message).id))}`)
+        else if (limit < THREADS_LIMIT_MAX) out(`\nmore since then: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))}`)
+        else out(`\n(more not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label, --by, or --text)`)
         return 0
       }
       if (more)

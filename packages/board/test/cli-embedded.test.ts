@@ -363,6 +363,67 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("reads on from a filtered page after a cursor without skipping a thread, though Vercel's board places each by its newest match", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    const as = async (who: string, args: string[]) => {
+      vi.stubEnv('VERCEL_AUTH_TOKEN', `user:${who}`)
+      return capture(() => app.run([...args, '--scope', 'acme']))
+    }
+    const app = createApp({ appName: 'vercel board' })
+    try {
+      const start = (await as('u_jb', ['post', 'dev', 'start'])).stdout.trim()
+      const a = (await as('u_val', ['post', 'dev', 'A by val'])).stdout.trim()
+      const b = (await as('u_val', ['post', 'dev', 'B by val'])).stdout.trim()
+      // A reply on A by someone else, after B: A's latest message is now past B's.
+      expect((await as('u_jb', ['reply', a, 'on A, by jb'])).code).toBe(0)
+      // Val's threads since the start, a page at a time, each next command pasted as it says.
+      const seen = new Set<string>()
+      let command = ['read', 'dev', '--by', 'me', '--limit', '1', '--after', start]
+      for (let page = 0; page < 4; page++) {
+        const { stdout } = await as('u_val', command)
+        for (const [, id] of stdout.matchAll(/^#(\S+) /gm)) seen.add(id!)
+        const more = /\nmore since then: vercel board (.+)\n$/.exec(stdout)
+        if (!more) break
+        command = more[1]!.split(' ').filter((word) => word !== '--scope' && word !== 'acme')
+      }
+      expect([...seen].sort()).toEqual([a, b].sort())
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("leaves a --json read the board's page as it answered, its older included, so paging back with it skips none", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const ids: string[] = []
+      for (const n of [1, 2, 3]) ids.push((await capture(() => app.run(['post', 'dev', `job ${n}`, '--scope', 'acme']))).stdout.trim())
+      const read = async (...args: string[]) => JSON.parse((await capture(() => app.run(['read', 'dev', '--limit', '2', '--json', '--scope', 'acme', ...args]))).stdout)
+      const newest = await read()
+      expect(newest.threads.map((thread: { message: { id: string } }) => thread.message.id)).toEqual(ids.slice(1))
+      // The page before it, by the protocol's `older`: the one thread left.
+      expect(newest.older).toEqual(expect.any(String))
+      const handle = board({ backend: vercel({ team: 'team_test', api: 'https://api.vercel.com', fetch: (input, init) => as(api, 'user:u_jb')(input, init) }) })
+      const back = await handle.threads({ channel: 'dev', limit: 2, before: newest.older })
+      expect(back.threads.map((thread) => thread.message.id)).toEqual(ids.slice(0, 1))
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("says how long to wait when Vercel's API still rate-limits a command after its retries, and that the limit is the login's, not this agent's", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
