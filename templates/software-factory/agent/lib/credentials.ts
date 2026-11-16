@@ -1,45 +1,26 @@
-import type { NetworkPolicy, NetworkPolicyRule } from "@vercel/sandbox";
 import { defineState } from "eve/context";
 import type { SandboxNetworkPolicy } from "eve/sandbox";
 import type { ToolContext } from "eve/tools";
 import { githubScope, threadRepos } from "../../lib/github";
 import { environment } from "../sandbox";
-import { connectors, factory, repoChannels } from "../../app/api/board/[[...path]]/factory.ts";
+import { connectors, factory, repoChannels, serviceChannels } from "../../app/api/board/[[...path]]/factory.ts";
 import { NAME } from "./identity.ts";
+import { policy } from "./policy.ts";
+import { threadServices } from "./services.ts";
 import { agentBoard } from "./vb-tool.ts";
 import { stale } from "./tokens";
-
-// Real credentials go in the sandbox's network policy, which adds them on the way out. Anything the
-// sandbox runs can use them, so each is the least the thread needs.
 
 const GITHUB_MS = 30 * 60_000;
 const GIT_EMAIL = `${NAME}@users.noreply.github.com`;
 
-/** What the sandbox's requests get on the way out: GitHub, when this thread has a token, and nothing else. */
-export function policy(tokens: { github: string | null }): NetworkPolicy {
-  const github: Record<string, NetworkPolicyRule[]> = tokens.github
-    ? {
-        "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
-        "github.com": [{ transform: [{ headers: { authorization: `Basic ${Buffer.from(`x-access-token:${tokens.github}`).toString("base64")}` } }] }],
-      }
-    : {};
-  return {
-    allow: {
-      ...github,
-      "*": [],
-    },
-  };
-}
+/** A thread's first message, or null when it couldn't be read. */
+type Root = Awaited<ReturnType<ReturnType<typeof agentBoard>["thread"]>>["message"] | null;
 
 /**
  * A GitHub token for this thread's repos only (`threadRepos`), among the ones the board brings in:
  * code run from one repo's PR can't reach the others. Null without a repo.
  */
-async function githubToken(getToken: typeof import("@vercel/connect").getToken, thread: string) {
-  const root = await agentBoard(factory)
-    .thread(thread)
-    .then((view) => view.message)
-    .catch(() => null);
+async function githubToken(getToken: typeof import("@vercel/connect").getToken, thread: string, root: Root) {
   if (!root) {
     console.warn(`[factory] couldn't read thread ${thread}, so the agent can't reach GitHub this turn`);
     return null;
@@ -64,8 +45,14 @@ export async function give(ctx: Pick<ToolContext, "getSandbox">, thread: string,
   if (!force && !stale(given.get().until, now)) return;
   const sandbox = await ctx.getSandbox(environment);
   const { getToken } = await import("@vercel/connect");
-  const github = await githubToken(getToken, thread);
-  await sandbox.setNetworkPolicy(policy({ github }) as SandboxNetworkPolicy);
+  const root: Root = await agentBoard(factory)
+    .thread(thread)
+    .then((view) => view.message)
+    .catch(() => null);
+  const github = await githubToken(getToken, thread, root);
+  // Other services' keys: only in the channels channels.ts gives them.
+  const services = threadServices(root?.channel, serviceChannels);
+  await sandbox.setNetworkPolicy(policy({ github, services }) as SandboxNetworkPolicy);
   const git = await sandbox.run({
     command: `git config --global user.name ${JSON.stringify(NAME)} && git config --global user.email ${GIT_EMAIL}`,
   });

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { installAgentBrowser } from "@agent-browser/eve/sandbox";
 import { defineSandbox } from "eve/sandbox";
 import { VercelSandbox } from "eve/sandbox/vercel";
+import { placeholders } from "./lib/services";
 
 /** Pinned: asking GitHub's API for the latest hits the unauthenticated rate limit sandboxes share. */
 const GH = "2.102.0";
@@ -57,6 +58,9 @@ export default defineSandbox(() =>
     networkPolicy: "deny-all",
     env: {
       GH_TOKEN: "from-the-network-policy",
+      // Each service's key the project has (agent/lib/services.ts): a placeholder too, in every
+      // thread. Whether the real key is added is the thread's channel's to say.
+      ...placeholders(),
     },
   }),
 );

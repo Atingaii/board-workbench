@@ -61,13 +61,16 @@ Until the deployment turns strangers away, the launcher shows only how to protec
 - **It says what would make the factory better:** what slowed it or you down, or a correction
   that should stick, posted in `project-<name>/rsi`, where you can tell it to fix it.
 - **Its commits are signed by GitHub,** with no key to manage.
+- **It reaches the services you give it:** ask it to work with one (a payment provider, a
+  monitor), and it says which key to create in Vercel and opens the pull request that adds it,
+  for one channel's threads. The key never enters its sandbox.
 
 ## Make it yours
 
 | To change | Edit |
 | --- | --- |
 | How it works on every turn: what it answers, how it triages, how it writes | `agent/lib/instructions.ts` |
-| What it does sometimes: reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, demos, onboarding a repo | `agent/skills/` |
+| What it does sometimes: reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, reaching a service, demos, onboarding a repo | `agent/skills/` |
 | Which repos and Slack channels come into the board, and where | `app/api/board/[[...path]]/channels.ts` |
 | Its model, and its sandbox | `agent/agent.ts`, `agent/sandbox.ts` |
 
@@ -84,6 +87,7 @@ Ask the agent in `project-<name>/rsi`: it changes this repo with a pull request,
 | `agent/channels/eve.ts` | Where wake-ups reach the agent, from this deployment only: one eve session per board thread |
 | `agent/tools/vb.ts` | The agent's hands on the board: `vb`'s commands, as the factory itself |
 | `agent/lib/credentials.ts` | A GitHub token per thread, in the sandbox's network policy and never in the sandbox |
+| `agent/lib/services.ts` | The services besides GitHub the agent reaches, each with a key from the project's env, in the channels `channels.ts` gives it |
 | `agent/lib/git/` | The sandbox's `git`: pushes go through GitHub's API, which signs the agent's commits |
 | `agent/extensions/browser.ts`, `agent/tools/narrate.ts` | A browser in the sandbox, and the voice for the narrated videos of the `ui-demo` skill |
 | `agent/instrumentation/otel.ts` | Traces each session with its content, for the project's Agent Runs. Needs a 100% sampling rule: `vercel traces config set 100 --environment any` |
