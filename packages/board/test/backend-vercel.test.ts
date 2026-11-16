@@ -1845,6 +1845,24 @@ describe('vercel()', () => {
     await vi.waitFor(() => expect(pongSlack.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**pong**: <@U_G1>, over to you']))
   })
 
+  it("names a mention of any key the board runs in a write its sync makes as a user, as a2() does", async () => {
+    const api = fakeMessageboard()
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: fakePlatform('slack').adapter }, channels({ C1: 'general' })), 'slack-eu': slack({ adapter: fakePlatform('slack').adapter }, channels({ C9: 'general' })) },
+    })
+    await pong.fetch(new Request(`${PONG_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'hello', user: 'U_ADA', name: 'ada' }) }))
+    await vi.waitFor(async () => expect((await pong.messages({ channel: 'general' })).messages).toHaveLength(1))
+    const [asked] = (await pong.messages({ channel: 'general' })).messages
+    const ada = { id: 'slack:user:U_ADA', handle: 'ada', name: 'ada', avatar: null, isBot: false }
+    // A callback's own write, as Ada, mentions a user of each key.
+    const { message } = await pong.syncImport({ op: 'post', author: ada, from: null, re: asked!.id, text: 'cc @[slack:user:U_G1] and @[slack-eu:user:U_G2]' })
+    const owner = 'vercel:project:prj_pong:production'
+    expect((await pong.thread(asked!.id)).replies.find((reply) => reply.id === message)?.text).toBe(`cc @[${owner}+slack:user:U_G1] and @[${owner}+slack-eu:user:U_G2]`)
+  })
+
   it("keeps an import's mention as it came where naming it under its project would outgrow a message", async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')

@@ -1150,7 +1150,8 @@ through the sync that speaks for them, under the key it imported them through.
   - **A platform's own mention comes in as one.** A provider writes each user
     a message mentions as `@[<their id>]` in its text and lists them in the
     event's `mentioned`, as it describes an author (Slack's `<@U0456>` is
-    `@[slack:user:U0456]`). The import carries them (`mentioned` on a post
+    `@[slack:user:U0456]`). The board names every one under the entry's key,
+    listed or not. The import carries them (`mentioned` on a post
     or an edit), and the backend meets each one it doesn't know: an actor as
     one who wrote would be, under the import's key, never someone the board
     signs in. One it knows keeps its record, which their own writes keep

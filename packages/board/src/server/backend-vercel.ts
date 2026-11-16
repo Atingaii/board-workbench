@@ -2280,15 +2280,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** The platform users an import's text mentions, for the API to meet as it meets the author. */
   const mentioned = (body: { mentioned?: ExternalAuthor[] | undefined }) => (body.mentioned?.length ? { mentioned: body.mentioned.map(platformUser) } : {})
   /**
-   * An import's text, its mentions of its key's users (`@[slack:user:U0456]`) as the API names
+   * An import's text, its mentions of its keys' users (`@[slack:user:U0456]`) as the API names
    * them: this project's profiles of them, as it names the author. Where that would take the text
    * past what a message holds, it stays as it came, and sync still finds who the short ID names.
    */
   async function asNamed(who: Who, body: { text: string; from: string | null; author: ExternalAuthor }): Promise<string> {
-    const key = body.from ?? body.author.id.split(':')[0]!
-    if (!body.text.includes(`@[${key}:`)) return body.text
+    // The key it came through, and for a write a sync makes as the user (no `from`), any key this board runs, as `a2()` has it.
+    const keys = body.from === null ? [...new Set([body.author.id.split(':')[0]!, ...(binding?.sync ?? []).map((entry) => entry.key)])] : [body.from]
+    const ours = (actor: string) => keys.some((key) => actor.startsWith(`${key}:`))
+    if (!keys.some((key) => body.text.includes(`@[${key}:`))) return body.text
     const owner = principalId((await self(who)).actor.principal)
-    const named = replaceMentions(body.text, (token) => (token.kind === 'actor' && token.actor.startsWith(`${key}:`) ? `@[${owner}+${token.actor}]` : null))
+    const named = replaceMentions(body.text, (token) => (token.kind === 'actor' && ours(token.actor) ? `@[${owner}+${token.actor}]` : null))
     return named.length > MESSAGE_TEXT_MAX ? body.text : named
   }
 

@@ -229,8 +229,9 @@ under the entry's key instead, so a provider under key `support` brings
 `text` as `@[desk:user:7]` and list them in the event's `mentioned`, each shaped
 like an `author`, on a `message` or an `edited` event. The board names them
 under the key as it does authors, and meets each one it hasn't seen, so people
-can mention them back before they've written. Up to 50 a message; one the text
-doesn't mention is left out.
+can mention them back before they've written. Up to 50 a message are met;
+every mention in the text is named under the key, and one the text doesn't
+mention is left out.
 
 **Dedupe.** `dedupe` is the identity of one occurrence. A platform redelivering the
 same event must produce the same value, so the retry does nothing; a later

@@ -79,6 +79,16 @@ describe("a mention that comes in from Slack, on the board's own sync", () => {
     expect((await actors(julian)).find((actor) => actor.id === 'slack-eu:user:U_GRACE')).toMatchObject({ handle: 'grace', name: 'Grace Hopper' })
   })
 
+  it('names every user a message mentions under its key, and meets the first fifty', async () => {
+    const { board, says } = mirrored('slack-eu')
+    const julian = await julianOn(board.fetch)
+    const users = Array.from({ length: 51 }, (_, n) => `U_${n}`)
+    await says('U_ADA', '500.1', users.map((user) => `<@${user}>`).join(' '))
+    await vi.waitFor(async () => expect((await read(julian, 'firehose')).map((kept) => kept.text)).toEqual([users.map((user) => `@[slack-eu:user:${user}]`).join(' ')]))
+    const met = (await actors(julian)).map((actor) => actor.id)
+    expect(users.filter((user) => met.includes(`slack-eu:user:${user}`))).toEqual(users.slice(0, 50))
+  })
+
   it('shows them to a caller that reads only where they were mentioned, and to no caller held elsewhere', async () => {
     const { board, says } = mirrored()
     const julian = await julianOn(board.fetch)

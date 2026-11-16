@@ -149,17 +149,20 @@ export function keyedId(key: string, platform: string, id: string): string {
   return `${key}:${id.startsWith(`${platform}:`) ? id.slice(platform.length + 1) : id}`
 }
 
-/** A platform event with its author named under `key`, and the users its text mentions, there too. */
+/**
+ * A platform event with its author named under `key`, and every user its text mentions there too:
+ * the ones `mentioned` describes, and any it has no room for, since a mention by the platform's
+ * name would be of another sync's user.
+ */
 function keyedEvent(key: string, platform: string, event: ExternalEvent): ExternalEvent {
   if (!('author' in event)) return event
   const author = { ...event.author, id: keyedId(key, platform, event.author.id) }
-  if (!('mentioned' in event) || !event.mentioned?.length) return { ...event, author } as ExternalEvent
-  const keyed = new Map(event.mentioned.map((user) => [user.id, keyedId(key, platform, user.id)]))
+  if ((event.kind !== 'message' && event.kind !== 'edited') || key === platform) return { ...event, author } as ExternalEvent
   return {
     ...event,
     author,
-    mentioned: event.mentioned.map((user) => ({ ...user, id: keyed.get(user.id)! })),
-    text: replaceMentions(event.text, (token) => (token.kind === 'actor' && keyed.has(token.actor) ? `@[${keyed.get(token.actor)}]` : null)),
+    ...(event.mentioned ? { mentioned: event.mentioned.map((user) => ({ ...user, id: keyedId(key, platform, user.id) })) } : {}),
+    text: replaceMentions(event.text, (token) => (token.kind === 'actor' && token.actor.startsWith(`${platform}:`) ? `@[${keyedId(key, platform, token.actor)}]` : null)),
   }
 }
 
