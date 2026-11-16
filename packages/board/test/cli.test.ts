@@ -78,6 +78,8 @@ describe('cli', () => {
     expect(failure(await vb(['reply', id, '--file', join(dir, 'missing.md'), '--json']))).toMatchObject({ reason: 'file_not_found' })
     // The option's old name says its new one, with the command to run, and posts nothing.
     expect(await vb(['reply', id, '--text-file', note])).toEqual({ code: 2, stdout: '', stderr: `error: --text-file is --file now.\n\n  Run it with --file:\n    vb reply ${id} --file ${note}\n` })
+    // A command that takes no file is told only that it doesn't know the option.
+    expect((await vb(['read', 'text-files', '--text-file', note])).stderr.split('\n')[0]).toBe('error: Unknown option --text-file for vb read.')
     // One too big to attach says so of the text, not of --attach. Sparse: nothing is written.
     const huge = join(dir, 'huge.log')
     await writeFile(huge, '')

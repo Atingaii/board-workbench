@@ -278,6 +278,8 @@ function parse(argv: string[]) {
  * inline), it says where that goes instead.
  */
 function renamedOption(name: string, word: string | undefined, argv: string[]): Failed | undefined {
+  // Only where the command takes a file at all: anywhere else the old name is as unknown as any.
+  if (!optionsOf(word).includes('file')) return undefined
   if (name === 'text-file' && word === 'tasks')
     return usage('--text-file is gone from tasks create.', { reason: 'unknown_option', next: [{ instruction: 'Pass the text, or - to read it from stdin: --file there is a plan of several' }] })
   if (name === 'schema' && word === 'schemas')
