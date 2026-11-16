@@ -54,7 +54,7 @@ you: one line, so they know it will stick.
 - **The fix is small and clear** (a line or two in your instructions or a skill, a command a
   skill gets wrong): open the pull request first, so the post carries its link. Don't offer to
   open it: the pull request is the offer. Its check-ins (the pr-lifecycle skill) go in the
-  post's thread, not the one you were in.
+  post's thread, not the one you were in: open it, post, then schedule them on the post.
 - **This thread can't push to the factory's repo** (it came from another repo's PR or issue):
   the post is all you do. Say the fix is ready to open, so one word there gets it.
 - **Bigger, or a matter of taste:** the post is the proposal. Build it when someone in that
