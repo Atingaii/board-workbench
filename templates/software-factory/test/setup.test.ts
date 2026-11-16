@@ -629,6 +629,49 @@ test("Slack's app in its channel, by name, is done", async () => {
   assert.equal(isDone(slack!), true);
 });
 
+test("a private channel mapped by its ID, which Connect's app can't list, is done once the app can read it", async () => {
+  // Connect's Slack app has groups:history but not groups:read: a private channel never shows in
+  // users.conversations, but reading it works once the app's in it.
+  const base = fake().deps.synced;
+  const synced = { ...base, slackChannels: { ...base.slackChannels, C0PRIVATE: "project-factory/alerts" } };
+  const checked = (history: () => Response) =>
+    fake({
+      deps: { connect: async () => "app-token", synced },
+      routes: {
+        "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
+        "https://slack.com/api/users.conversations": conversations({ id: "C2", name: "factory-rsi" }),
+        "https://slack.com/api/conversations.history": history,
+      },
+    });
+  const inside = checked(() => json({ ok: true, messages: [] }));
+  assert.equal(isDone((await shown(inside.deps)).slack!), true);
+  // It asks about that channel alone: the one it found in the list needs no second request.
+  assert.deepEqual(inside.requests.filter((url) => url.includes("conversations.history")), ["https://slack.com/api/conversations.history?channel=C0PRIVATE&limit=1"]);
+  // Outside it, Slack says a private channel isn't there, and a public one that the app isn't in it.
+  for (const error of ["channel_not_found", "not_in_channel"]) {
+    const { slack } = await shown(checked(() => json({ ok: false, error })).deps);
+    assert.deepEqual(labels(todo(slack!)), ["Invite the app to `C0PRIVATE`"]);
+    assert.deepEqual(commands(slack!), ["/invite @factory"]);
+  }
+  // Slack not answering isn't the app being outside: nobody is sent to invite an app that's already in.
+  const { slack } = await shown(checked(() => json({ ok: false, error: "ratelimited" })).deps);
+  assert.deepEqual(labels(todo(slack!)), ["Couldn't ask Slack which channels the app is in"]);
+  assert.match(todo(slack!)[0]!.hint ?? "", /ratelimited/);
+});
+
+test("a channel mapped by its name is looked for in the app's channels only", async () => {
+  // A name isn't an ID Slack can read by, so there's nothing more to ask.
+  const { deps, requests } = fake({
+    deps: { connect: async () => "app-token" },
+    routes: {
+      "https://slack.com/api/auth.test": () => json({ ok: true, team: "Acme", user: "factory" }),
+      "https://slack.com/api/users.conversations": conversations({ id: "C1", name: "general" }),
+    },
+  });
+  assert.deepEqual(labels(todo((await shown(deps)).slack!)), ["Invite the app to `#factory-rsi`"]);
+  assert.deepEqual(requests.filter((url) => url.includes("conversations.history")), []);
+});
+
 /** A reply by this deployment under a profile. */
 const under = (profile: string) => ({ id: "13", re: "12", labels: {}, by: { principal: DEPLOYMENT, profile, actor: "a" } }) as never;
 
