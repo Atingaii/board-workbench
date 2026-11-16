@@ -51,7 +51,7 @@ import {
 import type { Method, Protocol } from '../api/protocol.ts'
 import type { ExternalAuthor } from '../contract/external.ts'
 import type { Actor } from '../contract/folds.ts'
-import { ATTACHMENT_BYTES_MAX, RESERVED_LABEL_PREFIX, TASK_BATCH_MAX, type Attachment, type Labels } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, MESSAGE_TEXT_MAX, RESERVED_LABEL_PREFIX, TASK_BATCH_MAX, type Attachment, type Labels } from '../contract/schemas.ts'
 import { findBlocks } from '../contract/blocks.ts'
 import type { SchemaDefinition } from '../contract/data-schemas.ts'
 import { checkValue } from '../contract/data-values.ts'
@@ -64,6 +64,7 @@ import { importedHandle, userIdOf } from '../contract/profiles.ts'
 import type { CallerRequest } from './auth.ts'
 import { avatarSvg } from './avatars.ts'
 import { badRequest, batchTooLarge, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
+import { extractMentions, settleMentions, type Mentioned, type MentionedActor } from '../contract/mentions.ts'
 import { DroppedError, runMiddleware, type Write, type WriteSource } from './middleware.ts'
 import { createRouter, METHODS, openapi, queryObject, readCapped, readJson, type BoardRoute } from './routing.ts'
 import { FULL_ACCESS, parseCan, type Access } from './access.ts'
@@ -432,6 +433,77 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * then the backend's refusal is the answer, not what the text says. A message board() can't find
    * for the caller is still checked, since one written without reading is its author's to edit.
    */
+  /**
+   * Settles the `@handle`s of a caller's texts: a mention is `@[actor-id]`, so a handle that names
+   * exactly one of the actors the caller can see is written as that, and one that names none or
+   * several stays as typed, a mention of no one. Of several, it's the one who wrote in `thread`, if
+   * exactly one did. The actors are read once, for the first text that has a handle. A board behind
+   * this one settles them itself, and a schedule's send goes as it was settled when it was made: a
+   * handle that mentioned no one then mentions no one later. An ID is longer than a handle, so where
+   * settling would take a text past what a message holds, it stays as typed, each handle's actor a
+   * candidate: the writer is never refused for a length they didn't type.
+   */
+  function settler(caller: Caller, signal: AbortSignal) {
+    let listed: Promise<MentionedActor[]> | null = null
+    // A caller that may not list the board's actors can name no one by handle.
+    const actors = () =>
+      (listed ??= backend.actors(caller, {}, signal).then(
+        (answer) => answer.actors.map(({ id, handle, name }) => ({ id, handle, name })),
+        (error: unknown) => {
+          if (error instanceof HttpError && (error.status === 403 || error.status === 404)) return []
+          throw error
+        },
+      ))
+    return async (text: string, thread: () => Promise<string | undefined>): Promise<{ text: string; mentions: Mentioned[] }> => {
+      if (backend.settlesMentions || caller.origin.via?.kind === 'schedule' || !extractMentions(text).some((token) => token.kind === 'handle')) return { text, mentions: [] }
+      const fitting = (settled: { text: string; mentions: Mentioned[] }) =>
+        settled.text.length <= MESSAGE_TEXT_MAX || text.length > MESSAGE_TEXT_MAX ? settled : { text, mentions: settled.mentions.map(unsettled) }
+      const settled = settleMentions(text, await actors())
+      if (!settled.mentions.some((mention) => mention.candidates.length > 1)) return fitting(settled)
+      const id = await thread()
+      const writers = new Set<string>()
+      if (id !== undefined) {
+        try {
+          const { message, replies } = await backend.message(caller, { id }, signal)
+          for (const written of [message, ...replies]) writers.add(written.by.actor)
+        } catch (error) {
+          if (!(error instanceof HttpError && error.status === 404)) throw error
+        }
+      }
+      return fitting(
+        settleMentions(text, await actors(), (candidates) => {
+          const wrote = candidates.filter((actor) => writers.has(actor.id))
+          return wrote.length === 1 ? wrote[0]! : null
+        }),
+      )
+    }
+  }
+
+  /** A handle that would have mentioned an actor, said as one that didn't: still text, and they're who it could have meant. */
+  const unsettled = (mention: Mentioned): Mentioned => (mention.actor ? { written: mention.written, actor: null, candidates: [mention.actor] } : mention)
+
+  /**
+   * Hands `write` a text with its `@handle`s settled, as `settler` does, and adds what became of each
+   * to its answer. `kept` is the text the answer came back with: where that isn't the one written, a
+   * retry got the message its first try made, and a handle is said to mention only who that text does.
+   */
+  async function settling<T extends object>(
+    caller: Caller,
+    text: string,
+    thread: () => Promise<string | undefined>,
+    signal: AbortSignal,
+    write: (text: string) => Promise<T>,
+    kept?: (answer: T) => string,
+  ): Promise<T & { mentions?: Mentioned[] }> {
+    const settled = await settler(caller, signal)(text, thread)
+    const answer = await write(settled.text)
+    if (settled.mentions.length === 0) return answer
+    const stored = kept?.(answer) ?? settled.text
+    if (stored === settled.text) return { ...answer, mentions: settled.mentions }
+    const mentioned = new Set(extractMentions(stored).flatMap((token) => (token.kind === 'actor' ? [token.actor] : [])))
+    return { ...answer, mentions: settled.mentions.map((mention) => (mention.actor && !mentioned.has(mention.actor.id) ? unsettled(mention) : mention)) }
+  }
+
   async function checkWrite(caller: Caller, text: string, where: { channel: string } | { message: string }, signal: AbortSignal): Promise<void> {
     if (!text.includes('json#')) return
     const access = accessOf(caller)
@@ -554,7 +626,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     const message = { ...(channel !== undefined ? { channel } : {}), ...(re !== undefined ? { re } : {}), text, ...(labels ? { labels } : {}), ...(noSync !== undefined ? { noSync } : {}), ...(attachments ? { attachments } : {}) }
     return screenPost(caller, message as Protocol['post']['input'], signal, async (screened) => {
       if (screened.text !== text) await checkBlocks(screened.text)
-      return backend.schedule(caller, { ...input, text: screened.text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal)
+      return settling(caller, screened.text, async () => re, signal, (settled) =>
+        backend.schedule(caller, { ...input, text: settled, ...(screened.labels ? { labels: screened.labels } : {}) }, signal),
+      )
     })
   }
 
@@ -628,6 +702,18 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   }
 
   /**
+   * An import with only the platform users its text mentions, as it lands: one the sync function or
+   * the middleware wrote out of it isn't introduced to the board.
+   */
+  function introducing(body: Protocol['syncImport']['input']): Protocol['syncImport']['input'] {
+    if ((body.op !== 'post' && body.op !== 'edit') || !body.mentioned?.length) return body
+    const named = new Set(extractMentions(body.text).flatMap((token) => (token.kind === 'actor' ? [token.actor] : [])))
+    const { mentioned: all, ...rest } = body
+    const mentioned = all.filter((user) => named.has(user.id))
+    return mentioned.length ? { ...rest, mentioned } : rest
+  }
+
+  /**
    * An import, through the middleware when it's a post or an edit that would land: what the
    * middleware passed on, or what it responded when it dropped it, for sync to tell the author on
    * the platform. A retry of one that landed stands.
@@ -642,7 +728,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     if (written !== null) await checkBlocks(written)
     const send = async (patched: Protocol['syncImport']['input']) => {
       if (written !== null && (patched.op === 'post' || patched.op === 'edit') && patched.text !== written) await checkBlocks(patched.text)
-      return backend.syncImport(caller, patched, signal)
+      return backend.syncImport(caller, introducing(patched), signal)
     }
     if (middleware.length === 0 || caller.origin.via?.kind === 'middleware' || (body.op !== 'post' && body.op !== 'edit')) return send(body)
     const access = accessOf(caller)
@@ -709,7 +795,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       screenPost(poster, body, signal, async (patched) => {
         // What the middleware passed on is what's written: checked again when it changed the text.
         if (patched.text !== input.text) await checkBlocks(patched.text)
-        return backend.post(poster, patched, signal)
+        return settling(poster, patched.text, async () => patched.re, signal, (text) => backend.post(poster, { ...patched, text }, signal), (answer) => answer.message.text)
       })
     // Without sync, nothing here calls a platform: its targets only take their shape.
     if (!engine) return send(caller, input.sync?.length ? { ...input, sync: await Promise.all(input.sync.map(resolveTarget)) } : input)
@@ -835,7 +921,14 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         const root = { channel, text: sent, ...(labels ? { labels } : {}), ...(noSync !== undefined ? { noSync } : {}), ...(attachments ? { attachments } : {}), ...(id !== undefined ? { id } : {}) } as Protocol['post']['input']
         return screenPost(caller, root, signal, async (screened) => {
           if (screened.text !== sent) await checkBlocks(screened.text)
-          return backend.createTask(caller, { ...body, text: screened.text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal)
+          return settling(
+            caller,
+            screened.text,
+            async () => undefined,
+            signal,
+            (text) => backend.createTask(caller, { ...body, text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal),
+            (answer) => answer.task.text,
+          )
         })
       }
       case 'createTasks': {
@@ -857,8 +950,18 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         for (const task of body.tasks) await checkWrite(caller, task.text, { channel: body.channel }, signal)
         return screenTasks(caller, body, signal, async (tasks) => {
           for (const [at, task] of tasks.entries()) if (task.text !== body.tasks[at]!.text) await checkBlocks(task.text)
+          const settle = settler(caller, signal)
+          const mentions: Mentioned[] = []
+          const settled: typeof tasks = []
+          for (const task of tasks) {
+            const root = await settle(task.text, async () => undefined)
+            settled.push(root.text === task.text ? task : { ...task, text: root.text })
+            // One handle is said once, however many of the batch's tasks typed it.
+            for (const mention of root.mentions) if (!mentions.some((said) => said.written === mention.written)) mentions.push(mention)
+          }
           // What it asked for goes with it: a backend keeps it with the batch, and a board behind this one goes by it.
-          return backend.createTasks(caller, { ...body, tasks, request }, signal)
+          const answer = await backend.createTasks(caller, { ...body, tasks: settled, request }, signal)
+          return mentions.length > 0 ? { ...answer, mentions } : answer
         })
       }
       case 'edit': {
@@ -866,7 +969,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         await checkWrite(caller, edit.text, { message: edit.id }, signal)
         return screenEdit(caller, edit, signal, async (patched) => {
           if (patched.text !== edit.text) await checkBlocks(patched.text)
-          return backend.edit(caller, patched, signal)
+          const thread = async () => {
+            const edited = await lookup(caller, edit.id, signal)
+            return edited ? (edited.re ?? edited.id) : undefined
+          }
+          return settling(caller, patched.text, thread, signal, (text) => backend.edit(caller, { ...patched, text }, signal))
         })
       }
       case 'syncImport':
@@ -876,7 +983,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         ownLabels(body.labels)
         // Checked when it's made, where its author sees it; a send that comes back through here is checked as any post.
         await checkWrite(caller, body.text, body.channel !== undefined ? { channel: body.channel } : { message: body.re! }, signal)
-        return backend.sendsSchedulesHere === false ? screenSchedule(caller, body, signal) : backend.schedule(caller, body, signal)
+        return backend.sendsSchedulesHere === false
+          ? screenSchedule(caller, body, signal)
+          : settling(caller, body.text, async () => body.re, signal, (text) => backend.schedule(caller, { ...body, text }, signal))
       }
       case 'inbox': {
         const query = input as Protocol['inbox']['input']

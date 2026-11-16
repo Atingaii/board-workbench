@@ -899,13 +899,20 @@ function build(options: A2Options, binding: BoardBinding) {
     async syncImport(caller, body, signal) {
       const { principal } = (await needSync(caller, 'import', true))
       // Only a user of a sync key it has, never anyone this board signs in.
-      const platform = await speaksFor(caller, principal.id, body.author, body.from)
+      // The platform users its text mentions are checked as its author is: each is who they'd be had they written.
+      const mentioned = body.op === 'post' || body.op === 'edit' ? (body.mentioned ?? []) : []
+      const [platform, ...platforms] = (await speaksFor(caller, principal.id, [body.author, ...mentioned], body.from)) as [string, ...string[]]
       const author = externalIdentity(body.author, ownSync(caller) ? null : principal, platform)
       const may = (channel: string) => principal.access.can('sync', channel)
       // A mention of one of its keys' users is of the platform user as this import names them: its own profile of them.
       const keys = ownSync(caller) ? [] : (await entriesOf(caller, principal.id)).map(({ key }) => key)
-      const asNamed = (text: string) =>
-        keys.length === 0 ? text : replaceMentions(text, (token) => (token.kind === 'actor' && keys.some((key) => token.actor.startsWith(`${key}:`)) ? `@[${principal.id}+${token.actor}]` : null))
+      // Where that would take the text past what a message holds, it stays as it came: sync still finds who a short ID names.
+      const asNamed = (text: string) => {
+        if (keys.length === 0) return text
+        const named = replaceMentions(text, (token) => (token.kind === 'actor' && keys.some((key) => token.actor.startsWith(`${key}:`)) ? `@[${principal.id}+${token.actor}]` : null))
+        return named.length > MESSAGE_TEXT_MAX ? text : named
+      }
+      const introduces = mentioned.map((user, at) => externalIdentity(user, ownSync(caller) ? null : principal, platforms[at]!).actor)
       if (body.op === 'post') {
         if ((body.channel === undefined) === (body.re === undefined)) throw badRequest('an import needs `channel`; a reply needs `re`')
         let re: number | undefined
@@ -938,6 +945,7 @@ function build(options: A2Options, binding: BoardBinding) {
             after: afterAt(body.after),
             attachments,
             links: await linksOf(principal, body.links),
+            introduces,
           })
           return posted.id
         }
@@ -960,7 +968,7 @@ function build(options: A2Options, binding: BoardBinding) {
       if (body.op === 'edit') {
         const proof = await authorized('post')
         const commit = async ({ text }: { text: string }) => {
-          await writeEdit(writes, { identity: author, authorized: proof, text: asNamed(text), from: body.from, asAuthor, revision: body.revision })
+          await writeEdit(writes, { identity: author, authorized: proof, text: asNamed(text), from: body.from, asAuthor, revision: body.revision, introduces })
           return ref(found.id)
         }
         const write = { kind: 'edit' as const, id: ref(found.id), channel: found.channel, re: found.re === null ? null : ref(found.re), text: body.text }
@@ -1172,36 +1180,41 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   /**
-   * Whether a caller may write as `author`, and the platform of the sync key they're a user of: a
-   * platform user, never anyone this board signs in, named under a key it syncs (`slack-eu:…`):
-   * entry `from`, when it names one.
+   * Whether a caller may write as each of `users`, and the platform of the sync key each is a user
+   * of: a platform user, never anyone this board signs in, named under a key it syncs
+   * (`slack-eu:…`): entry `from`, when it names one. An import's author, and who its text mentions.
    */
-  async function speaksFor(caller: Caller, principal: string, author: { id: string }, from: string | null): Promise<string> {
-    if (authenticates(author.id) || (await signedIn(author.id))) throw forbidden(`${author.id} is someone this board signs in, not a platform user: sync can't write as them`)
+  async function speaksFor(caller: Caller, principal: string, users: readonly { id: string }[], from: string | null): Promise<string[]> {
+    const signs = await signedIn()
+    for (const { id } of users) if (authenticates(id) || signs(id)) throw forbidden(`${id} is someone this board signs in, not a platform user: sync can't write as them`)
     const entries = await entriesOf(caller, principal)
     const keys = from === null ? entries : entries.filter((entry) => entry.key === from)
     if (from !== null && keys.length === 0) throw forbidden(`this token doesn't sync ${from} here: its board registers its sync entries`)
-    const entry = keys.find(({ key }) => author.id.startsWith(`${key}:`))
-    if (!entry) throw forbidden(`${author.id} isn't a user of ${keys.length ? keys.map(({ key }) => key).join(' or ') : 'a sync key this token has'}: their ID starts with its key`)
-    return entry.platform
+    return users.map(({ id }) => {
+      const entry = keys.find(({ key }) => id.startsWith(`${key}:`))
+      if (!entry) throw forbidden(`${id} isn't a user of ${keys.length ? keys.map(({ key }) => key).join(' or ') : 'a sync key this token has'}: their ID starts with its key`)
+      return entry.platform
+    })
   }
 
   /**
-   * Whether `id` is someone this board signs in that `authenticates` can't tell by its shape: a
+   * Whether an ID is someone this board signs in that `authenticates` can't tell by its shape: a
    * host's principal, which may take any ID and kind, and their agents (`<principal>+<profile>`).
    * It is once it has registered (its watchers write as `<principal>+<id>`, which never wakes
    * them), or written: the board records a host's principals and their profiles as the host's,
    * whatever their kind, and anything else that writes as other than a platform user.
    */
-  async function signedIn(id: string): Promise<boolean> {
-    const plus = id.indexOf('+')
+  async function signedIn(): Promise<(id: string) => boolean> {
     const owners = (await registry.state()).byOwner
-    if (owners[id] || (plus > 0 && owners[id.slice(0, plus)])) return true
     const { state: actors } = await session.state(actorsReducer)
-    return [id, plus > 0 ? id.slice(0, plus) : null].some((known) => {
-      const actor = known === null ? undefined : actors.byId[known]
-      return actor !== undefined && (actor.kind !== 'external' || actor.host === true)
-    })
+    return (id) => {
+      const plus = id.indexOf('+')
+      if (owners[id] || (plus > 0 && owners[id.slice(0, plus)])) return true
+      return [id, plus > 0 ? id.slice(0, plus) : null].some((known) => {
+        const actor = known === null ? undefined : actors.byId[known]
+        return actor !== undefined && (actor.kind !== 'external' || actor.host === true)
+      })
+    }
   }
 
   /**

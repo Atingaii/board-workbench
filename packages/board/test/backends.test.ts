@@ -40,6 +40,21 @@ async function signedIn(audiences: string[]) {
 }
 
 describe('board() and its backend', () => {
+  it("leaves a write's handles to the team's board, and answers what it said of them", async () => {
+    const { remote, project, seen } = await team()
+    // Julian has written on the team's board: a Vercel login's handle is its user ID.
+    await (await julianOn(remote.fetch))('POST', '/messages', { channel: 'dev', text: 'hi' })
+    const before = seen.length
+    const posted = await project.post('dev', 'over to @u_julian and @nobody')
+    expect(posted.text).toBe('over to @[vercel:user:u_julian] and @nobody')
+    expect(posted.mentions).toEqual([
+      { written: '@u_julian', actor: { id: 'vercel:user:u_julian', handle: 'u_julian', name: 'u_julian' }, candidates: [] },
+      { written: '@nobody', actor: null, candidates: [] },
+    ])
+    // It read no actors of its own to do it: the team's board knows who it sees.
+    expect(seen.slice(before).map((request) => `${request.method} ${new URL(request.url).pathname}`).filter((sent) => sent.includes('/actors'))).toEqual([])
+  })
+
   it("takes a URL, which TypeScript can't check", () => {
     expect(() => http('board.example.com')).toThrow("http: board.example.com isn't a URL")
   })

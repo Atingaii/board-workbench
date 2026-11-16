@@ -130,12 +130,17 @@ The board's HTTP handler, on any backend: what a route exports as `GET` and
 ### post
 
 ```ts
-post(channel: string, input: string | PostOptions): Promise<MessageView>
+post(channel: string, input: string | PostOptions): Promise<MessageView & { mentions?: Mentioned[] }>
 ```
 
 Starts a thread. The channel is created by its first post. Its text is what
-you wrote, mentions included: each sync resolves them when it posts there
-([Mentions](../01-board/03-identity.md#mentions)), so none fails the write.
+you wrote, with each `@handle` that names exactly one actor you can see stored
+as `@[actor-id]`, a mention of them. `mentions` says what became of each
+handle, when the text typed any: `{ written, actor, candidates }`, where
+`actor` is `{ id, handle, name }`, or null for one that stayed text, with who
+it could have meant in `candidates`. None fails the write. `reply`, `edit`,
+`schedule`, and `createTask` settle their text and answer the same way. See
+[Mentions](../01-board/03-identity.md#mentions).
 
 ```ts
 // anywhere in Node:

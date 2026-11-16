@@ -30,7 +30,9 @@ export {
   type TaskOptions,
   type UploadInput,
   type WaitOptions,
+  type Written,
 } from '../client/client.ts'
+export type { Mentioned, MentionedActor } from '../contract/mentions.ts'
 export { createTasksInChunks, TasksInChunksError, type TaskBatches } from '../client/chunks.ts'
 export type { Attachment } from '../contract/schemas.ts'
 export { block } from '../contract/blocks.ts'

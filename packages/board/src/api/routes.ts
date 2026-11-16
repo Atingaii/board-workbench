@@ -21,7 +21,7 @@ import {
   SentTaskNote,
   TaskState,
 } from '../contract/schemas.ts'
-import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
+import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, MENTIONED_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message, Task } from '../contract/folds.ts'
@@ -544,6 +544,13 @@ const PlatformUser = ExternalAuthor.extend({ avatar: z.string().nullable().trans
 const Imported = { author: PlatformUser, from: SyncKey.nullable() }
 
 /**
+ * The platform's users a text mentions as `@[<their id>]`. One the board hasn't met becomes known
+ * to it, as one who wrote does: named, and seen where the message is. One the text doesn't mention
+ * is left out.
+ */
+const Mentioned = z.array(PlatformUser).max(MENTIONED_PER_MESSAGE_MAX).optional()
+
+/**
  * Where the platform event an import comes from is: its sync entry, platform channel, and thread.
  * The middleware is told, and answers there when it drops the write.
  */
@@ -571,12 +578,13 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     noSync: z.boolean().optional(),
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
     links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX).optional(),
+    mentioned: Mentioned,
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** A reply's precondition, as a post's: a sync callback's reply after the newest message it read. */
     after: Ref.optional(),
   }),
   /** `revision`, as an edit's or a delete's: only if the message is still at it. */
-  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional(), revision: Revision.optional() }),
+  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional(), revision: Revision.optional(), mentioned: Mentioned }),
   z.object({ op: z.literal('delete'), ...Imported, ...Changed, revision: Revision.optional() }),
   z.object({ op: z.literal('react'), ...Imported, ...Changed, emoji: Emoji, remove: z.boolean().optional() }),
   z.object({

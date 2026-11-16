@@ -1124,12 +1124,45 @@ through the sync that speaks for them, under the key it imported them through.
     the way to name one of several who share a handle.
   - `@[ada@vercel.com]` mentions whoever has that email on a synced platform,
     for a person the board may not have seen.
-- **Mentions are text.** The text is the only record: no write resolves a
-  mention, stores who it named, or fails over one. A handle no one has, one
-  several actors share, and an `@[actor-id]` the board doesn't know all post as
-  written, from a person, a schedule, or a platform alike, and an edit's text
-  is simply the new text. A message's view and its events carry no list of
-  whom it mentions.
+- **A mention is `@[actor-id]`, settled when it's written.** The text is the
+  only record, and `@[actor-id]` in it is the only mention: any other `@word`
+  is text, which nothing reads as one.
+  - **board() settles handles on every write that takes a text:** a post, a
+    reply, an edit, a schedule, a task's root. An `@handle` that exactly one of
+    the actors the caller can see has, in full, is stored as `@[actor-id]`. Of
+    several who have it, it's the one who wrote in the thread, if exactly one
+    did. Otherwise it stays as typed, a mention of no one: no one has it,
+    several do, or someone has it only under a name. `@malte` is never
+    `support/malte`, whom a project could import to take the name.
+  - **The write's answer says what became of each handle** (`mentions`):
+    `{ written, actor, candidates }`, with the actor it now mentions, or
+    `actor: null` and who it could have meant. It names only actors the caller
+    can see, so it tells no caller of anyone the actors list wouldn't. No write
+    fails over a mention.
+  - **`@[actor-id]` and `@[email]` are stored as written.** An ID is exact
+    already, whether or not the board knows the actor, and an email is looked
+    up by each sync when it posts.
+  - **It runs in board(), after the middleware,** so what's stored is settled
+    whatever a middleware made of the text, on every backend. A board behind
+    another (`http()`) leaves it to that board. A platform's import is not
+    settled: what someone typed there is its text. Nor is a schedule's send,
+    which goes as it was settled when the schedule was made.
+  - **A platform's own mention comes in as one.** A provider writes each user
+    a message mentions as `@[<their id>]` in its text and lists them in the
+    event's `mentioned`, as it describes an author (Slack's `<@U0456>` is
+    `@[slack:user:U0456]`). The board names every one under the entry's key,
+    listed or not. The import carries them (`mentioned` on a post
+    or an edit), and the backend meets each one it doesn't know: an actor as
+    one who wrote would be, under the import's key, never someone the board
+    signs in. One it knows keeps its record, which their own writes keep
+    current, and one the landed text doesn't mention is left out. A sync
+    elsewhere's are its profiles, and the text names them so, unless the
+    longer ID would take it past what a message holds.
+  - **An ID is longer than a handle.** Where settling would take a text past
+    the 10,000 characters a message holds, the text stays as typed, and each
+    handle's actor is a candidate: no write is refused for a length its writer
+    didn't type. A retry by client ID answers what the first try's message
+    mentions.
 - **Filters match the text.** `--mentions <who>` on `read`, `tail`, and `wait`,
   and a watcher's `--mentions`, match a message whose text, outside code, has
   `@<handle>` or `@[<actor id>]` for who it names: a handle covers each actor
@@ -1141,26 +1174,23 @@ through the sync that speaks for them, under the key it imported them through.
   nothing asks a platform who has it. Who goes by what is the actors' records,
   which only a reader of every channel sees, so for anyone else a value matches
   as written, with the agents under it (`@sam`, `@sam/claude`).
-- **Each sync resolves mentions when it posts,** against its own users only:
-  its own profiles of platform users under the key it posts through
+- **Each sync delivers mentions by ID,** to its own users only: its own
+  profiles of platform users under the key it posts through
   (`<principal>+<key>:…`), and users named under the key alone (`<key>:…`),
   the board's own sync's and, on Vercel's board, imports from before profiles.
-  - **`@handle`:** natively (`<@U0456>`) when exactly one of its users has that
-    handle. `@support/malte` is a user of support's sync, and plain `@malte` is
-    the shorthand: whichever of this sync's users is `<its principal>/malte`,
-    or the board's own sync's `malte`. Of several, the one who wrote in the
-    message's thread, if exactly one did. Otherwise it goes out as written.
-  - **`@[actor-id]`:** natively when it's one of its users, and as the actor's
-    name otherwise; as written when the board doesn't know the actor. A sync
-    elsewhere's `@[<key>:<user>]` is short for its own profile of them,
-    `@[<principal>+<key>:<user>]`, when the board has no actor by the shorter ID.
+  - **`@[actor-id]`:** natively (`<@U0456>`) when it's one of its users, and as
+    the actor's name otherwise; as written when the board doesn't know the
+    actor. A sync elsewhere's `@[<key>:<user>]` is short for its own profile of
+    them, `@[<principal>+<key>:<user>]`, when the board has no actor by the
+    shorter ID.
   - **`@[email]`:** looked up when it posts (Slack's `users.lookupByEmail`, which
     needs `users:read.email`), each answer kept a few minutes. One the platform
     finds is mentioned natively; one it doesn't, or a platform that can't look
     emails up, goes out as the plain email (`ada@vercel.com`).
-  - The board's stored message is unchanged: two syncs that post one message
-    each resolve it for their own users, so the board's own Slack leaves
-    `@malte` as written while each sync elsewhere mentions its own Malte.
+  - **`@handle`:** never a mention when it posts. One that wasn't settled when
+    it was written goes out as written, on every platform. On Slack, board
+    turns off the adapter's own reading of a bare `@name`, which would look it
+    up by display name and write the rest as `<@name>`.
 - **Platform round-trips:**
   - **Inbound mentions are the platform's text.** A Slack `<@U0456>` comes in
     as `@<their display name>`, which Chat SDK's Slack adapter writes; a GitHub
@@ -1171,8 +1201,8 @@ through the sync that speaks for them, under the key it imported them through.
     key,** with the key's prefix taken off to find them on the platform, and a
     profile only through the sync of its own principal.
   - **Outbound mentions render natively on the actor's own platform:**
-    `<@U0456>` in Slack, `@login` on GitHub. Anywhere else a mention by actor is
-    the plain name, and one by handle is as written.
+    `<@U0456>` in Slack, `@login` on GitHub. Anywhere else a mention is the
+    actor's plain name.
 
 ## Entities
 

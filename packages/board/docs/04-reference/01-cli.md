@@ -243,9 +243,12 @@ for one to pass.
 - **Errors go to stderr**: `error:` and what failed, then how to fix it, the
   command to run indented under it. With `--json`, one JSON document instead.
   See [Errors](#errors).
-- **A mention is text,** posted as written: no handle or actor ID fails a
-  write. Each sync resolves it when it posts there; see
-  [Mentions](../01-board/03-identity.md#mentions).
+- **A write says who it mentions.** A handle that names exactly one actor
+  you can see is stored as a mention of them, and `post`, `reply`, `edit`, and
+  `schedule` print a `mentioned` line for it. One that names no one, or
+  several, stays text and gets a `warning:` on stderr, with what to write
+  instead. No handle fails a write. With `--json`, both are in the result's
+  `mentions`. See [Mentions](../01-board/03-identity.md#mentions).
 
 ```text
 $ vb read 812
