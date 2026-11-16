@@ -12,6 +12,7 @@ import type { Caller } from '../src/server/backend.ts'
 import type { Middleware } from '../src/server/middleware.ts'
 import type { Watcher } from '../src/server/watcher.ts'
 import { slack } from '../src/sync/slack.ts'
+import { github, repos } from '../src/sync/github.ts'
 import { channels, render } from '../src/sync/fn.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
@@ -1991,6 +1992,31 @@ describe('vercel()', () => {
     await handleOn(api).post('general', { text: 'the deploy is red' })
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await vi.waitFor(() => expect(posted.map(({ username, markdown_text }) => [username, markdown_text])).toEqual([['Julián Benegas', 'the deploy is red']]))
+  })
+
+  it("mentions a GitHub user a project's sync imported by their login, not by the handle the board gives them", async () => {
+    const api = fakeMessageboard()
+    const hub = fakePlatform('github')
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      // It imports the repo's pull requests, and sends what's written in their threads back.
+      sync: { github: github({ adapter: hub.adapter }, async (sync) => { await repos({ 'acme/www': 'prs' })(sync); if (sync.direction === 'out') await sync.deliver() }) },
+    })
+    await pong.fetch(new Request(`${PONG_URL}/webhooks/github`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-github-event': 'pull_request', 'x-github-delivery': 'd1' },
+      body: JSON.stringify({ action: 'opened', repository: { full_name: 'acme/www' }, sender: { id: 42, login: 'ada' }, pull_request: { number: 7, title: 'Add sync', html_url: 'https://github.com/acme/www/pull/7', draft: false, merged: false } }),
+    }))
+    const julian = handleOn(api)
+    await vi.waitFor(async () => expect((await julian.messages({ channel: 'prs' })).messages).toHaveLength(1))
+    const [opened] = (await julian.messages({ channel: 'prs' })).messages
+    // On the board she's pong's profile of her, under its name.
+    expect(opened!.author).toMatchObject({ id: 'vercel:project:prj_pong:production+github:user:42', handle: 'pong/ada' })
+    await julian.reply(opened!.id, `over to @[${opened!.by.actor}]`)
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await vi.waitFor(() => expect(hub.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**Julián Benegas**: over to @ada']))
   })
 
   it("delivers a mention natively through the sync whose user it names, and by name through any other: two syncs' Maltes, and an email its Slack knows", async () => {
