@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { agentPrompt, joinPrompt, markdown } from "../lib/markdown.ts";
-import { channel, projectName, slackChannel } from "../lib/project.ts";
+import { channel, envVarsPage, projectName, projectOf, slackChannel } from "../lib/project.ts";
 import { runningOf } from "../lib/running.ts";
 import { boardDeps, hasApp, isDone, setup, stepsView, type Deps, type Step, type Task } from "../lib/setup.ts";
 import { CHANNELS, FACTORY, README as TEMPLATE_README } from "./fresh.ts";
@@ -571,6 +571,14 @@ test("what's named for the Vercel project follows its name, so two factories on 
   assert.equal(channel(undefined, { VERCEL_PROJECT_NAME: "acme.factory" }), "project-acme-factory");
   assert.equal(channel("web", { VERCEL_PROJECT_NAME: "acme.factory" }), "project-acme-factory/web");
   assert.equal(channel("web", { VERCEL_PROJECT_NAME: "f".repeat(100) }), `project-${"f".repeat(40)}/web`);
+});
+
+test("the page where a project keeps its secrets is its own, on its team, from the token it runs with", () => {
+  // What the agent links when it needs a key: this project's environment variables, not a place to look for them.
+  assert.equal(envVarsPage(projectOf(jwt({ owner: "acme", project: "web-factory" }))), "https://vercel.com/acme/web-factory/settings/environment-variables");
+  // A token that names no project gives no page: the agent says where in words.
+  assert.equal(envVarsPage(projectOf("not-a-token")), null);
+  assert.equal(envVarsPage(projectOf(jwt({ owner: "acme" }))), null);
 });
 
 /** This checkout's own config as a deployment with `env` loads it: where each repo and Slack channel comes in, and what its agent hears. */
