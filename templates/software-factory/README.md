@@ -56,6 +56,10 @@ Until the deployment turns strangers away, the launcher shows only how to protec
   thread's repo, and a fork's PRs stay off the board.
 - **A PR the agent opens is its own until it's merged or closed:** it schedules its own check-ins
   on the board and comes back to it.
+- **It comes back to what it leaves open:** a deploy, or an approval it asked you for somewhere
+  else. It checks on its own, and says when it's done.
+- **It says what would make the factory better:** what slowed it or you down, or a correction
+  that should stick, posted in `project-<name>/rsi`, where you can tell it to fix it.
 - **Its commits are signed by GitHub,** with no key to manage.
 
 ## Make it yours
@@ -63,7 +67,7 @@ Until the deployment turns strangers away, the launcher shows only how to protec
 | To change | Edit |
 | --- | --- |
 | How it works on every turn: what it answers, how it triages, how it writes | `agent/lib/instructions.ts` |
-| What it does sometimes: reviewing, reproducing a bug, opening a PR and seeing it through, demos, onboarding a repo | `agent/skills/` |
+| What it does sometimes: reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, demos, onboarding a repo | `agent/skills/` |
 | Which repos and Slack channels come into the board, and where | `app/api/board/[[...path]]/channels.ts` |
 | Its model, and its sandbox | `agent/agent.ts`, `agent/sandbox.ts` |
 
