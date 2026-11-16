@@ -119,6 +119,51 @@ describe('a private channel, from the handle', () => {
     expect(await team.channels()).toEqual([])
   })
 
+  it("takes its own grant back once another's lock has landed, though that's its last manage there", async () => {
+    const team = testBoard()
+    const gate = () => {
+      let open!: () => void
+      const opened = new Promise<void>((resolve) => (open = resolve))
+      return { opened, open }
+    }
+    // Ada has checked the path and is about to make her grant; Julian has made his and seen no other;
+    // Ada's lands; Julian's lock lands; Ada looks again; Julian looks again once she's done.
+    const [adaChecked, julianLooked, adaOwned, locked, adaDone] = [gate(), gate(), gate(), gate(), gate()]
+    const grantsAt = (request: Request) => new URL(request.url).pathname.endsWith('/grants')
+    let julianLists = 0
+    const julian = handleAs(async (request) => {
+      if (request.method === 'POST' && grantsAt(request)) {
+        const lock = (await request.clone().text()).includes('"everyone"')
+        await (lock ? adaOwned : adaChecked).opened
+        const response = await team.fetch(request)
+        if (lock) locked.open()
+        return response
+      }
+      if (request.method === 'GET' && grantsAt(request) && ++julianLists === 3) await adaDone.opened
+      const response = await team.fetch(request)
+      if (request.method === 'GET' && grantsAt(request) && julianLists === 2) julianLooked.open()
+      return response
+    }, () => personToken())
+    let adaLists = 0
+    const ada = handleAs(async (request) => {
+      if (request.method === 'POST' && grantsAt(request)) {
+        adaChecked.open()
+        await julianLooked.opened
+        const response = await team.fetch(request)
+        adaOwned.open()
+        return response
+      }
+      if (request.method === 'GET' && grantsAt(request) && ++adaLists === 2) await locked.opened
+      return team.fetch(request)
+    }, () => personToken('u_ada'))
+    const [first, second] = await Promise.allSettled([julian.createChannel('vault', { private: true }), ada.createChannel('vault', { private: true }).finally(adaDone.open)])
+    // Ada found Julian's grants and gave hers up, so the channel is his alone.
+    expect([first.status, second.status === 'rejected' ? (second.reason as { code: string }).code : 'made']).toEqual(['fulfilled', 'channel_granted'])
+    expect((await team.grants()).map((grant) => grant.principals[0])).toEqual([{ kind: 'all-users' }, expect.objectContaining({ kind: 'all-projects' }), { kind: 'all-apps' }, expect.objectContaining({ kind: 'user', userId: 'u_julian' }), { kind: 'everyone' }])
+    expect((await caller(team.fetch, await personToken('u_ada'))('POST', '/messages', { channel: 'vault', text: 'let me in' })).status).toBe(403)
+    expect((await julian.post('vault', { text: 'mine' })).channel).toBe('vault')
+  })
+
   it("takes its grants back, and makes nothing, when someone grants themselves in before its lock lands", async () => {
     const team = testBoard()
     let theirs: string | null = null

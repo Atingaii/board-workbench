@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { env, url, useBoard, vb } from './cli-harness.ts'
-import { localUserToken, workflowToken } from './tokens.ts'
+import { localUserToken, personToken, workflowToken } from './tokens.ts'
 
 useBoard()
 // As `vb serve`'s own user, the board's owner, whom no grant limits.
@@ -186,13 +186,21 @@ describe('cli grants', () => {
         '  this grant would leave you unable to manage grants in factory/',
         '',
         '  Keep manage there yourself, in the same write:',
-        "    vb grants create --everyone --can factory/=read --can factory/memory/=none --user <YOU> --can 'factory/=all;factory/memory/=all'",
+        // Whoever runs it, as a grant would name them: here a repository's runs.
+        "    vb grants create --everyone --can factory/=read --can factory/memory/=none --github acme/web --can 'factory/=all;factory/memory/=all'",
         '  Make it anyway:',
         '    vb grants create --everyone --can factory/=read --can factory/memory/=none --lock-me-out',
         '',
       ].join('\n'),
     ])
     expect(JSON.parse((await vb([...lock, '--json'], run)).stderr)).toMatchObject({ status: 'error', reason: 'grant_lockout', data: { error: { code: 'grant_lockout', status: 409 } } })
+    // A person is named as a person, and that command, run as it's printed, makes both.
+    const ada = { BOARD_TOKEN: await personToken('u_ada', url) }
+    const asked = await vb(['grants', 'create', '--everyone', '--can', 'attic/=none'], ada)
+    expect(asked.stderr.split('\n')[4]).toBe('    vb grants create --everyone --can attic/=none --user u_ada --can attic/=all')
+    expect((await vb(['grants', 'create', '--everyone', '--can', 'attic/=none', '--user', 'u_ada', '--can', 'attic/=all'], ada)).code).toBe(0)
+    await startOver()
+    await create('--github', 'acme/web', '--can', '*=all')
     expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(4)
     // With the grant that keeps the run in, in the same command, it's made, and the run's to change.
     const kept = await vb([...lock, '--github', 'acme/web', '--can', 'factory/=all;factory/memory/=all'], run)

@@ -548,6 +548,15 @@ export function createBoardClient(options: ClientOptions) {
           { hint: `Close it with a grant: everyone at ${pattern} with 'none'.` },
         )
       const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
+      // Taking back a grant it made, when the channel isn't to be its own after all. Where someone
+      // else's lock has landed, that's its last manage there, a lockout: it means it, and says so.
+      const takeBack = (id: string) => {
+        const revoke = (body: { lockMeOut?: true }) => call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body })
+        return revoke({}).catch((error: unknown) => {
+          if (error instanceof BoardError && error.code === 'grant_lockout') return revoke({ lockMeOut: true })
+          throw error
+        })
+      }
       // What reaches the path besides its own grants as it made them: one someone changed (adding
       // themselves to it, or opening the lock) lets them in as much as a grant of their own would.
       const others = (grants: GrantView[], mine: GrantView[]) =>
@@ -559,7 +568,7 @@ export function createBoardClient(options: ClientOptions) {
       // most one of them keeps a way in, and if each finds the other, neither does.
       const raced = others(await reaching(), [own.grant])
       if (raced.length > 0) {
-        await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(own.grant.id)}/revoke`, { body: {} })
+        await takeBack(own.grant.id)
         throw granted(raced, [own.grant])
       }
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
@@ -568,7 +577,7 @@ export function createBoardClient(options: ClientOptions) {
       // it isn't private, and both of its grants go, the lock first.
       const late = others(await reaching(), [own.grant, closed.grant])
       if (late.length > 0) {
-        for (const id of [closed.grant.id, own.grant.id]) await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body: {} })
+        for (const id of [closed.grant.id, own.grant.id]) await takeBack(id)
         throw granted(late, [own.grant, closed.grant])
       }
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })

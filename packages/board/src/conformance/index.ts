@@ -1830,8 +1830,10 @@ const CHECKS: Check[] = [
     run: (ctx) =>
       withGrants(ctx, async ({ make }) => {
         const pattern = `${subtreeOf(ctx)}lockout/`
-        // A board that takes no lockMeOut refuses this one, which stops the check here: it would make
-        // the lock below, and this run couldn't revoke it afterwards.
+        // A board that takes no lockMeOut refuses this one, as grant bodies are strict, which stops
+        // the check here: it would make the lock below, and this run couldn't revoke it afterwards.
+        // One that drops keys it doesn't know gets past this, and the run's own handle checks a
+        // body before the board sees it, so the kit can't ask it with a key that's wrong.
         await make(grantFor(ctx), undefined, { lockMeOut: true }).catch((error: unknown) => {
           if (error instanceof BoardError && error.status === 400) throw new Mismatch(`a grant that says lockMeOut: expected it made, got ${error.status} ${error.code}`)
           throw error

@@ -561,9 +561,10 @@ revoked g4
 
 A change you couldn't take back is refused, with reason `grant_lockout`:
 closing a channel to everyone closes it to you, and lifting that takes
-`manage` there. It says how to keep yourself in, and `--lock-me-out` goes
-ahead. Revoking or narrowing the grant that keeps you in is refused the same
-way. An owner is never locked out.
+`manage` there. It says how to keep yourself in, naming you as a grant would
+(`--user`, `--project` and `--environment`, `--app`, or `--github`), and
+`--lock-me-out` goes ahead. Revoking or narrowing the grant that keeps you in
+is refused the same way. An owner is never locked out.
 
 ```text
 $ vb grants create --everyone --can factory/=read
@@ -571,7 +572,7 @@ error: Can't create the grant: it would lock you out.
   this grant would leave you unable to manage grants in factory/
 
   Keep manage there yourself, in the same write:
-    vb grants create --everyone --can factory/=read --user <YOU> --can factory/=all
+    vb grants create --everyone --can factory/=read --user u_julian --can factory/=all
   Make it anyway:
     vb grants create --everyone --can factory/=read --lock-me-out
 ```
