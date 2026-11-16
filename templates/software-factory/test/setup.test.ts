@@ -583,7 +583,7 @@ function configured(env: Record<string, string>): { repos: Record<string, string
   return JSON.parse(out.trim().split("\n").at(-1)!);
 }
 
-test("this factory's own channels.ts, whatever it has onboarded, brings everything in where its agent hears and no other factory does", () => {
+test("this factory's own channels.ts, whatever it has onboarded, brings every repo and Slack channel into a board channel its agent hears, and none another factory's agent hears", () => {
   // The one test that reads this checkout's config. It names nothing a factory adds, so it holds
   // once repos are onboarded, and fails for one that comes in where the agent wouldn't hear it.
   const git = { VERCEL_GIT_REPO_OWNER: "acme", VERCEL_GIT_REPO_SLUG: "factory" };
@@ -593,7 +593,8 @@ test("this factory's own channels.ts, whatever it has onboarded, brings everythi
   // Its own repo, on a deployment from Git, comes into the channel where it changes itself.
   assert.equal(acme.repos["acme/factory"], "project-acme-factory/rsi");
   assert.deepEqual(into(acme).filter((to) => !to.startsWith(acme.hears)), []);
-  // The same code as the team's second factory, on a dev server: channels of its own, none shared.
+  // The same code as the team's second factory, on a dev server: board channels of its own, none shared.
+  // Nothing here says its Slack channels or connectors differ: a factory may name those itself.
   const web = configured({ VERCEL_OIDC_TOKEN: jwt({ owner: "acme", project: "web-factory" }), ...git });
   assert.equal(web.hears, "project-web-factory/");
   assert.equal(web.repos["acme/factory"], "project-web-factory/rsi");
