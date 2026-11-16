@@ -58,7 +58,8 @@ export default defineSandbox(() =>
     networkPolicy: "deny-all",
     env: {
       GH_TOKEN: "from-the-network-policy",
-      // Each service's key the project has (agent/lib/services.ts): a placeholder too.
+      // Each service's key the project has (agent/lib/services.ts): a placeholder too, in every
+      // thread. Whether the real key is added is the thread's channel's to say.
       ...placeholders(),
     },
   }),

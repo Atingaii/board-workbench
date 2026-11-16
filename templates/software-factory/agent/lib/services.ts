@@ -9,19 +9,19 @@ type Env = Record<string, string | undefined>;
 export type Service = {
   /** The env var that holds the key, in the Vercel project and, as a placeholder, in the sandbox. */
   env: string;
-  /** The hosts the key goes to. */
+  /** The hosts the key goes to. A host two services name goes to the first listed, and GitHub's stay GitHub's. */
   hosts: string[];
   /** The headers that carry the key: `authorization: Bearer <key>` when left out. */
   headers?: (key: string) => Record<string, string>;
-  /** The key's prefix, which a CLI may check before it sends anything: kept in the placeholder. */
-  prefix?: RegExp;
+  /** What the key may start with, which a CLI may check before it sends anything: the one it does start with is kept in the placeholder. Written out, so nothing of the key but that can reach the sandbox. */
+  prefixes?: string[];
   /** Env the sandbox gets as it is, since it's no secret: an org's ID, say. */
   passthrough?: string[];
 };
 
 /** This factory's services, each under the name `serviceChannels` gives a channel. One line adds one. */
 export const services = {
-  // stripe: { env: "STRIPE_API_KEY", hosts: ["api.stripe.com"], prefix: /^[a-z]{2}_(live|test)_/ },
+  // stripe: { env: "STRIPE_API_KEY", hosts: ["api.stripe.com"], prefixes: ["rk_live_", "rk_test_"] },
   // An API that takes its key in a header of its own:
   // acme: { env: "ACME_API_KEY", hosts: ["api.acme.dev"], headers: (key) => ({ "x-api-key": key }) },
 } satisfies Record<string, Service>;
@@ -36,7 +36,7 @@ export function placeholders(env: Env = process.env, all: Record<string, Service
   for (const service of Object.values(all)) {
     const key = env[service.env];
     if (!key) continue;
-    out[service.env] = `${key.match(service.prefix ?? /^$/)?.[0] ?? ""}${PLACEHOLDER}`;
+    out[service.env] = `${service.prefixes?.find((prefix) => key.startsWith(prefix)) ?? ""}${PLACEHOLDER}`;
     for (const name of service.passthrough ?? []) if (env[name]) out[name] = env[name]!;
   }
   return out;
@@ -56,7 +56,7 @@ export function serviceRules(names: readonly string[], env: Env = process.env, a
     const key = service && env[service.env];
     if (!key) continue;
     const headers = service.headers?.(key) ?? { authorization: `Bearer ${key}` };
-    for (const host of service.hosts) rules[host] = [{ transform: [{ headers }] }];
+    for (const host of service.hosts) rules[host] ??= [{ transform: [{ headers }] }];
   }
   return rules;
 }

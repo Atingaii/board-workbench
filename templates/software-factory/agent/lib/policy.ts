@@ -18,8 +18,9 @@ export function policy(
     : {};
   return {
     allow: {
-      ...github,
       ...(serviceRules(tokens.services ?? [], env, all) as Record<string, NetworkPolicyRule[]>),
+      // After the services, so none of them can take GitHub's hosts.
+      ...github,
       "*": [],
     },
   };

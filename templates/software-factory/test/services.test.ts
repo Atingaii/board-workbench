@@ -7,8 +7,8 @@ import { placeholders, serviceRules, threadServices, type Service } from "../age
 // and what the sandbox itself sees of them. With services of the test's own, not this factory's.
 
 const SERVICES: Record<string, Service> = {
-  stripe: { env: "STRIPE_API_KEY", hosts: ["api.stripe.com", "files.stripe.com"], prefix: /^[a-z]{2}_(live|test)_/ },
-  axiom: { env: "AXIOM_TOKEN", hosts: ["api.axiom.co"], prefix: /^xa[ap]t-/, passthrough: ["AXIOM_ORG_ID"] },
+  stripe: { env: "STRIPE_API_KEY", hosts: ["api.stripe.com", "files.stripe.com"], prefixes: ["rk_live_", "rk_test_"] },
+  axiom: { env: "AXIOM_TOKEN", hosts: ["api.axiom.co"], prefixes: ["xaat-", "xapt-"], passthrough: ["AXIOM_ORG_ID"] },
   railway: { env: "RAILWAY_API_TOKEN", hosts: ["backboard.railway.com"] },
   acme: { env: "ACME_API_KEY", hosts: ["api.acme.dev"], headers: (key) => ({ "x-api-key": key }) },
 };
@@ -56,6 +56,20 @@ test("the sandbox sees a placeholder with the key's prefix, never the key", () =
   for (const value of Object.values(env)) assert.doesNotMatch(value, /secret/);
   // A service's own env doesn't come along without its key.
   assert.deepEqual(placeholders({ AXIOM_ORG_ID: "acme-x1" }, SERVICES), {});
+  // A key that starts some other way keeps nothing of itself.
+  assert.deepEqual(placeholders({ STRIPE_API_KEY: "sk_live_secret" }, SERVICES), { STRIPE_API_KEY: "from-the-network-policy" });
+});
+
+test("a host goes to the first service that names it, and GitHub's hosts stay GitHub's", () => {
+  const shared: Record<string, Service> = {
+    first: { env: "FIRST_KEY", hosts: ["api.acme.dev"] },
+    second: { env: "SECOND_KEY", hosts: ["api.acme.dev", "api.github.com"] },
+  };
+  const env = { FIRST_KEY: "first-secret", SECOND_KEY: "second-secret" };
+  const { allow } = policy({ github: "gh-token", services: ["first", "second"] }, env, shared) as { allow: Record<string, unknown> };
+  assert.deepEqual(allow["api.acme.dev"], [{ transform: [{ headers: { authorization: "Bearer first-secret" } }] }]);
+  // A service can't swap its key in where the thread's GitHub token goes.
+  assert.deepEqual(allow["api.github.com"], [{ transform: [{ headers: { authorization: "Bearer gh-token" } }] }]);
 });
 
 test("a factory with no services gives the sandbox nothing more", () => {
