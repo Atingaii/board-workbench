@@ -12,6 +12,10 @@ export function projectOf(jwt: string): Project {
   }
 }
 
+/** Where a project's environment variables are kept in Vercel's dashboard: null when the project isn't known. */
+export const envVarsPage = (project: Project): string | null =>
+  project ? `https://vercel.com/${project.team}/${project.name}/settings/environment-variables` : null;
+
 /**
  * This factory's name on its team: its Vercel project's. What a team keeps one of per name is named
  * for it (the Connect connectors, the Slack channel), so a team's second factory gets its own.
