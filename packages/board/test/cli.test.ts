@@ -362,6 +362,45 @@ describe('cli', () => {
     expect(await vb(['label', id, 'x=1', '--if', 'owner'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --if takes key=value, and owner isn't one\. For a label that mustn't be set, --if-unset key\./) })
   })
 
+  it('says the rule a label key or value broke, and which one broke it', async () => {
+    const id = (await vb(['post', 'reviews', 'review of a1b2c3'])).stdout.trim()
+    const rule = `isn't a label key: one is 1 to 64 lowercase letters, numbers, ., _, and -, starting with a letter or number\n`
+    expect(await vb(['label', id, 'Verdict=pass'])).toMatchObject({ code: 2, stderr: `error: Can't label #${id}.\n  set: "Verdict" ${rule}` })
+    expect(await vb(['post', 'reviews', 'x', '--label', 'my verdict=pass'])).toMatchObject({ code: 2, stderr: `error: Can't post to reviews.\n  labels: "my verdict" ${rule}` })
+    expect(await vb(['label', id, `verdict=${'a'.repeat(300)}`])).toMatchObject({
+      code: 2,
+      stderr: `error: Can't label #${id}.\n  set.verdict: a label value is at most 256 characters, and this one has 300\n`,
+    })
+    // A line of text is a value: the rule is length, not letters.
+    expect(await vb(['label', id, 'verdict=Looks good: ship it, 2 nits (see #4)'])).toMatchObject({ code: 0, stderr: '' })
+  })
+
+  it('says when a read of a channel left threads out, and reads on to them without skipping any', async () => {
+    // Where the board is before any of them: a board-wide read's cursor.
+    await vb(['post', 'paged-before', 'not in paged'])
+    const start = JSON.parse((await vb(['read', '--json'])).stdout).cursor as string
+    const ids: string[] = []
+    for (const n of [1, 2, 3, 4, 5]) ids.push((await vb(['post', 'paged', `job ${n}`])).stdout.trim())
+    const shown = (stdout: string) => [...stdout.matchAll(/^#(\S+) /gm)].map((match) => match[1]!)
+    // The newest two, and how to see older ones.
+    const newest = await vb(['read', 'paged', '--limit', '2'])
+    expect(shown(newest.stdout)).toEqual(ids.slice(3))
+    expect(newest.stdout).toContain('\n(older not shown: vb read paged --limit 4)\n')
+    // As many as there are: nothing is left out, so it says nothing.
+    expect((await vb(['read', 'paged', '--limit', '5'])).stdout).not.toContain('not shown')
+    // After a cursor, page by page, each line pasted as it says: every thread once, none skipped.
+    const seen: string[] = []
+    let command = ['read', 'paged', '--limit', '2', '--after', start]
+    for (let page = 0; page < 5; page++) {
+      const { stdout } = await vb(command)
+      seen.push(...shown(stdout))
+      const more = /\nmore since then: vb (.+)\n$/.exec(stdout)
+      if (!more) break
+      command = more[1]!.split(' ')
+    }
+    expect(seen).toEqual(ids)
+  })
+
   it('edits and deletes --if-revision only while no one has changed the message since', async () => {
     const id = (await vb(['post', 'deploys', 'step 1 of 5'])).stdout.trim()
     const read = async () => JSON.parse((await vb(['read', id, '--json'])).stdout).message as { text: string; deleted: boolean; revision: number }
@@ -521,7 +560,7 @@ describe('cli', () => {
 
     const read = await vb(['read', 'open-work', '--limit', '1'])
     expect(read).toMatchObject({ code: 0, stderr: '' })
-    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\nnew since then: vb read open-work --limit 1 --after \\d+\n$`))
+    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\n\\(older not shown: vb read open-work --limit 2\\)\n\nnew since then: vb read open-work --limit 1 --after \\d+\n$`))
 
     const all = await vb(['read', 'open-work'])
     expect(all.stdout).toContain(`#${second}  u_julian`)
