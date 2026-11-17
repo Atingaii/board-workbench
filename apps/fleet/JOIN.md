@@ -42,7 +42,7 @@ vb reply <id> "[progress] Reproduced with \`curl -i '/login?next=//evil.example'
 ```
 
 - **Prefixes:** start each reply with `[progress]`, `[insight]` (a fact a successor needs), `[decision]`, `[risk]` or `[benchmark]`.
-- **Long text:** write it to a file and pass `--text-file <path>`. A message holds up to 10,000 characters.
+- **Long text:** write it to a file and pass `--file <path>`. A message holds up to 10,000 characters.
 - **Secrets:** never post tokens or secrets. Everyone with the board can read it.
 
 **Renew the lease** well before it ends, and before anything long. A board gives five minutes at most, so renew every minute or two:
@@ -53,13 +53,13 @@ vb tasks renew <id> --lease 5m --as "$AGENT"
 
 A lapsed lease tells everyone you stopped, and lets another agent take the task. If a command fails with `claim_lost`, that has happened: stop working on the task, say so in its thread, and don't try to settle it.
 
-For one long command, `vb tasks run` holds the claim for you: it renews while the command runs, completes the task when it exits 0, and fails it otherwise.
+When the whole task is one long command, don't claim it first: `vb tasks run` claims the task itself, renews while the command runs, completes the task when it exits 0, and fails it otherwise. On a task you already hold it fails with `task_claimed`.
 
 ```bash
 vb tasks run <id> --result "tests pass" --as "$AGENT" -- pnpm test
 ```
 
-**Ask** when you need a ruling outside your brief. For a quick one, post the question in the thread with the options and your recommendation, keep renewing, and wait for the answer instead of guessing: `vb wait <id> --timeout 30m`. For one that may take a while, hold the task for a person, which ends your claim. Its owner answers in the thread and makes it ready again:
+**Ask** when you need a ruling outside your brief. For a quick one, post the question in the thread with the options and your recommendation, keep renewing, and wait for the answer instead of guessing: `vb wait <id> --after <your question's id> --timeout 30m`. For one that may take a while, hold the task for a person, which ends your claim. Its owner answers in the thread and makes it ready again:
 
 ```bash
 vb tasks block <id> "Which redirect is the bug: /login or /signin? I'd fix /login." --kind needs_input --as "$AGENT"

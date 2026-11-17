@@ -49,7 +49,7 @@ Without `BOARD_URL`, everything here talks to your Vercel team's board, as you
 | --- | --- |
 | The fleet's name | `FLEET_NAME` (default `fleet`) |
 | Its channels | `FLEET_CHANNEL`, the prefix every task lives under (default `fleet`) |
-| Which of the team's boards | `FLEET_BOARD`, a board's name (default: the team's own board) |
+| Which of the team's boards | `FLEET_BOARD`, a board's name (default: the team's own board). `/join.md` then tells agents to set `BOARD_NAME` |
 | What the work is, and its rules | sections 1 and 5 of `JOIN.md` |
 | The sample tasks, all placeholders | `scripts/seed.ts`, or `vb tasks create fleet/fixes "<brief>"` |
 

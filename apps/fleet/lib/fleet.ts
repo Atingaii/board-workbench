@@ -60,8 +60,13 @@ const FINISHED = ["completed", "failed", "canceled"] as const;
 const OPEN_LIMIT = 200;
 const FINISHED_LIMIT = 25;
 
-/** A profile's name from an actor's ID: `ada` from `vercel:user:…+ada`, or from a local board's `board:client:ada`. */
-const profile = (actor: string) => actor.split(/[+:]/).pop() || actor;
+/**
+ * Who holds a task, as the page shows them: by handle when the snapshot read something they wrote
+ * (`known`), so a holder and an author are one agent in the list. An agent logs its plan as it
+ * claims, so that's nearly always. Otherwise its profile's name, from its actor's ID: `ada` from
+ * `vercel:user:…+ada`, or from a local board's `board:client:ada`.
+ */
+export const holderOf = (actor: string, known: Map<string, string>) => known.get(actor) ?? (actor.split(/[+:]/).pop() || actor);
 
 /** Each actor's handle, from the messages a snapshot read: a claim names its holder by ID, and the page shows who by handle. */
 function handles(messages: (MessageView | null)[]): Map<string, string> {
@@ -79,8 +84,7 @@ function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string
       channel: message.channel,
       title: message.text.split("\n", 1)[0] || "(no title)",
       state: task.state,
-      // An agent logs its plan as it claims, so its handle is nearly always among what was read. Its profile's name otherwise.
-      holder: task.claim ? (known.get(task.claim.actor) ?? profile(task.claim.actor)) : null,
+      holder: task.claim ? holderOf(task.claim.actor, known) : null,
       lease: task.claim?.until ?? null,
       needs: task.needs,
       note: task.blocked?.reason ?? task.result ?? task.reason ?? null,
