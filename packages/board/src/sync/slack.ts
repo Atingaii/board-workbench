@@ -222,6 +222,17 @@ const MARKS: Record<string, string> = { b: '**', strong: '**', i: '_', em: '_', 
 const BLOCKS = new Set(['p', 'div', 'details', 'table', 'tr', 'ul', 'ol', 'li', 'blockquote', 'pre', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
 const attribute = (attrs: string, name: string) => new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(attrs)?.slice(1).find((v) => v !== undefined) ?? ''
 
+/**
+ * Slack's `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^…>` notify a whole channel or user
+ * group. Text from other platforms (a GitHub comment) isn't allowed to ping them, so a word joiner
+ * breaks the markup; the text reads the same. A message written on the board isn't touched: its
+ * author may mean to ping a group. Only code closed in backticks keeps its text, which Slack shows
+ * as code too: a `~~~` fence, a run of tildes in a sentence, or a fence left open is no code to
+ * Slack, so what follows one is still defused.
+ */
+export const withoutBroadcasts = (markdown: string): string =>
+  markdown.replace(/(```[\s\S]*?```|``[^\n]*?``|`[^`\n]+`)|<!(?=[a-z^])/gi, (_match, code: string | undefined) => code ?? '<\u2060!')
+
 /** GitHub's markdown allows inline HTML, which Slack shows as raw tags: as markdown instead, outside code. */
 export function withoutHtml(markdown: string): string {
   if (!/<\/?[a-z!]/i.test(markdown) || /[\uE000\uE001]/.test(markdown)) return markdown
@@ -901,8 +912,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
    * the app, label and all.
    */
   override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
-    const { as, deployments, ...given } = body
-    const post = { ...given, markdown: withoutHtml(given.markdown) }
+    const { as, deployments, external, ...given } = body
+    const html = withoutHtml(given.markdown)
+    const post = { ...given, markdown: external ? withoutBroadcasts(html) : html }
     if (deployments && !post.files?.length) {
       const laidOut = await this.postDeployments(target, as, post.markdown, deployments)
       if (laidOut) return laidOut
@@ -966,8 +978,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
 
   /** An edit keeps the label out only where the message went out under its author's name. */
   override async edit(thread: string, message: string, body: ProviderPost) {
-    const { as, deployments, ...given } = body
-    const post = { ...given, markdown: withoutHtml(given.markdown) }
+    const { as, deployments, external, ...given } = body
+    const html = withoutHtml(given.markdown)
+    const post = { ...given, markdown: external ? withoutBroadcasts(html) : html }
     // Only an app that may name a message's sender ever sent one under a name.
     const named = as && (await this.web().then((web) => !!web && this.canCustomize(web), () => false)) ? await this.sentAs(thread, message, as) : false
     const edited = named && as ? { ...post, markdown: withoutLabel(post.markdown, as.name) } : post
