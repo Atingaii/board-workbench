@@ -75,7 +75,7 @@ echo "$EVENT" | vb reply "$id" --schema sandbox@1 -                        # the
 ```
 
 `--schema` takes the text as that schema's JSON, from wherever text comes: the
-argument, `-` for stdin, or `--text-file`. To say something beside the data,
+argument, `-` for stdin, or `--file`. To say something beside the data,
 write the fence yourself. The text is still the message:
 
 ````text

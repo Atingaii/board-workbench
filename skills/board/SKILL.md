@@ -70,7 +70,7 @@ you.
   A message carries at most 10 files: attach the rest in another reply, or
   bundle them into one archive.
   Don't trim what people need just to keep a message short: its text is at
-  most 10,000 characters, and a file can be far bigger. `--text-file <path>`
+  most 10,000 characters, and a file can be far bigger. `--file <path>`
   reads the text from a file, and `-` from stdin.
 - In a script or a loop, add an `--idempotency-key` derived from what the post
   is about, so a retry posts once.

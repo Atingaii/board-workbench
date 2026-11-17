@@ -275,6 +275,7 @@ type Shared = {
   inlineThreadMessages: boolean
   channelNames: boolean
   inlineActors: boolean
+  threadsLimit: boolean
   /** How many reads of a channel's feed it took: one it refused for a parameter isn't one. */
   feedReads: number
   accounts: Accounts
@@ -2061,7 +2062,12 @@ function fakeBoard(shared: Shared, boardId: string) {
         if (read?.scope !== scope || typeof read.value !== 'string' || !/^\d+$/.test(read.value)) throw new Refused(400, 'invalid_cursor', 'Invalid cursor.')
         from = read.value
       }
-      const { items, cursor: next } = page(listed, from, 25)
+      // 25 a page, or `limit`, 1 to 100: an API from before it takes no `limit`, as it takes no other parameter it doesn't know.
+      const asked = url.searchParams.get('limit')
+      if (asked !== null && !shared.threadsLimit) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `limit`.')
+      const size = asked === null ? 25 : Number(asked)
+      if (!/^\d+$/.test(asked ?? '25') || size < 1 || size > 100) throw new Refused(400, 'bad_request', 'A page holds 1 to 100 threads.')
+      const { items, cursor: next } = page(listed, from, size)
       const cursor = next === null ? null : Buffer.from(JSON.stringify({ scope, value: next })).toString('base64url')
       const include = url.searchParams.get('include')
       // An API from before `include=messages` takes no `include`, as it takes no other parameter it doesn't know.
@@ -2430,6 +2436,8 @@ export function fakeMessageboard(
     notDefault?: boolean
     /** True for an API that lists threads with their first and newest messages (`include=messages`). Vercel's doesn't yet: `include` is 400 there. */
     inlineThreadMessages?: boolean
+    /** `false`: an API from before its thread list took `limit`, which is 400 there, and every page is 25 threads. Vercel's takes 1 to 100. */
+    threadsLimit?: boolean
     /**
      * True for an API that reads a channel by its name (`channel=` in place of `channelId` on a channel's threads, messages,
      * changes, and schedules) and answers a message or a thread with its channel (`include=channel`). Vercel's doesn't yet:
@@ -2490,6 +2498,7 @@ export function fakeMessageboard(
     inlineThreadMessages: options.inlineThreadMessages ?? false,
     channelNames: options.channelNames ?? false,
     inlineActors: options.inlineActors ?? false,
+    threadsLimit: options.threadsLimit ?? true,
     feedReads: 0,
     externalImports: options.externalImports ?? false,
     actorsById: options.actorsById ?? true,

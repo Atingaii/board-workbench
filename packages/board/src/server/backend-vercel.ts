@@ -326,6 +326,8 @@ const API_CURSOR = /^c1\./
 /** The API's longest page of a channel's messages, and longest long-poll, in seconds. */
 const PAGE_MAX = 100
 const WAIT_MAX_S = 25
+/** The most threads a page of the API's thread list holds (`limit`): without it, 25. */
+const THREAD_PAGE_MAX = 100
 /** The most recent inbox events the API lists at once. */
 const INBOX_LIST_MAX = 100
 /** The API's codes board()'s sync doesn't know: on sync's routes, each is answered as the board's code for its status. */
@@ -1597,7 +1599,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const out: ApiThread[] = []
     let cursor: string | undefined
     do {
-      const page = await threadPage(who, path, { channelId: channel.id, label, cursor }, signal)
+      const page = await threadPage(who, path, { channelId: channel.id, label, cursor, limit: THREAD_PAGE_MAX }, signal)
       out.push(...page.threads)
       cursor = page.cursor ?? undefined
     } while (cursor)
@@ -1619,21 +1621,52 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** Whether the API lists threads with their first and newest messages (`include=messages`): until it refuses the parameter, it's asked. */
   let threadsWithMessages = true
+  /** Whether the API takes how many threads a page holds (`limit`): until it refuses the parameter, it's asked. */
+  let threadsByLimit = true
+  /** Whether a page of threads was answered, so what the thread list takes is known: until one is, reads of it wait for the first. */
+  let threadListKnown = false
+  /** The first read of the thread list, while it's out: reads that start meanwhile wait for its answer, so an API that refuses a parameter refuses it once. */
+  let askingThreads: Promise<void> | null = null
   /**
    * A page of a channel's threads, each with its first and newest message where the API sends them, so
-   * showing them costs no read of its own. An API from before `include=messages` takes no parameter
-   * it doesn't know and answers 400: the page is read again without it, and it's never asked again.
+   * showing them costs no read of its own, and `limit` of them where the API takes it, so a long list
+   * costs a request per 100 threads and not per 25. An API from before either takes no parameter it
+   * doesn't know and answers 400 naming it: the page is read again without that one, and it's never
+   * asked again. Reads that go out together, one a channel, wait for the first to learn which API this is.
    */
-  async function threadPage(who: Who, path: string, query: { channelId?: string; channel?: string; label: string | undefined; cursor: string | undefined }, signal: AbortSignal) {
+  async function threadPage(who: Who, path: string, query: { channelId?: string; channel?: string; label: string | undefined; cursor: string | undefined; limit: number }, signal: AbortSignal) {
     type Page = { threads: ApiThread[]; cursor: string | null }
-    if (threadsWithMessages)
-      try {
-        return await reading<Page>(who, path, { query: { ...query, include: 'messages' }, signal })
-      } catch (error) {
-        if (!unknownParameter(error, 'include')) throw error
-        threadsWithMessages = false
+    while (!threadListKnown && askingThreads) await stoppable(askingThreads, signal)
+    let answered = () => {}
+    if (!threadListKnown) {
+      const first = new Promise<void>((resolve) => {
+        answered = () => {
+          if (askingThreads === first) askingThreads = null
+          resolve()
+        }
+      })
+      askingThreads = first
+    }
+    const { limit, ...rest } = query
+    try {
+      for (;;) {
+        try {
+          const page = await reading<Page>(who, path, {
+            query: { ...rest, ...(threadsWithMessages ? { include: 'messages' } : {}), ...(threadsByLimit ? { limit: String(limit) } : {}) },
+            signal,
+          })
+          threadListKnown = true
+          return page
+        } catch (error) {
+          // It names the parameter it doesn't take: refusing one says nothing of the other.
+          if (threadsWithMessages && unknownParameter(error, 'include')) threadsWithMessages = false
+          else if (threadsByLimit && unknownParameter(error, 'limit')) threadsByLimit = false
+          else throw error
+        }
       }
-    return reading<Page>(who, path, { query, signal })
+    } finally {
+      answered()
+    }
   }
 
   /**
@@ -1647,7 +1680,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const out: ApiThread[] = []
     let cursor: string | undefined
     do {
-      const found = await threadPage(who, path, { channelId: channel.id, label, cursor }, signal)
+      // As many as it still needs: with `limit` alone, the rest of them, and otherwise all it can get.
+      const wanted = label === undefined && page.after === undefined && page.limit !== undefined ? page.limit - out.length : THREAD_PAGE_MAX
+      const found = await threadPage(who, path, { channelId: channel.id, label, cursor, limit: Math.min(wanted, THREAD_PAGE_MAX) }, signal)
       out.push(...found.threads)
       cursor = found.cursor ?? undefined
       const last = out.at(-1)
@@ -1689,7 +1724,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     let { cursor, skip } = before === undefined ? { cursor: undefined, skip: 0 } : olderIn(before, channel)
     const out: ApiThread[] = []
     do {
-      const found = await threadPage(who, path, { ...inChannel(channel), label: undefined, cursor }, signal).catch((error: unknown) => {
+      // The threads it skips and the rest it needs, so a page asked for whole stops where the API's does.
+      const found = await threadPage(who, path, { ...inChannel(channel), label: undefined, cursor, limit: Math.min(skip + limit - out.length, THREAD_PAGE_MAX) }, signal).catch((error: unknown) => {
         // A cursor of the right shape the API still refuses: one it no longer takes.
         if (error instanceof HttpError && error.status === 400 && error.code === 'invalid_cursor') throw new HttpError(400, 'invalid_cursor', `before isn't a page of #${channel.name}'s threads: pass a page's older as it came`)
         throw error
@@ -3085,6 +3121,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { grant } = await api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(grantRefused)
       return { grant: grantFrom(grant) }
     },
+    async createGrants(caller, input, signal) {
+      const who = whoOf(caller)
+      const { grants } = await api<Protocol['createGrants']['output']>(who, 'POST', await onBoard(who, '/grants/batch'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(grantRefused)
+      return { grants: grants.map(grantFrom) }
+    },
     async updateGrant(caller, { id, ...change }, signal) {
       const who = whoOf(caller)
       const { grant } = await api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) }).catch(grantRefused)
@@ -3098,9 +3139,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const explained = await api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {}).catch(explainRefused)
       return { ...explained, grants: explained.grants.map(grantFrom) }
     },
-    async revokeGrant(caller, { id }, signal) {
+    async revokeGrant(caller, { id, ...options }, signal) {
       const who = whoOf(caller)
-      return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
+      return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId(), ...options }, ...(signal ? { signal } : {}) })
     },
     // Schemas are the team's in the API: every board on it shares one registry. They're read through
     // the board, which whoever it lets in may do, a deployment included; registering is the team's.

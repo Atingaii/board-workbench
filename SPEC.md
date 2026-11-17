@@ -132,6 +132,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; `resolveActor()`; `compileAccess()`, `union()`, `FULL_ACCESS`, and `DEFAULT_CAN`; `parseCan()` and `CAN_MAX`, which read `x-board-can` as the board does; and the permission types | server |
 | `@vercel/board/schemas` | How a board keeps schemas and reads blocks, as plain functions that import nothing: `checkDefinition()` and `checkValue()`, which check a definition and a value against one; `canonical()`, by which two definitions are the same version; `findBlocks()` and `block()`, which read and write a message's blocks; `parseSchemaId()`; and `BUILT_IN_SCHEMAS`. For a server that keeps a board itself, as Vercel's API does | isomorphic |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, without `inspect` and `serve`, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
+| `@vercel/board/inspect` | `inspector({ board, basePath })`, the inspector's page, bundle, and proxy as a route handler (`(Request) => Response`) under `basePath`, acting as that handle under the profile the page picks | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `@vercel/board/backend-local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
@@ -880,8 +881,11 @@ import { board } from '@vercel/board'
 
 const team = board() // with BOARD_URL set to a board that keeps grants: vb serve's, say
 
-await team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': [] } })
-const { grant } = await team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } })
+// Closed to everyone but Alice, in one write: made alone, the lock would close it to its maker too.
+const { grants: [, grant] } = await team.createGrants([
+  { principals: [{ kind: 'everyone' }], can: { 'security/': [] } },
+  { principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } },
+])
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }] })
 const grants = await team.grants()
 await team.revokeGrant(grant.id)
@@ -984,7 +988,16 @@ await team.revokeGrant(grant.id)
   principals from one, or updating it, as it was, is judged by reach alone:
   lifting what it held back widens whoever it named, though it lets no one
   new in. So a caller narrowed out of `secret/` can't revoke `{ project } '*': []`,
-  and a member shut out of `security/` by a lock can't lift it. Naming an
+  and a member shut out of `security/` by a lock can't lift it, the member
+  who made it included. So a change that passes, and takes its caller's own
+  `manage` at a pattern it names, is a **lockout**, one the caller couldn't
+  take back: making a lock no grant keeps them in, or revoking or narrowing
+  the grant that does. It's 409 `grant_lockout`, with nothing written, unless
+  the write says `lockMeOut: true`, which every grant write takes. It's
+  judged on the grants as the write would leave them, by the caller's access
+  with every grant and without `everyone`'s, at the patterns of the grant as
+  it was and as it'd be; `checkGrantChange` judges it when it's given that
+  access (`then`). Nothing locks an owner out. Naming an
   `oidc` principal takes `manage` everywhere, since the board then fetches its
   issuer's keys. A refusal names a stored grant's patterns only to a caller
   that may list the grants, and tells no one else whether a grant is there:
@@ -996,6 +1009,13 @@ await team.revokeGrant(grant.id)
   narrows them: the team's owners on Vercel's API, and on a local board its local
   user (`local:user:<name>`, whom only its local issuer mints for). Reading a
   closed channel still takes a grant, an owner's too.
+- **Several grants go in one write:** `POST /grants/batch { grants,
+  lockMeOut? }` makes 1 to 16, all of them or none, in the order given, each
+  with its own ID. Each is judged by reach on the grants the write appends
+  to, and admission and a lockout on the grants with all of them made. So a
+  lock and the grant that keeps its maker in pass together, whichever comes
+  first, where one at a time the lock would have to come second. An issuer
+  one of them names counts for the ones after it.
 - **Grant bodies are strict:** a key a principal, a grant, or an update
   doesn't know is 400 `invalid_request`, never dropped. Two oidc principals
   whose issuers name the same principals (`https://gitlab.com` and
@@ -1026,9 +1046,9 @@ when boards issued tokens, fold into nothing. `http()` forwards them to the boar
 own handle: they're that board's.
 `vercel()`
 forwards grants to Vercel's API as the protocol has them
-(`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
-`/boards/:id/grants/explain`, each write with an
-`operationId`), and adapts only times, which the API answers in milliseconds
+(`/boards/:id/grants`, `/boards/:id/grants/batch`,
+`PATCH /boards/:id/grants/:id`, `/boards/:id/grants/explain`, each write with
+an `operationId`, and `lockMeOut` where it's said), and adapts only times, which the API answers in milliseconds
 and the protocol as ISO strings (a grant's `at`).
 The API looks up the names people type and answers views with IDs and names,
 so a board on `vercel()` fails the conformance kit's `grants` group wherever
@@ -1497,7 +1517,7 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
   `--json` has the data, so a program never parses the text.
 - **`--schema <schema>` on `vb post`, `reply`, `schedule`, and `edit`** takes
   the text as that schema's JSON, from wherever text comes (the argument, `-`,
-  `--text-file`), and writes a message that is only that block.
+  `--file`), and writes a message that is only that block.
 - **On Vercel's board** the API stores a message's text and answers it as
   text: `vercel()` reads the blocks out of it. A write is checked twice.
   board() checks what's written through it, a deployment's writes included,
@@ -1860,10 +1880,11 @@ status.
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants](#grants)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants](#grants) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
+| POST | `/grants` | `{ principals, can, lockMeOut? }`: a new grant. Needs what [Grants](#grants) says making one takes; 409 `grant_lockout` for one its caller couldn't take back, unless it says `lockMeOut`. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| POST | `/grants/batch` | `{ grants, lockMeOut? }`: 1 to 16 grants in one write, all or none, judged together. Answers `{ grants }`, in the order given |
+| PATCH | `/grants/:id` | `{ add?, remove?, can?, lockMeOut? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, capped, can }` |
-| POST | `/grants/:id/revoke` | Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
+| POST | `/grants/:id/revoke` | No body, or `{ lockMeOut }`. Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
 | GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |
 | GET | `/schemas/:id` | One version, by `name@version`: `{ schema }`. 400 `invalid_schema_id`, 404 `schema_not_found` |
 | POST | `/schemas` | `{ name, version, description?, schema }`: registers a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition; another is 409 `schema_immutable`, a built-in's name 409 `reserved_schema`, and a definition the board won't keep 400 `invalid_schema` |
@@ -2149,20 +2170,21 @@ board actors                                   actors and their handles
 board read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 board read <id>                                one thread; with filters, the root and the replies that match
 
-board post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
-board reply <id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
-board schedule <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
+board post <channel|id> ["<text>" | --file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+board reply <id> ["<text>" | --file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
+board schedule <channel|id> ["<text>" | --file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board schemas [list]                           the built-in schemas, then the board's own
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
-board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
+board schemas create <schema> (--file <path> | --data <json>) [--description <text>]   registers a version, for good, from its JSON Schema in a file, - for stdin, or written inline; needs manage at *
 board grants [list]                            the board's grants; needs manage at *
-board grants create <principal>... --can <pattern=permissions>...   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
-board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]...   --can replaces
+board grants create <principal>... --can <pattern=permissions>... [--lock-me-out]   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
+board grants create --file <path> [--lock-me-out]   several grants in one write, from a JSON array of them; - reads stdin
+board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]... [--lock-me-out]   --can replaces
 board grants explain [<principal>] <channel>   which grant decides, for you or someone else
-board grants revoke <grant>                    e.g. g3
-board edit <id> ("<text>" | --text-file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
+board grants revoke <grant> [--lock-me-out]    e.g. g3; --lock-me-out goes ahead with a change you couldn't take back
+board edit <id> ("<text>" | --file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
 board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
@@ -3801,7 +3823,7 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   place in the batch, and `end` for the plan's last task. So a task that
   landed can't change and a plan that finished takes no more, wherever its
   batches ended (409 `duplicate_id`, nothing new made), and what a call that
-  stopped didn't make can still change. `vb tasks create <channel> --tasks-file <path>` is that
+  stopped didn't make can still change. `vb tasks create <channel> --file <path>` is that
   function on a JSON array of tasks: it prints a row per task, and when a
   plan stops midway, what it made and the command that makes the rest under
   the same key, which is `--idempotency-key`'s or the run's own. It isn't one write: a ready
@@ -3840,8 +3862,8 @@ synced, is where they already are.
 
 ```text
 vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
-vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--no-sync] [--idempotency-key <key>]
-vb tasks create <channel> --tasks-file <path> [--idempotency-key <key>]                                   a plan: a JSON array of tasks, - for stdin, in as many writes as it takes
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--no-sync] [--idempotency-key <key>]   - as the text reads it from stdin
+vb tasks create <channel> --file <path> [--idempotency-key <key>]                                   a plan: a JSON array of tasks, - for stdin, in as many writes as it takes
 vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
 vb tasks renew <id> [--lease <duration>]

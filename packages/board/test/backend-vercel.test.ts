@@ -149,6 +149,9 @@ describe('vercel()', () => {
       'paging: refuses to page threads back and forward at once': 'passed',
       "grants: lets no caller narrowed with x-board-can grant past its can, even where everyone's grant closes it": 'passed',
       'grants: lets no caller narrowed with x-board-can let anyone in where everyone gets more than it has': 'passed',
+      // The run is a team owner, whom nothing locks out.
+      "grants: refuses a grant its maker couldn't take back, unless it says lockMeOut": 'skipped',
+      'grants: makes several grants in one write, or none of them, a lock with the grant that keeps its maker in': 'passed',
       'grants: lets a member grant on a pattern after a lock under it': 'skipped',
       'grants: lets a project on another team in, in its environments': 'skipped',
       'schemas: lists the built-in schemas first, and reads a schema by its ID': 'passed',
@@ -800,23 +803,159 @@ describe('vercel()', () => {
     const read = async (query: { before?: string; limit?: number }) => {
       sent.length = 0
       const page = await team.threads({ channel: 'busy', ...query })
-      return { texts: page.threads.map((t) => t.message.text), older: page.older, sent: listed().map((url) => url.searchParams.get('cursor')) }
+      return { texts: page.threads.map((t) => t.message.text), older: page.older, sent: listed().map((url) => [url.searchParams.get('cursor'), url.searchParams.get('limit')]) }
     }
     const texts = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `thread ${from + i}`)
-    // The API's cursor goes out as it came: 25 threads a page, the newest first.
-    const first = await read({ limit: 25 })
-    expect(first).toEqual({ texts: texts(35, 60), older: expect.any(String), sent: [null] })
+    // The API's cursor goes out as it came, for a page as long as the read asks, the newest first.
+    const first = await read({ limit: 30 })
+    expect(first).toEqual({ texts: texts(30, 60), older: expect.any(String), sent: [[null, '30']] })
     const second = await read({ before: first.older!, limit: 25 })
-    expect(second).toEqual({ texts: texts(10, 35), older: expect.any(String), sent: [first.older] })
-    // One of its pages with `before`, whatever the limit.
-    expect(await read({ before: second.older!, limit: 100 })).toEqual({ texts: texts(0, 10), older: null, sent: [second.older] })
-    // A page cut short at `limit` says how far into the API's it got, and the next starts there.
-    expect(await read({ limit: 4 })).toEqual({ texts: texts(56, 60), older: '~4', sent: [null] })
-    expect(await read({ before: '~4', limit: 25 })).toEqual({ texts: texts(35, 56), older: first.older, sent: [null] })
+    expect(second).toEqual({ texts: texts(5, 30), older: expect.any(String), sent: [[first.older, '25']] })
+    // One of its pages with `before`, however few are left.
+    expect(await read({ before: second.older!, limit: 100 })).toEqual({ texts: texts(0, 5), older: null, sent: [[second.older, '100']] })
+    // A read longer than the API's longest page reads on to its limit.
+    const all = await read({ limit: 150 })
+    expect(all).toEqual({ texts: texts(0, 60), older: null, sent: [[null, '100']] })
     expect(listed().every((url) => url.searchParams.get('include') === 'messages')).toBe(true)
     // Only one channel's threads, unfiltered, page this way.
     await expect(team.threads({ channel: 'busy', label: ['kind'], before: first.older! })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
     expect(await team.threads({ channel: 'busy/' })).not.toHaveProperty('older')
+  })
+
+  it("pages a channel's threads back on an API whose pages are always 25, a page cut short at `limit` included", async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true, threadsLimit: false })
+    const { team } = recording(api)
+    for (let i = 0; i < 60; i++) await team.post('busy', { text: `thread ${i}` })
+    const read = async (query: { before?: string; limit?: number }) => {
+      const page = await team.threads({ channel: 'busy', ...query })
+      return { texts: page.threads.map((t) => t.message.text), older: page.older }
+    }
+    const texts = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `thread ${from + i}`)
+    const first = await read({ limit: 25 })
+    expect(first).toEqual({ texts: texts(35, 60), older: expect.any(String) })
+    // One of its pages with `before`, whatever the limit.
+    expect(await read({ before: first.older!, limit: 100 })).toEqual({ texts: texts(10, 35), older: expect.any(String) })
+    // A page cut short at `limit` says how far into the API's it got, and the next starts there.
+    expect(await read({ limit: 4 })).toEqual({ texts: texts(56, 60), older: '~4' })
+    expect(await read({ before: '~4', limit: 25 })).toEqual({ texts: texts(35, 56), older: first.older })
+  })
+
+  it("lists a long channel 100 threads to a request, and each channel's latest in one, where the API takes a page's limit", async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true })
+    const author = handleOn(api, 'user:u_ada')
+    for (let i = 0; i < 280; i++) await author.post('queue', { text: `task ${i}`, labels: { kind: 'task' } })
+    for (const channel of ['dev', 'ops', 'ci']) for (let i = 0; i < 60; i++) await author.post(channel, { text: `${channel} ${i}` })
+    const inner = as(api, 'user:u_jb')
+    /** The thread list's pages a read takes, in a process of its own that has already read once, on the API or on one from before `limit`. */
+    const pages = async (threadsLimit: boolean, query: Parameters<ReturnType<typeof handleOn>['threads']>[0]) => {
+      let listed = 0
+      const team = board({
+        backend: vercel({
+          team: 'team_test',
+          api: API,
+          fetch: async (input, init) => {
+            const url = new URL(String(input))
+            if (!url.pathname.endsWith('/threads')) return inner(input, init)
+            listed++
+            if (!threadsLimit && url.searchParams.has('limit')) return Response.json({ error: { code: 'bad_request', message: 'Invalid request: should NOT have additional property `limit`.' } }, { status: 400 })
+            return inner(input, init)
+          },
+        }),
+      })
+      await team.threads({ channel: 'queue', limit: 1 })
+      listed = 0
+      const { threads } = await team.threads(query)
+      return { threads: threads.length, pages: listed }
+    }
+    // Every thread of the channel, newest first.
+    expect(await pages(true, { channel: 'queue', limit: 280 })).toEqual({ threads: 280, pages: 3 })
+    expect(await pages(false, { channel: 'queue', limit: 280 })).toEqual({ threads: 280, pages: 12 })
+    // Filtered by a label, which lists every page.
+    expect(await pages(true, { channel: 'queue', label: ['kind=task'], limit: 280 })).toEqual({ threads: 280, pages: 3 })
+    expect(await pages(false, { channel: 'queue', label: ['kind=task'], limit: 280 })).toEqual({ threads: 280, pages: 12 })
+    // The board's latest 50, as `vb read` asks: each channel's newest 50, all at once.
+    expect(await pages(true, {})).toEqual({ threads: 50, pages: 4 + 1 })
+    expect(await pages(false, {})).toEqual({ threads: 50, pages: 4 * 2 + 1 })
+  })
+
+  it("is refused a page's limit once by an API that doesn't take it, however many channels a read goes to at once, and still asks for the messages", async () => {
+    const channels = ['dev', 'ops', 'ci', 'docs']
+    /** A process of its own on `api`, with each thread list read it sent and the parameters it was refused. */
+    const process = (api: ReturnType<typeof fakeMessageboard>) => {
+      const inner = as(api, 'user:u_jb')
+      const refused: string[] = []
+      const sent: URL[] = []
+      const julian = board({
+        backend: vercel({
+          team: 'team_test',
+          api: API,
+          fetch: async (input, init) => {
+            const url = new URL(String(input))
+            const response = await inner(input, init)
+            if (!url.pathname.endsWith('/threads') || (init?.method ?? 'GET') !== 'GET') return response
+            sent.push(url)
+            if (response.status === 400) refused.push(/`(\w+)`/.exec(((await response.clone().json()) as { error: { message: string } }).error.message)?.[1] ?? '?')
+            return response
+          },
+        }),
+      })
+      return { julian, refused, sent }
+    }
+    const asked = (sent: URL[]) => [...new Set(sent.slice(-1).flatMap((url) => ['include', 'limit'].filter((name) => url.searchParams.has(name))))]
+    for (const [options, refused, kept] of [
+      [{ threadsLimit: false, inlineThreadMessages: true }, ['limit'], ['include']],
+      [{ inlineThreadMessages: false }, ['include'], ['limit']],
+      [{ threadsLimit: false, inlineThreadMessages: false }, ['include', 'limit'], []],
+    ] as const) {
+      const api = fakeMessageboard({ ...options, inlineActors: true })
+      for (const channel of channels) await handleOn(api, 'user:u_ada').post(channel, { text: `in ${channel}` })
+      // The whole board's latest threads: a page of each channel, all at once.
+      const { julian, refused: was, sent } = process(api)
+      expect((await julian.threads({})).threads.map((thread) => thread.message.text).sort()).toEqual(channels.map((channel) => `in ${channel}`).sort())
+      expect(was.sort(), JSON.stringify(options)).toEqual(refused)
+      // What it doesn't refuse it's still asked, and what it refused never is again.
+      expect(asked(sent), JSON.stringify(options)).toEqual(kept)
+      await julian.threads({ channel: 'dev', label: ['kind'] })
+      expect(was.sort(), JSON.stringify(options)).toEqual(refused)
+    }
+  })
+
+  it("lists a channel it reads by name 100 threads to a request, and is refused a page's limit once however many it reads by name at once", async () => {
+    const channels = ['dev', 'ops', 'ci', 'docs']
+    for (const options of [{ channelNames: true }, { channelNames: false }, { channelNames: true, threadsLimit: false }, { channelNames: false, threadsLimit: false }]) {
+      const api = fakeMessageboard({ ...options, inlineThreadMessages: true, inlineActors: true })
+      const author = handleOn(api, 'user:u_ada')
+      for (let i = 0; i < 120; i++) await author.post('queue', { text: `task ${i}` })
+      for (const channel of channels) await author.post(channel, { text: `in ${channel}` })
+      const inner = as(api, 'user:u_jb')
+      const listed: URL[] = []
+      const refused: string[] = []
+      const julian = board({
+        backend: vercel({
+          team: 'team_test',
+          api: API,
+          fetch: async (input, init) => {
+            const url = new URL(String(input))
+            const response = await inner(input, init)
+            if (!url.pathname.endsWith('/threads') || (init?.method ?? 'GET') !== 'GET') return response
+            listed.push(url)
+            if (response.status === 400) refused.push(/`(\w+)`/.exec(((await response.clone().json()) as { error: { message: string } }).error.message)?.[1] ?? '?')
+            return response
+          },
+        }),
+      })
+      const label = JSON.stringify(options)
+      // Each channel by its name, all at once: an API that refuses `limit` refuses it once, and each reads its own threads.
+      const read = await Promise.all(channels.map((channel) => julian.threads({ channel })))
+      expect(read.map(({ threads }) => threads.map((thread) => thread.message.text)), label).toEqual(channels.map((channel) => [`in ${channel}`]))
+      expect(refused.filter((name) => name === 'limit'), label).toHaveLength(options.threadsLimit === false ? 1 : 0)
+      // A long one, by its name where the API takes it, a page of 100 where it takes `limit`.
+      listed.length = 0
+      expect((await julian.threads({ channel: 'queue', limit: 120 })).threads, label).toHaveLength(120)
+      const sent = listed.map((url) => [url.searchParams.has('channel') ? 'channel' : 'channelId', url.searchParams.get('limit')])
+      if (options.threadsLimit === false) expect(sent, label).toEqual(Array(5).fill([options.channelNames ? 'channel' : 'channelId', null]))
+      else expect(sent, label).toEqual([[options.channelNames ? 'channel' : 'channelId', '100'], [options.channelNames ? 'channel' : 'channelId', '20']])
+    }
   })
 
   it("refuses a before that was never one of the channel's pages, as invalid_cursor, without asking the API with it", async () => {
@@ -2465,6 +2604,25 @@ describe('vercel()', () => {
     const pong = handleOn(fakeMessageboard(), 'project:prj_pong:production')
     await expect(pong.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', origin: 'board' })
     await expect(pong.createGrant({ principals: [{ kind: 'everyone' }], can: { 'dev/': [] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', message: expect.stringContaining('takes manage') })
+  })
+
+  it("gives back a lockout Vercel's API refuses as the board's, and sends lockMeOut and a batch through to it", async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createGrant({ principals: [{ kind: 'app', app: 'deploy' }], can: { '*': 'all' } })
+    // An app is no team owner: what it manages, a grant can take from it.
+    const app = handleOn(api, 'app:oac_2')
+    const lock = { principals: [{ kind: 'everyone' }], can: { 'dev/': ['read'] } } as const
+    await expect(app.createGrant(lock)).rejects.toMatchObject({ status: 409, code: 'grant_lockout', origin: 'board', message: expect.stringContaining('dev/') })
+    const { grants } = await app.createGrants([lock, { principals: [{ kind: 'app', app: 'deploy' }], can: { 'dev/': 'all' } }])
+    expect(grants.map((grant) => [grant.principals[0]?.kind, grant.can])).toEqual([
+      ['everyone', { 'dev/': ['read'] }],
+      ['app', { 'dev/': 'all' }],
+    ])
+    const [, keeps] = grants
+    await expect(app.revokeGrant(keeps!.id)).rejects.toMatchObject({ status: 409, code: 'grant_lockout' })
+    await expect(app.updateGrant(keeps!.id, { can: { 'dev/': ['read'] } })).rejects.toMatchObject({ status: 409, code: 'grant_lockout' })
+    expect(await app.revokeGrant(keeps!.id, { lockMeOut: true })).toEqual({ revoked: true })
+    await expect(app.createGrant({ principals: [{ kind: 'app', app: 'deploy' }], can: { 'dev/': 'all' } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
   })
 
   it("sends grants to Vercel's API as people name their principals, and gives back what it answers, IDs and names", async () => {
