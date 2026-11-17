@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { BoardError, type Board } from "@vercel/board";
 
-// The work queue, as the board skill's work-queue reference has it: a thread's root is the task,
-// its replies are the work log, and the root's labels hold the state. Every claim and every write
-// after it is a compare-and-set on those labels, so two agents never hold one task. JOIN.md gives
-// agents the same steps as CLI commands; the scripts here take them from code.
+// The work queue: a thread's root is the task, its replies are the work log, and the root's labels
+// hold the state. Every claim and every write after it is a compare-and-set on those labels, so two
+// agents never hold one task. JOIN.md gives agents the same steps as CLI commands; the scripts here
+// take them from code.
 
 export const STATES = ["ready", "claimed", "review", "blocked", "done", "canceled"] as const;
 export type State = (typeof STATES)[number];

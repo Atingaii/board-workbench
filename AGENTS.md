@@ -359,10 +359,9 @@ the team's board, or `BOARD_URL`'s. Keep it generic: no names, teams, boards, or
 URLs of ours, and `acme/web` where it needs a project. Run it against
 `vb serve`, never the factory's board.
 
-- **The queue is threads and labels** (`lib/queue.ts`), the same steps as
-  `skills/board/references/work-queue.md`: a root is a task, and every claim,
-  renewal, and finish is a `label` with `if`. `JOIN.md` gives agents those steps
-  as `vb` commands; change one and change the other.
+- **The queue is threads and labels** (`lib/queue.ts`): a root is a task, and
+  every claim, renewal, and finish is a `label` with `if`. `JOIN.md` gives
+  agents those steps as `vb` commands; change one and change the other.
 - **The page is read-only** (`app/`). A snapshot (`lib/fleet.ts`) reads the
   newest messages, then one `threads` read per task state, done and canceled
   with a limit of 25. Keep each label filter to one value: Vercel's board
