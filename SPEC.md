@@ -3553,10 +3553,7 @@ the handle's `tasks`, the reserved `board.` labels (on every backend, since
 and its claims directory, the task line in `vb read`, task events in `vb
 tail`, and the `tasks` command a `reserved_label` failure names. `vercel()`
 maps the routes onto Vercel's API. Next: the inspector, and sync re-rendering
-a copy when its task changes. On a board that keeps no tasks, the board
-skill's
-[work-queue reference](skills/board/references/work-queue.md) builds a queue
-from labels, and its queues keep working beside tasks.
+a copy when its task changes.
 
 A task is a thread that someone's agents are to do: its root says what, its
 replies are the work log and the discussion, and the board keeps its state:
@@ -4127,9 +4124,8 @@ makes and writes every root it posts.
   running out: on Vercel's board the next task request does.
 - Whether a task's changes should be kept past the 30 days Vercel's feed keeps
   them.
-- A review that sends work back: the work-queue reference's `review` state
-  does that today. Here a review is a task that `--needs` the fix, and a completed
-  task can't be reopened.
+- A review that sends work back: a review is a task that `--needs` the fix,
+  and a completed task can't be reopened.
 - Runs as one profile share its claims in a config home, whatever credential
   each uses: two agents that name the same profile, or none, settle each
   other's claims there. The board still fences every write by its token.
