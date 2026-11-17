@@ -219,3 +219,28 @@ describe("the inspector's channel view", () => {
     expect(board.view.hasOlder('ops')).toBe(false)
   })
 })
+
+describe('a post from the inspector', () => {
+  const pending = (m: MessageView): store.Pending => ({ channel: m.channel, re: m.re, text: m.text, noSync: false, labels: {}, key: `k${m.id}`, createdAt: m.createdAt, error: null })
+
+  it('shows in its channel as soon as the board answers it, before the stream brings it', async () => {
+    const board = fakeBoard(() => [{ root: message(1), replies: [] }])
+    await board.view.load('ops')
+    const root = message(2)
+    const answer = reply(3, 1)
+    board.set({ ...board.state(), pending: [pending(root), pending(answer)] })
+    board.set(store.sent(board.state(), 'k2', root))
+    board.set(store.sent(board.state(), 'k3', answer))
+    expect(board.shown()).toEqual([
+      ['2', 0, null],
+      ['1', 1, '3'],
+    ])
+    expect(board.state().pending).toEqual([])
+    // The stream bringing them after counts neither twice.
+    board.view.apply([posted(root), posted(answer)])
+    expect(board.shown()).toEqual([
+      ['2', 0, null],
+      ['1', 1, '3'],
+    ])
+  })
+})
