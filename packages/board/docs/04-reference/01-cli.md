@@ -57,8 +57,17 @@ const code = await createApp({
   // How requests to Vercel's API go with that login: the app's own fetch, which adds the login's
   // credentials. Without it, the login goes as a Bearer token, which a DPoP login can't use.
   // fetch: (input, init) => yourSignedFetch(input, init), // a DPoP proof for each request
+  // A Vercel token someone passed for this run, as `vercel board --token` takes one: the login to
+  // use in place of `login`, ahead of everything the environment holds, a deployment's own token
+  // and BOARD_TOKEN included. Board sends it itself, as a Bearer token, never through `fetch`. A
+  // board at a URL gets a token minted with it, never the token itself.
+  // token: yourFlags.token,
 }).run(process.argv.slice(3))
 ```
+
+A variable never goes ahead of a deployment's own token, so a token in the
+environment is not one to pass here: pass only what the person typed for this
+run. [`whoami`](#whoami) names it as its source, `the token you passed`.
 
 `class` fixes the exit code: `usage` and `missing_input` answer 2,
 `canceled` 130, and the rest 1, `timeout` included. Without `onError`, board

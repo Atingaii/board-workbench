@@ -2034,9 +2034,11 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 - **`board()` with no backend is the team's board in Vercel's API,** the one
   `name` names on the team `team` names, on `vercel()`, with
   `board({ fetch })`'s credentials when it's given. In Node they default to
-  the deployment's OIDC token, which nothing replaces, or else `BOARD_TOKEN`, then the
-  login a CLI hands it (`VERCEL_AUTH_TOKEN`) or your `vercel login`, never `VERCEL_TOKEN`, and
-  the team to `VERCEL_ORG_ID`, the deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
+  the deployment's OIDC token, which nothing in the environment replaces, or else `BOARD_TOKEN`, then the
+  login a CLI hands it (`VERCEL_AUTH_TOKEN`) or your `vercel login`, never `VERCEL_TOKEN`. A token
+  passed for one run of a CLI that embeds board's (`createApp({ token })`, as `vercel board --token`)
+  is that run's login, ahead of them all: whoever passed it said who to be. The team defaults
+  to `VERCEL_ORG_ID`, the deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
   it's that board instead (on `http()`, internal), whatever the name: it
   sends a token in the order in [Tokens](#tokens), through Deployment
   Protection, and `board({ fetch })` never goes there. The default build, for

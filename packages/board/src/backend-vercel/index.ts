@@ -1,10 +1,11 @@
 // Your team's board in Vercel's API, internal: board()'s default backend, and the CLI's. In Node, it finds credentials the way
 // a deployment and the Vercel CLI do: the deployment's OIDC token, or else `BOARD_TOKEN` or your login. Never
-// `VERCEL_TOKEN`, a name people set for other reasons, and nothing replaces a deployment's own token.
+// `VERCEL_TOKEN`, a name people set for other reasons, and nothing in the environment replaces a deployment's
+// own token: only a token someone passed the CLI for this run goes ahead of it.
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import { decodeJwt } from 'jose'
-import { asYou, environmentProfile, loginHanded, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
+import { asYou, environmentProfile, loginHanded, PASSED, passedToken, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
 import { HttpError } from '../server/errors.ts'
 
@@ -14,12 +15,17 @@ const deployed = () => process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_T
 /** Off a deployment, a credential Vercel's API takes, set for board: what a sandbox or CI passes. */
 const boardToken = () => (deployed() ? null : process.env.BOARD_TOKEN || null)
 
+/** Whether what goes is a Vercel login: a token passed for this run, or with no deployment's token and no `BOARD_TOKEN`, yours. */
+const asLogin = () => passedToken() !== null || (!deployed() && !boardToken())
+
 /**
- * A token Vercel's API takes: this deployment's OIDC token, or else `BOARD_TOKEN`, or your Vercel
- * login, the one the CLI that runs board's hands it (`vercel board`'s, or `VERCEL_AUTH_TOKEN`) or
- * your `vercel login`.
+ * A token Vercel's API takes: the one this run was passed (`vercel board --token`), or else this
+ * deployment's OIDC token, or else `BOARD_TOKEN`, or your Vercel login, the one the CLI that runs
+ * board's hands it (`vercel board`'s, or `VERCEL_AUTH_TOKEN`) or your `vercel login`.
  */
 async function token(): Promise<string> {
+  const passed = passedToken()
+  if (passed !== null) return passed
   if (deployed()) return getVercelOidcToken()
   const set = boardToken()
   if (set) return set
@@ -31,6 +37,7 @@ async function token(): Promise<string> {
 
 /** Where `token` comes from, in words: what `vb whoami` says. */
 export function credentialSource(): string {
+  if (passedToken() !== null) return PASSED
   if (deployed()) return 'Vercel OIDC'
   if (boardToken()) return 'BOARD_TOKEN'
   return loginHanded() ? 'the Vercel CLI' : 'vercel login'
@@ -81,8 +88,7 @@ const environment: VercelEnvironment = {
     const credential = await token()
     // Your login goes through the fetch the CLI that runs board's hands it, which adds its own
     // credentials. A deployment's token, or BOARD_TOKEN, goes as it is.
-    if (!deployed() && !boardToken())
-      return asYou(input, init, credential)
+    if (asLogin()) return asYou(input, init, credential)
     const headers = new Headers(init.headers)
     headers.set('authorization', `Bearer ${credential}`)
     return globalThis.fetch(input, { ...init, headers })
