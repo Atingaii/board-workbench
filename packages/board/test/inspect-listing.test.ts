@@ -227,20 +227,29 @@ describe('a post from the inspector', () => {
     const board = fakeBoard(() => [{ root: message(1), replies: [] }])
     await board.view.load('ops')
     const root = message(2)
-    const answer = reply(3, 1)
-    board.set({ ...board.state(), pending: [pending(root), pending(answer)] })
+    board.set({ ...board.state(), pending: [pending(root)] })
     board.set(store.sent(board.state(), 'k2', root))
-    board.set(store.sent(board.state(), 'k3', answer))
     expect(board.shown()).toEqual([
+      ['1', 0, null],
       ['2', 0, null],
-      ['1', 1, '3'],
     ])
     expect(board.state().pending).toEqual([])
-    // The stream bringing them after counts neither twice.
-    board.view.apply([posted(root), posted(answer)])
+    board.view.apply([posted(root)])
     expect(board.shown()).toEqual([
+      ['1', 0, null],
       ['2', 0, null],
-      ['1', 1, '3'],
     ])
+  })
+
+  it("counts every reply in a thread when the board answers yours before the stream brings someone else's", async () => {
+    // Three replies the page counts, and only the latest of them loaded.
+    const board = fakeBoard(() => [{ root: message(1), replies: [reply(2, 1), reply(3, 1), reply(4, 1)] }])
+    await board.view.load('ops')
+    const theirs = message(5, { re: '1', thread: 't1', text: 'theirs', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null } })
+    const mine = reply(6, 1)
+    board.set({ ...board.state(), pending: [pending(mine)] })
+    board.set(store.sent(board.state(), 'k6', mine))
+    board.view.apply([posted(theirs), posted(mine)])
+    expect(board.shown()).toEqual([['1', 5, '6']])
   })
 })

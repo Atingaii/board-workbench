@@ -173,6 +173,8 @@ describe('the inspector store', () => {
     // Two threads one author started a minute apart show who once, as Slack does, unless the first has replies.
     expect(continues(message(1, { createdAt: at(0) }), message(2, { createdAt: at(1) }))).toBe(true)
     expect(continues(message(1, { createdAt: at(0) }), message(2, { createdAt: at(1) }), true)).toBe(false)
+    // A reply moves an older thread below a newer one by the same author: it shows who started it again.
+    expect(continues(message(2, { createdAt: at(1) }), message(1, { createdAt: at(0) }))).toBe(false)
   })
 
   it("lists a channel by the board's thread pages: a task that came in from the task list shows there once a page has it", () => {

@@ -256,11 +256,14 @@ function listed(state: State, message: MessageView): State {
 }
 
 /**
- * Your post, as the board answered it: in place of the post on its way, and listed in its channel at
- * once, so it never leaves the page while the stream catches up.
+ * Your post, as the board answered it: in place of the post on its way, and a new thread listed in its
+ * channel at once, so it never leaves the page while the stream catches up. A reply's thread moves on
+ * when the stream brings it, in order, so replies the stream hasn't brought yet still count.
  */
-export const sent = (state: State, key: string, message: MessageView): State =>
-  listed(merge({ ...state, pending: state.pending.filter((p) => p.key !== key) }, [message]), message)
+export function sent(state: State, key: string, message: MessageView): State {
+  const next = merge({ ...state, pending: state.pending.filter((p) => p.key !== key) }, [message])
+  return message.re === null ? listed(next, message) : next
+}
 
 /** The channel of a live reply whose thread its listing doesn't have, so its first page is read again; else null. */
 export function unlistedReply(state: State, event: BoardEventView): string | null {
@@ -478,9 +481,13 @@ export function continues(previous: Groupable | undefined, m: Groupable, hasRepl
     previous.channel === m.channel &&
     previous.re === m.re &&
     sameDay(previous.createdAt, m.createdAt) &&
-    Date.parse(m.createdAt) - Date.parse(previous.createdAt) < GROUP_MS
+    gap(previous, m) >= 0 &&
+    gap(previous, m) < GROUP_MS
   )
 }
+
+// A channel lists threads by latest activity, so an older one can come after a newer one: it never runs on from it.
+const gap = (previous: Groupable, m: Groupable) => Date.parse(m.createdAt) - Date.parse(previous.createdAt)
 
 
 // --- who's who ---------------------------------------------------------------------------------
