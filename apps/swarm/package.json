@@ -1,5 +1,5 @@
 {
-  "name": "fleet",
+  "name": "swarm",
   "private": true,
   "type": "module",
   "scripts": {

@@ -1,15 +1,15 @@
-import { FLEET, team } from "@/lib/board";
-import { snapshot } from "@/lib/fleet";
+import { SWARM, team } from "@/lib/board";
+import { snapshot } from "@/lib/swarm";
 
 // The page's live feed, as server-sent events: a snapshot when it connects, and another after every
-// change under the fleet. The browser never talks to the board, so it never holds a credential.
+// change under the swarm. The browser never talks to the board, so it never holds a credential.
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /** A connection ends before the function would, and the browser's EventSource opens the next. */
 const ROTATE_MS = 50_000;
 
-/** A busy fleet redraws the page this often at most: a snapshot is several board reads. */
+/** A busy swarm redraws the page this often at most: a snapshot is several board reads. */
 const REDRAW_MS = 3_000;
 
 export async function GET(request: Request): Promise<Response> {
@@ -30,8 +30,8 @@ export async function GET(request: Request): Promise<Response> {
         let cursor = first.cursor;
         let drawn = Date.now();
         while (!stop.signal.aborted) {
-          // One long-poll: it answers as soon as something under the fleet changes, or empty after 20 s.
-          const page = await team().poll({ channel: FLEET, after: cursor, wait: 20 }, stop.signal);
+          // One long-poll: it answers as soon as something under the swarm changes, or empty after 20 s.
+          const page = await team().poll({ channel: SWARM, after: cursor, wait: 20 }, stop.signal);
           cursor = page.cursor;
           if (page.events.length === 0) {
             send("ping", {}); // keeps the connection warm

@@ -351,9 +351,9 @@ wake-ups and webhooks.
   first use, a page load say).
   `vercel curl /api/board/wake --deployment <url> -- -X POST` wakes it by hand.
 
-## fleet (`apps/fleet`)
+## swarm (`apps/swarm`)
 
-A template people fork for a fleet of agents on one queue. It stands alone: it
+A template people fork for a swarm of agents on one queue. It stands alone: it
 runs the `@vercel/board` release on npm, not this checkout, and `board()`, so
 the team's board, or `BOARD_URL`'s. Keep it generic: no names, teams, boards, or
 URLs of ours, and `acme/web` where it needs a project. Run it against
@@ -364,20 +364,20 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
   `JOIN.md` gives agents the steps as `vb tasks` commands, and
   `scripts/worker.ts` takes the same ones from code; change one and change the
   other.
-- **The page is read-only** (`app/`). A snapshot (`lib/fleet.ts`) reads the
+- **The page is read-only** (`app/`). A snapshot (`lib/swarm.ts`) reads the
   newest messages, then one `threads` read per task state by its
   `board.task` label, the finished states with a limit of 25. It reads threads
   and not `tasks.list`, which lists oldest first: the page wants the newest
   finished. Keep each label filter to one value: Vercel's board
-  indexes only that, and pages through every thread in the fleet for
+  indexes only that, and pages through every thread in the swarm for
   `a|b` or a bare key. Nothing is kept between snapshots.
-  `app/api/live` long-polls the fleet's events and sends a snapshot over
+  `app/api/live` long-polls the swarm's events and sends a snapshot over
   server-sent events after a change, at most one every 3 seconds. The browser
   holds no credential.
 - `pnpm seed` makes sample tasks, one plan per channel, a review that waits for
   its fix among them. `pnpm worker <name>` is a stand-in agent that claims,
   logs, renews, and completes them, to check the page without a model.
-- `pnpm test` (`test/fleet.test.ts`) runs on `local({ memory: true })`: what a
+- `pnpm test` (`test/swarm.test.ts`) runs on `local({ memory: true })`: what a
   snapshot holds for each state, a task made and finished between two
   included, a race for one claim, and a task readied by the one it waited for.
   The claims' own promises (a lease that runs out, a fenced write) are the

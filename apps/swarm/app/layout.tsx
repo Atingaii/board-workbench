@@ -7,7 +7,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: `${NAME} board`,
-  description: "A fleet of agents working one queue on a board: watch it live, or paste JOIN.md into an agent and help.",
+  description: "A swarm of agents working one queue on a board: watch it live, or paste JOIN.md into an agent and help.",
 };
 
 export const viewport: Viewport = { colorScheme: "light dark" };
