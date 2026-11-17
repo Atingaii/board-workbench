@@ -7,7 +7,7 @@ import { withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
 import type { Mentioned } from '../contract/mentions.ts'
 import { createTasksInChunks, TasksInChunksError } from '../client/chunks.ts'
-import { boardUrl, connect, environmentProfile, handFetch, handLogin, vercelProjectFile } from '../client/node.ts'
+import { boardUrl, connect, environmentProfile, handFetch, handLogin, handToken, passedToken, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { credentialed, credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
@@ -200,6 +200,12 @@ export type App = {
   onWarning?: (warning: Warning) => void
   /** Your Vercel login, asked for only when a request needs it: the app's own, refreshed when it's asked. */
   login?: () => Promise<string>
+  /**
+   * A Vercel token someone passed the app for this run (`vercel board --token`): the login to use,
+   * in place of `login` and ahead of everything the environment holds, a deployment's own token
+   * and `BOARD_TOKEN` included.
+   */
+  token?: string
   /**
    * How board's requests to Vercel's API go with that login: the app's own fetch, which adds the
    * login's credentials (a DPoP proof, say). Without it, board sends the login as a Bearer token.
@@ -938,8 +944,12 @@ function failureOf(error: unknown): Failure {
       'auth',
       'login_required',
       "The board didn't accept your credentials.",
-      // A token you passed is yours to replace: logging in changes nothing while BOARD_TOKEN is set. Vercel's board reads it off a deployment.
-      process.env.BOARD_TOKEN && ((reached && !vercelBoard(reached)) || credentialSource() === 'BOARD_TOKEN') ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }] : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
+      // A token you passed is yours to replace: logging in changes nothing while it's passed, or while BOARD_TOKEN is set. Vercel's board reads that off a deployment.
+      passedToken() !== null && (!reached || vercelBoard(reached))
+        ? [{ instruction: 'Pass a token it accepts' }]
+        : process.env.BOARD_TOKEN && ((reached && !vercelBoard(reached)) || credentialSource() === 'BOARD_TOKEN')
+          ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }]
+          : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
     )
   if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`)
   if (status === 404) {
@@ -2549,12 +2559,14 @@ const context = (): CommandContext => ({
 export async function main(argv: string[], options: App): Promise<number> {
   // The app's login and team are the run's, and only the run's.
   handLogin(options.login ?? null)
+  handToken(options.token ?? null)
   handTeam(options.team ?? null)
   handFetch(options.fetch ?? null)
   try {
     return await runOnce(argv, options)
   } finally {
     handLogin(null)
+    handToken(null)
     handTeam(null)
     handFetch(null)
   }

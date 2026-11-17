@@ -162,15 +162,34 @@ export function asYou(input: RequestInfo | URL, init: RequestInit, login: string
   return send(input, { ...init, headers })
 }
 
-/** Whether the login is one a CLI handed over (`createApp`'s `login`, or `VERCEL_AUTH_TOKEN`). */
-export const loginHanded = () => handed !== null || !!process.env.VERCEL_AUTH_TOKEN
+/** The token someone passed the CLI that runs board's for this run (`vercel board --token`), while there is one. */
+let passed: string | null = null
+
+/** Where `vb whoami` says a passed token came from. */
+export const PASSED = 'the token you passed'
 
 /**
- * Your Vercel login: what the CLI that runs board's hands it, as `vercel board` does (its `login`,
- * or `VERCEL_AUTH_TOKEN` from its `--token`), or else what `vercel login` saved.
+ * Hands board the token someone passed the CLI that runs it, as `vercel board --token` does: the
+ * Vercel login for this run, ahead of everything the environment holds, a deployment's own token
+ * and `BOARD_TOKEN` included. Whoever passed it said who to be, which no variable does. Null takes
+ * it back.
+ */
+export function handToken(token: string | null) {
+  passed = token
+}
+
+/** The token this run was passed, or null. */
+export const passedToken = () => passed
+
+/** Whether the login is one a CLI handed over (`createApp`'s `token` or `login`, or `VERCEL_AUTH_TOKEN`). */
+export const loginHanded = () => passed !== null || handed !== null || !!process.env.VERCEL_AUTH_TOKEN
+
+/**
+ * Your Vercel login: what the CLI that runs board's hands it, as `vercel board` does (the token
+ * it was passed, its `login`, or `VERCEL_AUTH_TOKEN`), or else what `vercel login` saved.
  */
 export const vercelLogin = () =>
-  handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken()
+  passed !== null ? Promise.resolve(passed) : handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken()
 
 /**
  * A handed login's token, which its tokens for boards are cached by: null for `vercel login`'s own. One
@@ -307,8 +326,9 @@ export type NodeTransport = {
 
 /**
  * How a client reaches the board at `url` from Node: through Deployment Protection, with a token
- * from `token`, `BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions, the Vercel
- * runtime, or your Vercel CLI login, in that order. Who you are is the token's to say: the board
+ * from `token`, the login a CLI that runs board's was passed (`handToken`), `BOARD_TOKEN`, a local
+ * board's token file (`vb serve`), GitHub Actions, the Vercel runtime, or your Vercel CLI login,
+ * in that order. Who you are is the token's to say: the board
  * names you from what it verifies. A board with no Vercel project has no token for your login to
  * mint, so a request goes to it with none: what verifies its callers may know you another way, as
  * a board behind `tailscale serve` does.
@@ -342,11 +362,26 @@ export function connect(
   let cached: Minted | null = null
   let source: string | null = null
   let person: Promise<Cached> | null = null
+  /** A token minted with your Vercel login, which `from` names. */
+  const asPerson = async (discovered: Discovery, from: string): Promise<Minted> => {
+    person ??= personToken(url, discovered).finally(() => {
+      person = null
+    })
+    const minted = await person
+    source = from
+    return minted
+  }
   // `source` says which of these it picked, for `vb whoami`.
   const mint = async (): Promise<Minted> => {
     if (options.token !== undefined) {
       const token = typeof options.token === 'function' ? await options.token() : options.token
       return { token, expiresAt: expiry(token) }
+    }
+    // A token passed for this run is a Vercel login, never the board's: it mints one, ahead of what
+    // the environment holds. A board with no Vercel project has none for it to mint.
+    if (passed !== null) {
+      const discovered = await discover()
+      if (discovered.project_id) return asPerson(discovered, PASSED)
     }
     if (process.env.BOARD_TOKEN) {
       const token = process.env.BOARD_TOKEN
@@ -371,12 +406,7 @@ export function connect(
     }
     // No project, no token a login could mint: the request goes as it is, for the board to say whose it is.
     if (!discovered.project_id) return { token: null, expiresAt: Date.now() + 5 * 60_000 }
-    person ??= personToken(url, discovered).finally(() => {
-      person = null
-    })
-    const minted = await person
-    source = 'vercel login'
-    return minted
+    return asPerson(discovered, 'vercel login')
   }
   const token = async () => {
     // One handed over is asked again each time: a function returns a fresh one.

@@ -20,6 +20,7 @@ const { board } = await import('../src/server/index.ts')
 const { http } = await import('../src/backend-http/index.ts')
 const { BOARD_URL, personToken, testBoard } = await import('./harness.ts')
 const { handFetch, handLogin } = await import('../src/client/node.ts')
+const { createApp } = await import('../src/cli/embedded.ts')
 
 const EVIL = 'https://evil.example/api/board'
 const LOCAL = 'http://localhost:3000/api/board'
@@ -146,6 +147,32 @@ describe("a person's token from `vercel login`", () => {
     expect(api.calls).toEqual(['POST /v1/projects/prj_board/token?source=board&teamId=team_test'])
     expect(exchange).toHaveBeenCalledWith({ token: 'development-token-for-prj_board', audience: LOCAL })
     expect(bearers).toHaveLength(1)
+  })
+
+  it('is minted with the token an app was passed, ahead of BOARD_TOKEN, and that token never reaches the board', async () => {
+    const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
+    const board = testBoard()
+    const bearers = network(api, (request) => board.fetch(request))
+    // `vercel login`'s is an account Vercel's API turns away here, and BOARD_TOKEN is someone else on this board.
+    login.token = 'another-login'
+    vi.stubEnv('BOARD_URL', BOARD_URL)
+    vi.stubEnv('BOARD_TOKEN', await personToken('u_bo', BOARD_URL))
+    /** What `whoami --json` prints from an app passed `token`, or none. */
+    const whoami = async (token?: string) => {
+      let stdout = ''
+      const out = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => ((stdout += String(chunk)), true))
+      try {
+        await createApp({ appName: 'vercel board', ...(token ? { token } : {}) }).run(['whoami', '--json'])
+      } finally {
+        out.mockRestore()
+      }
+      return JSON.parse(stdout) as { principal: string; source: string }
+    }
+    expect(await whoami('vercel-cli-token')).toMatchObject({ principal: 'vercel:user:u_julian', source: 'the token you passed' })
+    expect(bearers).not.toContain('Bearer vercel-cli-token')
+    expect(exchange).toHaveBeenCalledWith({ token: 'development-token-for-prj_board', audience: BOARD_URL })
+    // Passed none, the same app sends BOARD_TOKEN, as vb does.
+    expect(await whoami()).toMatchObject({ principal: 'vercel:user:u_bo', source: 'BOARD_TOKEN' })
   })
 
   it("fails when a login a CLI hands it fails, never acting as `vercel login`'s account", async () => {
