@@ -1,8 +1,8 @@
 // A stand-in agent, to watch the page move without spending tokens: node scripts/worker.ts [name]
-// It does what JOIN.md tells a real agent to do (claim, log, renew, finish) and sleeps where a real
+// It does what JOIN.md tells a real agent to do (claim, log, renew, complete) and sleeps where a real
 // one would work. STEP_MS sets how long each step takes (3 s by default). Stop it with Ctrl-C.
+import { BoardError } from "@vercel/board";
 import { FLEET, team } from "../lib/board.ts";
-import { claim, finish, renew, review } from "../lib/queue.ts";
 
 const name = process.argv[2] ?? `worker-${Math.random().toString(36).slice(2, 6)}`;
 const board = team().as(name);
@@ -10,46 +10,40 @@ const me = (await board.me()).handle ?? name;
 const step = Number(process.env.STEP_MS ?? 3_000);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Whether the board refused a claim's write because the claim is over: its lease ran out, or the task was canceled. */
+const over = (error: unknown) => error instanceof BoardError && ["claim_lost", "task_finished", "task_claimed", "task_waiting", "task_blocked"].includes(error.code);
+
 console.log(`${me} is working ${FLEET}`);
 for (;;) {
-  // Someone else's finished work comes first: a review readies what waits for it.
-  const reviews = await board.threads({ channel: FLEET, label: { "task.state": "review" } });
-  const theirs = reviews.threads.find(({ message }) => message.labels["task.owner"] !== me);
-  if (theirs && (await review(board, theirs.message.id, "done", FLEET))) {
-    await board.reply(theirs.message.id, "Reviewed: the result holds. Done.");
-    console.log(`reviewed ${theirs.message.id}`);
+  const ready = await board.tasks.list({ channel: FLEET, state: "ready" });
+  if (ready.tasks.length === 0) {
+    // Nothing to take: block until something in the fleet changes, then look again.
+    await board.wait({ channel: FLEET }, { timeout: "1m" });
     continue;
   }
-
-  const { threads } = await board.threads({ channel: FLEET, label: { "task.state": "ready" } });
-  if (threads.length === 0) {
-    // Nothing to take: block until something in the fleet changes, then look again. Waiting from
-    // where the first read stood catches what landed while this loop was looking.
-    await board.wait({ channel: FLEET, after: reviews.cursor }, { timeout: "1m" });
-    continue;
-  }
-  const { message } = threads[Math.floor(Math.random() * threads.length)]!;
-  const token = await claim(board, message.id, me);
-  if (!token) continue; // someone was first
+  // By its ID, as JOIN.md has a real agent do once it has read the task and who wrote it. Of claims that race, one lands.
+  const { message } = ready.tasks[Math.floor(Math.random() * ready.tasks.length)]!;
+  const claim = await board.tasks.claim(message.id).catch((error: unknown) => {
+    if (over(error)) return null; // someone was first
+    throw error;
+  });
+  if (!claim) continue;
 
   const title = message.text.split("\n", 1)[0];
   console.log(`claimed ${message.id}  ${title}`);
-  await board.reply(message.id, "[progress] Claimed. Plan: reproduce, change, verify, report.");
-  let held = true;
-  for (const note of ["[progress] Reproduced it. Working on the change.", "[progress] Change made. Verifying."]) {
+  try {
+    await board.reply(message.id, "[progress] Claimed. Plan: reproduce, change, verify, report.");
+    for (const note of ["[progress] Reproduced it. Working on the change.", "[progress] Change made. Verifying."]) {
+      await sleep(step);
+      // The lease is renewed before each step. Once it's lost, someone else holds the task: stop, and settle nothing.
+      await claim.renew();
+      await board.reply(message.id, note);
+    }
     await sleep(step);
-    // A lost claim means someone took the task over: stop, and write nothing more to its state.
-    if (!(held = await renew(board, message.id, token))) break;
-    await board.reply(message.id, note);
-  }
-  if (!held) {
+    await claim.complete("Verified: the change holds.");
+    console.log(`completed ${message.id}`);
+  } catch (error) {
+    if (!over(error)) throw error;
     await board.reply(message.id, "Lost the claim, so stopping here.");
-    continue;
-  }
-  await sleep(step);
-  const state = Math.random() < 0.5 ? "review" : "done";
-  if (await finish(board, message.id, token, state, FLEET)) {
-    await board.reply(message.id, state === "review" ? "Ready for review: the change is verified." : "Done: verified.");
-    console.log(`${state} ${message.id}`);
   }
 }

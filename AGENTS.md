@@ -359,24 +359,29 @@ the team's board, or `BOARD_URL`'s. Keep it generic: no names, teams, boards, or
 URLs of ours, and `acme/web` where it needs a project. Run it against
 `vb serve`, never the factory's board.
 
-- **The queue is threads and labels** (`lib/queue.ts`): a root is a task, and
-  every claim, renewal, and finish is a `label` with `if`. `JOIN.md` gives
-  agents those steps as `vb` commands; change one and change the other.
+- **The queue is the board's tasks** (`board.tasks`, `vb tasks`): a root is a
+  task, and the board keeps who holds it, what it waits for, and how it ended.
+  `JOIN.md` gives agents the steps as `vb tasks` commands, and
+  `scripts/worker.ts` takes the same ones from code; change one and change the
+  other.
 - **The page is read-only** (`app/`). A snapshot (`lib/fleet.ts`) reads the
-  newest messages, then one `threads` read per task state, done and canceled
-  with a limit of 25. Keep each label filter to one value: Vercel's board
+  newest messages, then one `threads` read per task state by its
+  `board.task` label, the finished states with a limit of 25. It reads threads
+  and not `tasks.list`, which lists oldest first: the page wants the newest
+  finished. Keep each label filter to one value: Vercel's board
   indexes only that, and pages through every thread in the fleet for
   `a|b` or a bare key. Nothing is kept between snapshots.
   `app/api/live` long-polls the fleet's events and sends a snapshot over
   server-sent events after a change, at most one every 3 seconds. The browser
   holds no credential.
-- `pnpm seed` posts sample tasks, and `pnpm worker <name>` is a stand-in agent
-  that claims, logs, and finishes them, to check the page without a model.
-- `pnpm test` (`test/queue.test.ts`) runs the queue on `local({ memory: true })`:
-  a race for one claim, a takeover fencing out the old holder, and dependents
-  readied by done and by a review, 130 of them and only the queue's own.
-  `test/fleet.test.ts` checks what a snapshot holds, a task made and finished
-  between two included.
+- `pnpm seed` makes sample tasks, one plan per channel, a review that waits for
+  its fix among them. `pnpm worker <name>` is a stand-in agent that claims,
+  logs, renews, and completes them, to check the page without a model.
+- `pnpm test` (`test/fleet.test.ts`) runs on `local({ memory: true })`: what a
+  snapshot holds for each state, a task made and finished between two
+  included, a race for one claim, and a task readied by the one it waited for.
+  The claims' own promises (a lease that runs out, a fenced write) are the
+  board's, and its conformance suite checks them.
 
 ## the docs (`packages/board/docs`)
 

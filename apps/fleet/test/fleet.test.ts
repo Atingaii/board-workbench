@@ -1,74 +1,101 @@
-// What the page is told, on a board in memory: node --test test/*.test.ts
+// What the page is told, and what the fleet relies on from the board's tasks, on a board in memory:
+// node --test test/*.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { board as makeBoard, type Board } from "@vercel/board";
+import { board as makeBoard, BoardError, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
 import { snapshot } from "../lib/fleet.ts";
-import { claim, create, finish } from "../lib/queue.ts";
 
 const fresh = (): Board => makeBoard({ backend: local({ memory: true }) });
 const look = (board: Board) => snapshot(board, "fleet/");
 const states = (tasks: { title: string; state: string }[]) => Object.fromEntries(tasks.map((task) => [task.title, task.state]));
+const create = async (board: Board, channel: string, text: string, needs: string[] = []) => (await board.tasks.create(channel, { text, needs })).task.id;
+const code = (error: unknown) => (error instanceof BoardError ? error.code : String(error));
+
 async function done(board: Board, title: string): Promise<string> {
-  const id = await create(board, "fleet/fixes", { title, key: title });
-  const token = await claim(board, id, "ada");
-  assert.ok(token);
-  assert.equal(await finish(board, id, token, "done", "fleet/"), true);
+  const id = await create(board, "fleet/fixes", title);
+  await (await board.as("ada").tasks.claim(id)).complete("verified");
   return id;
 }
 
 test("a snapshot has the fleet's tasks with their state and holder, and nothing from other channels", async () => {
   const board = fresh();
-  await create(board, "fleet/fixes", { title: "ready one", brief: "the brief", key: "a" });
-  const held = await create(board, "fleet/perf", { title: "held one", key: "b" });
-  await claim(board, held, "grace");
+  await create(board, "fleet/fixes", "ready one\n\nthe brief");
+  const held = await create(board, "fleet/perf", "held one");
+  await board.as("grace").tasks.claim(held);
+  await board.as("grace").reply(held, "[progress] Claimed.");
   await done(board, "done one");
-  await create(board, "other/fixes", { title: "another queue's", key: "c" });
+  await create(board, "other/fixes", "another queue's");
   await board.post("fleet/general", "not a task");
 
   const snap = await look(board);
-  assert.deepEqual(states(snap.tasks), { "ready one": "ready", "held one": "claimed", "done one": "done" });
+  assert.deepEqual(states(snap.tasks), { "ready one": "ready", "held one": "claimed", "done one": "completed" });
   const task = snap.tasks.find((task) => task.title === "held one")!;
-  assert.equal(task.owner, "grace");
+  // Its holder shows as it does on what it wrote, so the page counts one agent, not two.
+  assert.equal(task.holder, snap.flow.find((line) => line.text === "[progress] Claimed.")!.author);
   assert.equal(task.channel, "fleet/perf");
   assert.ok(Date.parse(task.lease!) > Date.now());
+  assert.equal(snap.tasks.find((task) => task.title === "done one")!.note, "verified");
   assert.ok(snap.flow.some((line) => line.text === "not a task"));
   assert.ok(!snap.flow.some((line) => line.channel.startsWith("other/")));
 });
 
-test("a task that finishes between two snapshots shows as done in the next", async () => {
+test("a task that waits shows what it needs, and is ready once that completes", async () => {
   const board = fresh();
-  const id = await create(board, "fleet/fixes", { title: "soon done", key: "a" });
-  await done(board, "done before");
-  assert.deepEqual(states((await look(board)).tasks), { "soon done": "ready", "done before": "done" });
+  const fix = await create(board, "fleet/fixes", "fix it");
+  const review = await create(board, "fleet/fixes", "review the fix", [fix]);
+  let snap = await look(board);
+  assert.deepEqual(states(snap.tasks), { "fix it": "ready", "review the fix": "waiting" });
+  assert.deepEqual(snap.tasks.find((task) => task.id === review)!.needs, [fix]);
+  assert.equal(await board.as("grace").tasks.claim(review).then(() => null, code), "task_waiting");
 
-  const token = await claim(board, id, "ada");
-  await finish(board, id, token!, "done", "fleet/");
-  assert.deepEqual(states((await look(board)).tasks), { "soon done": "done", "done before": "done" });
+  await (await board.as("ada").tasks.claim(fix)).complete("fixed");
+  snap = await look(board);
+  assert.deepEqual(states(snap.tasks), { "fix it": "completed", "review the fix": "ready" });
+});
+
+test("of many agents claiming one task at once, one gets it, and the rest settle nothing", async () => {
+  const board = fresh();
+  const id = await create(board, "fleet/fixes", "one task");
+  const agents = ["ada", "grace", "linus", "ken", "barbara", "edsger", "margaret", "dennis"];
+  const claims = await Promise.all(agents.map((agent) => board.as(agent).tasks.claim(id).then((claim) => claim, code)));
+  const won = claims.filter((claim) => typeof claim !== "string");
+  assert.equal(won.length, 1);
+  assert.ok(claims.filter((claim) => typeof claim === "string").every((refusal) => refusal === "task_claimed"));
+  const [task] = (await look(board)).tasks;
+  assert.equal(task!.holder, agents[claims.findIndex((claim) => typeof claim !== "string")]);
+});
+
+test("a task held for a person shows why, and one given up on or called off shows how it ended", async () => {
+  const board = fresh();
+  const asked = await create(board, "fleet/fixes", "needs a ruling");
+  await (await board.as("ada").tasks.claim(asked)).block("Which of the two redirects is the bug?", { kind: "needs_input" });
+  const failed = await create(board, "fleet/fixes", "can't be done");
+  await (await board.as("ada").tasks.claim(failed)).fail("The endpoint is gone.");
+  const dropped = await create(board, "fleet/fixes", "dropped");
+  await board.tasks.cancel(dropped, "Superseded.");
+  await board.post("fleet/fixes", { text: "a thread, not a task", labels: { "task.state": "ready" } });
+
+  const snap = await look(board);
+  assert.deepEqual(states(snap.tasks), { "needs a ruling": "blocked", "can't be done": "failed", dropped: "canceled" });
+  const notes = Object.fromEntries(snap.tasks.map((task) => [task.title, task.note]));
+  assert.deepEqual(notes, { "needs a ruling": "Which of the two redirects is the bug?", "can't be done": "The endpoint is gone.", dropped: "Superseded." });
 });
 
 test("a task made and finished between two snapshots shows in the next, though it was never seen open", async () => {
   const board = fresh();
-  await create(board, "fleet/fixes", { title: "still ready", key: "a" });
+  await create(board, "fleet/fixes", "still ready");
   await look(board);
   await done(board, "quick one");
-  assert.deepEqual(states((await look(board)).tasks), { "still ready": "ready", "quick one": "done" });
-});
-
-test("a canceled task shows as canceled, and a label that names no state isn't a task", async () => {
-  const board = fresh();
-  const id = await create(board, "fleet/fixes", { title: "dropped", key: "a" });
-  await board.label(id, { set: { "task.state": "canceled" }, if: { "task.state": "ready" } });
-  await board.post("fleet/fixes", { text: "odd one", labels: { "task.state": "paused" } });
-  assert.deepEqual(states((await look(board)).tasks), { dropped: "canceled" });
+  assert.deepEqual(states((await look(board)).tasks), { "still ready": "ready", "quick one": "completed" });
 });
 
 test("a snapshot holds the newest 25 finished tasks and says there are more", async () => {
   const board = fresh();
   for (let i = 1; i <= 27; i++) await done(board, `done ${i}`);
-  await create(board, "fleet/fixes", { title: "open", key: "open" });
+  await create(board, "fleet/fixes", "open");
   const snap = await look(board);
-  const finished = snap.tasks.filter((task) => task.state === "done").map((task) => task.title);
+  const finished = snap.tasks.filter((task) => task.state === "completed").map((task) => task.title);
   assert.equal(snap.finishedCapped, true);
   assert.deepEqual(finished, Array.from({ length: 25 }, (_, i) => `done ${27 - i}`));
   assert.equal(snap.tasks.filter((task) => task.state === "ready").length, 1);

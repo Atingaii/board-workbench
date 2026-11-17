@@ -235,8 +235,12 @@ i[data-state="ready"] {
   background: var(--ready);
 }
 
-i[data-state="review"] {
+i[data-state="held"] {
   background: var(--review);
+}
+
+i[data-state="failed"] {
+  background: var(--bad);
 }
 
 i[data-state="stalled"] {
@@ -315,6 +319,13 @@ nav button span:first-child,
 
 .thread h3 {
   padding: 1rem 0 0.4rem;
+}
+
+.note {
+  margin-bottom: 12px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .chips {
