@@ -1,6 +1,6 @@
-# fleet
+# swarm
 
-A fleet of agents working one queue on a board, and a page to watch them. Start
+A swarm of agents working one queue on a board, and a page to watch them. Start
 from it when you want many agents, yours and your teammates', on one project.
 
 ![The page: channels and agents, the flow of messages, and tasks by state](./screenshot.png)
@@ -13,10 +13,10 @@ It has three parts:
   agent, so two agents never hold one task.
 - **`JOIN.md`**, what a person pastes into a coding agent to join: where the
   queue is, how to claim a task and report on it, and the rules of the work.
-  The page serves it at `/join.md` with this fleet's name and channels filled in.
+  The page serves it at `/join.md` with this swarm's name and channels filled in.
 - **A live page** (`app/`), read-only: channels and agents, the flow of
   messages, and the tasks by state. A click opens a task's brief and work log,
-  and the view is in the link (`?ch=fleet/fixes&task=<id>`).
+  and the view is in the link (`?ch=swarm/fixes&task=<id>`).
 
 ## Run it
 
@@ -37,7 +37,7 @@ real thing, open a coding agent and paste what `http://localhost:3000/join.md`
 serves.
 
 `npm test` checks what the page is told on a board in memory, and what the
-fleet relies on from the board: one claim wins a race, and a completed task
+swarm relies on from the board: one claim wins a race, and a completed task
 readies what waited for it.
 
 Without `BOARD_URL`, everything here talks to your Vercel team's board, as you
@@ -47,34 +47,34 @@ Without `BOARD_URL`, everything here talks to your Vercel team's board, as you
 
 | What | Where |
 | --- | --- |
-| The fleet's name | `FLEET_NAME` (default `fleet`) |
-| Its channels | `FLEET_CHANNEL`, the prefix every task lives under (default `fleet`) |
-| Which of the team's boards | `FLEET_BOARD`, a board's name (default: the team's own board). `/join.md` then tells agents to set `BOARD_NAME` |
+| The swarm's name | `SWARM_NAME` (default `swarm`) |
+| Its channels | `SWARM_CHANNEL`, the prefix every task lives under (default `swarm`) |
+| Which of the team's boards | `SWARM_BOARD`, a board's name (default: the team's own board). `/join.md` then tells agents to set `BOARD_NAME` |
 | What the work is, and its rules | sections 1 and 5 of `JOIN.md` |
-| The sample tasks, all placeholders | `scripts/seed.ts`, or `vb tasks create fleet/fixes "<brief>"` |
+| The sample tasks, all placeholders | `scripts/seed.ts`, or `vb tasks create swarm/fixes "<brief>"` |
 
 ## Deploy it
 
 Deploy it as a Vercel project on the team whose board holds the queue.
-The page reads as the project, so grant it `read` under the fleet's channels:
+The page reads as the project, so grant it `read` under the swarm's channels:
 
 ```bash
-vb grants create --project <project> --can 'fleet/=read'
+vb grants create --project <project> --can 'swarm/=read'
 ```
 
-Keep Deployment Protection on: the page shows whatever the fleet writes.
+Keep Deployment Protection on: the page shows whatever the swarm writes.
 Agents never go through the page. They write to the board as the people who
 started them.
 
 ## How it reads the board
 
-- **A snapshot reads what's in play:** the fleet's newest 100 messages, then
+- **A snapshot reads what's in play:** the swarm's newest 100 messages, then
   one read per task state. A task's state is a label too, `board.task`, and a
   board indexes a label with one value, so `board.task=ready` lists only the
   ready tasks. Completed, failed, and canceled are read 25 at a time, so most
   of the cost follows the open tasks.
 - **The live route** (`app/api/live`) long-polls the board's events under the
-  fleet and sends the browser a new snapshot after a change, at most one every
+  swarm and sends the browser a new snapshot after a change, at most one every
   3 seconds. Each viewer holds one long-poll; a connection ends after 50
   seconds and the browser opens the next.
 - **The browser holds no credential.** It talks only to this app.

@@ -1,5 +1,5 @@
 import type { Board, MessageView, ThreadSummaryView } from "@vercel/board";
-import { FLEET, NAME, team } from "./board.ts";
+import { SWARM, NAME, team } from "./board.ts";
 
 /** The states the board keeps a task in. */
 export const STATES = ["waiting", "ready", "claimed", "blocked", "completed", "failed", "canceled"] as const;
@@ -30,7 +30,7 @@ export type Task = {
 
 export type Snapshot = {
   name: string;
-  fleet: string;
+  swarm: string;
   /** The board's position this was read at: the live route follows on from it. */
   cursor: string;
   at: string;
@@ -38,7 +38,7 @@ export type Snapshot = {
   tasks: Task[];
   /** True when there are more finished tasks than `tasks` holds, so a count of them is a floor. */
   finishedCapped: boolean;
-  /** The latest messages under the fleet, newest first. */
+  /** The latest messages under the swarm, newest first. */
   flow: Line[];
 };
 
@@ -97,20 +97,20 @@ function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string
 }
 
 /**
- * The fleet as it is now: its newest messages, then one read per task state. A task's state is a
+ * The swarm as it is now: its newest messages, then one read per task state. A task's state is a
  * label too, `board.task` on its root, and a board indexes a label with one value: so
  * `board.task=ready` lists only the ready tasks, newest activity last, while a filter with several
  * values, or the bare key, makes Vercel's board page through every thread in every channel of the
- * fleet. Finished states are read with a small limit, which caps their summaries, the
+ * swarm. Finished states are read with a small limit, which caps their summaries, the
  * expensive part; Vercel's board still lists every finished task to find the newest few, a request
  * per page of them. Nothing is kept between snapshots: each is the board as it is, whoever asks
  * and whatever they missed.
  */
-export async function snapshot(board: Board = team(), fleet: string = FLEET): Promise<Snapshot> {
+export async function snapshot(board: Board = team(), swarm: string = SWARM): Promise<Snapshot> {
   // The messages first: their cursor is where the live route listens from, so a change that lands
   // between the reads is in the next snapshot rather than in neither.
-  const page = await board.messages({ channel: fleet, limit: 100 });
-  const read = async (state: State, limit: number) => (await board.threads({ channel: fleet, label: { "board.task": state }, limit })).threads.reverse();
+  const page = await board.messages({ channel: swarm, limit: 100 });
+  const read = async (state: State, limit: number) => (await board.threads({ channel: swarm, label: { "board.task": state }, limit })).threads.reverse();
   const [openRead, finishedRead] = await Promise.all([
     Promise.all(OPEN.map((state) => read(state, OPEN_LIMIT))),
     Promise.all(FINISHED.map((state) => read(state, FINISHED_LIMIT))),
@@ -120,7 +120,7 @@ export async function snapshot(board: Board = team(), fleet: string = FLEET): Pr
   const [open, finished] = [openRead, finishedRead].map((states) => states.map((threads) => threads.flatMap((thread) => toTask(thread, known))));
   return {
     name: NAME,
-    fleet,
+    swarm,
     cursor: page.cursor,
     at: new Date().toISOString(),
     // The board lists oldest first; the page reads newest first, state by state.
@@ -130,9 +130,9 @@ export async function snapshot(board: Board = team(), fleet: string = FLEET): Pr
   };
 }
 
-/** One task's thread: its brief, its labels, and its work log. Only a thread under the fleet. */
+/** One task's thread: its brief, its labels, and its work log. Only a thread under the swarm. */
 export async function history(id: string): Promise<{ root: Line; labels: Record<string, string>; replies: Line[] }> {
   const { message, replies } = await team().thread(id);
-  if (!message.channel.startsWith(FLEET)) throw new Error(`${id} isn't in ${FLEET}`);
+  if (!message.channel.startsWith(SWARM)) throw new Error(`${id} isn't in ${SWARM}`);
   return { root: line(message), labels: message.labels, replies: replies.map(line) };
 }

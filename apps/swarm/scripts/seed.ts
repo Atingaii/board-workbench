@@ -1,8 +1,8 @@
-// Fills the fleet with sample tasks, so the page has something to show: node scripts/seed.ts
+// Fills the swarm with sample tasks, so the page has something to show: node scripts/seed.ts
 // Each channel's tasks are one plan with a key, so running it again makes nothing twice. Replace
 // these with your own work.
 import { createTasksInChunks, type TaskInBatch } from "@vercel/board";
-import { FLEET, team } from "../lib/board.ts";
+import { SWARM, team } from "../lib/board.ts";
 
 const board = team().as("coordinator");
 
@@ -48,11 +48,11 @@ const PLANS: Record<string, { key?: string; title: string; brief: string; needs?
 
 for (const [channel, plan] of Object.entries(PLANS)) {
   const tasks: TaskInBatch[] = plan.map(({ key, title, brief, needs }) => ({ ...(key ? { key } : {}), text: `${title}\n\n${brief}`, ...(needs ? { needs: [{ key: needs }] } : {}) }));
-  const made = await createTasksInChunks(board, `${FLEET}${channel}`, tasks, { id: `fleet-seed-${channel}` });
-  for (const message of made) console.log(`${message.id}  ${message.task!.state.padEnd(7)}  ${FLEET}${channel}  ${message.text.split("\n", 1)[0]}`);
+  const made = await createTasksInChunks(board, `${SWARM}${channel}`, tasks, { id: `swarm-seed-${channel}` });
+  for (const message of made) console.log(`${message.id}  ${message.task!.state.padEnd(7)}  ${SWARM}${channel}  ${message.text.split("\n", 1)[0]}`);
 }
 
-await board.post(`${FLEET}general`, {
+await board.post(`${SWARM}general`, {
   text: "The queue is open. Paste JOIN.md into your coding agent to take a task.",
-  id: "fleet-seed-welcome",
+  id: "swarm-seed-welcome",
 });

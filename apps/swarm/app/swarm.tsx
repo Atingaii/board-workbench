@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { thread } from "./actions";
-import type { Line, Snapshot, Task } from "@/lib/fleet";
+import type { Line, Snapshot, Task } from "@/lib/swarm";
 
 /** What a task shows as: its state, with a claim split by whether its lease still holds. */
 type Shown = "working" | "stalled" | "held" | "ready" | "waiting" | "done" | "failed" | "canceled";
@@ -33,7 +33,7 @@ const shown = (task: Task, now: number): Shown =>
         ? "done"
         : task.state;
 
-/** `fleet/perf` is in `fleet/perf`, and in `fleet`'s subtree. */
+/** `swarm/perf` is in `swarm/perf`, and in `swarm`'s subtree. */
 const within = (channel: string, filter: string | null) => !filter || channel === filter || channel.startsWith(`${filter}/`);
 
 function span(ms: number): string {
@@ -46,7 +46,7 @@ function span(ms: number): string {
 const ago = (at: string, now: number) => span(now - Date.parse(at));
 const firstLine = (text: string) => text.split("\n", 1)[0] || "(empty)";
 
-export function Fleet({ first, channel: firstChannel, task: firstTask }: { first: Snapshot; channel: string | null; task: string | null }) {
+export function Swarm({ first, channel: firstChannel, task: firstTask }: { first: Snapshot; channel: string | null; task: string | null }) {
   const [snap, setSnap] = useState(first);
   const [live, setLive] = useState<"live" | "reconnecting" | { problem: string }>("live");
   const [channel, setChannel] = useState(firstChannel);
@@ -76,7 +76,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
     return () => source.close();
   }, []);
 
-  // The view lives in the link, so a copied one reopens it: ?ch=fleet/perf&task=<id>
+  // The view lives in the link, so a copied one reopens it: ?ch=swarm/perf&task=<id>
   useEffect(() => {
     const query = [channel && `ch=${encodeURIComponent(channel).replaceAll("%2F", "/")}`, open && `task=${encodeURIComponent(open)}`].filter(Boolean);
     window.history.replaceState(null, "", query.length ? `?${query.join("&")}` : window.location.pathname);
@@ -162,14 +162,14 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
         <ul>
           <li>
             <button type="button" aria-pressed={!channel} onClick={() => setChannel(null)}>
-              <span>{snap.fleet}</span>
+              <span>{snap.swarm}</span>
               <span className="faint">all</span>
             </button>
           </li>
           {channels.map(([path, open]) => (
             <li key={path}>
               <button type="button" aria-pressed={channel === path} onClick={() => setChannel(path)}>
-                <span>{path.slice(snap.fleet.length) || path}</span>
+                <span>{path.slice(snap.swarm.length) || path}</span>
                 <span className="faint">{open || ""}</span>
               </button>
             </li>
@@ -199,7 +199,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
               <li key={line.id}>
                 <button type="button" onClick={() => setOpen(line.re ?? line.id)} title={line.text}>
                   <time>{ago(line.at, now)}</time>
-                  <span className="faint ch">{line.channel.slice(snap.fleet.length) || line.channel}</span>
+                  <span className="faint ch">{line.channel.slice(snap.swarm.length) || line.channel}</span>
                   <span className="who">{line.author}</span>
                   <span className="text">
                     {line.re && <span className="faint">↳ </span>}
@@ -218,7 +218,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
         ) : (
           <>
             <h2>Tasks</h2>
-            {groups.length === 0 && <p className="faint pad">No tasks in {channel ?? snap.fleet}</p>}
+            {groups.length === 0 && <p className="faint pad">No tasks in {channel ?? snap.swarm}</p>}
             {groups.map((group) => {
               const finished = group.key === "done" || group.key === "failed" || group.key === "canceled";
               const rows = group.tasks;

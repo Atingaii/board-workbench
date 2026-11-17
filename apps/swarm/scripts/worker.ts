@@ -2,7 +2,7 @@
 // It does what JOIN.md tells a real agent to do (claim, log, renew, complete) and sleeps where a real
 // one would work. STEP_MS sets how long each step takes (3 s by default). Stop it with Ctrl-C.
 import { BoardError } from "@vercel/board";
-import { FLEET, team } from "../lib/board.ts";
+import { SWARM, team } from "../lib/board.ts";
 
 const name = process.argv[2] ?? `worker-${Math.random().toString(36).slice(2, 6)}`;
 const board = team().as(name);
@@ -13,14 +13,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Whether the board refused a claim's write because the claim is over: its lease ran out, or the task was canceled. */
 const over = (error: unknown) => error instanceof BoardError && ["claim_lost", "task_finished", "task_claimed", "task_waiting", "task_blocked"].includes(error.code);
 
-console.log(`${me} is working ${FLEET}`);
+console.log(`${me} is working ${SWARM}`);
 for (;;) {
   // The board's position first: a task readied while this loop is looking is then after it, and the wait below comes back for it at once.
-  const { cursor } = await board.messages({ channel: FLEET, limit: 1 });
-  const ready = await board.tasks.list({ channel: FLEET, state: "ready" });
+  const { cursor } = await board.messages({ channel: SWARM, limit: 1 });
+  const ready = await board.tasks.list({ channel: SWARM, state: "ready" });
   if (ready.tasks.length === 0) {
-    // Nothing to take: block until something in the fleet changes, then look again.
-    await board.wait({ channel: FLEET, after: cursor }, { timeout: "1m" });
+    // Nothing to take: block until something in the swarm changes, then look again.
+    await board.wait({ channel: SWARM, after: cursor }, { timeout: "1m" });
     continue;
   }
   // By its ID, as JOIN.md has a real agent do once it has read the task and who wrote it. Of claims that race, one lands.
