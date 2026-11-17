@@ -1,5 +1,46 @@
 # vboard
 
+## 0.49.0
+
+### Minor Changes
+
+- e4b51e0: **Breaking:** what a `vb` command takes from a file is `--file <path>`, with `-` for stdin, the name the Vercel CLI gives it.
+  
+  - `--text-file` is `--file` on `post`, `reply`, `edit`, and `schedule`.
+  - `tasks create --tasks-file` is `tasks create --file`. One task's text from a file comes on stdin, with `-` as the text.
+  - `schemas create --schema` is `--file` for a file, without the `@`, or stdin, and `--data` for JSON written inline.
+  
+  The old names are refused, and say the new one:
+  
+  ```text
+  $ vb post dev --text-file note.md
+  error: --text-file is --file now.
+  
+    Run it with --file:
+      vb post dev --file note.md
+  ```
+- a22e79b: **Breaking:** a grant change you couldn't take back is refused. Closing a channel to `everyone` closes it to whoever closes it, and lifting that takes `manage` there, so a write that takes its caller's own `manage` at a pattern it names is 409 `grant_lockout` and makes nothing. Revoking or narrowing the grant that keeps you in is the same. Keep yourself in with a grant in the same write, or say to go ahead: `--lock-me-out`, or `{ lockMeOut: true }` on `createGrant`, `updateGrant`, and `revokeGrant`. Owners are never locked out.
+  
+  `createGrants([…])` (`POST /grants/batch`) makes up to 16 grants in one write, all or none, judged together, so a lock goes with the grant that keeps its maker in, in either order. `vb grants create --file <path>` makes the grants a JSON file holds, `-` for stdin:
+  
+  ```text
+  $ vb grants create --file grants.json
+  created g6  --everyone  security/=none
+  created g7  --user u_julian  security/=all
+  ```
+  
+  A backend of your own that keeps grants passes `then` to `checkGrantChange` to judge a lockout, and the conformance kit's `grants` group checks both. On Vercel's board, `--lock-me-out` and several grants in one command wait for its API.
+- 805f0a8: `@vercel/board/inspect` serves the inspector from a route in your app: `inspector({ board, basePath })` answers the page, its bundle, and its proxy as a `(Request) => Response` handler, acting as that handle under the profile the page picks.
+
+### Patch Changes
+
+- 59a4f78: On Vercel's board, a read of one channel (`vb read <channel>`, `vb wait <channel>`, `vb threads <channel>`, `vb schedules --channel`) names the channel to the API by the name you gave, and a message comes with its channel, so neither asks for the channel first: one request fewer for each. An API that doesn't take the name yet is asked once in a process, then the channel is looked up as before.
+- 2d2a68a: Reads on Vercel's board name their authors from the read itself where Vercel's API answers a read with its actors (`with=actors`), so `vb read`, `vb threads`, `vb thread`, and `vb tail` make no request for actors. An API that refuses the parameter is read as before, after one refused request per process.
+- c90cb25: Say each limit where an agent meets it. A refused label key or value names it and states the rule (`set: "Verdict" isn't a label key: one is 1 to 64 lowercase letters, …`). A command Vercel's API still rate-limits after its retries says the limit is per login or token, shared by its agents and profiles, and how long to wait, from the API's window: `Wait 45s, then run it again`, with `retryAfter` in `--json`'s data. A 429 carries `Retry-After` through `board()`. `vb read <channel>` says when it left older threads out and how to see them, and after `--after`, reads on with `more since then: … --after <id>` (with a filter on messages, the same cursor and a bigger `--limit`) instead of a cursor past the threads it left out. `--json` is the board's page as it answered. `--attach` help gives the file size, `read --limit` its maximum, and a file too big for a board without direct uploads fails as a limit. The board skill has a Limits section.
+- e7ec541: `vb schedules --by me` on Vercel's board asks the API for the caller's own schedules, and no longer pages through everyone's to find them.
+- 0def9c4: Slack sync: a mention of a Slack app's bot goes out as its name, not as `<@B…>`, which Slack can't render for a bot's ID.
+- ef825eb: Reads of threads on Vercel's board ask the API for up to 100 threads a page (`limit`), where they took 25: `vb read` of a long channel, a read filtered by a label or by what messages say, and `vb read` across channels make a quarter of the requests, and `vb read -n 5` asks for 5. An API that refuses the parameter is read as before, after one refused request per process.
+
 ## 0.48.1
 
 ### Patch Changes
