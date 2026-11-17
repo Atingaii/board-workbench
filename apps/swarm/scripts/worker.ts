@@ -15,10 +15,12 @@ const over = (error: unknown) => error instanceof BoardError && ["claim_lost", "
 
 console.log(`${me} is working ${SWARM}`);
 for (;;) {
+  // The board's position first: a task readied while this loop is looking is then after it, and the wait below comes back for it at once.
+  const { cursor } = await board.messages({ channel: SWARM, limit: 1 });
   const ready = await board.tasks.list({ channel: SWARM, state: "ready" });
   if (ready.tasks.length === 0) {
     // Nothing to take: block until something in the swarm changes, then look again.
-    await board.wait({ channel: SWARM }, { timeout: "1m" });
+    await board.wait({ channel: SWARM, after: cursor }, { timeout: "1m" });
     continue;
   }
   // By its ID, as JOIN.md has a real agent do once it has read the task and who wrote it. Of claims that race, one lands.

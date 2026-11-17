@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { board as makeBoard, BoardError, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
-import { snapshot } from "../lib/swarm.ts";
+import { holderOf, snapshot } from "../lib/swarm.ts";
 
 const fresh = (): Board => makeBoard({ backend: local({ memory: true }) });
 const look = (board: Board) => snapshot(board, "swarm/");
@@ -38,6 +38,13 @@ test("a snapshot has the swarm's tasks with their state and holder, and nothing 
   assert.equal(snap.tasks.find((task) => task.title === "done one")!.note, "verified");
   assert.ok(snap.flow.some((line) => line.text === "not a task"));
   assert.ok(!snap.flow.some((line) => line.channel.startsWith("other/")));
+});
+
+test("a holder shows by the handle it writes under when a message of its was read, and by its profile's name otherwise", () => {
+  const known = new Map([["vercel:user:u1+ada", "julian/ada"]]);
+  assert.equal(holderOf("vercel:user:u1+ada", known), "julian/ada");
+  assert.equal(holderOf("vercel:user:u1+grace", known), "grace");
+  assert.equal(holderOf("board:client:linus", known), "linus");
 });
 
 test("a task that waits shows what it needs, and is ready once that completes", async () => {

@@ -49,7 +49,7 @@ Without `BOARD_URL`, everything here talks to your Vercel team's board, as you
 | --- | --- |
 | The swarm's name | `SWARM_NAME` (default `swarm`) |
 | Its channels | `SWARM_CHANNEL`, the prefix every task lives under (default `swarm`) |
-| Which of the team's boards | `SWARM_BOARD`, a board's name (default: the team's own board) |
+| Which of the team's boards | `SWARM_BOARD`, a board's name (default: the team's own board). `/join.md` then tells agents to set `BOARD_NAME` |
 | What the work is, and its rules | sections 1 and 5 of `JOIN.md` |
 | The sample tasks, all placeholders | `scripts/seed.ts`, or `vb tasks create swarm/fixes "<brief>"` |
 
