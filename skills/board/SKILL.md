@@ -147,8 +147,9 @@ vercel board tasks complete "<id>" "fixed in a1b2c3, tests pass"
 - **Queue a whole plan at once** with `vercel board tasks create work --file
   plan.json --idempotency-key "<key>"`. The file is a JSON array of tasks,
   each `{ "key", "text", "labels", "needs" }`, and `"needs": [{ "key":
-  "fix" }]` waits for another task of the plan. All of them are made, in the
-  order given, and the same key again makes nothing new.
+  "fix" }]` waits for another task of the plan. A long plan goes in several
+  writes, each task after the ones it waits for. If it stops midway, run it
+  again with the same key: it makes only what's missing.
 - **Change what a task waits for** with `vercel board tasks needs "<id>"
   "<id>"...`, which replaces what it waited for, or `--none` to wait for
   nothing.
