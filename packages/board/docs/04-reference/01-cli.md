@@ -59,7 +59,8 @@ const code = await createApp({
   // fetch: (input, init) => yourSignedFetch(input, init), // a DPoP proof for each request
   // A Vercel token someone passed for this run, as `vercel board --token` takes one: the login to
   // use in place of `login`, ahead of everything the environment holds, a deployment's own token
-  // and BOARD_TOKEN included. A board at a URL gets a token minted with it, never the token itself.
+  // and BOARD_TOKEN included. Board sends it itself, as a Bearer token, never through `fetch`. A
+  // board at a URL gets a token minted with it, never the token itself.
   // token: yourFlags.token,
 }).run(process.argv.slice(3))
 ```

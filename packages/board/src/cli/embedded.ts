@@ -26,7 +26,8 @@ export type { Failure, FailureClass, Recovery, Warning } from './failure.ts'
  *
  * `token` is a Vercel token someone passed the app for this run, as `vercel board --token` takes
  * one: the login to use, in place of `login` and ahead of everything the environment holds, a
- * deployment's own token and `BOARD_TOKEN` included. A variable never goes ahead of those.
+ * deployment's own token and `BOARD_TOKEN` included. A variable never goes ahead of those. Board
+ * sends it itself, as a Bearer token, never through `fetch`, which would add the app's own login's.
  */
 export function createApp(options: {
   appName: string

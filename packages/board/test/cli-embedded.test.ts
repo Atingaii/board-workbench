@@ -667,19 +667,25 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("sends the token an app was passed to Vercel's API ahead of a deployment's own, BOARD_TOKEN, and its login, and says it's the one to replace when it's refused", async () => {
+  it("sends the token an app was passed to Vercel's API itself, ahead of a deployment's own, BOARD_TOKEN, and the app's login, and says it's the one to replace when it's refused", async () => {
     const home = await isolated()
-    // On a deployment, with a BOARD_TOKEN and a login in the environment too: each is someone else.
+    // On a deployment, with a BOARD_TOKEN too: each is someone else, and so is the app's login.
     const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
     const oidc = `${part({ alg: 'none' })}.${part({ owner_id: 'team_test', exp: Math.floor(Date.now() / 1000) + 3600 })}.`
-    for (const [key, set] of Object.entries({ VERCEL: '1', VERCEL_OIDC_TOKEN: oidc, BOARD_TOKEN: 'p9Lr4vTzQ2wc', VERCEL_AUTH_TOKEN: 'user:u_jb' })) vi.stubEnv(key, set)
+    for (const [key, set] of Object.entries({ VERCEL: '1', VERCEL_OIDC_TOKEN: oidc, BOARD_TOKEN: 'p9Lr4vTzQ2wc' })) vi.stubEnv(key, set)
     const api = fakeMessageboard({ tokens: { [oidc]: 'project:prj_pong:production', p9Lr4vTzQ2wc: 'user:u_bo', w3Nc8sJd1hFy: 'user:u_ada' } })
     const sent: (string | null)[] = []
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       sent.push(new Request(input, init).headers.get('authorization'))
       return api.fetch(input, init)
     })
-    const app = (token?: string) => createApp({ appName: 'vercel board', team: async () => 'team_test', ...(token ? { token } : {}) })
+    // The app's fetch adds its own login's credentials to whatever it sends, as `vercel board`'s does.
+    const appFetch: typeof fetch = (input, init) => {
+      const headers = new Headers(init?.headers)
+      headers.set('authorization', 'Bearer user:u_jb')
+      return globalThis.fetch(input, { ...init, headers })
+    }
+    const app = (token?: string) => createApp({ appName: 'vercel board', team: async () => 'team_test', login: async () => 'user:u_jb', fetch: appFetch, ...(token ? { token } : {}) })
     const whoami = async (token?: string) => JSON.parse((await capture(() => app(token).run(['whoami', '--json']))).stdout) as { principal: string; source: string }
     const cwd = process.cwd()
     process.chdir(home)
@@ -691,6 +697,11 @@ describe('the embedded CLI', () => {
       vi.stubEnv('VERCEL_OIDC_TOKEN', '')
       expect(await whoami('w3Nc8sJd1hFy')).toMatchObject({ principal: 'vercel:user:u_ada' })
       expect(await whoami()).toMatchObject({ principal: 'vercel:user:u_bo', source: 'BOARD_TOKEN' })
+      // With neither, the app's login goes, through the app's fetch: the one a passed token never takes.
+      vi.stubEnv('BOARD_TOKEN', '')
+      expect(await whoami()).toMatchObject({ principal: 'vercel:user:u_jb', source: 'the Vercel CLI' })
+      expect(await whoami('w3Nc8sJd1hFy')).toMatchObject({ principal: 'vercel:user:u_ada' })
+      vi.stubEnv('BOARD_TOKEN', 'p9Lr4vTzQ2wc')
       // It's the run's: the next one, passed none, is the deployment again.
       vi.stubEnv('VERCEL', '1')
       vi.stubEnv('VERCEL_OIDC_TOKEN', oidc)

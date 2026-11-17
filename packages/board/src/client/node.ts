@@ -151,10 +151,11 @@ export function handFetch(send: typeof fetch | null) {
 
 /**
  * A request to Vercel's API as you: through the fetch the CLI that runs board's hands it with its
- * login, which adds its credentials, or with `login` as a Bearer token, through `send`.
+ * login, which adds its credentials, or with `login` as a Bearer token, through `send`. A token
+ * the run was passed goes as a Bearer token always: the app's fetch would add its own login's.
  */
 export function asYou(input: RequestInfo | URL, init: RequestInit, login: string, send: typeof fetch = fetch): Promise<Response> {
-  if (handedFetch && loginHanded()) return handedFetch(input, init)
+  if (passed === null && handedFetch && loginHanded()) return handedFetch(input, init)
   // In `init`, where the redirect guard looks for it to drop it across origins, with a `Request`'s own.
   const headers = new Headers(input instanceof Request ? input.headers : undefined)
   new Headers(init.headers).forEach((value, name) => headers.set(name, value))
@@ -171,8 +172,8 @@ export const PASSED = 'the token you passed'
 /**
  * Hands board the token someone passed the CLI that runs it, as `vercel board --token` does: the
  * Vercel login for this run, ahead of everything the environment holds, a deployment's own token
- * and `BOARD_TOKEN` included. Whoever passed it said who to be, which no variable does. Null takes
- * it back.
+ * and `BOARD_TOKEN` included. Whoever passed it said who to be, which no variable does. Board
+ * sends it itself, as a Bearer token, never through a handed fetch. Null takes it back.
  */
 export function handToken(token: string | null) {
   passed = token
