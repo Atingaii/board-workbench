@@ -5,21 +5,33 @@ import { thread } from "./actions";
 import type { Line, Snapshot, Task } from "@/lib/fleet";
 
 /** What a task shows as: its state, with a claim split by whether its lease still holds. */
-type Shown = "working" | "stalled" | "review" | "ready" | "blocked" | "done" | "canceled";
+type Shown = "working" | "stalled" | "held" | "ready" | "waiting" | "done" | "failed" | "canceled";
 const GROUPS: { key: Shown; title: string }[] = [
   { key: "working", title: "Working" },
   { key: "stalled", title: "Stalled" },
-  { key: "review", title: "In review" },
+  { key: "held", title: "Held for a person" },
   { key: "ready", title: "Ready" },
-  { key: "blocked", title: "Blocked" },
+  { key: "waiting", title: "Waiting" },
   { key: "done", title: "Done" },
+  { key: "failed", title: "Failed" },
   { key: "canceled", title: "Canceled" },
 ];
+
+/** The states a task has ended in. */
+const ENDED = ["completed", "failed", "canceled"];
 
 type History = Awaited<ReturnType<typeof thread>>;
 
 const shown = (task: Task, now: number): Shown =>
-  task.state !== "claimed" ? task.state : task.lease && Date.parse(task.lease) < now ? "stalled" : "working";
+  task.state === "claimed"
+    ? task.lease && Date.parse(task.lease) < now
+      ? "stalled"
+      : "working"
+    : task.state === "blocked"
+      ? "held"
+      : task.state === "completed"
+        ? "done"
+        : task.state;
 
 /** `fleet/perf` is in `fleet/perf`, and in `fleet`'s subtree. */
 const within = (channel: string, filter: string | null) => !filter || channel === filter || channel.startsWith(`${filter}/`);
@@ -85,7 +97,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
   const channels = useMemo(() => {
     const open = new Map<string, number>();
     for (const line of snap.flow) open.set(line.channel, open.get(line.channel) ?? 0);
-    for (const task of snap.tasks) open.set(task.channel, (open.get(task.channel) ?? 0) + (task.state === "done" || task.state === "canceled" ? 0 : 1));
+    for (const task of snap.tasks) open.set(task.channel, (open.get(task.channel) ?? 0) + (ENDED.includes(task.state) ? 0 : 1));
     return [...open].sort(([a], [b]) => a.localeCompare(b));
   }, [snap]);
 
@@ -94,9 +106,9 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
     const seen = new Map<string, { holding: number; last: string | null }>();
     for (const line of [...snap.flow].reverse()) seen.set(line.author, { holding: 0, last: line.at });
     for (const task of snap.tasks) {
-      if (task.state !== "claimed" || !task.owner) continue;
-      const agent = seen.get(task.owner) ?? { holding: 0, last: null };
-      seen.set(task.owner, { ...agent, holding: agent.holding + 1 });
+      if (task.state !== "claimed" || !task.holder) continue;
+      const agent = seen.get(task.holder) ?? { holding: 0, last: null };
+      seen.set(task.holder, { ...agent, holding: agent.holding + 1 });
     }
     return [...seen].sort(([, a], [, b]) => b.holding - a.holding || (b.last ?? "").localeCompare(a.last ?? ""));
   }, [snap]);
@@ -125,7 +137,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
           {typeof live === "string" ? live : `down: ${live.problem}`}
         </span>
         <span className="counts">
-          <b>{count("working")}</b> working · <b>{count("ready")}</b> ready · <b>{count("review")}</b> in review · <b>
+          <b>{count("working")}</b> working · <b>{count("ready")}</b> ready · <b>{count("held")}</b> held · <b>
             {count("done")}
             {snap.finishedCapped ? "+" : ""}
           </b>{" "}
@@ -208,7 +220,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
             <h2>Tasks</h2>
             {groups.length === 0 && <p className="faint pad">No tasks in {channel ?? snap.fleet}</p>}
             {groups.map((group) => {
-              const finished = group.key === "done" || group.key === "canceled";
+              const finished = group.key === "done" || group.key === "failed" || group.key === "canceled";
               const rows = group.tasks;
               return (
                 <div key={group.key} className="group">
@@ -221,7 +233,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
                       <li key={task.id}>
                         <button type="button" onClick={() => setOpen(task.id)} title={task.title}>
                           <span className="text">{task.title}</span>
-                          {task.owner && group.key !== "ready" && <span className="who">{task.owner}</span>}
+                          {task.holder && <span className="who">{task.holder}</span>}
                           <span className="faint chip">{chip(task, group.key, now)}</span>
                         </button>
                       </li>
@@ -242,7 +254,7 @@ export function Fleet({ first, channel: firstChannel, task: firstTask }: { first
 function chip(task: Task, key: Shown, now: number): string {
   if (key === "working" && task.lease) return `lease ${span(Date.parse(task.lease) - now)}`;
   if (key === "stalled" && task.lease) return `lease ended ${ago(task.lease, now)} ago`;
-  if (key === "blocked" && task.after) return `after ${task.after}`;
+  if (key === "waiting" && task.needs.length) return `needs ${task.needs.join(" ")}`;
   return ago(task.last?.at ?? task.createdAt, now);
 }
 
@@ -250,7 +262,7 @@ function chip(task: Task, key: Shown, now: number): string {
 function Panel({ id, task, now, onClose }: { id: string; task: Task | null; now: number; onClose: () => void }) {
   const [history, setHistory] = useState<History | { problem: string } | null>(null);
   // Anything that changes in the thread changes one of these.
-  const version = task ? `${task.state}:${task.owner}:${task.replies}:${task.last?.id}` : "";
+  const version = task ? `${task.state}:${task.holder}:${task.replies}:${task.last?.id}` : "";
 
   useEffect(() => {
     let stale = false;
@@ -284,11 +296,12 @@ function Panel({ id, task, now, onClose }: { id: string; task: Task | null; now:
                 <i data-state={key} aria-hidden />
                 {key}
               </span>
-              {task.owner && <span className="who">{task.owner}</span>}
-              {key !== "ready" && key !== "review" && <span className="faint">{chip(task, key, now)}</span>}
+              {task.holder && <span className="who">{task.holder}</span>}
+              {key !== "ready" && <span className="faint">{chip(task, key, now)}</span>}
               <span className="faint">{id}</span>
             </p>
           )}
+          {task?.note && <p className="note">{task.note}</p>}
           <Entry line={history.root} now={now} />
           <h3>
             Work log <span className="faint">{history.replies.length}</span>

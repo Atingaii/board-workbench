@@ -1,62 +1,55 @@
 // Fills the fleet with sample tasks, so the page has something to show: node scripts/seed.ts
-// Each task has a key, so running it again posts nothing twice. Replace these with your own work.
+// Each channel's tasks are one plan with a key, so running it again makes nothing twice. Replace
+// these with your own work.
+import { createTasksInChunks, type TaskInBatch } from "@vercel/board";
 import { FLEET, team } from "../lib/board.ts";
-import { create } from "../lib/queue.ts";
 
 const board = team().as("coordinator");
 
-const TASKS: { channel: string; slug: string; title: string; brief: string; after?: string }[] = [
-  {
-    channel: "fixes",
-    slug: "login-redirect",
-    title: "Fix the open redirect in /login",
-    brief: "`/login?next=//evil.example` redirects off-site. Accept only same-origin paths. Add a test for `//`, `/\\`, and an absolute URL.",
-  },
-  {
-    channel: "fixes",
-    slug: "login-redirect-review",
-    title: "Review the /login redirect fix",
-    brief: "Try to get past the new check. Say what you tried in the thread.",
-    after: "login-redirect",
-  },
-  {
-    channel: "fixes",
-    slug: "flaky-checkout",
-    title: "Find why the checkout e2e test flakes",
-    brief: "It fails about one run in ten on CI, never locally. Post the failing run's log lines before you propose a cause.",
-  },
-  {
-    channel: "perf",
-    slug: "home-lcp",
-    title: "Cut the home page's LCP below 2 s on a mid-range phone",
-    brief: "Measure first and post the numbers as a reply. The hero image is the suspect, not the proof.",
-  },
-  {
-    channel: "perf",
-    slug: "bundle-audit",
-    title: "List the five largest client modules and who imports them",
-    brief: "No changes: a reply with the table is the result.",
-  },
-  {
-    channel: "docs",
-    slug: "env-vars",
-    title: "Document every environment variable the app reads",
-    brief: "One table in the README: name, where it's read, what happens without it.",
-  },
-  {
-    channel: "docs",
-    slug: "runbook",
-    title: "Write the rollback runbook",
-    brief: "The exact commands, in order, for rolling production back one deployment.",
-  },
-];
+/** A channel's tasks. `key` names one for the others of its channel, and `needs` makes a task wait for it. */
+const PLANS: Record<string, { key?: string; title: string; brief: string; needs?: string }[]> = {
+  fixes: [
+    {
+      key: "login-redirect",
+      title: "Fix the open redirect in /login",
+      brief: "`/login?next=//evil.example` redirects off-site. Accept only same-origin paths. Add a test for `//`, `/\\`, and an absolute URL.",
+    },
+    {
+      title: "Review the /login redirect fix",
+      brief: "Try to get past the new check. Say what you tried in the thread.",
+      needs: "login-redirect",
+    },
+    {
+      title: "Find why the checkout e2e test flakes",
+      brief: "It fails about one run in ten on CI, never locally. Post the failing run's log lines before you propose a cause.",
+    },
+  ],
+  perf: [
+    {
+      title: "Cut the home page's LCP below 2 s on a mid-range phone",
+      brief: "Measure first and post the numbers as a reply. The hero image is the suspect, not the proof.",
+    },
+    {
+      title: "List the five largest client modules and who imports them",
+      brief: "No changes: a reply with the table is the result.",
+    },
+  ],
+  docs: [
+    {
+      title: "Document every environment variable the app reads",
+      brief: "One table in the README: name, where it's read, what happens without it.",
+    },
+    {
+      title: "Write the rollback runbook",
+      brief: "The exact commands, in order, for rolling production back one deployment.",
+    },
+  ],
+};
 
-const ids = new Map<string, string>();
-for (const task of TASKS) {
-  const after = task.after ? ids.get(task.after) : undefined;
-  const id = await create(board, `${FLEET}${task.channel}`, { title: task.title, brief: task.brief, key: `fleet-seed-${task.slug}`, after });
-  ids.set(task.slug, id);
-  console.log(`${id}  ${FLEET}${task.channel}  ${task.title}`);
+for (const [channel, plan] of Object.entries(PLANS)) {
+  const tasks: TaskInBatch[] = plan.map(({ key, title, brief, needs }) => ({ ...(key ? { key } : {}), text: `${title}\n\n${brief}`, ...(needs ? { needs: [{ key: needs }] } : {}) }));
+  const made = await createTasksInChunks(board, `${FLEET}${channel}`, tasks, { id: `fleet-seed-${channel}` });
+  for (const message of made) console.log(`${message.id}  ${message.task!.state.padEnd(7)}  ${FLEET}${channel}  ${message.text.split("\n", 1)[0]}`);
 }
 
 await board.post(`${FLEET}general`, {

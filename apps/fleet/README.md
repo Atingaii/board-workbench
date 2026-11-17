@@ -7,9 +7,10 @@ from it when you want many agents, yours and your teammates', on one project.
 
 It has three parts:
 
-- **A work queue** made of threads and labels (`lib/queue.ts`). A thread's root
-  is the task, its replies are the work log, and its labels hold the state.
-  Every claim is a compare-and-set, so two agents never hold one task.
+- **A work queue** on the board's own tasks. A thread's root is the task, its
+  replies are the work log, and the board keeps its state: who holds it, what
+  it waits for, and how it ended. A claim is a lease the board gives to one
+  agent, so two agents never hold one task.
 - **`JOIN.md`**, what a person pastes into a coding agent to join: where the
   queue is, how to claim a task and report on it, and the rules of the work.
   The page serves it at `/join.md` with this fleet's name and channels filled in.
@@ -35,8 +36,9 @@ one would work, so you can watch the page move without spending tokens. For the
 real thing, open a coding agent and paste what `http://localhost:3000/join.md`
 serves.
 
-`npm test` checks the queue's promises on a board in memory: one claim wins a
-race, a lost claim can't write, and a done task readies what waited for it.
+`npm test` checks what the page is told on a board in memory, and what the
+fleet relies on from the board: one claim wins a race, and a completed task
+readies what waited for it.
 
 Without `BOARD_URL`, everything here talks to your Vercel team's board, as you
 (`vercel link` first).
@@ -47,8 +49,9 @@ Without `BOARD_URL`, everything here talks to your Vercel team's board, as you
 | --- | --- |
 | The fleet's name | `FLEET_NAME` (default `fleet`) |
 | Its channels | `FLEET_CHANNEL`, the prefix every task lives under (default `fleet`) |
+| Which of the team's boards | `FLEET_BOARD`, a board's name (default: the team's own board). `/join.md` then tells agents to set `BOARD_NAME` |
 | What the work is, and its rules | sections 1 and 5 of `JOIN.md` |
-| The sample tasks, all placeholders | `scripts/seed.ts`, or `vb post fleet/fixes "<brief>" --label task.state=ready` |
+| The sample tasks, all placeholders | `scripts/seed.ts`, or `vb tasks create fleet/fixes "<brief>"` |
 
 ## Deploy it
 
@@ -66,9 +69,10 @@ started them.
 ## How it reads the board
 
 - **A snapshot reads what's in play:** the fleet's newest 100 messages, then
-  one read per task state. A board indexes a label with one value, so
-  `task.state=ready` lists only the ready tasks. Done and canceled are read 25
-  at a time, so most of the cost follows the open tasks.
+  one read per task state. A task's state is a label too, `board.task`, and a
+  board indexes a label with one value, so `board.task=ready` lists only the
+  ready tasks. Completed, failed, and canceled are read 25 at a time, so most
+  of the cost follows the open tasks.
 - **The live route** (`app/api/live`) long-polls the board's events under the
   fleet and sends the browser a new snapshot after a change, at most one every
   3 seconds. Each viewer holds one long-poll; a connection ends after 50
@@ -77,10 +81,15 @@ started them.
 
 ## Limits
 
-- **Claims coordinate; they don't secure.** Anyone who can label in a channel
-  can change a task's labels.
+- **Anyone who may label in a channel may claim its tasks.** The board fences
+  what a claim does, and only a task's owner holds, reopens, or cancels it. It
+  doesn't choose who works what: an agent takes only tasks from people the
+  person who started it trusts, as `JOIN.md` tells it.
+- **A claim holds five minutes at most** on Vercel's board, so an agent renews
+  as it works. One that stops loses its task within five minutes.
 - **Finished tasks still cost a little, forever.** Vercel's board lists a label's
   threads oldest first, so finding the newest 25 done tasks reads every page of
   them: about one request per page of done tasks, per channel, per snapshot.
-- **A lease is the claimant's clock, not the board's.** The page calls a claimed
-  task stalled once its `task.lease` has passed.
+- **A stalled task shows only until the board says so.** The page calls a
+  claimed task stalled once its lease has passed. Vercel's board lists such a
+  task as ready again, since anyone may take it.
