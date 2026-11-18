@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
-import { GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_MAX, GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
+import { everyChannel } from '../client/channels.ts'
 import { withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
 import type { Mentioned } from '../contract/mentions.ts'
@@ -457,13 +458,14 @@ const messageRef = (id: string) => (bareId(id) ? id : `#${id}`)
  * A thread's replies as `--after` and `--label` narrow them, from the replies its read answered: those after the
  * message `--after` names, which is one of the thread's, and those that wear every `--label`, or whose root does.
  */
-function narrowedReplies(thread: { message: MessageView; replies: MessageView[] }): MessageView[] {
+function narrowedReplies(thread: { message: MessageView; replies: MessageView[] }, cut: { after: boolean }): MessageView[] {
   let replies = thread.replies
   if (flags.after !== undefined) {
     const id = flags.after.replace(/^#/, '')
     const at = [thread.message, ...replies].findIndex((message) => message.id === id)
-    if (at === -1) throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
-    replies = replies.slice(at)
+    // A board asked for the replies after it answered them alone: one from before that answers the whole thread, cut here.
+    if (at === -1 && cut.after) throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
+    if (at !== -1) replies = replies.slice(at)
   }
   const labels = (flags.label ?? []).map((label) => {
     const eq = label.indexOf('=')
@@ -1337,11 +1339,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         } else out(created ? `created ${channel.path}` : `${channel.path} already exists`)
         return 0
       }
-      if (sub !== undefined && sub !== 'list') throw usage(`Unknown command ${sub} for ${named()} channels.`, { reason: 'unknown_command' })
-      if (rest.length > 0) throw usage(`channels list takes no arguments: ${rest[0]} is one too many.`)
-      const channels = await client().channels()
-      if (flags.json) return result({ channels }), 0
-      if (channels.length === 0) return out('no channels yet'), 0
+      // What isn't `list` or `create` is the prefix of a list, `channels dev/`: with more after it, a command there isn't.
+      if (sub !== undefined && sub !== 'list' && rest.length > 0) throw usage(`Unknown command ${sub} for ${named()} channels.`, { reason: 'unknown_command' })
+      const [prefix, extra] = sub === 'list' ? rest : args
+      if (extra !== undefined) throw usage(`channels list takes one prefix: ${extra} is one too many.`)
+      if (flags.limit !== undefined && !(/^[1-9]\d*$/.test(flags.limit) && Number(flags.limit) <= CHANNELS_LIMIT_MAX)) throw usage(`--limit takes 1 to ${CHANNELS_LIMIT_MAX} channels, and ${flags.limit} isn't one.`)
+      const listed = await client().channels({ ...(prefix !== undefined ? { prefix } : {}), ...(flags.limit !== undefined ? { limit: Number(flags.limit) } : {}), ...(flags.after !== undefined ? { after: flags.after } : {}) })
+      if (flags.json) return result({ channels: listed.channels, next: listed.next }), 0
+      // A page comes in the board's order: shown by path, so the ones under one prefix are together.
+      const channels = [...listed.channels].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+      if (channels.length === 0) return out(prefix === undefined && flags.after === undefined ? 'no channels yet' : `no channels${prefix !== undefined ? ` under ${prefix}` : ''}${flags.after !== undefined ? ' after that page' : ''}`), 0
       let group = ''
       for (const channel of channels) {
         const prefix = channel.path.includes('/') ? channel.path.slice(0, channel.path.lastIndexOf('/') + 1) : ''
@@ -1358,6 +1365,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           : ''
         out(`${prefix ? '  ' : ''}${channel.path}${counted}`)
       }
+      // A page that isn't the last says how to read the next.
+      if (listed.next !== null) out(`\n(more not shown: ${commandLine(rerunWithout(['--after'], '--after', listed.next))})`)
       return 0
     }
 
@@ -1377,13 +1386,22 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         // A thread is read whole: what finds threads doesn't narrow one, and it's said before anything is read.
         const across = (['by', 'text', 'mentions', 'source', 're', 'before'] as const).find((name) => flags[name] !== undefined)
         if (across !== undefined) throw usage(`Can't use --${across} on one thread. It's read whole: --after and --label narrow its replies.`)
-        const thread = link ? await board.linked(target) : await board.thread(messageId(target))
+        // A board reads the replies after a message itself, so a long thread isn't read whole for its last few.
+        const after = !link && flags.after !== undefined ? flags.after.replace(/^#/, '') : undefined
+        const thread = link
+          ? await board.linked(target)
+          : await board.thread(messageId(target), after !== undefined && isMessageRef(after) ? { after: messageId(after) } : {}).catch((error: unknown) => {
+              // A message of another thread is no place in this one, which is the flag's to say.
+              if (error instanceof BoardError && error.status === 400 && /isn't a message of this thread/.test(error.message))
+                throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
+              throw error
+            })
         // A board older than this CLI answers /links with its discovery document. Its 404 stays: a
         // current board's means the link isn't one it synced.
         if (link && !Array.isArray((thread as { replies?: unknown }).replies)) throw outdated("This board can't read links.")
         // What narrows it is narrowed here, from the replies it came with.
         const narrowed = flags.after !== undefined || (flags.label?.length ?? 0) > 0
-        const replies = narrowed ? narrowedReplies(thread) : thread.replies
+        const replies = narrowed ? narrowedReplies(thread, { after: link || after === undefined || !isMessageRef(after) }) : thread.replies
         if (flags.json) return result({ ...thread, replies }), 0
         // Reactions name people who may not have written here: look up the ones that show.
         const authors = new Set([thread.message, ...replies].map((m) => m.by.actor))
@@ -1422,7 +1440,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const page = listed.threads.length > limit ? { ...listed, threads: flags.after !== undefined ? listed.threads.slice(0, limit) : listed.threads.slice(-limit) } : listed
       // Nothing in a channel that doesn't exist is a typo, not an empty channel.
       if (!page.threads.length && target) {
-        const channels = (await board.channels()).map((c) => c.path)
+        // Every channel, a page at a time: a name close to the one typed could be any of them.
+        const channels = (await everyChannel(board)).map((c) => c.path)
         if (!channels.some((path) => path === target || path.startsWith(target.replace(/\/?$/, '/')))) {
           const guess = closest(target, channels)
           throw new Failed({
@@ -1868,7 +1887,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const stop = stopOn(controller)
       try {
         for await (const event of client().events(
-          { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
+          { ...filters(args[0]), ...(flags.all ? { all: true } : {}), ...(flags.last !== undefined ? { last: Number(flags.last) } : {}) },
           { signal: controller.signal },
         ))
           if (flags.json) line(event)
@@ -2227,7 +2246,7 @@ async function tasks(args: string[]): Promise<number> {
     })
     // Nothing in a channel that doesn't exist is a typo, of a channel or of what to do.
     if (page.tasks.length === 0 && verb && flags.after === undefined) {
-      const channels = (await board.channels()).map((c) => c.path)
+      const channels = (await everyChannel(board)).map((c) => c.path)
       // `work/` is `work` and what's under it: the channel itself is enough for it to be there.
       const name = verb.replace(/\/$/, '')
       if (!channels.some((path) => path === name || path.startsWith(`${name}/`))) {

@@ -790,7 +790,7 @@ for (let page = await team.threads({ channel: 'prs' }); ; ) {
 ### thread
 
 ```ts
-thread(id: string): Promise<ThreadView>
+thread(id: string, range?: { after?: string; limit?: number }): Promise<ThreadView>
 ```
 
 One whole thread from any message in it: `{ message, replies, cursor,
@@ -800,7 +800,7 @@ that reply in it.
 ### channels, actors, me, discovery
 
 ```ts
-channels(): Promise<ChannelView[]>  // { path, lastIndex?, messages?, threads? }
+channels(query?: { prefix?: string; limit?: number; after?: string }): Promise<{ channels: ChannelView[]; cursor: string; next: string | null }>  // each { path, lastIndex?, messages?, threads? }
 createChannel(path: string, options?: { private?: boolean }): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this handle writes as
@@ -960,11 +960,21 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 ### poll
 
 ```ts
-poll(query?: Filters & { after?: string; wait?: number; all?: boolean }, signal?: AbortSignal): Promise<EventsPage>
+poll(query?: Filters & { after?: string; wait?: number; all?: boolean; last?: number }, signal?: AbortSignal): Promise<EventsPage>
 ```
 
 One long-poll of `/events`: `{ events, cursor }`. `wait` is in seconds, at
 most 300. Pass `cursor` back as `after` to continue.
+
+`last` reads the feed's newest events instead, 100 at most: oldest first,
+at once, with the feed's end as `cursor`. It takes no `after` or `wait`.
+`events({ last })` starts with them and follows.
+
+```ts
+// What the board last saw, then everything after it.
+const { events, cursor } = await team.poll({ last: 50 })
+for await (const event of team.events({ after: cursor })) show(event)
+```
 
 ### request
 

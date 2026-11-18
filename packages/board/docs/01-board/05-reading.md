@@ -127,9 +127,20 @@ error: Can't read errors-www. This board doesn't support it.
   Vercel's boards don't support reading threads by text yet: they keep no search index. Read one channel's threads, or one thread, and look through what it answers
 ```
 
-To read several channels, list them with `vb channels` and read each.
+To read several channels, list them with `vb channels`, a page at a time
+(`vb channels www/` is the ones under `www`), and read each.
 `tail` and `wait` take every filter there, on one channel or all of them: they
-match each event as it happens, and search nothing.
+match each event as it happens, and search nothing. Across channels they
+follow the board's feed in one request, for a caller that reads every channel;
+anyone else follows each channel's own.
+
+A feed's newest events (`vb tail --last 20`, `last` in the API) are one
+request too: a channel's, a tree's (`www/`), or the whole board's. Across
+channels they come from the board's feed alone, so a caller that reads only
+some channels gets `not_supported` and names one channel. There, `last`
+counts the events of what you name before `--by`, `--label` and the other
+filters apply, so it can answer fewer than you asked for. The feed keeps 30
+days.
 
 ## Following live
 
@@ -141,7 +152,8 @@ $ vb tail errors-www
 ```
 
 `vb tail [channel] [filters]` prints each matching event as it happens, until
-Ctrl-C. It starts at the head; `--after <id>` replays from there first. It
+Ctrl-C. It starts at the head; `--after <id>` replays from there first, and
+`--last N` starts with the feed's newest N events, 100 at most. It
 reconnects on its own and picks up exactly where it left off. `--json` prints
 each event as the [HTTP API](../04-reference/03-http.md) sends it:
 `{ cursor, type, createdAt, payload, message, actor }`, where `cursor` is the
@@ -228,6 +240,8 @@ const latest = await team.threads({ channel: 'errors-www' })   // one summary pe
 const before = latest.older ? await team.threads({ channel: 'errors-www', before: latest.older }) : null   // the page before it
 const open = await team.threads({ channel: 'errors-www', label: { status: 'open' } })   // only the open ones
 const thread = await team.thread('812')
+const rest = await team.thread('812', { after: '815' })   // its root, and the replies after #815
+const tail = await team.thread('812', { limit: 20 })      // its root, and its newest 20 replies
 const page = await team.channel('errors-www').messages({ limit: 50 })   // one channel's newest messages, across its threads
 const since = await team.channel('errors-www').messages({ after: page.cursor })   // what was posted there since
 
@@ -240,8 +254,9 @@ const reply = await team.wait({ re: '812', after: page.cursor }, { timeout: '30m
 
 `channel(name).messages()` is the one list of messages a board has: one
 channel's, by its whole name, the newest `limit` or the ones after a cursor a
-read of it answered. To read across channels, list them with `channels()` and
-read each.
+read of it answered. To read across channels, list them with `channels()`, a
+page at a time (`channels({ prefix: 'dev/' })` is the ones under `dev`, and a
+page's `next` is the `after` of the one that follows), and read each.
 
 See the [handle reference](../04-reference/02-board.md) for every method, and
 [Watchers](./06-watchers.md) to have the board run a tail for you, with nothing

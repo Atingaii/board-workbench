@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import { LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_DEFAULT, CHANNELS_LIMIT_MAX, LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
@@ -13,6 +13,7 @@ import { type Backend, type BackendRoute, type BoardBinding, type Caller, type P
 import { mediaType } from '../contract/files.ts'
 import { uploadName } from './file-names.ts'
 import { badRequest, duplicateId, HttpError, json, notFound } from './errors.ts'
+import { carried } from './carried.ts'
 import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
@@ -324,6 +325,15 @@ export const isApiMessageId = (value: string) => MESSAGE_ID.test(value)
 const CURSOR = /^([0-9a-z]+)(?:\.([0-9a-z]+))?$/
 /** The API's own cursor for one channel, which its message list and feed share, and any process resumes. */
 const API_CURSOR = /^c1\./
+/**
+ * In a position, the feed the API reads across channels in one: the whole board's, or a tree's
+ * (`dev/`), in place of a channel's ID. Its cursor says where it is by itself (`x1.<time>.<skip>.<the
+ * API's cursor>`), so any process reads on from it.
+ */
+const ACROSS = '*'
+const ACROSS_CURSOR = /^x1\.([0-9a-z]+)\.(\d+)\.(c1\..+)$/
+/** The longest cursor the protocol takes. */
+const CURSOR_MAX = 128
 /** The API's longest page of a channel's messages, and longest long-poll, in seconds. */
 const PAGE_MAX = 100
 const WAIT_MAX_S = 25
@@ -894,9 +904,25 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       throw error
     })
   }
+  /**
+   * The channels callers have been shown, by name, for the callers one `can` narrows alike. The API finds a name
+   * only for a caller that reads its channel, so what one caller was shown is never another's answer: one narrowed
+   * otherwise asks the API, which decides. The credential is this backend's, so `can` is all that tells callers apart.
+   */
+  const namedBy = new Map<string, Map<string, ApiChannel>>()
+  const namedTo = (who: Who): Map<string, ApiChannel> => {
+    const key = who.can ?? ''
+    let named = namedBy.get(key)
+    if (!named) {
+      // The newest few ways callers are narrowed: each is whatever a request's header says.
+      if (namedBy.size >= 200) namedBy.delete(namedBy.keys().next().value!)
+      namedBy.set(key, (named = new Map()))
+    }
+    return named
+  }
   /** The channel by `name`, which the API finds without listing the board's. */
-  const named = new Map<string, ApiChannel>()
   async function channelNamed(who: Who, name: string): Promise<ApiChannel | null> {
+    const named = namedTo(who)
     const known = named.get(name)
     if (known) return known
     const { channels: [found] } = await api<{ channels: ApiChannel[] }>(who, 'GET', await onBoard(who, '/channels'), { query: { name } })
@@ -921,7 +947,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * read's own by its ID.
    */
   async function inNamed<T>(who: Who, name: string, read: (channel: ChannelRef) => Promise<T>): Promise<T | null> {
-    if (readsByName && !named.has(name))
+    if (readsByName && !namedTo(who).has(name))
       try {
         return await read({ name })
       } catch (error) {
@@ -939,9 +965,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * already read answers first, and one the API won't show by ID is looked for in the list, as before.
    */
   const byChannelId = new Map<string, Promise<ApiChannel | null>>()
-  /** A channel an answer named by both its ID and its name: nothing in this process asks for it again. */
-  const learn = ({ id, name }: ApiChannel) => {
-    named.set(name, { id, name })
+  /** A channel an answer to `who` named by both its ID and its name: no caller narrowed as it is asks for it again, by name, and none by ID. */
+  const learn = (who: Who, { id, name }: ApiChannel) => {
+    namedTo(who).set(name, { id, name })
     byChannelId.set(id, Promise.resolve({ id, name }))
   }
   async function channelById(who: Who, id: string): Promise<ApiChannel> {
@@ -965,6 +991,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!found) throw new HttpError(502, 'remote_error', `Vercel's API names a channel it doesn't list: ${id}`)
     return found
   }
+  /**
+   * The channel a change of the board's feed, or a tree's, is in, which the API says by name on each: no channel is
+   * asked for to name an event. An API whose events say none is from before that feed could be read here.
+   */
+  function channelOf(change: ApiChange): string {
+    const { channel } = change as unknown as { channel?: unknown }
+    if (typeof channel !== 'string') throw new HttpError(502, 'remote_error', "Vercel's API names no channel on this feed's events: it's from before the board's feed could be read here, and too old for this read")
+    return channel
+  }
   /** The channel by `name`, made if it isn't there: `created` says whether this made it. */
   async function ensureChannel(who: Who, name: string): Promise<{ channel: ApiChannel; created: boolean }> {
     const found = await channelNamed(who, name)
@@ -972,7 +1007,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     try {
       const { channel } = await api<{ channel: ApiChannel }>(who, 'POST', await onBoard(who, '/channels'), { body: { operationId: operationId(), name } })
       channels = null
-      named.set(name, channel)
+      namedTo(who).set(name, channel)
       return { channel, created: true }
     } catch (error) {
       // Someone made it first.
@@ -993,10 +1028,62 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const found = await channelNamed(who, filter)
       return found ? [found] : []
     }
+    if (filter !== undefined && channelPages) {
+      // The API lists the ones under it by their names' prefix, a page at a time, and finds the tree's own by its name.
+      const under: ApiChannel[] = []
+      let next: string | undefined
+      do {
+        const page = await channelsPage(who, { prefix: filter, after: next, limit: CHANNELS_LIMIT_MAX })
+        under.push(...page.channels)
+        next = page.next ?? undefined
+      } while (next && channelPages)
+      if (channelPages) {
+        const own = await channelNamed(who, filter.slice(0, -1))
+        return [...(own ? [own] : []), ...under]
+      }
+    }
     const listed = await loadChannels(who, true)
     if (filter === undefined) return listed
     const path = filter.slice(0, -1)
     return listed.filter((channel) => channel.name === path || channel.name.startsWith(filter))
+  }
+
+  /** Whether the API pages its channel list by `limit` and lists it by a name's `prefix`: until it refuses one, it's asked. */
+  let channelPages = true
+  /**
+   * A page of the board's channels: `limit` of them whose names start with `prefix`, after a page's `next`. The API
+   * pages them, 100 a request at most, by name under a prefix and in its own order without one. One from before
+   * that lists them all, 50 a request, and they're cut here, by name: its pages' `next` is the last name, and the
+   * API's is its own cursor, so neither reads on the other's.
+   */
+  async function channelsPage(who: Who, { prefix, after, limit }: { prefix?: string | undefined; after?: string | undefined; limit: number }, signal?: AbortSignal): Promise<{ channels: ApiChannel[]; next: string | null }> {
+    const refused = () => new HttpError(400, 'invalid_cursor', `after: ${after} isn't a page of this board's channels: pass a page's next as it came`)
+    // A `next` that names where its page left off (`n.`) is one only an API without pages hands out, in any process: its list goes on from it.
+    if (channelPages && !after?.startsWith('n.')) {
+      if (after !== undefined && !after.startsWith('c.')) throw refused()
+      const path = await onBoard(who, '/channels')
+      const found: ApiChannel[] = []
+      let cursor = after?.slice(2)
+      try {
+        do {
+          const page = await api<{ channels: ApiChannel[]; cursor: string | null }>(who, 'GET', path, { query: { prefix, limit: String(Math.min(PAGE_MAX, limit - found.length)), cursor }, ...(signal ? { signal } : {}) })
+          found.push(...page.channels)
+          cursor = page.cursor ?? undefined
+        } while (cursor && found.length < limit)
+        for (const channel of found) learn(who, channel)
+        return { channels: found, next: cursor ? `c.${cursor}` : null }
+      } catch (error) {
+        if (!unknownParameter(error, 'prefix') && !unknownParameter(error, 'limit')) throw error
+        channelPages = false
+      }
+    }
+    if (after !== undefined && !after.startsWith('n.')) throw refused()
+    const last = after === undefined ? undefined : decodeURIComponent(after.slice(2))
+    const listed = (await loadChannels(who, true))
+      .filter((channel) => (prefix === undefined || channel.name.startsWith(prefix)) && (last === undefined || channel.name > last))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    const channels = listed.slice(0, limit)
+    return { channels, next: listed.length > limit ? `n.${encodeURIComponent(channels.at(-1)!.name)}` : null }
   }
 
   async function messageById(who: Who, id: string, signal?: AbortSignal, include?: 'channel'): Promise<{ thread: ApiThread; message: ApiMessage; channel?: ApiChannel }> {
@@ -1020,7 +1107,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (messagesWithChannel)
       try {
         const { channel, ...found } = await messageById(who, id, signal, 'channel')
-        if (channel) learn(channel)
+        if (channel) learn(who, channel)
         return { ...found, channel: channel ? { id: channel.id, name: channel.name } : await channelById(who, found.thread.channelId) }
       } catch (error) {
         if (unknownParameter(error, 'include')) messagesWithChannel = false
@@ -1062,6 +1149,41 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       cursor = page.cursor ?? undefined
     } while (cursor)
     return messages
+  }
+
+  /** Whether the API reads a thread's messages in a range (`after`, `limit`, `order`): until it refuses one, it's asked. */
+  let threadRanges = true
+  /**
+   * A thread's root, and its replies in a range: after the message at `after`, the first `limit` of them, or with no
+   * `after`, the newest. The API reads the range itself, a page of 100 at most, and the root apart when the range
+   * leaves it out; one from before ranges answers 400 for the parameter, and the whole thread is read and cut here.
+   */
+  async function threadRange(who: Who, threadId: string, range: { after?: number; limit?: number }, signal?: AbortSignal): Promise<ApiMessage[]> {
+    const cut = ([root, ...replies]: ApiMessage[]) => {
+      const rest = range.after === undefined ? replies : replies.filter((reply) => reply.sequence > range.after!)
+      return root ? [root, ...(range.limit === undefined ? rest : range.after === undefined ? rest.slice(-range.limit) : rest.slice(0, range.limit))] : []
+    }
+    if (!threadRanges) return cut(await threadMessages(who, threadId, signal))
+    const path = await onBoard(who, `/threads/${encodeURIComponent(threadId)}/messages`)
+    // One more than asked for when it reads the newest: the root is among them when the thread is that short.
+    const wanted = range.limit === undefined ? Infinity : range.after === undefined ? range.limit + 1 : range.limit
+    const order = range.after === undefined ? { order: 'desc' } : { after: String(range.after) }
+    const read: ApiMessage[] = []
+    try {
+      let cursor: string | undefined
+      do {
+        const page = await reading<{ messages: ApiMessage[]; cursor: string | null }>(who, path, { query: { ...order, limit: String(Math.min(PAGE_MAX, wanted - read.length)), cursor }, ...(signal ? { signal } : {}) })
+        read.push(...page.messages)
+        cursor = page.cursor ?? undefined
+      } while (cursor && read.length < wanted)
+    } catch (error) {
+      if (!['after', 'limit', 'order'].some((name) => unknownParameter(error, name))) throw error
+      threadRanges = false
+      return cut(await threadMessages(who, threadId, signal))
+    }
+    const replies = read.filter((message) => message.sequence > 1).sort((a, b) => a.sequence - b.sequence)
+    const root = read.find((message) => message.sequence === 1) ?? (await messageById(who, idAt(threadId, 1), signal)).message
+    return [root, ...(range.limit === undefined ? replies : range.after === undefined ? replies.slice(-range.limit) : replies.slice(0, range.limit))]
   }
 
   /** Who reacted with each emoji. The API counts them on the message and lists them apart. */
@@ -1481,6 +1603,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   type Position = { t: number; feeds: Record<string, Feed>; past?: string; floor?: number }
   const positions = new Map<string, Position>()
   function cursorOf(position: Position): string {
+    // A position in the board's feed alone is its API cursor and how far into the page after it: nothing to keep here.
+    const across = position.feeds[ACROSS]
+    if (across?.at && Object.keys(position.feeds).length === 1 && position.past === undefined && position.floor === undefined) {
+      const exact = `x1.${position.t.toString(36)}.${across.skip}.${across.at}`
+      if (exact.length <= CURSOR_MAX) return exact
+    }
     const key = `${position.t.toString(36)}.${Math.floor(Math.random() * 36 ** 8).toString(36)}`
     positions.set(key, position)
     if (positions.size > 10_000) positions.delete(positions.keys().next().value!)
@@ -1489,6 +1617,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   function positionOf(cursor: string): Position {
     const kept = positions.get(cursor)
     if (kept) return kept
+    const exact = ACROSS_CURSOR.exec(cursor)
+    if (exact) return { t: parseInt(exact[1]!, 36), feeds: { [ACROSS]: { at: exact[3]!, skip: Number(exact[2]) } } }
     const found = CURSOR.exec(cursor)
     if (!found) throw new HttpError(400, 'invalid_cursor', `after: ${cursor} isn't a cursor here or a message's ID`)
     // A cursor this process doesn't hold, as every `vb` run's is, is its time alone: nothing at or before it is after it,
@@ -1510,10 +1640,42 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const found = await Promise.all(listed.map((channel) => head(who, channel)))
     return Object.fromEntries(listed.map((channel, i) => [channel.id, found[i]!]))
   }
-  /** One channel's feed now. */
+  /** One channel's feed now, or the board's. */
   async function head(who: Who, channel: ChannelRef): Promise<Feed> {
-    const { cursor } = await api<{ cursor: string }>(who, 'GET', await onBoard(who, '/changes'), { query: { ...inChannel(channel), from: 'latest' } })
+    const { cursor } = await api<{ cursor: string }>(who, 'GET', await onBoard(who, '/changes'), { query: { ...feedOf(channel), from: 'latest' } })
     return { at: cursor, skip: 0 }
+  }
+  /** How a read of a feed names it to the API: a channel as any read does, a tree by its name (`dev/`), and the whole board by nothing. */
+  const feedOf = (channel: ChannelRef): { channelId?: string; channel?: string } => (channel.id === ACROSS ? (channel.name ? { channel: channel.name } : {}) : inChannel(channel))
+  /** The board's feed as a read's one source: a tree's when `channel` names one. */
+  const across = (channel: string | undefined): ApiChannel => ({ id: ACROSS, name: channel ?? '' })
+
+  /** Whether the API reads the board's feed in one for a caller narrowed as `can` says: asked once each. */
+  const acrossFeeds = new Map<string, Promise<boolean>>()
+  /** The API's refusal of the board's feed to a caller that doesn't read every channel, by its code: its cursors would count the rest. */
+  const readsSome = (error: unknown): boolean => error instanceof HttpError && error.status === 403 && error.code === 'feed_needs_every_channel'
+  /**
+   * Whether these credentials read the board's feed in one request: not on an API from before it, which
+   * takes no read of changes without a channel, and not when they read only some channels. Either way
+   * the read follows each channel's feed, as before.
+   */
+  function acrossFeed(who: Who): Promise<boolean> {
+    const key = who.can ?? ''
+    let asked = acrossFeeds.get(key)
+    if (!asked) {
+      asked = onBoard(who, '/changes')
+        .then((path) => api(who, 'GET', path, { query: { from: 'latest' } }))
+        .then(
+          () => true,
+          (error: unknown) => {
+            if (readsSome(error) || (error instanceof HttpError && error.status === 400 && /missing required property\W*channelId\b/i.test(error.message))) return false
+            acrossFeeds.delete(key)
+            throw error
+          },
+        )
+      acrossFeeds.set(key, asked)
+    }
+    return asked
   }
 
   /** Who a `--by` value covers, as the API's authors. */
@@ -1962,14 +2124,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         const from = position.feeds[channel.id]
         // A channel the position doesn't know reads from its oldest change kept, after the position's time.
         // Each change comes with its message as it is now, so showing one costs no read of its own.
-        const page = await reading<{ events: ApiChange[]; cursor: string }>(who, path, { query: { channelId: channel.id, include: 'message', ...(from?.at ? { cursor: from.at } : {}) }, signal })
+        const page = await reading<{ events: ApiChange[]; cursor: string; caughtUp?: boolean }>(who, path, { query: { ...feedOf(channel), include: 'message', ...(from?.at ? { cursor: from.at } : {}) }, signal })
         const skip = from?.skip ?? 0
         const events = page.events
           .map((change, i) => ({ change, i }))
           .slice(skip)
           .filter(({ change }) => from || change.createdAt > position.t)
           .filter(({ change }) => !(position.floor !== undefined && change.createdAt <= position.floor) && !(change.type === 'message.posted' && change.messageId === position.past))
-        return { channel, at: from?.at ?? null, next: page.cursor, events }
+        // The board's feed answers what it passed over, which for a tree may be others' events alone and short of its end.
+        return { channel, at: from?.at ?? null, next: page.cursor, events, behind: channel.id === ACROSS && page.caughtUp === false && page.cursor !== from?.at }
       }),
     )
     const narrow = await narrowOf(who, filters)
@@ -1986,12 +2149,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const message = change.currentMessage
       // A label matches on the root's, which only a read of the thread has: nothing else needs one.
       const given = message && change.threadId ? { message, thread: filters.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
-      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running }, ...start }), filters, narrow, given, threads)
+      // The board's feed says which channel each change is in, by its name.
+      const channel = page.channel.id === ACROSS ? channelOf(change) : page.channel.name
+      const event = await eventOf(who, change, channel, cursorOf({ t: change.createdAt, feeds: { ...running }, ...start }), filters, narrow, given, threads)
       if (event) events.push(event)
     }
     const after: Record<string, Feed> = { ...position.feeds }
     for (const page of pages) after[page.channel.id] = { at: page.next, skip: 0 }
-    return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after, ...start } }
+    return { events, behind: pages.some((page) => page.behind), position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after, ...start } }
   }
 
   /**
@@ -2016,9 +2181,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         let pending = listed.length
         for (const channel of listed) {
           const at = position.feeds[channel.id]?.at
-          api<{ events: ApiChange[] }>(who, 'GET', path, { query: { channelId: channel.id, ...(at ? { cursor: at } : { from: 'latest' }), wait: String(wait) }, signal: either })
+          api<{ events: ApiChange[]; caughtUp?: boolean }>(who, 'GET', path, { query: { ...feedOf(channel), ...(at ? { cursor: at } : { from: 'latest' }), wait: String(wait) }, signal: either })
             .then((page) => {
-              if (page.events.length > 0) resolve(true)
+              // The board's feed answers at once, with nothing, when what came is others' and there's more behind it: that's read on from too.
+              if (page.events.length > 0 || (channel.id === ACROSS && page.caughtUp === false)) resolve(true)
               else if (--pending === 0) resolve(false)
             })
             // One this let go is no failure; the caller's own stop is, as a read's would be.
@@ -2109,20 +2275,96 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
+  /** Whether the API reads a feed's newest events (`last`): until it refuses the parameter, it's asked. */
+  let readsLast = true
+  const noLast = () => notSupported("reading a feed's newest events", 'follow it from now, without `last`')
+  const noLastAcross = () => notSupported('reading the newest events of several channels at once here', "read one channel's, with `channel`")
+
+  /**
+   * The newest events of one feed, oldest first, in one read: the API's `last`, on a channel's feed, a tree's or
+   * the board's, with the feed's end as the cursor. Several channels' are only ever the board's feed: where the
+   * API keeps none for the caller, or takes no `last`, the read is refused, not made a channel at a time.
+   */
+  async function newest(who: Who, query: Protocol['events']['input'], signal: AbortSignal): Promise<Protocol['events']['output']> {
+    if (!readsLast) throw noLast()
+    const { last: _last, ...rest } = query
+    // A channel that isn't there, or a thread outside the channels the read names, has no events: it goes on from now.
+    const none = () => followed(who, [], undefined, rest, signal)
+    try {
+      const name = oneChannel(query)
+      const found = name === null ? null : await inNamed(who, name, (channel) => newestOf(who, channel, query, signal))
+      if (found) return found
+      if (name !== null) return await none()
+      if (query.re !== undefined) {
+        const [channel] = await channelOfThread(who, query.re, query.channel, signal)
+        return channel ? await newestOf(who, channel, query, signal) : await none()
+      }
+      if (!(await acrossFeed(who))) throw noLastAcross()
+      return await newestOf(who, across(query.channel), query, signal)
+    } catch (error) {
+      if (unknownParameter(error, 'last')) {
+        readsLast = false
+        throw noLast()
+      }
+      if (!readsSome(error)) throw error
+      acrossFeeds.set(who.can ?? '', Promise.resolve(false))
+      throw noLastAcross()
+    }
+  }
+
+  async function newestOf(who: Who, feed: ChannelRef, query: Protocol['events']['input'], signal: AbortSignal): Promise<Protocol['events']['output']> {
+    const page = await reading<{ events: ApiChange[]; cursor: string }>(who, await onBoard(who, '/changes'), { query: { ...feedOf(feed), include: 'message', last: String(query.last) }, signal })
+    const narrow = await narrowOf(who, query)
+    const threads = threadReader(who, signal)
+    naming(who, page.events.flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
+    narrow.mentions?.ahead(page.events.flatMap((change) => (change.currentMessage ? [change.currentMessage.text] : [])))
+    const one = feed.id !== ACROSS
+    const events: BoardEventView[] = []
+    for (const change of page.events) {
+      const message = change.currentMessage
+      const given = message && change.threadId ? { message, thread: query.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
+      // One channel's feed shows what concerns a message, under the API's own cursors, as a read after one of them does.
+      // Each event of the board's feed carries the cursor right after it too: a read from it goes on with exactly what follows.
+      if (one && !given) continue
+      const event = one
+        ? await eventOf(who, change, feed.name, change.cursor ?? page.cursor, query, narrow, given)
+        : await eventOf(who, change, channelOf(change), cursorOf({ t: change.createdAt, feeds: { [ACROSS]: { at: change.cursor ?? page.cursor, skip: 0 } } }), query, narrow, given, threads)
+      // The API answers each with its message as it is now: what an event says that the message no longer carries isn't answered.
+      const settled = event && carried(event)
+      if (settled) events.push(settled)
+    }
+    if (one) return { events, cursor: page.cursor }
+    const t = page.events.length > 0 ? Math.max(...page.events.map((change) => change.createdAt)) : Date.now()
+    return { events, cursor: cursorOf({ t, feeds: { [ACROSS]: { at: page.cursor, skip: 0 } } }) }
+  }
+
   /** A read of the feed, as `vb tail` makes it: one channel's feed when it names one, or every channel's. */
   async function eventsAs(who: Who, query: Protocol['events']['input'], signal: AbortSignal): Promise<Protocol['events']['output']> {
+    if (query.last !== undefined) return newest(who, query, signal)
     const name = oneChannel(query)
     const found = name === null ? null : await inNamed(who, name, (channel) => channelEvents(who, channel, query, signal))
     if (found) return found
     if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
-    const listed = query.re === undefined ? await channelsFor(who, query.channel) : await channelOfThread(who, query.re, query.channel, signal)
+    const from = query.after === undefined ? undefined : locate(query.after) ? await afterMessage(who, query.after) : positionOf(query.after)
+    // Several channels' events are one read of the board's feed where the API has it for this caller, unless the
+    // read goes on from a position in each channel's own feed, which only they read on from.
+    // And it's a tree's or every channel's, never one exact name's: a channel that isn't there yet has no events, as before.
+    const one = (query.channel === undefined || query.channel.endsWith('/')) && query.re === undefined && !(from && Object.keys(from.feeds).some((key) => key !== ACROSS)) && (await acrossFeed(who))
+    try {
+      return await followed(who, one ? [across(query.channel)] : query.re === undefined ? await channelsFor(who, query.channel) : await channelOfThread(who, query.re, query.channel, signal), from, query, signal)
+    } catch (error) {
+      // The caller reads fewer channels than when it was asked: it follows the ones it reads, from the same time.
+      if (!one || !readsSome(error)) throw error
+      acrossFeeds.set(who.can ?? '', Promise.resolve(false))
+      const { [ACROSS]: _left, ...feeds } = from?.feeds ?? {}
+      return followed(who, await channelsFor(who, query.channel), from && { ...from, feeds }, query, signal)
+    }
+  }
+
+  /** The events of `listed` feeds after `from`, or from now, waiting for the first when the read waits. */
+  async function followed(who: Who, listed: ApiChannel[], from: Position | undefined, query: Protocol['events']['input'], signal: AbortSignal): Promise<Protocol['events']['output']> {
     // With no cursor, it starts now, as on any board.
-    let position: Position =
-      query.after === undefined
-        ? { t: Date.now(), feeds: await heads(who, listed) }
-        : locate(query.after)
-          ? await afterMessage(who, query.after)
-          : positionOf(query.after)
+    let position: Position = from ?? { t: Date.now(), feeds: await heads(who, listed) }
     const until = Date.now() + (query.wait ?? 0) * 1000
     // On a busy board a wait wakes at every change, so one that a filter (--mentions me, --by) finds
     // nothing in would read again straight away: once one wakes within a second, it reads every
@@ -2133,6 +2375,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const page = await read(who, listed, position, query, signal)
       position = page.position
       if (page.events.length > 0 || Date.now() >= until || signal.aborted) return { events: page.events, cursor: cursorOf(position) }
+      // Short of the board's feed's end, there's more to read now, from where this read got to: nothing to wait for yet.
+      if (page.behind) continue
       if (!busy) busy = (await changed(who, listed, position, until, signal)) && Date.now() - started < 1000
       await pause(Math.min(started + 1000, until) - Date.now(), signal)
     }
@@ -2859,13 +3103,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         can: canOf(found.can),
       }
     },
-    async channels(caller) {
-      const who = whoOf(caller)
+    async channels(caller, { prefix, after, limit = CHANNELS_LIMIT_DEFAULT }, signal) {
+      const page = await channelsPage(whoOf(caller), { prefix, after, limit }, signal)
       // The API counts neither messages nor threads in a channel, so a view says nothing of them.
-      const listed: ChannelView[] = (await channelsFor(who, undefined))
-        .map((channel) => ({ path: channel.name }))
-        .sort((a, b) => a.path.localeCompare(b.path))
-      return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
+      return { channels: page.channels.map((channel): ChannelView => ({ path: channel.name })), cursor: cursorOf({ t: Date.now(), feeds: {} }), next: page.next }
     },
     async createChannel(caller, { path }) {
       const { created } = await ensureChannel(whoOf(caller), path)
@@ -2940,7 +3181,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           return { feed, found, id: channel.id ?? found.threads[0]?.channelId }
         })
         if (!read) return { threads: [], cursor: cursorOf({ t: 0, feeds: {} }), older: null }
-        if (read.id !== undefined) learn({ id: read.id, name })
+        if (read.id !== undefined) learn(who, { id: read.id, name })
         // A cursor keeps each feed by its channel's ID, which a page with no thread doesn't say: it's asked for.
         const id = read.id ?? (await channelNamed(who, name))?.id
         const page = read.found.threads.map((thread) => ({ thread, channel: { name }, at: thread.lastActivityAt })).reverse()
@@ -2985,10 +3226,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (after === undefined) threads.reverse()
       return { threads, cursor: cursorOf({ t: newest, feeds }) }
     },
-    async message(caller, { id }, signal) {
+    async message(caller, { id, after, limit }, signal) {
       const who = whoOf(caller)
       const { thread, channel } = await messageIn(who, id, signal)
-      const [root, ...replies] = await threadMessages(who, thread.id, signal)
+      const from = after === undefined ? undefined : locate(after)
+      if (after !== undefined && from?.threadId !== thread.id) throw new HttpError(400, 'invalid_request', `after: ${after} isn't a message of this thread`)
+      const [root, ...replies] =
+        from !== undefined || limit !== undefined ? await threadRange(who, thread.id, { ...(from ? { after: from.sequence } : {}), ...(limit !== undefined ? { limit } : {}) }, signal) : await threadMessages(who, thread.id, signal)
       if (!root) throw notFound(`message not found: ${id}`, 'message_not_found')
       // The root and its replies are named together: one after the other, they'd ask for their authors apart.
       const [message, ...shown] = await Promise.all([root, ...replies].map((each) => view(who, each, channel.name)))
@@ -3232,7 +3476,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           : await inNamed(who, name, async (channel) => {
               const found = await all<ApiSchedule>(who, path, 'schedules', { ...filter, ...inChannel(channel) }, signal)
               // Each is in the channel the read named: showing it asks for no channel by its ID.
-              if (found[0]) learn({ id: found[0].channelId, name })
+              if (found[0]) learn(who, { id: found[0].channelId, name })
               return found
             })
       if (!listed) return { schedules: [] }

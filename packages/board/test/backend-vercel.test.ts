@@ -88,12 +88,15 @@ describe('vercel()', () => {
       'core: raises the version with each edit, reaction, and label': 'passed',
       'core: drops a deleted message from what its labels find': 'passed',
       "core: reads one channel's messages after a cursor of its own, oldest first, and on from where it stopped": 'passed',
+      'core: lists channels a page at a time, and the ones under a prefix': 'passed',
+      "core: reads a thread's replies after one of its messages, and as many of its newest as it's asked for": 'passed',
       "core: reads one channel's newest messages, as many as it's asked for": 'passed',
       'core: lists threads, each with its reply count and latest reply': 'passed',
       // Vercel's API keeps no index to find threads by what they say, or across channels.
       'search: finds threads by text anywhere in a message of theirs, in any case, as it reads now': 'skipped',
       'search: lists the threads of every channel under a pattern at once': 'skipped',
       'core: reads events after a cursor, each with a cursor of its own': 'passed',
+      "core: reads a channel's newest events, oldest first, and goes on from their cursor": 'skipped',
       'core: holds a long-poll open until the next event': 'passed',
       'core: deletes a message, leaving a tombstone': 'passed',
       'core: lists the channel and you in it': 'passed',
@@ -452,7 +455,7 @@ describe('vercel()', () => {
     await team.post('ops', { text: 'one' })
     await team.post('dev/web', { text: 'two' })
     await team.reply((await team.post('dev/web', { text: 'three' })).id, { text: 'four' })
-    expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+    expect((await team.channels()).channels).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
   })
 
   /** A handle on the fake whose reads of the board's whole channel list are kept: the tag each sent, and the status and tag it was answered with. */
@@ -469,26 +472,27 @@ describe('vercel()', () => {
   }
 
   it("lists the board's channels again with the tag the API answered them with, and shows what it answered while the API says it holds", async () => {
-    const api = fakeMessageboard()
+    const api = fakeMessageboard({ channelPages: true })
     const { team, listed } = listingOn(api)
     await team.post('ops', { text: 'one' })
     await team.post('dev/web', { text: 'two' })
     listed.length = 0
-    expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
-    expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+    // In the API's own order, which a list of every channel keeps where the API pages them.
+    expect((await team.channels()).channels).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'dev/web' }])
+    expect((await team.channels()).channels).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'dev/web' }])
     const [first, second] = listed
     expect(first).toMatchObject({ sent: null, status: 200, etag: expect.any(String) })
     expect(second).toEqual({ sent: first!.etag, status: 304, etag: first!.etag })
   })
 
   it('keeps the tag of the newest list the API answered, and sends that one next', async () => {
-    const api = fakeMessageboard()
+    const api = fakeMessageboard({ channelPages: true })
     const { team, listed } = listingOn(api)
     await team.post('ops', { text: 'one' })
     await team.channels()
     await team.createChannel('ops/alerts')
-    expect(await team.channels()).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'ops/alerts' }])
-    expect(await team.channels()).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'ops/alerts' }])
+    expect((await team.channels()).channels).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'ops/alerts' }])
+    expect((await team.channels()).channels).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'ops/alerts' }])
     const [before, changed, again] = listed
     expect(changed).toMatchObject({ sent: before!.etag, status: 200 })
     expect(changed!.etag).not.toBe(before!.etag)
@@ -496,15 +500,15 @@ describe('vercel()', () => {
   })
 
   it('keeps a tag for each caller the API answers apart: a profile narrowed to some channels sends none of its principal\'s', async () => {
-    const api = fakeMessageboard()
+    const api = fakeMessageboard({ channelPages: true })
     const { team, listed } = listingOn(api)
     await team.post('ops', { text: 'one' })
     await team.post('dev/web', { text: 'two' })
     const fixer = team.as('fixer', { can: { 'dev/': ['read'] } })
     listed.length = 0
     for (let round = 0; round < 2; round++) {
-      expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
-      expect(await fixer.channels()).toEqual([{ path: 'dev/web' }])
+      expect((await team.channels()).channels).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'dev/web' }])
+      expect((await fixer.channels()).channels).toEqual([{ path: 'dev/web' }])
     }
     expect(listed.map(({ sent, status }) => [sent === null ? null : listed.findIndex((one) => one.etag === sent), status])).toEqual([
       [null, 200],
@@ -524,7 +528,7 @@ describe('vercel()', () => {
     expect(await team.createChannel('ops')).toMatchObject({ created: false })
     expect(await handleOn(api, 'user:u_ada').createChannel('dev/alerts')).toMatchObject({ created: false })
     // The board's own general, and what it made: each once.
-    expect((await team.channels()).map((c) => c.path).sort()).toEqual(['dev/alerts', 'general', 'ops'])
+    expect((await team.channels()).channels.map((c) => c.path).sort()).toEqual(['dev/alerts', 'general', 'ops'])
   })
 
   it("shows a channel's threads from the thread list alone where the API lists them with their messages, and reads each by ID where it doesn't, asking it once", async () => {
@@ -823,7 +827,7 @@ describe('vercel()', () => {
         ])
       }
       // A read makes no channel.
-      out.push((await seed.channels()).map((channel) => channel.path).sort())
+      out.push((await seed.channels()).channels.map((channel) => channel.path).sort())
       // What it can read still reads, and a message in a channel it can't read names none.
       out.push((await fixer.channel('dev').messages()).messages.map((m) => m.text))
       out.push(await fixer.thread(secret.id).then((thread) => thread.message.channel, () => null))
@@ -1552,7 +1556,7 @@ describe('vercel()', () => {
     }) as typeof fetch
     const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: counted, files: api.files }) })
     for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
-    const channels = (await team.channels()).length
+    const channels = (await team.channels()).channels.length
     const { cursor } = await team.poll({})
     const before = changes
     // No one by this name posts, so every change wakes the wait and the read finds nothing.

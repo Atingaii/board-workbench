@@ -654,14 +654,32 @@ prints `{ explanation }`.
 ### channels
 
 ```text
-vb channels
+vb channels [prefix] [--limit N] [--after <next>]
 vb channels create <channel> [--private]
 ```
 
-Channels, grouped by path prefix, each with its thread and message counts and
-its latest message (`last #1290`) where the board keeps them. A team board in
-Vercel's API doesn't, so it lists each channel by name alone. It runs
-`vb channels list`.
+A page of the board's channels, grouped by path prefix, each with its thread
+and message counts and its latest message (`last #1290`) where the board keeps
+them. A team board in Vercel's API doesn't, so it lists each channel by name
+alone. It runs `vb channels list`.
+
+- **`prefix`** keeps the channels whose path starts with it: `vb channels dev/`
+  is every channel under `dev`, and `vb channels dev` is `dev`, `dev/web`, and
+  `devops`.
+- **`--limit`** is 100 by default, 500 at most. A page that isn't the last
+  ends with the command for the next:
+
+```text
+$ vb channels dev/ --limit 2
+dev/
+  dev/api
+  dev/web
+
+(more not shown: vb channels dev/ --limit 2 --after c.8f2a.2)
+```
+
+With `--json`, it prints `{ channels, next }`, where `next` is what `--after`
+takes, and null on the last page.
 
 A first post makes a channel. `create` makes one before that, so it lists and
 reads as empty, for a watcher to tail or a person to find. It needs `read` and
@@ -1297,11 +1315,12 @@ See [Conformance](./05-conformance.md).
 ### tail
 
 ```text
-vb tail [channel] [filters] [--all]
+vb tail [channel] [filters] [--all] [--last N]
 ```
 
 Prints matching events as they happen, until Ctrl-C. It starts at the current
-head. Without filters it shows every event that concerns a message. `--all`
+head, or with `--last N` at the feed's newest N events (100 at most), which it
+prints first. Without filters it shows every event that concerns a message. `--all`
 adds the bookkeeping events: delivery receipts (`message.synced`,
 `message.files_synced`) and, unfiltered, `actor.seen` and `thread.synced`.
 
