@@ -847,6 +847,63 @@ describe('sync', () => {
     expect(g.posts).toHaveLength(0) // GitHub's own reply never goes back to GitHub
   })
 
+  it("posts a PR's failed CI run in its thread, and clears it when the run passes or the PR moves on", async () => {
+    const { board, g, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { id: 1001, full_name: 'vercel/board' }
+    const sender = { login: 'grace', id: 42 }
+    const pr = (action: string, sha: string, number = 7) => ({
+      action, repository, sender,
+      pull_request: { number, title: 'Add sync', html_url: `https://github.com/vercel/board/pull/${number}`, draft: false, merged: false, head: { sha } },
+    })
+    const run = (conclusion: string, sha: string, { name = 'check', path = '.github/workflows/check.yml', at = sha, number = 7 } = {}) => ({
+      action: 'completed', repository, sender,
+      workflow_run: { id: 1, name, path, conclusion, head_sha: sha, html_url: 'https://github.com/vercel/board/actions/runs/1', pull_requests: [{ number, head: { sha: at } }] },
+    })
+    const send = (event: string, body: unknown, delivery: string) => webhook('github', body, { 'x-github-event': event, 'x-github-delivery': delivery })
+    const thread = async () => {
+      const [root] = await read(julian, 'prs')
+      return (await julian('GET', `/messages/${root!.id}`)).body as { message: { labels: Record<string, string> }; replies: { text: string; by: { actor: string } }[] }
+    }
+    const failed = 'check failed on board#7 at aaaaaaa: https://github.com/vercel/board/actions/runs/1'
+
+    await send('pull_request', pr('opened', 'aaaaaaa1'), 'ci-opened')
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    const [root] = await read(julian, 'prs')
+
+    await send('workflow_run', run('failure', 'aaaaaaa1'), 'ci-failed')
+    await send('workflow_run', run('failure', 'aaaaaaa1'), 'ci-failed') // redelivered
+    await send('workflow_run', run('failure', 'stale000', { at: 'aaaaaaa1' }), 'ci-stale') // an older commit's run, finishing late
+    await vi.waitFor(async () => {
+      const { message, replies } = await thread()
+      expect(message.labels['ci.1001-7.check']).toBe('failure')
+      expect(replies.map((m) => m.text)).toEqual([failed])
+      expect(replies[0]!.by.actor).toBe('github:user:41898282')
+    })
+
+    // Another workflow by the same name passing, or another PR this thread joined passing or moving on, leaves it.
+    await julian('POST', `/messages/${root!.id}/sync`, { target: 'github:vercel/board:8' })
+    await send('workflow_run', run('success', 'aaaaaaa1', { path: '.github/workflows/lint.yml' }), 'ci-other-workflow')
+    await send('workflow_run', run('success', 'ccccccc3', { number: 8 }), 'ci-other-pr')
+    await send('pull_request', pr('synchronize', 'ddddddd4', 8), 'ci-other-pr-pushed')
+    await vi.waitFor(async () => expect((await thread()).message.labels.head).toBe('ddddddd4'))
+    expect((await thread()).message.labels['ci.1001-7.check']).toBe('failure')
+
+    await send('workflow_run', run('success', 'aaaaaaa1'), 'ci-passed')
+    await vi.waitFor(async () => expect((await thread()).message.labels).not.toHaveProperty('ci.1001-7.check'))
+
+    await send('workflow_run', run('timed_out', 'aaaaaaa1', { name: 'E2E tests', path: '.github/workflows/e2e.yaml' }), 'ci-timed-out')
+    await vi.waitFor(async () => expect((await thread()).message.labels['ci.1001-7.e2e']).toBe('timed_out'))
+    await send('pull_request', pr('synchronize', 'bbbbbbb2'), 'ci-pushed')
+    await vi.waitFor(async () => {
+      const { message, replies } = await thread()
+      expect(message.labels).toMatchObject({ head: 'bbbbbbb2' })
+      expect(message.labels).not.toHaveProperty('ci.1001-7.e2e')
+      expect(replies.map((m) => m.text)).toEqual([failed, 'E2E tests timed out on board#7 at aaaaaaa: https://github.com/vercel/board/actions/runs/1'])
+    })
+    expect(g.posts).toHaveLength(0)
+  })
+
   it("keeps a GitHub author's avatar when a comment arrives without one", async () => {
     const { board, webhook } = setup()
     const julian = caller(board.fetch, await personToken())
