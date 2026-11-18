@@ -1,5 +1,6 @@
 import type { Board, MessageView, ThreadSummaryView } from "@vercel/board";
-import { SWARM, NAME, team } from "./board.ts";
+import { SWARM, NAME, RUNS, team } from "./board.ts";
+import { ownWrite, runs, selfOf } from "./runs.ts";
 
 /** The states the board keeps a task in. */
 export const STATES = ["waiting", "ready", "claimed", "blocked", "completed", "failed", "canceled"] as const;
@@ -22,6 +23,12 @@ export type Task = {
   needs: string[];
   /** Why it's held for a person, or how it ended: its result, or why it failed or was canceled. */
   note: string | null;
+  /** What it is in a launched run (`plan`, `work`, `review`, `find`, `verify`, `report`), from its `role` label: null for a task people made. */
+  role: string | null;
+  /** The pull request it opened, from its `pr` label, when it opened one. */
+  pr: string | null;
+  /** Whether this deployment made it: only such a task is one of a launched run's, whatever its channel or labels say. */
+  own: boolean;
   author: string;
   replies: number;
   last: Line | null;
@@ -40,6 +47,35 @@ export type Snapshot = {
   finishedCapped: boolean;
   /** The latest messages under the swarm, newest first. */
   flow: Line[];
+  /** The channel the deployment's runs are announced in, and its newest runs, newest first: the page shows a run by its goal, not its channel. */
+  runsChannel: string;
+  runs: RunView[];
+};
+
+/** A run as the live page shows it: what it was asked, how far it got, and what it spent. */
+export type RunView = {
+  slug: string;
+  /** Its tasks' channel. */
+  channel: string;
+  /** Its thread in the runs channel, where the deployment logs what it does for the run. */
+  thread: string;
+  title: string;
+  goal: string;
+  repo: string;
+  scenario: string;
+  model: string;
+  agents: number;
+  /** How many of them are up: one per task that's ready or being worked, so the plan decides it. */
+  up: number;
+  phase: string;
+  note: string | null;
+  cost: number;
+  budgetUsd: number | null;
+  settled: number;
+  total: number;
+  /** When it stops starting tasks, once it's prepared. */
+  deadline: string | null;
+  createdAt: string;
 };
 
 const author = (message: MessageView) => message.author?.handle ?? message.by.actor;
@@ -75,7 +111,7 @@ function handles(messages: (MessageView | null)[]): Map<string, string> {
   return known;
 }
 
-function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string, string>): Task[] {
+function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string, string>, self: string | null): Task[] {
   const task = message.task;
   if (!task) return [];
   return [
@@ -88,6 +124,9 @@ function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string
       lease: task.claim?.until ?? null,
       needs: task.needs,
       note: task.blocked?.reason ?? task.result ?? task.reason ?? null,
+      role: message.labels.role ?? null,
+      pr: message.labels.pr ?? null,
+      own: self !== null && task.owner === self && ownWrite(message.by, self),
       author: author(message),
       replies,
       last: last ? line(last) : null,
@@ -115,9 +154,13 @@ export async function snapshot(board: Board = team(), swarm: string = SWARM): Pr
     Promise.all(OPEN.map((state) => read(state, OPEN_LIMIT))),
     Promise.all(FINISHED.map((state) => read(state, FINISHED_LIMIT))),
   ]);
+  const self = await selfOf(board).catch(() => null);
   const summaries = [...openRead.flat(), ...finishedRead.flat()];
+  // A swarm with no launched runs (agents joining from JOIN.md alone) has no runs channel: that's no runs.
+  const launched = await runs(board, 20).catch(() => []);
+
   const known = handles([...page.messages, ...summaries.flatMap(({ message, last }) => [message, last])]);
-  const [open, finished] = [openRead, finishedRead].map((states) => states.map((threads) => threads.flatMap((thread) => toTask(thread, known))));
+  const [open, finished] = [openRead, finishedRead].map((states) => states.map((threads) => threads.flatMap((thread) => toTask(thread, known, self))));
   return {
     name: NAME,
     swarm,
@@ -127,7 +170,49 @@ export async function snapshot(board: Board = team(), swarm: string = SWARM): Pr
     tasks: [...open!.flat(), ...finished!.flat()],
     finishedCapped: finished!.some((tasks) => tasks.length >= FINISHED_LIMIT),
     flow: page.messages.map(line).reverse(),
+    runsChannel: RUNS,
+    runs: launched.map((run) => ({
+      slug: run.slug,
+      channel: `${swarm}${run.slug}`,
+      thread: run.id,
+      title: run.title,
+      goal: run.config.goal,
+      repo: run.config.repo,
+      scenario: run.config.scenario,
+      model: run.config.model,
+      agents: run.config.agents,
+      up: run.up,
+      phase: run.phase,
+      note: run.note,
+      cost: run.cost,
+      budgetUsd: run.config.budgetUsd,
+      settled: run.settled,
+      total: run.total,
+      deadline: run.prepared ? new Date(run.prepared.deadline).toISOString() : null,
+      createdAt: run.createdAt,
+    })),
   };
+}
+
+/** How old a snapshot every viewer shares may be: a snapshot is about nine board reads, and the board takes 600 a minute from this project, agents included. */
+export const SHARED_MS = 5_000;
+
+let shared: { at: number; value: Promise<Snapshot> } | undefined;
+
+/**
+ * The swarm's snapshot, shared by everyone looking at it from this instance: one is read at most
+ * every `SHARED_MS`, however many tabs are open, so watching a busy run doesn't spend the board's
+ * rate limit that its agents need. A read that failed isn't kept.
+ */
+export function sharedSnapshot(maxAgeMs = SHARED_MS): Promise<Snapshot> {
+  if (shared && Date.now() - shared.at < maxAgeMs) return shared.value;
+  const value = snapshot();
+  const entry = { at: Date.now(), value };
+  shared = entry;
+  value.catch(() => {
+    if (shared === entry) shared = undefined;
+  });
+  return value;
 }
 
 /** One task's thread: its brief, its labels, and its work log. Only a thread under the swarm. */

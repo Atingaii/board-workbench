@@ -1,31 +1,37 @@
-/* A dense live dashboard in grayscale, like pong's page: dark by default, light when the system asks.
-   Color is kept for task states. */
+/* board's docs, in grayscale: dark by default, light when the system asks. Color only for states. */
 :root {
   color-scheme: light dark;
   --bg: #040404;
   --shade: #161616;
+  --shade-hover: #1b1b1b;
   --line: #252525;
+  --rule: #383838;
   --faint: #7a7a7a;
   --muted: #909090;
   --ink: #dedede;
   --bright: #fafafa;
+  --code-bg: #0d0d0d;
   --working: #4c9aff;
   --ready: #3ecf8e;
   --review: #f5a623;
   --bad: #ff5f56;
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  font-size: 81.25%;
+  --header: 40px;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 87.5%;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #fafafa;
     --shade: #f0f0f0;
+    --shade-hover: #e8e8e8;
     --line: #e0e0e0;
+    --rule: #c9c9c9;
     --faint: #6e6e6e;
     --muted: #525252;
     --ink: #1c1c1c;
     --bright: #000000;
+    --code-bg: #f4f4f4;
     --working: #0068d6;
     --ready: #1a7f4e;
     --review: #a35200;
@@ -37,349 +43,794 @@
   box-sizing: border-box;
 }
 
+html {
+  min-height: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
+  min-width: 0;
   background: var(--bg);
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
 
-h1,
-h2,
-h3,
-p,
-ul {
-  margin: 0;
+::selection {
+  background: color-mix(in oklab, var(--faint) 35%, transparent);
 }
 
-ul {
-  padding: 0;
-  list-style: none;
-}
-
-code,
-time,
-.who,
-.ch,
-.chip,
-.counts,
-.state {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-}
-
-code,
-.who {
-  color: var(--ink);
-}
-
-button {
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-button:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--working);
-  outline-offset: -2px;
+:focus-visible {
+  outline: 2px dashed var(--ink);
+  outline-offset: 2px;
 }
 
 a {
   color: var(--ink);
+  text-underline-offset: 3px;
 }
 
-.faint {
-  color: var(--faint);
-}
-
-.bad {
-  color: var(--bad);
-}
-
-.pad {
-  padding: 0.5rem 0.75rem;
-}
-
-/* One header bar and three panes that scroll on their own. */
-.shell {
-  display: grid;
-  grid-template: auto minmax(0, 1fr) / 16rem minmax(0, 1fr) minmax(20rem, 30rem);
-  gap: 0.75rem;
-  height: 100dvh;
-  min-height: 30rem;
-  padding: 0.75rem;
-}
-
-header {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 1.25rem;
-}
-
-h1 {
+a:hover {
   color: var(--bright);
-  font-size: 1rem;
+}
+
+code,
+pre,
+button {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* ── header ──────────────────────────────────────────────────────── */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: var(--header);
+  padding: 0 0.75rem;
+  background: var(--bg);
+  border-bottom: 1px dashed var(--line);
+  font-size: 15px;
   font-weight: 600;
 }
 
-.state {
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.brand svg {
+  color: var(--bright);
+}
+
+.brand:hover span {
+  color: var(--bright);
+  text-decoration: underline;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  margin-left: auto;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.site-nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--bright);
+}
+
+/* ── launcher ────────────────────────────────────────────────────── */
+
+.launcher {
+  min-width: 0;
+  max-width: 50rem;
+  margin: 0 auto;
+  padding: 4rem 1.25rem 5rem;
+}
+
+.hero h1 {
+  margin: 0 0 0.75rem;
+  color: var(--bright);
+  font-size: clamp(1.6rem, 4.5vw, 2.25rem);
+  font-weight: 600;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.lede {
+  max-width: 40rem;
+  margin: 0;
+}
+
+.hero-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin-top: 1.5rem;
+}
+
+.progress {
+  color: var(--faint);
+}
+
+.button {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--bright);
+  background: var(--bright);
+  color: var(--bg);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: default;
 }
 
-.state i,
-h3 i,
-.state-chip i {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--faint);
-  flex: none;
+.button:hover {
+  color: var(--bg);
+  opacity: 0.85;
 }
 
-.state[data-live="live"] i {
-  background: var(--ready);
-}
-
-.state[data-live="down"] {
-  color: var(--bad);
-}
-
-.state[data-live="down"] i {
-  background: var(--bad);
-}
-
-.counts b {
+.button.secondary {
+  border-color: var(--line);
+  background: var(--shade);
   color: var(--ink);
+}
+
+.button.secondary:hover {
+  background: var(--shade-hover);
+  color: var(--bright);
+  opacity: 1;
+}
+
+/* ── stepper ─────────────────────────────────────────────────────── */
+
+/* Steps hang off a dashed rail, as the docs' sections hang off their rules. */
+.stepper {
+  --marker: 1.75rem;
+  margin: 3.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--marker) minmax(0, 1fr);
+  gap: 1rem;
+  padding: 1.5rem 0;
+  border-top: 1px dashed var(--rule);
+}
+
+.step:last-child {
+  border-bottom: 1px dashed var(--rule);
+}
+
+.marker {
+  display: grid;
+  place-items: center;
+  width: var(--marker);
+  height: var(--marker);
+  border: 1px solid var(--line);
+  background: var(--shade);
+  color: var(--faint);
+  font-size: 0.85rem;
+}
+
+.step[data-done] .marker {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.step-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: var(--marker);
+}
+
+.step-head h2 {
+  margin: 0;
+  color: var(--bright);
+  font-size: 1rem;
   font-weight: 600;
 }
 
-.counts b.bad {
-  color: var(--bad);
-}
-
-.join {
+.optional {
   margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  color: var(--faint);
+  font-size: 0.85rem;
 }
 
-.join button,
-.head button {
-  padding: 0.25rem 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--shade);
-  color: var(--ink);
+/* A step's tasks. What's left to do reads first: done ones step back, and a hint sits under its task, smaller. */
+.tasks {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
 }
 
-.join button:hover,
-.head button:hover {
-  border-color: var(--faint);
-}
-
-.pane {
-  min-height: 0;
-  overflow-y: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-h2 {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--bright);
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-nav h2:not(:first-child) {
-  border-top: 1px solid var(--line);
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding-block: 0.3rem;
-}
-
-h3 {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.6rem 0.75rem 0.2rem;
-  color: var(--ink);
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-i[data-state="working"] {
-  background: var(--working);
-}
-
-i[data-state="ready"] {
-  background: var(--ready);
-}
-
-i[data-state="held"] {
-  background: var(--review);
-}
-
-i[data-state="failed"] {
-  background: var(--bad);
-}
-
-i[data-state="stalled"] {
-  background: var(--bad);
-}
-
-/* Rows are one line each, on a fixed height, so a list reads like a table. */
-nav button,
-.rows button,
-.agent {
-  display: flex;
-  align-items: baseline;
+.task {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
   gap: 0.6rem;
-  width: 100%;
-  height: 1.9rem;
-  padding: 0 0.75rem;
-  line-height: 1.9rem;
-  white-space: nowrap;
 }
 
-nav button,
-.agent {
-  justify-content: space-between;
+.task + .task {
+  margin-top: 0.4rem;
 }
 
-nav button:hover,
-.rows button:hover,
-nav button[aria-pressed="true"] {
-  background: var(--shade);
+.task > svg {
+  margin-top: 0.3rem;
+  color: var(--muted);
 }
 
-nav button[aria-pressed="true"] {
-  color: var(--bright);
-}
-
-.agent .who,
-nav button span:first-child,
-.text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.text {
-  flex: 1 1 auto;
-  min-width: 0;
+.task p {
+  margin: 0;
   color: var(--ink);
 }
 
-.rows time {
-  flex: none;
-  width: 2.2rem;
+.task[data-done] p,
+.task[data-done] > svg {
   color: var(--faint);
 }
 
-.rows .ch {
-  flex: none;
-  width: 5.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* A name in a task (a channel, a repo, a connector) stands out from the words around it, until it's done. */
+.task p code {
+  padding: 0.1rem 0.35rem;
+  background: var(--shade);
+  color: var(--bright);
 }
 
-.rows .who {
-  flex: none;
-  max-width: 11rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.task[data-done] p code {
+  padding: 0;
+  background: none;
+  color: inherit;
 }
 
-.chip {
-  flex: none;
+.task .hint {
+  color: var(--faint);
+  font-size: 0.9rem;
 }
 
-.thread {
-  padding: 0.75rem;
+.hint a {
+  color: var(--muted);
 }
 
-.thread h3 {
-  padding: 1rem 0 0.4rem;
+.hint a:hover {
+  color: var(--bright);
 }
 
-.note {
-  margin-bottom: 12px;
-  color: var(--ink);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.task .command {
+  margin-top: 0.5rem;
 }
 
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.3rem 0.75rem;
+.task:not(:last-child) .command:last-child {
   margin-bottom: 0.75rem;
 }
 
-.state-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
+/* ── code ────────────────────────────────────────────────────────── */
+
+pre {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: var(--code-bg);
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+/* One command per box, on one line: it scrolls instead of wrapping, beside its copy button. */
+.command {
+  display: flex;
+  border: 1px solid var(--line);
+  background: var(--code-bg);
+}
+
+.command pre {
+  flex: 1;
+  min-width: 0;
+  padding: 0.6rem 0.8rem;
+  border: 0;
+  white-space: pre;
+  scrollbar-width: thin;
+}
+
+.command + .command {
+  margin-top: 0.5rem;
+}
+
+.copy {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.5rem;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: none;
+  color: var(--faint);
+  cursor: default;
+}
+
+.copy:hover {
+  color: var(--bright);
+}
+
+/* ── under the steps, and once it runs ───────────────────────────── */
+
+/* A section of its own: a heading, then what it holds. */
+.panel {
+  margin-top: 3rem;
+}
+
+.panel h2,
+.setup summary {
+  margin: 0 0 0.75rem;
+  color: var(--bright);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* Numbers as a short list of lines, as the CLI prints one: what's counted, then the count, in two columns. */
+.stats {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: 0.3rem 1rem;
+  margin: 0;
+}
+
+/* A line's two halves sit in the list's columns, so the counts line up, from one list to the next too. */
+.stat {
+  display: contents;
+}
+
+.stat dt {
+  color: var(--muted);
+}
+
+.stat dd {
+  margin: 0;
+  color: var(--bright);
+}
+
+/* A few words to press, in a sentence. */
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: default;
+}
+
+.link:hover {
+  color: var(--bright);
+}
+
+/* A thing per row, and what it belongs to at the end of it. */
+.rows {
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px dashed var(--line);
+}
+
+.rows li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px dashed var(--line);
   color: var(--ink);
 }
 
-article {
-  padding: 0.5rem 0;
-  border-top: 1px solid var(--line);
-}
-
-article:first-of-type {
-  border-top: 0;
-}
-
-.by time {
+.rows span {
   color: var(--faint);
 }
 
-.body {
+/* Something to type, and the button that sends it, on one line: a field as wide as a command's box. */
+.onboard {
+  margin-top: 1rem;
+}
+
+.field {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.field input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--code-bg);
+  color: var(--bright);
+  font: inherit;
+}
+
+.field input::placeholder {
+  color: var(--faint);
+}
+
+.field input:focus-visible {
+  border-color: var(--muted);
+  outline: none;
+}
+
+/* As tall as the field beside it. */
+.onboard .field .button {
+  margin: 0;
+}
+
+/* A link in a note reads as the note does, underlined. */
+.note a {
   color: var(--ink);
-  white-space: pre-wrap;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.note a:hover {
+  color: var(--bright);
+}
+
+.note {
+  margin: 1rem 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* Right under a heading, it's the section's first line. */
+h2 + .note {
+  margin-top: 0;
+}
+
+.task .button,
+.panel .button {
+  margin-top: 0.5rem;
+}
+
+.task:not(:last-child) .button:last-child {
+  margin-bottom: 0.75rem;
+}
+
+.button:disabled {
+  opacity: 0.6;
+}
+
+/* The setup's steps, folded away once the factory runs. */
+.setup summary {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  margin: 0;
+  list-style: none;
+  cursor: default;
+}
+
+.setup summary::-webkit-details-marker {
+  display: none;
+}
+
+.setup summary span {
+  color: var(--faint);
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+/* It opens: a plus that turns into a minus, where the browser's own marker would be. */
+.setup summary::before {
+  width: 1ch;
+  color: var(--faint);
+  font-weight: 400;
+  content: "+";
+}
+
+.setup[open] summary::before {
+  content: "−";
+}
+
+.setup .stepper {
+  margin-top: 1rem;
+}
+
+/* ── launch form ─────────────────────────────────────────────────── */
+
+/* Each field on a row of its own: its name above it, the field as wide as a command's box. */
+.launch {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.launch .row {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.launch .row > span,
+.launch legend,
+.numbers span {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.launch legend {
+  margin-bottom: 0.35rem;
+  padding: 0;
+}
+
+.launch input,
+.launch select,
+.launch textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--code-bg);
+  color: var(--bright);
+  font: inherit;
+}
+
+.launch textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.launch input::placeholder,
+.launch textarea::placeholder {
+  color: var(--faint);
+}
+
+.launch input:focus-visible,
+.launch select:focus-visible,
+.launch textarea:focus-visible {
+  border-color: var(--muted);
+  outline: none;
+}
+
+/* A note right under a field reads as the field's own. */
+.launch .row-note {
+  margin: -0.75rem 0 0;
+  font-size: 0.85rem;
+}
+
+/* The scenarios side by side: a card each, the chosen one outlined. */
+.choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  gap: 0.5rem;
+}
+
+.choice {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  background: var(--shade);
+  cursor: default;
+}
+
+.choice:hover {
+  background: var(--shade-hover);
+}
+
+.choice[data-on] {
+  border-color: var(--bright);
+}
+
+.choice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.choice:has(input:focus-visible) {
+  outline: 2px dashed var(--ink);
+  outline-offset: 2px;
+}
+
+.choice strong {
+  color: var(--bright);
+  font-weight: 600;
+}
+
+.choice span {
+  font-size: 0.85rem;
+}
+
+.numbers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.numbers label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.submit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.submit .button {
+  margin: 0;
+  padding: 0.55rem 1.4rem;
+}
+
+.said {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.bad,
+.said.bad {
+  color: var(--bad);
+}
+
+code.inline {
   overflow-wrap: anywhere;
+  padding: 0.1rem 0.35rem;
+  background: var(--shade);
+  color: var(--bright);
 }
 
-.lost {
-  max-width: 40rem;
-  margin: 0 auto;
-  padding: 3rem 1rem;
+/* ── runs ────────────────────────────────────────────────────────── */
+
+.runs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px dashed var(--line);
 }
 
-.lost p {
-  margin-top: 0.75rem;
+.run {
+  padding: 0.9rem 0;
+  border-bottom: 1px dashed var(--line);
 }
 
-/* A phone gets the same three panes, stacked, with the page scrolling. */
-@media (max-width: 60rem) {
-  .shell {
-    grid-template: auto / minmax(0, 1fr);
-    height: auto;
+.run-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.run-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bright);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A run's phase as a chip, in the color of the states its tasks go through. */
+.phase {
+  flex: none;
+  padding: 0 0.4rem;
+  border: 1px solid currentColor;
+  color: var(--faint);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.run[data-phase="running"] .phase {
+  color: var(--working);
+}
+
+.run[data-phase="preparing"] .phase {
+  color: var(--review);
+}
+
+.run[data-phase="done"] .phase {
+  color: var(--ready);
+}
+
+.run[data-phase="failed"] .phase {
+  color: var(--bad);
+}
+
+.run-meta {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--faint);
+  font-size: 0.85rem;
+}
+
+.run-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  margin: 0.5rem 0 0;
+}
+
+.run-stats div {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.run-stats dt {
+  color: var(--faint);
+}
+
+.run-stats dd {
+  margin: 0;
+  color: var(--bright);
+}
+
+.run-stats dd span {
+  color: var(--muted);
+}
+
+/* What it has spent of its budget, as a thin bar. */
+.meter {
+  height: 3px;
+  margin-top: 0.6rem;
+  background: var(--line);
+}
+
+.meter span {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+}
+
+.run .note {
+  margin: 0.5rem 0 0;
+}
+
+.run-links {
+  display: flex;
+  gap: 1.25rem;
+  margin: 0.5rem 0 0;
+}
+
+.run-links .bad {
+  font-size: 0.85rem;
+}
+
+@media (max-width: 40rem) {
+  .launcher {
+    padding-top: 2.5rem;
   }
 
-  .pane {
-    max-height: 70dvh;
+  .step {
+    gap: 0.75rem;
+  }
+
+  .numbers {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
