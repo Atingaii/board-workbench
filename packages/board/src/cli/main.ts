@@ -386,8 +386,8 @@ export type Io = {
   error(chunk: string): void
   /** A file's bytes, for `--attach`; null when there's no such file. */
   readFile(path: string): Promise<Uint8Array | null>
-  /** Saves a file, for `download`. */
-  writeFile(path: string, data: Uint8Array): Promise<void>
+  /** Saves a file, for `download`; with `exclusive`, fails with `EEXIST` rather than replace one that's there. */
+  writeFile(path: string, data: Uint8Array, options?: { exclusive?: boolean }): Promise<void>
   /** What `-` reads. */
   stdin(): Promise<string>
   /** Stops `tail` and `wait`, and fails any other command its requests haven't finished, as `board`'s handle ends them; without one, Ctrl-C stops `tail` and `wait`. */
@@ -409,7 +409,7 @@ const TERMINAL: Io = {
     if (info.size > DIRECT_UPLOAD_BYTES_MAX) throw tooLarge(path)
     return new Uint8Array(await readFile(path))
   },
-  writeFile: (path, data) => writeFile(path, data),
+  writeFile: (path, data, { exclusive = false } = {}) => writeFile(path, data, { flag: exclusive ? 'wx' : 'w' }),
   stdin: readStdin,
   tty: process.stdout.isTTY === true,
 }
@@ -429,6 +429,16 @@ function messageId(value: string | undefined, what = 'message ID'): string {
   if (!/^[^\s/]+$/.test(id)) throw usage(`${value} isn't a ${what}.`)
   return id
 }
+
+/** Characters that change how a name reads without showing: invisible formatting (bidi overrides, zero-width), and line and paragraph separators. */
+const INVISIBLE = /[\p{Cf}\u2028\u2029]/gu
+
+/** A download that would replace a file, which only a path given to download may. */
+const exists = (path: string) =>
+  usage(`${path} is already here, and download keeps it: give download a path to save the attachment elsewhere.`, {
+    reason: 'file_exists',
+    next: [{ instruction: 'Save it under another name', argv: [...cli(), 'download', '<ID>', '<PATH>'] }],
+  })
 
 /** A file over what a direct upload takes. */
 const tooLarge = (path: string) =>
@@ -1762,8 +1772,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (args[1] === '-') return io.write(data), 0
       const disposition = response.headers.get('content-disposition') ?? ''
       const filename = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1]
-      const path = args[1] ?? basename(filename ? decodeURIComponent(filename) : id)
-      await io.writeFile(path, data)
+      // Whoever posted the file chose its name: saved by it, it never lands as a dotfile or replaces a file.
+      const saveAs = basename(filename ? decodeURIComponent(filename) : id)
+        .replace(INVISIBLE, '')
+        .replace(/^[.\s]+/, '')
+      const path = args[1] ?? (saveAs || id)
+      try {
+        await io.writeFile(path, data, { exclusive: args[1] === undefined })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          throw exists(path)
+        }
+        throw error
+      }
       if (flags.json) result({ attachment: { id }, path, outcome: 'downloaded' })
       else out(path)
       return 0
