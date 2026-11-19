@@ -169,13 +169,14 @@ const scheduleBody = (input: ScheduleOptions) => {
 /**
  * What makes a thread a task: the tasks it waits for (`needs`, by their IDs), the one actor of
  * yours that claims it (`for`, `<your principal>+<profile>`), and `claim`, which claims it in the
- * same write, for `lease` seconds.
+ * same write, for `lease` seconds, with `token` as its token when you bring one.
  */
 export type TaskOptions = {
   needs?: string[]
   for?: string | null
   claim?: boolean
   lease?: number
+  token?: string
 }
 
 /** A new thread that's a task: its root's text, labels, `noSync`, `attachments`, and `id`, as a post takes them, and what makes it a task. */
@@ -453,15 +454,16 @@ export function createBoardClient(options: ClientOptions) {
    * is how long you hold it, in seconds, the board's default without one: a board says how short
    * and how long one may be, and the claim's `until` says what it gave.
    */
-  async function claimTask(target: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
-  async function claimTask(target: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
+  async function claimTask(target: string, opts?: { lease?: number; token?: string; signal?: AbortSignal }): Promise<ClaimedTask>
+  async function claimTask(target: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number; token?: string }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
   async function claimTask(
-    target: string | { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number },
-    opts: { lease?: number; signal?: AbortSignal } = {},
+    target: string | { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number; token?: string },
+    opts: { lease?: number; token?: string; signal?: AbortSignal } = {},
   ): Promise<ClaimedTask | null> {
     const signal = opts.signal ? { signal: opts.signal } : {}
     if (typeof target === 'string') {
-      const { task, claim } = await call<{ task: MessageView; claim: TaskClaim }>('POST', `/tasks/${path(target)}/claim`, { body: opts.lease !== undefined ? { lease: opts.lease } : {}, ...signal })
+      const body = { ...(opts.lease !== undefined ? { lease: opts.lease } : {}), ...(opts.token !== undefined ? { token: opts.token } : {}) }
+      const { task, claim } = await call<{ task: MessageView; claim: TaskClaim }>('POST', `/tasks/${path(target)}/claim`, { body, ...signal })
       return claimed(task, claim)
     }
     const { wait, ...ready } = target
