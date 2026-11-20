@@ -28,6 +28,10 @@ type ApiPrincipal =
   | { type: 'user'; userId: string; clientId?: string }
   | { type: 'app'; clientId: string }
   | { type: 'project'; projectId: string; environment: string }
+  /** A GitHub Actions run, by its repository: `github:repo:<repositoryId>`. */
+  | { type: 'github'; repositoryId: string; repository: string; workflowRef?: string; ref?: string; event?: string }
+  /** A caller another OIDC issuer vouches for: `oidc:<issuer's host and path>:<subject>`. */
+  | { type: 'oidc'; issuer: string; subject: string; claims: Record<string, string | number | boolean> }
   /** An imported message's author as the API named it before platform profiles: the platform user alone. */
   | { type: 'external'; id: string; syncKey: string }
 /**
@@ -150,7 +154,7 @@ type ApiAttachment = Attachment & { boardId: string; sha256: string; state: 'pen
  */
 type ApiActorView = {
   id: string
-  kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'
+  kind: 'person' | 'agent' | 'deployment' | 'app' | 'workflow' | 'external'
   handle: string
   name?: string
   avatar?: string
@@ -234,7 +238,8 @@ export type VercelOptions = {
   api?: string
   /**
    * How requests reach the API, with credentials it takes. In Node it defaults to a
-   * deployment's OIDC token, `BOARD_TOKEN`, or your Vercel login, never `VERCEL_TOKEN`. Elsewhere, pass one that sends them.
+   * deployment's OIDC token, `BOARD_TOKEN`, a GitHub Actions job's OIDC token, or your Vercel login, never `VERCEL_TOKEN`.
+   * Elsewhere, pass one that sends them.
    */
   fetch?: typeof fetch
   /** How files reach Vercel's storage, on URLs the API signs: `fetch` by default, never with credentials. */
@@ -257,6 +262,10 @@ export type VercelEnvironment = {
 type Who = { profile: { name: string; avatar?: string } | null; can?: string }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
+/** A GitHub repository as `owner/name`. */
+const REPOSITORY = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/
+/** A word of a hint's command as a shell reads it back: a board's name can hold anything but a `/`. */
+const shellWord = (word: string): string => (/^[\w@%+=:,.-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
 
 /**
  * What `vb` on this board calls in Vercel's API for what a sandboxed agent does, by method and path
@@ -550,12 +559,18 @@ function locate(id: string): { threadId: string; sequence: number } | null {
   return found ? { threadId: `thr_${found[1]}`, sequence: Number(found[2]) } : null
 }
 
-/** A principal as board names it: `vercel:user:<id>`, `vercel:app:<id>`, `vercel:project:<id>:<env>`. */
-function principalId(principal: ApiPrincipal): string {
+/**
+ * The principal `actor` acts through, as board names it: `vercel:user:<id>`, `vercel:app:<id>`,
+ * `vercel:project:<id>:<env>`, and a workflow (`github:repo:<id>`, `oidc:<issuer>:<sub>`) as the
+ * actor's ID has it, its issuer encoded as the API encodes it.
+ */
+function principalId(actor: ApiActor): string {
+  const { principal } = actor
   if (principal.type === 'external') return principal.id
   if (principal.type === 'user') return `vercel:user:${principal.userId}`
   if (principal.type === 'app') return `vercel:app:${principal.clientId}`
-  return `vercel:project:${principal.projectId}:${principal.environment}`
+  if (principal.type === 'project') return `vercel:project:${principal.projectId}:${principal.environment}`
+  return actorParts(actor.id).principal
 }
 
 /** A principal from a board actor ID, `vercel:project:prj_1:preview+slack:user:U1` say, or null for one the API doesn't name. */
@@ -567,6 +582,9 @@ function principalFrom(actor: string): ApiPrincipal | null {
   if (id.startsWith('vercel:app:')) return { type: 'app', clientId: id.slice('vercel:app:'.length) }
   return null
 }
+
+/** Whether an actor ID names someone the API names: one `principalFrom` reads, or a workflow (`github:repo:<id>`, `oidc:<issuer>:<sub>`). */
+const namedByApi = (actor: string) => principalFrom(actor) !== null || /^(github:repo|oidc):/.test(actorParts(actor).principal)
 
 /**
  * Who an actor with a profile acts through, as board shows it: a project by its name (`project`, as the
@@ -648,13 +666,20 @@ function shownHandle(id: string, view: ApiActorView, names: Map<string, string>)
 const goingBy = (views: Iterable<readonly [string, ApiActorView]>, names: Map<string, string>, handle: string) =>
   [...views].filter(([id, view]) => view.handle.toLowerCase() === handle || shownHandle(id, view, names).toLowerCase() === handle).map(([id]) => id)
 
-/** A short name for a person or an app the API doesn't name: the start of their ID. */
-const shortName = (principal: Extract<ApiPrincipal, { type: 'user' | 'app' }>) =>
-  principal.type === 'user' ? `user-${principal.userId.slice(0, 6).toLowerCase()}` : `app-${principal.clientId.slice(0, 6).toLowerCase()}`
+/**
+ * A short name for anyone the API doesn't name: a person or an app by the start of their ID, a GitHub
+ * Actions run by its repository (`owner/name`), and another issuer's caller by its subject, as the API cuts it.
+ */
+function shortName(principal: Extract<ApiPrincipal, { type: 'user' | 'app' | 'github' | 'oidc' }>): string {
+  if (principal.type === 'user') return `user-${principal.userId.slice(0, 6).toLowerCase()}`
+  if (principal.type === 'app') return `app-${principal.clientId.slice(0, 6).toLowerCase()}`
+  if (principal.type === 'github') return principal.repository
+  return principal.subject.slice(0, 128)
+}
 
 const authorOf = (actor: ApiActor): Author => ({
   actor: actor.id,
-  principal: principalId(actor.principal),
+  principal: principalId(actor),
   profile: actor.profile?.name ?? null,
 })
 
@@ -853,7 +878,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // the few older boards that share one, the API lists the oldest first, and that's the one.
     const { boards } = await api<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
     if (boards[0]) return boards[0].id
-    const { principal } = (await self(who)).actor
+    const me = await self(who)
+    const { principal } = me.actor
     if (binding?.ensure === false)
       throw new HttpError(404, 'no_board', `no board named ${name} on this team, or none you can see.`, {
         hint: 'Check the name, or make it: leave out ensure: false',
@@ -863,7 +889,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { board: made } = await api<{ board: { id: string }; created: boolean }>(who, 'POST', '/boards/ensure', { body: { name, operationId: operationId() } })
       return made.id
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(name, principal)
+      if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(name, principal, me.teamId)
       // Names are unique across the team's boards, private ones included: this one is someone else's to show.
       if (error instanceof HttpError && error.code === 'board_name_taken')
         throw new HttpError(409, 'board_name_taken', `the board name ${name} is taken.`, { hint: 'Pick another name, or ask whoever can see it for access.', origin: 'handle' })
@@ -874,12 +900,23 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /**
    * A project a board's grants don't let in, the one `name`s or the team's (null): they were narrowed,
    * since every project on the team gets in by default. Its way out is the grant that lets it back in,
-   * naming the project by ID, since `/me` carries no name.
+   * naming the project by ID, since `/me` carries no name, and the team, so it can't land on the
+   * board of whichever team the person who runs it is linked to.
    */
-  const notLetIn = (name: string | null, principal: ApiPrincipal) => {
+  const notLetIn = (name: string | null, principal: ApiPrincipal, team: string) => {
     const board = name === null ? "the team's board" : `board ${name}`
+    const on = `${name === null ? '' : ` --name ${shellWord(name)}`} --scope ${shellWord(team)}`
+    if (principal.type === 'github' || principal.type === 'oidc') {
+      // A repository the API names goes into the command only when it's one.
+      const repository = principal.type === 'github' && REPOSITORY.test(principal.repository) ? principal.repository : null
+      if (repository === null) return new HttpError(403, 'board_not_granted', `this workflow has no access to ${board}.`, { hint: 'Someone who manages the board can grant it.', origin: 'handle' })
+      return new HttpError(403, 'board_not_granted', `this workflow has no access to ${board} (${repository}).`, {
+        hint: `Grant it: vb grants create --github ${repository}${on} --can '*=read,post,react,label'`,
+        origin: 'handle',
+      })
+    }
     if (principal.type !== 'project') return new HttpError(403, 'board_not_granted', `this project has no access to ${board}.`, { hint: 'Someone who manages the board can grant it.', origin: 'handle' })
-    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${name === null ? '' : ` --name ${name}`} --can '*=read,post,react,label'`
+    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${on} --can '*=read,post,react,label'`
     return new HttpError(403, 'board_not_granted', `this project has no access to ${board} (${principal.projectId}, ${principal.environment}).`, {
       hint: `Grant it: ${grant}`,
       origin: 'handle',
@@ -900,8 +937,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         ? boardNamed(who, boardName()!)
         : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
             if (defaultBoardId) return defaultBoardId
-            const { principal } = (await self(who)).actor
-            if (principal.type === 'project') throw notLetIn(null, principal)
+            const me = await self(who)
+            const { principal } = me.actor
+            // A deployment or a workflow the API names no board to isn't let in, and makes none.
+            if (principal.type === 'project' || principal.type === 'github' || principal.type === 'oidc') throw notLetIn(null, principal, me.teamId)
             const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
             return made.id
           })).catch((error: unknown) => {
@@ -1725,7 +1764,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       for (const id of ids) named.add(id)
     }
     // A profile name covers that agent of anyone's; a platform user a sync imported is only ever themselves.
-    return (actor) => named.has(actor.id) || named.has(principalId(actor.principal)) || (actor.profile !== undefined && !actor.profile.platform && named.has(actor.profile.name))
+    return (actor) => named.has(actor.id) || named.has(principalId(actor)) || (actor.profile !== undefined && !actor.profile.platform && named.has(actor.profile.name))
   }
 
   /** Which messages a `--source` value covers. */
@@ -1778,7 +1817,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     const named = (term: string) => terms.includes(term) || prefixes.some((prefix) => term.startsWith(prefix))
     // `me` names the caller's own ID, which is what a mention of them settles to; an ID names no handle.
-    const ids = (text: string) => (value === 'me' || value.includes(':') ? [] : mentionTerms(text).filter((term) => principalFrom(term) !== null))
+    const ids = (text: string) => (value === 'me' || value.includes(':') ? [] : mentionTerms(text).filter(namedByApi))
     /**
      * The handle an ID goes by as the actors list shows it, which is what a `@handle` settles from: the API's own
      * (`pong/claude`), a deployment by its project's name. None for an ID the API names no one by: a handle made up
@@ -1994,7 +2033,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       throw error
     })
   /** The actor `who` writes as: the credentials' principal, and its profile, as the API names it. */
-  const actorOf = async (who: Who) => `${principalId((await self(who)).actor.principal)}${who.profile ? `+${who.profile.name.toLowerCase()}` : ''}`
+  const actorOf = async (who: Who) => `${principalId((await self(who)).actor)}${who.profile ? `+${who.profile.name.toLowerCase()}` : ''}`
 
   /**
    * Refuses a handle narrowed with `as(profile, { can })` a source: the platform's app reads and
@@ -2768,7 +2807,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const keys = body.from === null ? [...new Set([body.author.id.split(':')[0]!, ...(binding?.sync ?? []).map((entry) => entry.key)])] : [body.from]
     const ours = (actor: string) => keys.some((key) => actor.startsWith(`${key}:`))
     if (!keys.some((key) => body.text.includes(`@[${key}:`))) return body.text
-    const owner = principalId((await self(who)).actor.principal)
+    const owner = principalId((await self(who)).actor)
     const named = replaceMentions(body.text, (token) => (token.kind === 'actor' && ours(token.actor) ? `@[${owner}+${token.actor}]` : null))
     return named.length > MESSAGE_TEXT_MAX ? body.text : named
   }
@@ -2812,24 +2851,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** A sync key's inbox, under the board. */
   const inboxPath = (who: Who, key: string, rest = '') => onBoard(who, `/sync/inbox/${encodeURIComponent(key)}${rest}`)
 
-  /** A grant Vercel's API won't keep: one naming a GitHub run or an OIDC issuer, which an app stands in for. */
-  const grantRefused = (error: unknown): never => {
-    if (error instanceof HttpError && error.code === 'unsupported_principal')
-      throw new HttpError(400, 'unsupported_principal', "Vercel's board takes no GitHub or OIDC principals in a grant.", {
-        hint: 'Grant an app that an OIDC exchange policy issues tokens for: --app <slug>.',
-        origin: 'handle',
-      })
-    throw error
-  }
-  /** An explain Vercel's API won't answer: for a GitHub run or an OIDC issuer, which no grant there names. */
-  const explainRefused = (error: unknown): never => {
-    if (error instanceof HttpError && error.code === 'unsupported_principal')
-      throw new HttpError(400, 'unsupported_principal', "Vercel's board explains no GitHub or OIDC caller: no grant names one.", {
-        hint: 'Explain the app an OIDC exchange policy issues tokens for: --app <slug>.',
-        origin: 'handle',
-      })
-    throw error
-  }
   // Tasks. The API keeps a task on its thread and names it by the thread; a board names it by its root.
   /** What a task route answers. On a create, `claimed` says whether the token this request sent holds the task's live claim. */
   type Made = { task: ApiTaskOf; claimed?: boolean }
@@ -3110,7 +3131,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // What these credentials may do, and until when, as the API says; without a word, what any it lets in may.
       return {
         actor: found.actor.id,
-        principal: principalId(found.actor.principal),
+        principal: principalId(found.actor),
         kind: shown.kind,
         handle: shown.handle,
         name: shown.name,
@@ -3414,17 +3435,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async createGrant(caller, input, signal) {
       const who = whoOf(caller)
-      const { grant } = await api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(grantRefused)
+      const { grant } = await api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
       return { grant: grantFrom(grant) }
     },
     async createGrants(caller, input, signal) {
       const who = whoOf(caller)
-      const { grants } = await api<Protocol['createGrants']['output']>(who, 'POST', await onBoard(who, '/grants/batch'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(grantRefused)
+      const { grants } = await api<Protocol['createGrants']['output']>(who, 'POST', await onBoard(who, '/grants/batch'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
       return { grants: grants.map(grantFrom) }
     },
     async updateGrant(caller, { id, ...change }, signal) {
       const who = whoOf(caller)
-      const { grant } = await api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) }).catch(grantRefused)
+      const { grant } = await api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) })
       return { grant: grantFrom(grant) }
     },
     async explain(caller, { claim, ...query }, signal) {
@@ -3432,7 +3453,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const params = new URLSearchParams()
       for (const [name, value] of Object.entries(query)) if (value !== undefined) params.set(name, value)
       for (const pair of claim ?? []) params.append('claim', pair)
-      const explained = await api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {}).catch(explainRefused)
+      const explained = await api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {})
       return { ...explained, grants: explained.grants.map(grantFrom) }
     },
     async revokeGrant(caller, { id, ...options }, signal) {
@@ -3624,7 +3645,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         } else {
           // The task is what it asked for, as far as it can say: it can't read the channel to see.
           const { actor } = await self(who)
-          task = askedTask(principalId(actor.principal), await actorOf(who), input)
+          task = askedTask(principalId(actor), await actorOf(who), input)
           const first = { id: idAt(made.task.id, 1), threadId: made.task.id, sequence: 1 }
           root = await view(who, { ...(await sent(who, first, { text, labels: { ...input.labels, [TASK_LABEL]: task.state }, attachments: input.attachments, noSync: input.noSync })), task }, input.channel!)
         }
@@ -3675,7 +3696,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
             const asked = input.tasks[at]!
             const needs = [...waits[at]!.threads, ...waits[at]!.keys.map((key) => threads[places.get(key)!]!)]
             const { actor } = await self(who)
-            const stood: ApiTask = { state: needs.length ? 'waiting' : 'ready', owner: principalId(actor.principal), by: await actorOf(who), for: asked.for ?? null, needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
+            const stood: ApiTask = { state: needs.length ? 'waiting' : 'ready', owner: principalId(actor), by: await actorOf(who), for: asked.for ?? null, needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
             const first = { id: idAt(task.id, 1), threadId: task.id, sequence: 1 }
             return view(who, { ...(await sent(who, first, { text: asked.text, labels: { ...asked.labels, [TASK_LABEL]: stood.state }, attachments: asked.attachments, noSync: asked.noSync })), task: stood }, input.channel)
           }),

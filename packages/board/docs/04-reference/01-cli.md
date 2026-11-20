@@ -97,8 +97,8 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 login's default team. `--scope <team>` picks another, by its slug or ID. It
 reads and writes as the login the CLI that runs it gives it. Given none, it
 finds its credentials as `vb` does: a deployment's own token, or else
-`BOARD_TOKEN`, or else you, with `VERCEL_AUTH_TOKEN` or `vercel login`'s. It
-never sends `VERCEL_TOKEN`.
+`BOARD_TOKEN`, or else `VERCEL_AUTH_TOKEN`, or else a GitHub Actions job's
+OIDC token, or else your `vercel login`. It never sends `VERCEL_TOKEN`.
 
 ### In-process, on a handle
 
@@ -273,7 +273,10 @@ itself.
   the Vercel CLI sets for a CLI it runs, or else your `vercel login`. That last one is cached
   in `~/.config/board/tokens/` for its 12-hour life. See
   [Identity](../01-board/03-identity.md). A team's board in Vercel's API
-  gets the deployment's OIDC token, or else `BOARD_TOKEN` or your Vercel login.
+  gets the deployment's OIDC token, or else `BOARD_TOKEN`, or else a GitHub
+  Actions OIDC token made out to `https://api.vercel.com/v1/messageboard`, or
+  else your Vercel login. A GitHub token names no Vercel team, so in Actions
+  `--scope <team ID>` or `VERCEL_ORG_ID` names it.
 - **A board with no Vercel project has no token for your login to mint,** so
   a request goes to it with none. A board that names its callers another way
   takes it: one [behind Tailscale](../03-guides/08-tailnet.md), say. Any other
@@ -592,7 +595,7 @@ A principal is a flag, and repeating flags names several:
 | `--user <email>` | a person on the team, or on a board [behind Tailscale](../03-guides/08-tailnet.md), by their login | |
 | `-p, --project <name\|id>` | a project's deployments | `-e, --environment` |
 | `--github <owner/repo>` | GitHub Actions runs in a repository | `--workflow`, `--git-branch`, `--event` |
-| `--oidc <issuer>` | an issuer's tokens | `--claim name=value` |
+| `--oidc <issuer>` | an issuer's tokens | `--claim name=value`, `sub` always |
 | `--app <slug\|id>` | an app installed on the team | |
 | `--all-users` | every person on the team | |
 | `--all-projects` | every project's deployments on the team | `-e, --environment` |
@@ -604,8 +607,13 @@ A modifier goes after the principal it's for, so one grant mixes them:
 `--environment` takes a comma-separated list and is `production` when left
 out. `--workflow` matches the run's workflow file (`ci.yml` is
 `.github/workflows/ci.yml`), `--git-branch` its `refs/heads/` branch, and
-`--event` its event. `--can pattern=permissions` repeats; permissions are a
-comma-separated list, `all`, or `none`. A board that verifies tokens itself,
+`--event` its event. `--oidc` takes a `--claim sub=…`, since its issuer
+signs tokens for everyone it serves and only `sub` says whose a token is:
+exact, or ending in `*` right after a `:` or `/` to match how one starts, as
+`--claim 'sub=project_path:acme/api:*' --claim project_id=42` does for GitLab
+(quoted, so the shell leaves the `*`). Its other claims narrow it, and a
+repeated claim is any of its values. `--can pattern=permissions` repeats;
+permissions are a comma-separated list, `all`, or `none`. A board that verifies tokens itself,
 as `vb serve` does, takes IDs: `--user u_123`, `--project prj_123`, and an
 app's client ID.
 
@@ -672,24 +680,20 @@ $ vb grants create --everyone --can factory/=read
 created g5  --everyone  factory/=read
 ```
 
-Vercel's board takes no `--github` or `--oidc` principal: a workflow gets in
-as a Vercel App, which an OIDC exchange policy issues its token for, and the
-grant names that app (`--app`, or `--all-apps`). `create` and `update` say so,
-with reason `unsupported_principal`:
+On Vercel's board too, a grant names a repository's runs or an issuer, and a
+workflow gets in with its own OIDC token, with no secret to store. See
+[CI and deploys](../03-guides/03-ci.md#let-the-workflow-in):
 
 ```text
-$ vb grants create --github acme/web --can 'ci/=post' --scope acme
-error: Vercel's board takes no GitHub or OIDC principals in a grant.
-
-  Grant an app that an OIDC exchange policy issues tokens for: --app <slug>.
+$ vb grants create --github acme/web --git-branch main --can 'ci/=post' --scope acme
+created g4  --github acme/web --git-branch main  ci/=post
 ```
 
 `explain` says which grant decides a channel: the pattern that won and those
 it won over, the closest grants there, and what they give. It explains you, or
 with `manage` at `*`, the one `--user`, `--project` (in one `--environment`),
 `--github`, `--oidc`, or `--app` it names. A local board has no apps, so
-nothing lets one in there. Vercel's board explains no `--github` or `--oidc`
-caller, since no grant there names one (`unsupported_principal`). A caller that can't list grants sees that
+nothing lets one in there. A caller that can't list grants sees that
 one decides, not which:
 
 ```text
