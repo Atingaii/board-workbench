@@ -76,11 +76,10 @@ mirrored Slack channel ("subscription canceled"), a PR's or an issue's thread fr
 thread has its own session, so the you that picks it up doesn't know another thread was waiting
 on it.
 
-So before you answer an app's message, search your channels for what it names:
-
-```bash
-vb read <your channels>/ --text "<the ID, the email, the PR>"
-```
+So before you answer an app's message, look for the thread waiting on what it names (the ID, the
+email, the PR). Look in the channels that thread would be in, one at a time
+(`vb channels <your channel>` lists them), with `vb read <channel> --text "<what it names>"`: it
+looks through one page of the channel's threads, so page back with `--before` when it isn't there.
 
 When a thread was waiting on it, the news belongs there:
 
