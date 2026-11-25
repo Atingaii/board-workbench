@@ -5,7 +5,7 @@ import Markdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { LOGOS } from '../../contract/logos.ts'
-import type { MessageView, SchemaView } from '../../api/routes.ts'
+import type { Me as ApiMe, MessageView, SchemaView } from '../../api/routes.ts'
 import { displayEmoji } from '../../contract/emoji.ts'
 import type { Attachment } from '../../server/index.default.ts'
 import { BlockCard } from './blocks.tsx'
@@ -236,11 +236,207 @@ export function SourceLogo({ platform }: { platform: string }) {
   )
 }
 
-export function Avatar({ name, url, size = 28 }: { name: string; url: string | null | undefined; size?: number }) {
-  const [broken, setBroken] = useState(false)
+function avatarSeed(str: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return Math.abs(h >>> 0)
+}
+
+function isAgentKind(kind?: string | null, actor?: string | null): boolean {
+  if (kind) {
+    const k = kind.toLowerCase()
+    if (k === 'agent' || k === 'profile' || k === 'deployment' || k === 'workflow') return true
+    if (k === 'person' || k === 'external') return false
+  }
+  if (actor) {
+    const a = actor.toLowerCase()
+    if (a.includes('+')) return true
+    if (/^(agent|bot|workflow|deployment):/.test(a)) return true
+    if (/(^|[:+._-])(agent|bot|workflow|deployment)($|[:+._-])/.test(a)) return true
+  }
+  return false
+}
+
+function AvatarIllustration({ isAgent, variant }: { isAgent: boolean; variant: number }) {
+  if (isAgent) {
+    switch (variant) {
+      case 0:
+        return (
+          <span className="wb-avatar wb-a0" aria-hidden="true">
+            <span className="wb-ant-stem" />
+            <span className="wb-ant-ball" />
+            <span className="wb-bot-base" />
+            <span className="wb-bot-head" />
+            <span className="wb-screen" />
+            <span className="wb-eye-l" />
+            <span className="wb-eye-r" />
+          </span>
+        )
+      case 1:
+        return (
+          <span className="wb-avatar wb-a1" aria-hidden="true">
+            <span className="wb-ear-l" />
+            <span className="wb-ear-r" />
+            <span className="wb-bot-base" />
+            <span className="wb-dome-head" />
+            <span className="wb-visor" />
+            <span className="wb-glow-l" />
+            <span className="wb-glow-r" />
+          </span>
+        )
+      case 2:
+        return (
+          <span className="wb-avatar wb-a2" aria-hidden="true">
+            <span className="wb-fin-l" />
+            <span className="wb-fin-r" />
+            <span className="wb-bot-base" />
+            <span className="wb-hex-head" />
+            <span className="wb-visor-strip" />
+          </span>
+        )
+      case 3:
+        return (
+          <span className="wb-avatar wb-a3" aria-hidden="true">
+            <span className="wb-dish" />
+            <span className="wb-bot-base" />
+            <span className="wb-box-head" />
+            <span className="wb-eye-ring" />
+            <span className="wb-eye-core" />
+            <span className="wb-eye-glint" />
+          </span>
+        )
+      case 4:
+        return (
+          <span className="wb-avatar wb-a4" aria-hidden="true">
+            <span className="wb-halo" />
+            <span className="wb-orb-base" />
+            <span className="wb-orb-head" />
+            <span className="wb-orb-visor" />
+            <span className="wb-eye-pill-l" />
+            <span className="wb-eye-pill-r" />
+          </span>
+        )
+      case 5:
+      default:
+        return (
+          <span className="wb-avatar wb-a5" aria-hidden="true">
+            <span className="wb-coil" />
+            <span className="wb-bolt-l" />
+            <span className="wb-bolt-r" />
+            <span className="wb-bot-base" />
+            <span className="wb-cyl-head" />
+            <span className="wb-eye-l" />
+            <span className="wb-eye-r" />
+            <span className="wb-grille" />
+          </span>
+        )
+    }
+  }
+
+  switch (variant) {
+    case 0:
+      return (
+        <span className="wb-avatar wb-p0" aria-hidden="true">
+          <span className="wb-torso" />
+          <span className="wb-hair-back" />
+          <span className="wb-head" />
+          <span className="wb-bangs" />
+          <span className="wb-eye-l" />
+          <span className="wb-eye-r" />
+        </span>
+      )
+    case 1:
+      return (
+        <span className="wb-avatar wb-p1" aria-hidden="true">
+          <span className="wb-torso" />
+          <span className="wb-head" />
+          <span className="wb-hair-short" />
+          <span className="wb-glasses-frame" />
+          <span className="wb-eye-l" />
+          <span className="wb-eye-r" />
+        </span>
+      )
+    case 2:
+      return (
+        <span className="wb-avatar wb-p2" aria-hidden="true">
+          <span className="wb-torso" />
+          <span className="wb-topknot" />
+          <span className="wb-head" />
+          <span className="wb-hair-sides" />
+          <span className="wb-eye-l" />
+          <span className="wb-eye-r" />
+        </span>
+      )
+    case 3:
+      return (
+        <span className="wb-avatar wb-p3" aria-hidden="true">
+          <span className="wb-torso" />
+          <span className="wb-afro" />
+          <span className="wb-head" />
+          <span className="wb-eye-l" />
+          <span className="wb-eye-r" />
+        </span>
+      )
+    case 4:
+      return (
+        <span className="wb-avatar wb-p4" aria-hidden="true">
+          <span className="wb-torso" />
+          <span className="wb-head" />
+          <span className="wb-beard" />
+          <span className="wb-beanie" />
+          <span className="wb-eye-l" />
+          <span className="wb-eye-r" />
+        </span>
+      )
+    case 5:
+    default:
+      return (
+        <span className="wb-avatar wb-p5" aria-hidden="true">
+          <span className="wb-hair-long" />
+          <span className="wb-torso" />
+          <span className="wb-head" />
+          <span className="wb-fringe" />
+          <span className="wb-eye-l" />
+          <span className="wb-eye-r" />
+        </span>
+      )
+  }
+}
+
+export function Avatar({
+  name,
+  url,
+  size = 28,
+  actor,
+  kind,
+}: {
+  name: string
+  url?: string | null
+  size?: number
+  actor?: string
+  kind?: string | null
+}) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    setFailedUrl(null)
+  }, [url])
+
+  const showImage = Boolean(url && url !== failedUrl)
+  const isAgent = isAgentKind(kind, actor, name)
+  const seed = avatarSeed(actor?.trim() || name.trim())
+  const variant = seed % 6
+
   return (
-    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.43 }}>
-      {url && !broken ? <img src={url} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} /> : name.slice(0, 1).toUpperCase()}
+    <span className="avatar" style={{ width: size, height: size }} aria-hidden="true">
+      {showImage ? (
+        <img src={url!} alt="" referrerPolicy="no-referrer" onError={() => setFailedUrl(url ?? null)} />
+      ) : (
+        <AvatarIllustration isAgent={isAgent} variant={variant} />
+      )}
     </span>
   )
 }
@@ -375,7 +571,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
             </span>
           ) : (
             <span className="avatar-wrap">
-              <Avatar name={name} url={m.author?.avatar} />
+              <Avatar name={name} url={m.author?.avatar} actor={m.by.actor} kind={m.author?.kind} />
               {m.from && <SourceLogo platform={sourcePlatform(m, options.platforms) ?? m.from} />}
             </span>
           )}
@@ -433,7 +629,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
             <button className="replies" onClick={() => options.openThread!(m.id)}>
               <span className="faces">
                 {replies.faces.map((r) => (
-                  <Avatar key={r.by.actor} name={authorName(r)} url={r.author?.avatar} size={16} />
+                  <Avatar key={r.by.actor} name={authorName(r)} url={r.author?.avatar} size={16} actor={r.by.actor} kind={r.author?.kind} />
                 ))}
               </span>
               {replies.count} 条回复
@@ -509,7 +705,7 @@ export function PendingRow({ post, me, continued = false }: { post: Pending; me:
             …
           </span>
         ) : (
-          <Avatar name={shownName(me)} url={me.avatar} />
+          <Avatar name={shownName(me)} url={me.avatar} actor={me.actor} kind={me.profile ? 'agent' : 'person'} />
         )}
       </div>
       <div className="body">

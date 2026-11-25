@@ -299,7 +299,7 @@ function ProfileMenu({ me }: { me: Me }) {
         title="发帖身份"
         trigger={
           <>
-            <Avatar name={shownName(me)} url={me.avatar} size={24} />
+            <Avatar name={shownName(me)} url={me.avatar} size={24} actor={me.actor} kind={me.kind} />
             <span className="as grow">身份：{shownName(me)}</span>
             <ChevronsUpDown size={13} />
           </>

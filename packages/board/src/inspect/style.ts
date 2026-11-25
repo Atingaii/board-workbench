@@ -626,6 +626,187 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible, [role='
   overflow: hidden;
 }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
+.wb-avatar {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  border-radius: inherit;
+  user-select: none;
+}
+.wb-avatar span {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+/* Person 0: Bob Cut (Sage) */
+.wb-p0 { background: #e1ece3; }
+.wb-p0 .wb-torso { bottom: -6%; left: 18%; width: 64%; height: 34%; border-radius: 50% 50% 0 0; background: #3e5a48; }
+.wb-p0 .wb-hair-back { top: 18%; left: 23%; width: 54%; height: 52%; border-radius: 46% 46% 36% 36%; background: #2b2320; }
+.wb-p0 .wb-head { top: 25%; left: 30%; width: 40%; height: 44%; border-radius: 42%; background: #fbdac4; }
+.wb-p0 .wb-bangs { top: 19%; left: 27%; width: 46%; height: 20%; border-radius: 45% 45% 20% 20%; background: #2b2320; }
+.wb-p0 .wb-eye-l { top: 42%; left: 38%; width: 9%; height: 9%; border-radius: 50%; background: #261f1d; }
+.wb-p0 .wb-eye-r { top: 42%; left: 53%; width: 9%; height: 9%; border-radius: 50%; background: #261f1d; }
+
+/* Person 1: Short Crop + Glasses (Dusty Rose) */
+.wb-p1 { background: #fbe7e5; }
+.wb-p1 .wb-torso { bottom: -6%; left: 16%; width: 68%; height: 35%; border-radius: 50% 50% 0 0; background: #683a45; }
+.wb-p1 .wb-head { top: 24%; left: 30%; width: 40%; height: 44%; border-radius: 44%; background: #f5c8ac; }
+.wb-p1 .wb-hair-short { top: 15%; left: 28%; width: 46%; height: 22%; border-radius: 50% 50% 25% 10%; background: #382821; }
+.wb-p1 .wb-glasses-frame { top: 38%; left: 32%; width: 36%; height: 16%; border: 1.5px solid #231b19; border-radius: 4px; background: rgba(255, 255, 255, 0.2); }
+.wb-p1 .wb-eye-l { top: 42%; left: 37%; width: 7%; height: 7%; border-radius: 50%; background: #201815; }
+.wb-p1 .wb-eye-r { top: 42%; left: 56%; width: 7%; height: 7%; border-radius: 50%; background: #201815; }
+
+/* Person 2: Topknot Bun (Lavender) */
+.wb-p2 { background: #e8e9fb; }
+.wb-p2 .wb-torso { bottom: -6%; left: 18%; width: 64%; height: 34%; border-radius: 50% 50% 0 0; background: #4d4f73; }
+.wb-p2 .wb-topknot { top: 7%; left: 37%; width: 26%; height: 26%; border-radius: 50%; background: #211c1e; }
+.wb-p2 .wb-head { top: 27%; left: 30%; width: 40%; height: 43%; border-radius: 42%; background: #f1c3a2; }
+.wb-p2 .wb-hair-sides { top: 21%; left: 27%; width: 46%; height: 22%; border-radius: 50% 50% 30% 30%; background: #211c1e; }
+.wb-p2 .wb-eye-l { top: 43%; left: 38%; width: 8%; height: 8%; border-radius: 50%; background: #211c1e; }
+.wb-p2 .wb-eye-r { top: 43%; left: 54%; width: 8%; height: 8%; border-radius: 50%; background: #211c1e; }
+
+/* Person 3: Curly Afro Cloud (Warm Sand) */
+.wb-p3 { background: #faebd8; }
+.wb-p3 .wb-torso { bottom: -6%; left: 16%; width: 68%; height: 35%; border-radius: 50% 50% 0 0; background: #8a4831; }
+.wb-p3 .wb-afro { top: 12%; left: 19%; width: 62%; height: 56%; border-radius: 50%; background: #1c1917; }
+.wb-p3 .wb-head { top: 27%; left: 29%; width: 42%; height: 43%; border-radius: 45%; background: #a66642; }
+.wb-p3 .wb-eye-l { top: 43%; left: 38%; width: 8%; height: 8%; border-radius: 50%; background: #fdf5eb; }
+.wb-p3 .wb-eye-r { top: 43%; left: 54%; width: 8%; height: 8%; border-radius: 50%; background: #fdf5eb; }
+
+/* Person 4: Beanie + Beard (Mist Blue) */
+.wb-p4 { background: #e1eef8; }
+.wb-p4 .wb-torso { bottom: -6%; left: 18%; width: 64%; height: 34%; border-radius: 50% 50% 0 0; background: #345275; }
+.wb-p4 .wb-head { top: 24%; left: 30%; width: 40%; height: 44%; border-radius: 42%; background: #f6c8a7; }
+.wb-p4 .wb-beard { top: 45%; left: 28%; width: 44%; height: 28%; border-radius: 0 0 50% 50%; background: #35271e; }
+.wb-p4 .wb-beanie { top: 14%; left: 27%; width: 46%; height: 26%; border-radius: 48% 48% 15% 15%; background: #c67824; }
+.wb-p4 .wb-eye-l { top: 38%; left: 37%; width: 8%; height: 8%; border-radius: 50%; background: #261b14; }
+.wb-p4 .wb-eye-r { top: 38%; left: 55%; width: 8%; height: 8%; border-radius: 50%; background: #261b14; }
+
+/* Person 5: Long Straight Hair + Fringe (Heather Mauve) */
+.wb-p5 { background: #f0e4ee; }
+.wb-p5 .wb-hair-long { top: 18%; left: 20%; width: 60%; height: 60%; border-radius: 40% 40% 15% 15%; background: #352220; }
+.wb-p5 .wb-torso { bottom: -6%; left: 21%; width: 58%; height: 34%; border-radius: 50% 50% 0 0; background: #5c3955; }
+.wb-p5 .wb-head { top: 25%; left: 30%; width: 40%; height: 43%; border-radius: 42%; background: #fbe0cc; }
+.wb-p5 .wb-fringe { top: 19%; left: 28%; width: 44%; height: 18%; border-radius: 45% 45% 20% 20%; background: #352220; }
+.wb-p5 .wb-eye-l { top: 42%; left: 38%; width: 8%; height: 8%; border-radius: 50%; background: #241615; }
+.wb-p5 .wb-eye-r { top: 42%; left: 54%; width: 8%; height: 8%; border-radius: 50%; background: #241615; }
+
+/* Agent 0: Retro TV Monitor Box Bot (Cool Cyan) */
+.wb-a0 { background: #def3f4; }
+.wb-a0 .wb-ant-stem { top: 8%; left: 47%; width: 6%; height: 16%; background: #445963; }
+.wb-a0 .wb-ant-ball { top: 4%; left: 41%; width: 18%; height: 18%; border-radius: 50%; background: #0ea89b; }
+.wb-a0 .wb-bot-base { bottom: 0; left: 32%; width: 36%; height: 16%; border-radius: 15% 15% 0 0; background: #2b3941; }
+.wb-a0 .wb-bot-head { top: 22%; left: 22%; width: 56%; height: 50%; border-radius: 20%; background: #3a4c56; }
+.wb-a0 .wb-screen { top: 30%; left: 28%; width: 44%; height: 32%; border-radius: 14%; background: #131c21; }
+.wb-a0 .wb-eye-l { top: 42%; left: 35%; width: 10%; height: 10%; border-radius: 20%; background: #2ee6ca; }
+.wb-a0 .wb-eye-r { top: 42%; left: 55%; width: 10%; height: 10%; border-radius: 20%; background: #2ee6ca; }
+
+/* Agent 1: Capsule Dome Bot (Warm Amber Gold) */
+.wb-a1 { background: #fcf1de; }
+.wb-a1 .wb-ear-l { top: 37%; left: 14%; width: 13%; height: 22%; border-radius: 50%; background: #9c6c24; }
+.wb-a1 .wb-ear-r { top: 37%; right: 14%; width: 13%; height: 22%; border-radius: 50%; background: #9c6c24; }
+.wb-a1 .wb-bot-base { bottom: 0; left: 30%; width: 40%; height: 16%; border-radius: 20% 20% 0 0; background: #3b2f20; }
+.wb-a1 .wb-dome-head { top: 18%; left: 22%; width: 56%; height: 56%; border-radius: 50% 50% 24% 24%; background: #554432; }
+.wb-a1 .wb-visor { top: 37%; left: 27%; width: 46%; height: 20%; border-radius: 999px; background: #1a140d; }
+.wb-a1 .wb-glow-l { top: 42%; left: 34%; width: 11%; height: 10%; border-radius: 50%; background: #f8ad32; }
+.wb-a1 .wb-glow-r { top: 42%; left: 55%; width: 11%; height: 10%; border-radius: 50%; background: #f8ad32; }
+
+/* Agent 2: Angular Cyber Mech (Steel Slate Blue) */
+.wb-a2 { background: #e4e9fa; }
+.wb-a2 .wb-fin-l { top: 11%; left: 22%; width: 10%; height: 22%; border-radius: 40% 0 0 0; background: #3e527a; transform: rotate(-15deg); }
+.wb-a2 .wb-fin-r { top: 11%; right: 22%; width: 10%; height: 22%; border-radius: 0 40% 0 0; background: #3e527a; transform: rotate(15deg); }
+.wb-a2 .wb-bot-base { bottom: 0; left: 27%; width: 46%; height: 18%; border-radius: 12% 12% 0 0; background: #212c42; }
+.wb-a2 .wb-hex-head { top: 22%; left: 21%; width: 58%; height: 50%; border-radius: 18%; background: #2f3e60; }
+.wb-a2 .wb-visor-strip { top: 38%; left: 25%; width: 50%; height: 16%; border-radius: 6%; background: #0f1624; box-shadow: inset 0 0 0 1px #46a1f8, 0 0 4px #46a1f8; }
+
+/* Agent 3: Industrial Cyclops Scanner (Emerald Sage) */
+.wb-a3 { background: #dff4e8; }
+.wb-a3 .wb-dish { top: 9%; left: 37%; width: 26%; height: 12%; border-radius: 50% 50% 0 0; background: #2b5e43; }
+.wb-a3 .wb-bot-base { bottom: 0; left: 28%; width: 44%; height: 16%; border-radius: 14% 14% 0 0; background: #1d3326; }
+.wb-a3 .wb-box-head { top: 20%; left: 22%; width: 56%; height: 52%; border-radius: 26%; background: #2d4c3a; }
+.wb-a3 .wb-eye-ring { top: 30%; left: 32%; width: 36%; height: 36%; border-radius: 50%; background: #112117; }
+.wb-a3 .wb-eye-core { top: 37%; left: 39%; width: 22%; height: 22%; border-radius: 50%; background: #33e185; }
+.wb-a3 .wb-eye-glint { top: 39%; left: 41%; width: 7%; height: 7%; border-radius: 50%; background: #ffffff; }
+
+/* Agent 4: Spherical Floating Droid (Neon Violet) */
+.wb-a4 { background: #eee4fc; }
+.wb-a4 .wb-halo { top: 9%; left: 28%; width: 44%; height: 9%; border-radius: 999px; border: 1.5px solid #9464f8; }
+.wb-a4 .wb-orb-base { bottom: 0; left: 38%; width: 24%; height: 14%; border-radius: 50% 50% 0 0; background: #2c1d3f; }
+.wb-a4 .wb-orb-head { top: 20%; left: 23%; width: 54%; height: 54%; border-radius: 50%; background: #44325e; }
+.wb-a4 .wb-orb-visor { top: 34%; left: 28%; width: 44%; height: 26%; border-radius: 35% 35% 45% 45%; background: #160d21; }
+.wb-a4 .wb-eye-pill-l { top: 42%; left: 34%; width: 11%; height: 8%; border-radius: 999px; background: #d76ef5; }
+.wb-a4 .wb-eye-pill-r { top: 42%; left: 55%; width: 11%; height: 8%; border-radius: 999px; background: #d76ef5; }
+
+/* Agent 5: Vintage Bolt Robot (Copper Coral) */
+.wb-a5 { background: #fee8e1; }
+.wb-a5 .wb-coil { top: 6%; left: 46%; width: 8%; height: 17%; border-radius: 3px; background: #684136; }
+.wb-a5 .wb-bolt-l { top: 38%; left: 13%; width: 10%; height: 18%; border-radius: 20%; background: #7c4c3e; }
+.wb-a5 .wb-bolt-r { top: 38%; right: 13%; width: 10%; height: 18%; border-radius: 20%; background: #7c4c3e; }
+.wb-a5 .wb-bot-base { bottom: 0; left: 32%; width: 36%; height: 15%; border-radius: 12% 12% 0 0; background: #3b201a; }
+.wb-a5 .wb-cyl-head { top: 21%; left: 22%; width: 56%; height: 52%; border-radius: 18% 18% 26% 26%; background: #5b352c; }
+.wb-a5 .wb-eye-l { top: 33%; left: 32%; width: 11%; height: 11%; border-radius: 50%; background: #ffba3b; }
+.wb-a5 .wb-eye-r { top: 33%; left: 57%; width: 11%; height: 11%; border-radius: 50%; background: #ffba3b; }
+.wb-a5 .wb-grille { top: 52%; left: 34%; width: 32%; height: 10%; border-radius: 3px; background: #200f0b; box-shadow: inset 0 0 0 1px #7c4c3e; }
+
+@media (prefers-color-scheme: dark) {
+  .wb-p0 { background: #233529; }
+  .wb-p0 .wb-torso { background: #2a4032; }
+  .wb-p0 .wb-head { background: #dfb79e; }
+  .wb-p0 .wb-bangs, .wb-p0 .wb-hair-back { background: #171311; }
+
+  .wb-p1 { background: #3b2628; }
+  .wb-p1 .wb-torso { background: #4a252e; }
+  .wb-p1 .wb-head { background: #d49f82; }
+  .wb-p1 .wb-hair-short { background: #1d1410; }
+  .wb-p1 .wb-glasses-frame { border-color: #120d0b; }
+
+  .wb-p2 { background: #282b42; }
+  .wb-p2 .wb-torso { background: #353752; }
+  .wb-p2 .wb-head { background: #cfa07e; }
+  .wb-p2 .wb-topknot, .wb-p2 .wb-hair-sides { background: #141113; }
+
+  .wb-p3 { background: #3d3121; }
+  .wb-p3 .wb-torso { background: #612f1e; }
+  .wb-p3 .wb-head { background: #884e2e; }
+  .wb-p3 .wb-afro { background: #100e0c; }
+
+  .wb-p4 { background: #223142; }
+  .wb-p4 .wb-torso { background: #22374f; }
+  .wb-p4 .wb-head { background: #d3a37f; }
+  .wb-p4 .wb-beanie { background: #965715; }
+  .wb-p4 .wb-beard { background: #1f1611; }
+
+  .wb-p5 { background: #372636; }
+  .wb-p5 .wb-torso { background: #3f233a; }
+  .wb-p5 .wb-head { background: #dbb7a0; }
+  .wb-p5 .wb-hair-long, .wb-p5 .wb-fringe { background: #1e1211; }
+
+  .wb-a0 { background: #1a3337; }
+  .wb-a0 .wb-bot-head { background: #26343b; }
+  .wb-a0 .wb-bot-base { background: #1a242a; }
+
+  .wb-a1 { background: #3d2e1c; }
+  .wb-a1 .wb-dome-head { background: #382c1e; }
+  .wb-a1 .wb-bot-base { background: #241c13; }
+
+  .wb-a2 { background: #232a40; }
+  .wb-a2 .wb-hex-head { background: #1b2438; }
+  .wb-a2 .wb-bot-base { background: #141b2a; }
+
+  .wb-a3 { background: #1a3426; }
+  .wb-a3 .wb-box-head { background: #1d3326; }
+  .wb-a3 .wb-bot-base { background: #122118; }
+
+  .wb-a4 { background: #312345; }
+  .wb-a4 .wb-orb-head { background: #281c3a; }
+  .wb-a4 .wb-orb-base { background: #181124; }
+
+  .wb-a5 { background: #3f241d; }
+  .wb-a5 .wb-cyl-head { background: #3a1f18; }
+  .wb-a5 .wb-bot-base { background: #22120e; }
+}
 .body { min-width: 0; max-width: 820px; }
 .meta-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-bottom: 2px; }
 .author { color: var(--bright); font-weight: 600; font-size: 13px; }
