@@ -5,8 +5,8 @@ import type { ChannelView, Me } from '../../api/routes.ts'
 import * as board from './board.ts'
 import { toast } from './chrome.ts'
 import { Avatar } from './message.tsx'
-import { Link, navigate, type Route } from './nav.tsx'
-import { openTasks, type State } from './store.ts'
+import { Link, navigate, type Route, type Where } from './nav.tsx'
+import { openTasks, type State, type TaskState } from './store.ts'
 import { ContextMenuArea, Menu, MenuItem, MenuSeparator } from './ui.tsx'
 import { boardWords, shownName } from './words.ts'
 
@@ -43,9 +43,32 @@ function useSeen(state: State, current: Route): Record<string, number> {
 
 const COMMAND_SHORTCUT = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? '⌘K' : 'Ctrl+K'
 
+type SidebarTaskGroup = {
+  label: string
+  items: { state: TaskState; label: string }[]
+}
+
+const TASK_GROUPS: readonly SidebarTaskGroup[] = [
+  {
+    label: '进行中',
+    items: [
+      { state: 'ready', label: '可认领' },
+      { state: 'claimed', label: '已认领' },
+      { state: 'blocked', label: '待处理' },
+    ],
+  },
+  {
+    label: '已结束',
+    items: [{ state: 'completed', label: '已完成' }],
+  },
+]
+
+const SIDEBAR_TASK_STATES = new Set<string>(TASK_GROUPS.flatMap((group) => group.items.map((item) => item.state)))
+
 export function Sidebar({
   state,
   current,
+  where,
   onCollapse,
   onOpenCommands,
   onOpenProjects,
@@ -53,6 +76,7 @@ export function Sidebar({
 }: {
   state: State
   current: Route
+  where: Where
   onCollapse: () => void
   onOpenCommands?: () => void
   onOpenProjects?: () => void
@@ -69,54 +93,64 @@ export function Sidebar({
     return [...out]
   }, [state.channels])
   const open = openTasks(state)
-  const where = boardWords(state.discovery)
+  const activeTaskState = current.view === 'tasks' ? where.params.get('state') : null
+  const inSidebarStatus = current.view === 'tasks' && activeTaskState !== null && SIDEBAR_TASK_STATES.has(activeTaskState)
+  const info = boardWords(state.discovery)
   const [adding, setAdding] = useState(false)
   const copy = (text: string) => void navigator.clipboard.writeText(text).then(() => toast(`已复制 ${text}`))
   return (
     <div className="sidebar-col">
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">
-          <Layers size={14} strokeWidth={2} />
+          <Layers size={12} strokeWidth={2} />
         </span>
-        <span className="which" title={state.discovery?.url}>
+        <span className="which" title={state.discovery?.url ?? info.name}>
           <span className="name">Board Workbench</span>
-          <span className="at">{where.at ? `${where.name} · ${where.at}` : where.name}</span>
         </span>
-        <button className="tool" title="隐藏侧栏" onClick={onCollapse}>
-          <PanelLeftClose size={15} strokeWidth={1.75} />
-        </button>
+        <div className="sidebar-toolbar">
+          {onOpenCommands && (
+            <button type="button" className="tool" onClick={onOpenCommands} title={`命令面板（${COMMAND_SHORTCUT}）`} aria-label="命令面板">
+              <Search size={13} strokeWidth={1.75} />
+            </button>
+          )}
+          {onOpenProjects && (
+            <button type="button" className="tool sidebar-projects-btn" onClick={onOpenProjects} title={projectCount > 0 ? `项目索引（${projectCount}）` : '项目索引'} aria-label="项目索引">
+              <FolderKanban size={13} strokeWidth={1.75} />
+              {projectCount > 0 && <span className="tool-badge">{projectCount}</span>}
+            </button>
+          )}
+          <button type="button" className="tool" title="隐藏侧栏" aria-label="隐藏侧栏" onClick={onCollapse}>
+            <PanelLeftClose size={13} strokeWidth={1.75} />
+          </button>
+        </div>
       </div>
       <div className="sidebar-scroll">
-        {(onOpenCommands || onOpenProjects) && (
-          <div className="workbench-side-tools">
-            {onOpenCommands && (
-              <button type="button" className="workbench-side-btn" onClick={onOpenCommands} title={`打开命令面板（${COMMAND_SHORTCUT}）`}>
-                <Search size={14} strokeWidth={1.75} aria-hidden="true" />
-                <span className="workbench-side-label">命令</span>
-                <kbd>{COMMAND_SHORTCUT}</kbd>
-              </button>
-            )}
-            {onOpenProjects && (
-              <button type="button" className="workbench-side-btn" onClick={onOpenProjects} title="打开项目索引">
-                <FolderKanban size={14} strokeWidth={1.75} aria-hidden="true" />
-                <span className="workbench-side-label">项目索引</span>
-                {projectCount > 0 && <span className="workbench-side-count">{projectCount}</span>}
-              </button>
-            )}
-          </div>
-        )}
         <div className="sidebar-group">
           <h2>工作区</h2>
           <Link to="/" className="item" current={current.view === 'activity'}>
             <Activity size={14} strokeWidth={1.75} className="item-icon" />
             <span className="name">动态</span>
           </Link>
-          <Link to="/tasks" className="item" current={current.view === 'tasks'}>
+          <Link to="/tasks" className="item" current={current.view === 'tasks' && !inSidebarStatus}>
             <ListTodo size={14} strokeWidth={1.75} className="item-icon" />
             <span className="name">任务</span>
             {open !== null && open > 0 && <span className="count">{open}</span>}
           </Link>
         </div>
+        {TASK_GROUPS.map((group) => (
+          <div key={group.label} className="sidebar-group">
+            <h2>{group.label}</h2>
+            {group.items.map((item) => {
+              const active = current.view === 'tasks' && activeTaskState === item.state
+              return (
+                <Link key={item.state} to={`/tasks?state=${item.state}`} className="item task-filter-item" current={active}>
+                  <i className={`status-dot ${item.state}`} aria-hidden="true" />
+                  <span className="name">{item.label}</span>
+                </Link>
+              )
+            })}
+          </div>
+        ))}
         <div className="sidebar-group">
           <h2>
             频道

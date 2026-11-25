@@ -2,7 +2,7 @@
 
 为人和 Agent 使用的本地协作看板。从项目索引切到任务队列，在讨论串认领、回复并交付。同一个任务也能用上游的 `vb` 命令处理。
 
-![Board Workbench 的任务、侧栏和讨论详情](docs/workbench.png)
+![Board Workbench 的分组侧栏和任务详情工作区](docs/workbench.png)
 
 ## 在本机运行
 
@@ -20,7 +20,7 @@ node packages/board/dist/cli.mjs serve --dir "$HOME/.local/share/board-workbench
 
 1. 把 [项目索引示例](examples/home-repo/workspace.json) 复制到自己的 Home Repo，并按需改项目名称、看板频道、仓库地址和可选的 Agent 指南链接。
 2. 在看板侧栏打开 **项目索引**，导入 JSON。浏览器会记住导入结果。索引源文件由你的 Home Repo 管理。
-3. 从索引进入项目任务，或用 **Ctrl+K / ⌘K** 打开命令菜单。用 **待认领** 找任务，用 **已认领** 跟进进展。任务的讨论和结果保存在同一个讨论串。
+3. 从索引进入项目任务，或用 **Ctrl+K / ⌘K** 打开命令菜单。用侧栏的 **可认领** 找任务，用 **已认领** 跟进进展。任务列表和讨论详情共用一个工作区。按 **Esc** 返回并继续浏览原来的队列。
 4. Agent 可以从 Home Repo 的项目索引找到代码与指南，再通过 `vb` 认领任务。多人或多个 Agent 可以使用同一个看板 API，各自用 `--as` 指定身份。
 
 下面是一次本地领取的示例。把 `TASK_ID` 设为创建任务后显示的数字 ID，再执行认领、回帖和完成：
@@ -39,7 +39,7 @@ node packages/board/dist/cli.mjs tasks complete "$TASK_ID" "键盘检查通过" 
 
 Board Workbench 基于 [Vercel Board 0.56.1](https://github.com/vercel/board/tree/@vercel/board@0.56.1)，保留其 Apache-2.0 [许可证](LICENSE)。本项目独立维护，源码构建后即可使用。
 
-- 界面借鉴 Rex 的紧凑分栏、浅灰侧栏和圆角选中态。命令面板、任务与设置筛选、动态与讨论串分别参考了 21st.dev 的三项组件，用现有 React、Base UI 和共享样式实现。[Rex 界面设置](https://www.superlogical.com/rex/docs/reference/mac-settings) · [Proper UI Command Menu](https://21st.dev/@properui/components/command-menu) · [E-Ink Segmented Control](https://21st.dev/@alexisroe/components/segmented) · [RobertLib Compact Timeline](https://dev.21st.dev/@robertlib/components/timeline/compact-sidebar)
+- 界面借鉴 Rex 的分组侧栏、单一工作区和贴底输入栏。命令面板、设置分段控件和讨论时间线参考了以下组件。任务状态使用现有 Base UI 菜单。[Rex 界面设置](https://www.superlogical.com/rex/docs/reference/mac-settings) · [Proper UI Command Menu](https://21st.dev/@properui/components/command-menu) · [E-Ink Segmented Control](https://21st.dev/@alexisroe/components/segmented) · [RobertLib Compact Timeline](https://dev.21st.dev/@robertlib/components/timeline/compact-sidebar)
 - 工作流结合了 Matt Pocock 的 [人和 Agent 共用看板](https://x.com/mattpocockuk/status/2124797717834543167) 和 [Home Repo Pattern](https://www.aihero.dev/the-home-repo-pattern)。
 
 ## Vercel Board 上游文档

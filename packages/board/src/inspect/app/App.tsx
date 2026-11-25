@@ -1,5 +1,5 @@
 // Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
-import { BookOpen, ExternalLink, FolderKanban, ListTodo, PanelLeftOpen, X } from 'lucide-react'
+import { ArrowLeft, BookOpen, ExternalLink, FolderKanban, ListTodo, PanelLeftOpen } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { MessageView, SyncedView } from '../../api/routes.ts'
 import * as board from './board.ts'
@@ -36,10 +36,9 @@ function remember(key: string, value: number | string) {
 }
 
 const SIDEBAR = { min: 180, max: 400, collapse: 150, key: 'board.sidebar-width', collapsedKey: 'board.sidebar-collapsed' }
-const PANE = { min: 320, key: 'board.pane-width' }
 
 function useSidebar() {
-  const [width, setWidth] = useState(() => Math.min(SIDEBAR.max, Math.max(SIDEBAR.min, stored(SIDEBAR.key, 224))))
+  const [width, setWidth] = useState(() => Math.min(SIDEBAR.max, Math.max(SIDEBAR.min, stored(SIDEBAR.key, 236))))
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(SIDEBAR.collapsedKey) === '1'
@@ -80,31 +79,6 @@ function useSidebar() {
   }
 }
 
-function usePane() {
-  const clamp = (value: number) => Math.min(Math.max(PANE.min, innerWidth * 0.7), Math.max(PANE.min, value))
-  const [width, setWidth] = useState(() => stored(PANE.key, 440))
-  const [dragging, setDragging] = useState<number | null>(null)
-  const latest = useRef<number | null>(null)
-  const commit = (next: number) => {
-    setWidth(next)
-    remember(PANE.key, next)
-  }
-  return {
-    width: clamp(dragging ?? width),
-    drag: (x: number) => {
-      latest.current = clamp(innerWidth - x)
-      setDragging(latest.current)
-    },
-    done: () => {
-      const at = latest.current
-      latest.current = null
-      setDragging(null)
-      if (at !== null) commit(at)
-    },
-    step: (delta: number) => commit(clamp(width - delta)),
-  }
-}
-
 /** Who you post as, asked before anything loads: the page acts as its app, so you write as a profile of it, `ada via factory`. */
 function NameGate({ done }: { done: () => void }) {
   const [error, setError] = useState<string | null>(null)
@@ -139,10 +113,36 @@ export function App() {
   const now = useNow()
   const [failed, setFailed] = useState<string | null>(null)
   const sidebar = useSidebar()
-  const pane = usePane()
   // On a narrow page the sidebar is out of the way until it's asked for, and goes again once you've picked.
   const [nav, setNav] = useState(false)
-  useEffect(() => setNav(false), [where.path])
+  const queryKey = where.params.toString()
+  useEffect(() => setNav(false), [where.path, queryKey])
+
+  const viewSurfaceRef = useRef<HTMLDivElement>(null)
+  const prevThreadRef = useRef<string | null>(null)
+  const returnFocusRef = useRef<HTMLElement | null>(null)
+  const threadOpen = where.thread !== null
+
+  useEffect(() => {
+    const surface = viewSurfaceRef.current
+    const prev = prevThreadRef.current
+    if (prev === null && where.thread !== null) {
+      const active = document.activeElement
+      returnFocusRef.current = active instanceof HTMLElement && surface?.contains(active) ? active : null
+    } else if (prev !== null && where.thread === null) {
+      const saved = returnFocusRef.current
+      returnFocusRef.current = null
+      requestAnimationFrame(() => {
+        if (saved && saved.isConnected && surface?.contains(saved)) {
+          saved.focus({ preventScroll: true })
+          return
+        }
+        const fallback = surface?.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(prev)}"]`)
+        fallback?.focus({ preventScroll: true })
+      })
+    }
+    prevThreadRef.current = where.thread
+  }, [where.thread])
 
   // Served from an app, the page reads nothing until you've named who you post as.
   const [naming, setNaming] = useState(board.needsName)
@@ -161,13 +161,17 @@ export function App() {
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || where.thread === null) return
+      if (event.key !== 'Escape') return
       if ((event.target as HTMLElement).closest('textarea, input, [role="menu"], [role="dialog"]')) return
-      navigate(here({ thread: null }))
+      if (nav) {
+        setNav(false)
+        return
+      }
+      if (where.thread !== null) navigate(here({ thread: null }))
     }
     addEventListener('keydown', close)
     return () => removeEventListener('keydown', close)
-  }, [where])
+  }, [nav, where])
 
   const current = route(where.path)
   // The tab says which board too, so two inspectors side by side tell apart.
@@ -198,6 +202,7 @@ export function App() {
     <button
       className={`tool${sidebar.collapsed ? '' : ' only-narrow'}`}
       title="显示侧栏"
+      aria-label="显示侧栏"
       onClick={() => {
         sidebar.collapse(false)
         setNav(true)
@@ -207,13 +212,14 @@ export function App() {
     </button>
   )
   return (
-    <div className={`shell${nav ? ' nav' : ''}`}>
+    <div className={`shell${nav ? ' nav' : ''}${sidebar.collapsed ? ' collapsed' : ''}`}>
       {nav && <div className="scrim" onClick={() => setNav(false)} />}
       {!sidebar.collapsed && (
         <nav className="sidebar" style={{ width: sidebar.width, opacity: sidebar.fade }}>
           <Sidebar
             state={state}
             current={current}
+            where={where}
             projectCount={workbench.projects.length}
             onOpenCommands={() => {
               setNav(false)
@@ -232,25 +238,26 @@ export function App() {
         </nav>
       )}
       <main className="main">
-        {current.view === 'activity' && <Activity state={state} options={options} known={known} lead={expand} filters={filters} />}
-        {current.view === 'channel' && (
-          <Channel key={current.channel} channel={current.channel} state={state} options={options} known={known} lead={expand} filters={filters} />
-        )}
-        {current.view === 'tasks' && <Tasks state={state} now={now} lead={expand} where={where} known={known} />}
-        {current.view === 'settings' && <Settings state={state} viewer={viewer} now={now} lead={expand} where={where} section={current.section} open={current.open} />}
-        {current.view === 'missing' && (
-          <>
-            <Header title="页面不存在" lead={expand} />
-            <p className="empty">找不到这个页面</p>
-          </>
+        <div ref={viewSurfaceRef} className={`view-surface${threadOpen ? ' is-hidden' : ''}`} inert={threadOpen} aria-hidden={threadOpen || undefined}>
+          {current.view === 'activity' && <Activity state={state} options={options} known={known} lead={expand} filters={filters} />}
+          {current.view === 'channel' && (
+            <Channel key={current.channel} channel={current.channel} state={state} options={options} known={known} lead={expand} filters={filters} />
+          )}
+          {current.view === 'tasks' && <Tasks state={state} now={now} lead={expand} where={where} known={known} />}
+          {current.view === 'settings' && <Settings state={state} viewer={viewer} now={now} lead={expand} where={where} section={current.section} open={current.open} />}
+          {current.view === 'missing' && (
+            <>
+              <Header title="页面不存在" lead={expand} />
+              <p className="empty">找不到这个页面</p>
+            </>
+          )}
+        </div>
+        {where.thread !== null && (
+          <section className="thread-surface" aria-label="详情">
+            <ThreadPane key={where.thread} id={where.thread} state={state} viewer={viewer} now={now} known={known} projects={workbench.projects} lead={expand} />
+          </section>
         )}
       </main>
-      {where.thread !== null && (
-        <aside className="pane" style={{ width: pane.width }}>
-          <ResizeHandle side="left" label="调整讨论串宽度" onDrag={pane.drag} onDone={pane.done} onStep={pane.step} />
-          <ThreadPane key={where.thread} id={where.thread} state={state} viewer={viewer} now={now} known={known} projects={workbench.projects} />
-        </aside>
-      )}
       {workbench.dialogs}
       <Toasts />
     </div>
@@ -400,7 +407,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   )
 }
 
-function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: number; known: KnownLabels; projects: readonly WorkspaceProject[] }) {
+function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: number; known: KnownLabels; projects: readonly WorkspaceProject[]; lead?: ReactNode }) {
   const { id, state, viewer, projects } = props
   const [missing, setMissing] = useState(false)
   useEffect(() => {
@@ -417,9 +424,20 @@ function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: numb
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
   const names = namesOf(state)
   const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas, names }
+  const lead = (
+    <>
+      {props.lead}
+      <button className="tool back-btn" title="返回列表（Esc）" aria-label="返回列表" onClick={() => navigate(here({ thread: null }))}>
+        <ArrowLeft size={15} strokeWidth={1.75} />
+      </button>
+    </>
+  )
+  const heading = t
+    ? firstLine(t.root.text) || (t.root.attachments ?? []).map((file) => file.name).join(', ') || (isTask(t.root) ? '任务' : '讨论串')
+    : '讨论串'
   return (
     <>
-      <Header title={isTask(t?.root) ? '任务' : '讨论串'} meta={t ? `#${t.root.id} · #${t.root.channel}` : `#${id}`}>
+      <Header title={heading} meta={t ? `#${t.root.id} · #${t.root.channel}` : `#${id}`} lead={lead}>
         {t && !isTask(t.root) && !t.root.deleted && viewer.may('label', t.root.channel) && (
           <Ask
             label={<ListTodo size={15} strokeWidth={1.75} />}
@@ -434,9 +452,6 @@ function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: numb
             onSubmit={(values) => void board.makeTask(id, { needs: taskIds(values.needs ?? ''), for: values.for ? actorFor(viewer.principal, values.for) : null })}
           />
         )}
-        <button className="tool" title="关闭（Esc）" onClick={() => navigate(here({ thread: null }))}>
-          <X size={15} strokeWidth={1.75} />
-        </button>
       </Header>
       {project && (
         <div className="workbench-project-context" {...nativeMenu}>

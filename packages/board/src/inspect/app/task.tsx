@@ -31,12 +31,18 @@ export const TASK_STATE_LABELS: Record<TaskState, string> = {
   canceled: '已取消',
 }
 
-export function StateMark({ state }: { state: TaskState }) {
+export function StateMark({ state, iconOnly = false, decorative = false }: { state: TaskState; iconOnly?: boolean; decorative?: boolean }) {
   const Icon = MARKS[state]
   return (
-    <span className={`task-state ${state}`}>
-      <Icon size={13} strokeWidth={2} />
-      {TASK_STATE_LABELS[state]}
+    <span
+      className={`task-state ${state}${iconOnly ? ' icon-only' : ''}`}
+      title={TASK_STATE_LABELS[state]}
+      role={iconOnly && !decorative ? 'img' : undefined}
+      aria-label={iconOnly && !decorative ? TASK_STATE_LABELS[state] : undefined}
+      aria-hidden={iconOnly && decorative ? true : undefined}
+    >
+      <Icon size={13} strokeWidth={2} aria-hidden="true" />
+      {!iconOnly && TASK_STATE_LABELS[state]}
     </span>
   )
 }
@@ -262,60 +268,62 @@ export function TaskCard({ root, state, viewer }: { root: TaskRoot; state: State
         <StateMark state={current} />
         {current === 'claimed' && task.claim && (
           <>
-            <span>{nameOf(state, task.claim.actor)} 已认领</span>
+            <span className="task-head-meta">{nameOf(state, task.claim.actor)} 已认领</span>
             <Lease until={task.claim.until} />
           </>
         )}
-        {lapsed && task.claim && <span>{nameOf(state, task.claim.actor)} 的认领已过期</span>}
+        {lapsed && task.claim && <span className="task-head-meta">{nameOf(state, task.claim.actor)} 的认领已过期</span>}
+        {(next.length > 0 || more.length > 0) && (
+          <div className="acts" ref={acts}>
+            {next}
+            {more.length > 0 && (
+              <Menu className="act" title="更多操作" trigger={<Ellipsis size={14} strokeWidth={1.75} />}>
+                {more}
+              </Menu>
+            )}
+          </div>
+        )}
       </div>
-      <dl className="facts" {...nativeMenu}>
-        <dt>所有者</dt>
-        <dd>{nameOf(state, task.owner)}</dd>
+      <dl className="facts task-facts-inline" {...nativeMenu}>
+        <div className="task-fact-item">
+          <dt>所有者</dt>
+          <dd>{nameOf(state, task.owner)}</dd>
+        </div>
         {task.for && (
-          <>
+          <div className="task-fact-item">
             <dt>指派给</dt>
             <dd>{nameOf(state, task.for)}</dd>
-          </>
+          </div>
         )}
         {task.needs.length > 0 && (
-          <>
+          <div className="task-fact-item">
             <dt>前置任务</dt>
             <dd>
               <Needs ids={task.needs} state={state} />
             </dd>
-          </>
+          </div>
         )}
         {task.blocked && (
-          <>
-            <dt>待处理事项</dt>
+          <div className="task-fact-item">
+            <dt>待处理</dt>
             <dd>
               {task.blocked.kind && <span className="badge">{task.blocked.kind}</span>} {task.blocked.reason}
             </dd>
-          </>
+          </div>
         )}
         {task.result && (
-          <>
+          <div className="task-fact-item">
             <dt>结果</dt>
             <dd>{task.result}</dd>
-          </>
+          </div>
         )}
         {task.reason && (
-          <>
+          <div className="task-fact-item">
             <dt>原因</dt>
             <dd>{task.reason}</dd>
-          </>
+          </div>
         )}
       </dl>
-      {(next.length > 0 || more.length > 0) && (
-        <div className="acts" ref={acts}>
-          {next}
-          {more.length > 0 && (
-            <Menu className="act" title="更多操作" trigger={<Ellipsis size={14} strokeWidth={1.75} />}>
-              {more}
-            </Menu>
-          )}
-        </div>
-      )}
       {asking && (
         <Panel title={asks[asking].title} open onOpenChange={(open) => !open && setAsking(null)} anchor={acts}>
           <AskForm {...asks[asking]} disabled={busy} onDone={() => setAsking(null)} />

@@ -1,5 +1,5 @@
 // Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
-import { ListFilter, ListTodo, X } from 'lucide-react'
+import { Check, ChevronDown, ListFilter, ListTodo, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { MessageView } from '../../api/routes.ts'
 import * as board from './board.ts'
@@ -9,7 +9,7 @@ import { Pendings } from './message.tsx'
 import { Ago, here, Link, navigate, useTypeToFocus, type Where } from './nav.tsx'
 import { isTask, nameOf, placesUnder, stateNow, tasks, type State, type TaskFilter, type TaskRoot } from './store.ts'
 import { Lease, Needs, StateMark, TASK_STATE_LABELS, useLapse } from './task.tsx'
-import { Header, nativeMenu, Panel, Suggest, type KnownLabels } from './ui.tsx'
+import { Header, Menu, MenuItem, nativeMenu, Panel, Suggest, type KnownLabels } from './ui.tsx'
 import { firstLine } from './words.ts'
 
 // The board's tasks as a queue: open ones, oldest first, the order they're worked in. Each row is
@@ -87,15 +87,32 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
   return (
     <>
       <Header title="任务" meta="最早创建优先" live={state.live} lead={props.lead}>
+        <Menu
+          className="status-menu-trigger"
+          title="切换任务状态"
+          align="end"
+          trigger={
+            <>
+              <i className={`status-dot ${filter.state}`} aria-hidden="true" />
+              <span>{STATE_FILTER_LABELS[filter.state]}</span>
+              <ChevronDown size={13} strokeWidth={1.75} aria-hidden="true" />
+            </>
+          }
+        >
+          {STATES.map((name) => (
+            <MenuItem key={name} onClick={() => navigate(here({ params: { state: name === 'open' ? null : name } }))}>
+              <span className="choice">
+                <span className="status-menu-option">
+                  <i className={`status-dot ${name}`} aria-hidden="true" />
+                  {STATE_FILTER_LABELS[name]}
+                </span>
+                {filter.state === name && <Check size={13} />}
+              </span>
+            </MenuItem>
+          ))}
+        </Menu>
         <TaskFilterButton filter={filter} channels={Object.keys(state.channels).sort()} owners={owners} assignees={assignees} state={state} known={props.known} count={chips.length} />
       </Header>
-      <nav className="tabs task-tabs" aria-label="任务状态筛选">
-        {STATES.map((name) => (
-          <Link key={name} to={here({ params: { state: name === 'open' ? null : name } })} className="tab" current={filter.state === name}>
-            {STATE_FILTER_LABELS[name]}
-          </Link>
-        ))}
-      </nav>
       {chips.length > 0 && (
         <div className="filter-bar">
           {chips.map((chip) => (
@@ -123,8 +140,8 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
             {!loading && (
               <p className="empty-hint">
                 {chips.length > 0 || filter.state !== 'open'
-                  ? '调整状态标签或筛选条件，即可查看其他任务。'
-                  : '在下方输入框发布新任务，或切换状态标签查看历史记录。'}
+                  ? '调整状态菜单或筛选条件，即可查看其他任务。'
+                  : '在下方输入带发布新任务，或切换状态菜单查看历史记录。'}
               </p>
             )}
           </div>
@@ -188,9 +205,28 @@ function TaskRow({ root, state, open }: { root: TaskRoot; state: State; open: bo
   const now = useLapse(task.claim?.until)
   const current = stateNow(task, now)
   const labels = Object.entries(root.labels).filter(([key]) => !key.startsWith('board.'))
+  const detail =
+    current === 'claimed' && task.claim ? (
+      <>
+        {nameOf(state, task.claim.actor)} · <Lease until={task.claim.until} />
+      </>
+    ) : current === 'ready' ? (
+      task.state === 'claimed' ? '认领已过期' : task.for ? `指派给 ${nameOf(state, task.for)}` : null
+    ) : current === 'waiting' ? (
+      <>
+        依赖 <Needs ids={task.needs} state={state} />
+      </>
+    ) : current === 'blocked' ? (
+      task.blocked?.kind ?? task.blocked?.reason ?? null
+    ) : current === 'completed' ? (
+      task.result
+    ) : current === 'failed' || current === 'canceled' ? (
+      task.reason
+    ) : null
   return (
     <div
       className="task-row"
+      data-thread-id={root.id}
       role="link"
       tabIndex={0}
       aria-current={open ? 'true' : undefined}
@@ -199,38 +235,41 @@ function TaskRow({ root, state, open }: { root: TaskRoot; state: State; open: bo
         if (!(event.target as HTMLElement).closest('a')) navigate(here({ thread: root.id }))
       }}
       onKeyDown={(event) => {
-        if (event.key === 'Enter') navigate(here({ thread: root.id }))
+        if (event.target !== event.currentTarget) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          navigate(here({ thread: root.id }))
+        }
       }}
     >
-      <StateMark state={current} />
-      <span className="task-title" {...nativeMenu}>
-        {/* A task can be its files alone. */}
-        <span className="task-subject">{firstLine(root.text) || (root.attachments ?? []).map((file) => file.name).join(', ') || '消息已移除'}</span>
-        <span className="task-id">#{root.id}</span>
-        {labels.map(([key, value]) => (
-          <span key={key} className="label">
-            {key}={value}
+      <StateMark state={current} iconOnly decorative />
+      <div className="task-row-main">
+        <div className="task-row-top">
+          <span className="task-title" {...nativeMenu}>
+            {/* A task can be its files alone. */}
+            <span className="task-subject">{firstLine(root.text) || (root.attachments ?? []).map((file) => file.name).join(', ') || '消息已移除'}</span>
+            <span className="task-id">#{root.id}</span>
+            {labels.map(([key, value]) => (
+              <span key={key} className="label">
+                {key}={value}
+              </span>
+            ))}
           </span>
-        ))}
-      </span>
-      <span className="task-now">
-        {current === 'claimed' && task.claim && (
-          <>
-            {nameOf(state, task.claim.actor)} · <Lease until={task.claim.until} />
-          </>
-        )}
-        {current === 'ready' && (task.state === 'claimed' ? '认领已过期' : task.for ? `指派给 ${nameOf(state, task.for)}` : '')}
-        {current === 'waiting' && (
-          <>
-            依赖 <Needs ids={task.needs} state={state} />
-          </>
-        )}
-        {current === 'blocked' && (task.blocked?.kind ?? task.blocked?.reason)}
-        {current === 'completed' && task.result}
-        {(current === 'failed' || current === 'canceled') && task.reason}
-      </span>
-      <span className="task-where">#{root.channel}</span>
-      <Ago iso={root.createdAt} />
+          <span className="task-row-right">
+            <span className={`task-state-text ${current}`}>{TASK_STATE_LABELS[current]}</span>
+            <Ago iso={root.createdAt} />
+          </span>
+        </div>
+        <div className="task-row-sub">
+          <span className="task-where">#{root.channel}</span>
+          {detail && (
+            <>
+              <span className="task-sep" aria-hidden="true">·</span>
+              <span className="task-now">{detail}</span>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

@@ -82,6 +82,7 @@ export function Composer(props: {
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [labelsOpen, setLabelsOpen] = useState(false)
   const [files, setFiles] = useState<File[]>([])
+  const [focused, setFocused] = useState(false)
   const area = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
 
@@ -102,14 +103,13 @@ export function Composer(props: {
 
   useEffect(() => {
     setText(readDraft(props.scope))
-    if (!matchMedia('(max-width: 900px)').matches && !props.channels) area.current?.focus({ preventScroll: true })
   }, [props.scope])
 
   useLayoutEffect(() => {
     const el = area.current!
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`
-  }, [text])
+  }, [text, focused])
 
   const change = (value: string) => {
     setText(value)
@@ -185,8 +185,25 @@ export function Composer(props: {
   }
 
   const labelEntries = Object.entries(labels)
+  const expanded =
+    focused ||
+    text.length > 0 ||
+    files.length > 0 ||
+    labelEntries.length > 0 ||
+    detail ||
+    later !== null ||
+    labelsOpen ||
+    laterOpen ||
+    noSync ||
+    (!tasking?.always && task)
   return (
-    <div className="composer">
+    <div
+      className={`composer${expanded ? ' expanded' : ' compact'}`}
+      onFocus={() => setFocused(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false)
+      }}
+    >
       <div
         className="composer-box"
         onClick={(event) => {
@@ -194,7 +211,7 @@ export function Composer(props: {
           area.current?.focus()
         }}
       >
-        {props.channels && (
+        {expanded && props.channels && (
           <Suggest
             className="composer-channel"
             prefix="#"
@@ -211,7 +228,7 @@ export function Composer(props: {
             onEnter={() => area.current?.focus()}
           />
         )}
-        {asTask && (detail || needs.trim() !== '' || assignee.trim() !== '') && (
+        {expanded && asTask && (detail || needs.trim() !== '' || assignee.trim() !== '') && (
           <div className="composer-task">
             <label className="suggest grow" title="输入此任务依赖的任务 ID">
               <span className="prefix">依赖</span>
@@ -241,20 +258,52 @@ export function Composer(props: {
             ))}
           </div>
         )}
-        <textarea
-          ref={area}
-          data-composer={props.role}
-          rows={2}
-          maxLength={10_000}
-          value={text}
-          placeholder={props.placeholder}
-          onChange={(event) => change(event.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={(event) => {
-            const pasted = [...event.clipboardData.files]
-            if (pasted.length === 0) return
-            event.preventDefault()
-            attach(pasted)
+        <div className="composer-input-row">
+          <textarea
+            ref={area}
+            data-composer={props.role}
+            rows={1}
+            maxLength={10_000}
+            value={text}
+            placeholder={props.placeholder}
+            onChange={(event) => change(event.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={(event) => {
+              const pasted = [...event.clipboardData.files]
+              if (pasted.length === 0) return
+              event.preventDefault()
+              attach(pasted)
+            }}
+          />
+          {!expanded && (
+            <div className="composer-compact-actions">
+              <button
+                type="button"
+                className="tool"
+                title="添加附件（也可粘贴文件）"
+                aria-label="添加附件"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setFocused(true)
+                  picker.current?.click()
+                }}
+              >
+                <Paperclip size={14} />
+              </button>
+              <button type="button" className="send small" disabled={!canSend} onMouseDown={(event) => event.preventDefault()} onClick={send}>
+                {asTask ? '发布任务' : later ? '定时发送' : '发送'}
+              </button>
+            </div>
+          )}
+        </div>
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            attach([...(event.target.files ?? [])])
+            event.target.value = ''
           }}
         />
         {files.length > 0 && (
@@ -271,102 +320,96 @@ export function Composer(props: {
             ))}
           </div>
         )}
-        <div className="composer-footer">
-          <button className="tool" title="添加附件（也可粘贴文件）" onClick={() => picker.current?.click()}>
-            <Paperclip size={14} />
-          </button>
-          <input
-            ref={picker}
-            type="file"
-            multiple
-            hidden
-            onChange={(event) => {
-              attach([...(event.target.files ?? [])])
-              event.target.value = ''
-            }}
-          />
-          <Panel
-            title="标签"
-            trigger={
-              <>
-                <Tag size={14} />
-                {labelEntries.length > 0 && <span className="count">{labelEntries.length}</span>}
-              </>
-            }
-            triggerTitle="为此消息设置标签"
-            align="start"
-            open={labelsOpen}
-            onOpenChange={setLabelsOpen}
-          >
-            <LabelEditor
-              labels={labels}
-              known={props.known}
-              onSet={(key, value) => setLabels((current) => ({ ...current, [key]: value }))}
-              onUnset={(key) =>
-                setLabels((current) => {
-                  const next = { ...current }
-                  delete next[key]
-                  return next
-                })
-              }
-            />
-          </Panel>
-          <button
-            className={`tool${noSync ? ' on' : ''}`}
-            aria-pressed={noSync}
-            title={noSync ? '此消息不会同步到 Slack 或 GitHub' : '同步到 Slack 和 GitHub（点击后仅在看板显示）'}
-            onClick={() => setNoSync(!noSync)}
-          >
-            <CloudOff size={14} />
-            {noSync && <span className="tool-label">仅看板</span>}
-          </button>
-          {tasking && !tasking.always && (
-            <button
-              className={`tool${task ? ' on' : ''}`}
-              aria-pressed={task}
-              title={task ? '发布为可供智能体认领的任务（点击切换为普通讨论串）' : '发布为任务'}
-              onClick={() => {
-                setTask(!task)
-              }}
-            >
-              <ListTodo size={14} />
-              {task && <span className="tool-label">任务</span>}
+        {expanded && (
+          <div className="composer-footer">
+            <button type="button" className="tool" title="添加附件（也可粘贴文件）" onClick={() => picker.current?.click()}>
+              <Paperclip size={14} />
             </button>
-          )}
-          {asTask && (
-            <button className={`tool${detail ? ' on' : ''}`} aria-pressed={detail} title="设置依赖任务和负责人" onClick={() => setDetail(!detail)}>
-              <span className="tool-label">依赖与指派</span>
-            </button>
-          )}
-          {!asTask && (
             <Panel
-              title="定时发送"
+              title="标签"
               trigger={
                 <>
-                  <Clock size={14} />
-                  {later && <span className="tool-label">{timingWords(later)}</span>}
+                  <Tag size={14} />
+                  {labelEntries.length > 0 && <span className="count">{labelEntries.length}</span>}
                 </>
               }
-              triggerClass={`tool${later ? ' on' : ''}`}
+              triggerTitle="为此消息设置标签"
               align="start"
-              open={laterOpen}
-              onOpenChange={setLaterOpen}
+              open={labelsOpen}
+              onOpenChange={setLabelsOpen}
             >
-              <Later
-                value={later}
-                onSet={(next) => {
-                  setLater(next)
-                  setLaterOpen(false)
-                  area.current?.focus()
-                }}
+              <LabelEditor
+                labels={labels}
+                known={props.known}
+                onSet={(key, value) => setLabels((current) => ({ ...current, [key]: value }))}
+                onUnset={(key) =>
+                  setLabels((current) => {
+                    const next = { ...current }
+                    delete next[key]
+                    return next
+                  })
+                }
               />
             </Panel>
-          )}
-          <span className="hint">Enter 发送 · Shift+Enter 换行</span>
-          <button className="send" disabled={!canSend} onMouseDown={(event) => event.preventDefault()} onClick={send}>
-            {asTask ? '发布任务' : later ? '定时发送' : '发送'}
-          </button>
-        </div>
+            <button
+              type="button"
+              className={`tool${noSync ? ' on' : ''}`}
+              aria-pressed={noSync}
+              title={noSync ? '此消息不会同步到 Slack 或 GitHub' : '同步到 Slack 和 GitHub（点击后仅在看板显示）'}
+              onClick={() => setNoSync(!noSync)}
+            >
+              <CloudOff size={14} />
+              {noSync && <span className="tool-label">仅看板</span>}
+            </button>
+            {tasking && !tasking.always && (
+              <button
+                type="button"
+                className={`tool${task ? ' on' : ''}`}
+                aria-pressed={task}
+                title={task ? '发布为可供智能体认领的任务（点击切换为普通讨论串）' : '发布为任务'}
+                onClick={() => {
+                  setTask(!task)
+                }}
+              >
+                <ListTodo size={14} />
+                {task && <span className="tool-label">任务</span>}
+              </button>
+            )}
+            {asTask && (
+              <button type="button" className={`tool${detail ? ' on' : ''}`} aria-pressed={detail} title="设置依赖任务和负责人" onClick={() => setDetail(!detail)}>
+                <span className="tool-label">依赖与指派</span>
+              </button>
+            )}
+            {!asTask && (
+              <Panel
+                title="定时发送"
+                trigger={
+                  <>
+                    <Clock size={14} />
+                    {later && <span className="tool-label">{timingWords(later)}</span>}
+                  </>
+                }
+                triggerClass={`tool${later ? ' on' : ''}`}
+                align="start"
+                open={laterOpen}
+                onOpenChange={setLaterOpen}
+              >
+                <Later
+                  value={later}
+                  onSet={(next) => {
+                    setLater(next)
+                    setLaterOpen(false)
+                    area.current?.focus()
+                  }}
+                />
+              </Panel>
+            )}
+            <span className="hint">Enter 发送 · Shift+Enter 换行</span>
+            <button type="button" className="send" disabled={!canSend} onMouseDown={(event) => event.preventDefault()} onClick={send}>
+              {asTask ? '发布任务' : later ? '定时发送' : '发送'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

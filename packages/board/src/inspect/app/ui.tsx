@@ -21,14 +21,14 @@ function Frame({ children }: { children: ReactNode }) {
   )
 }
 
-export function Menu(props: { trigger: ReactNode; title: string; className?: string; onOpenChange?: (open: boolean) => void; children: ReactNode }) {
+export function Menu(props: { trigger: ReactNode; title: string; className?: string; align?: 'start' | 'end'; onOpenChange?: (open: boolean) => void; children: ReactNode }) {
   return (
     <BaseMenu.Root {...(props.onOpenChange ? { onOpenChange: props.onOpenChange } : {})}>
       <BaseMenu.Trigger className={props.className ?? 'tool'} aria-label={props.title} title={props.title}>
         {props.trigger}
       </BaseMenu.Trigger>
       <BaseMenu.Portal>
-        <BaseMenu.Positioner className="positioner" align="end" sideOffset={4}>
+        <BaseMenu.Positioner className="positioner" align={props.align ?? 'end'} sideOffset={4}>
           <Frame>
             <BaseMenu.Popup className="menu">{props.children}</BaseMenu.Popup>
           </Frame>
@@ -340,7 +340,7 @@ export function Header(props: { title: string; meta?: string | undefined; live?:
   return (
     <header className={`header${props.flat ? ' flat' : ''}`}>
       {props.lead}
-      <span className={`title${props.mono ? ' mono' : ''}`}>{props.title}</span>
+      <span className={`title${props.mono ? ' mono' : ''}`} title={props.title}>{props.title}</span>
       {props.meta && <span className="meta">{props.meta}</span>}
       <span className="spacer" />
       {props.children}

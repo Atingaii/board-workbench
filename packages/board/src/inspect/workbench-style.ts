@@ -1,85 +1,12 @@
 export const WORKBENCH_CSS = `
-/* --- Board Workbench: sidebar tools, command palette, project index, and thread project context --- */
-.workbench-side-tools {
-  display: grid;
-  gap: 5px;
-  padding: 2px 0 12px;
-  margin-bottom: 10px;
-  border-bottom: 1px solid var(--side-hairline);
-}
-.workbench-side-tools button,
-.workbench-side-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 32px;
-  padding: 6px 9px;
-  border: 1px solid var(--side-hairline);
-  border-radius: 6px;
-  background: var(--side-surface);
-  color: var(--side-text);
-  text-align: left;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: default;
-  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
-}
-.workbench-side-tools button:hover,
-.workbench-side-btn:hover {
-  background: var(--side-hover);
-  border-color: var(--side-active);
-  color: var(--side-bright);
-}
-.workbench-side-tools button:focus-visible,
-.workbench-side-btn:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 1px;
-}
-.workbench-side-tools button svg,
-.workbench-side-btn svg {
-  flex: none;
-  color: var(--blue);
-  opacity: 0.95;
-  transition: color 0.12s ease;
-}
-.workbench-side-tools button:hover svg,
-.workbench-side-btn:hover svg {
-  color: var(--side-bright);
-}
-.workbench-side-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.workbench-side-tools kbd,
-.workbench-side-btn kbd {
-  margin-left: auto;
-  padding: 1px 5px;
-  border: 1px solid var(--side-hairline);
-  border-radius: 4px;
-  background: var(--side-bg);
-  color: var(--side-faint);
-  font: 10px/1.45 var(--mono);
-  white-space: nowrap;
-}
-.workbench-side-count {
-  margin-left: auto;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--side-bg);
-  color: var(--side-faint);
-  font: 10.5px/18px var(--mono);
-}
+/* --- Board Workbench: command palette, project index, and flat thread project context --- */
 
 /* --- Dialog backdrop and container --- */
 .workbench-backdrop {
   position: fixed;
   z-index: 70;
   inset: 0;
-  background: rgba(0, 0, 0, 0.48);
+  background: rgba(15, 23, 42, 0.36);
 }
 .workbench-dialog {
   position: fixed;
@@ -89,10 +16,10 @@ export const WORKBENCH_CSS = `
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  width: min(580px, calc(100vw - 24px));
-  max-height: min(680px, 82dvh);
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(660px, 82dvh);
   border: 1px solid var(--hairline-strong);
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
   background: var(--surface);
   color: var(--bright);
@@ -103,32 +30,31 @@ export const WORKBENCH_CSS = `
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px 12px;
+  padding: 13px 16px 11px;
   border-bottom: 1px solid var(--hairline);
   background: var(--surface);
 }
 .workbench-dialog-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.35;
   font-weight: 600;
   color: var(--bright);
 }
 .workbench-description {
-  margin: 3px 0 0;
+  margin: 2px 0 0;
   color: var(--muted);
   font-size: 12px;
 }
 .workbench-close {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   flex: none;
   border-radius: 6px;
   color: var(--muted);
   cursor: default;
-  transition: background 0.12s ease, color 0.12s ease;
 }
 .workbench-close:hover { background: var(--shade); color: var(--bright); }
 
@@ -137,7 +63,7 @@ export const WORKBENCH_CSS = `
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
-  padding: 14px 16px;
+  padding: 12px 16px 14px;
 }
 .workbench-dialog-foot {
   display: flex;
@@ -145,7 +71,7 @@ export const WORKBENCH_CSS = `
   align-items: center;
   justify-content: space-between;
   gap: 8px 14px;
-  padding: 9px 16px;
+  padding: 8px 16px;
   border-top: 1px solid var(--hairline);
   background: var(--surface-2);
   color: var(--faint);
@@ -171,17 +97,16 @@ export const WORKBENCH_CSS = `
   font: 10px/1.55 var(--mono);
 }
 
-/* --- Command search bar and Proper UI Command Menu list --- */
+/* --- Command search bar and list --- */
 .workbench-search-wrap {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  padding: 0 10px 0 12px;
+  padding: 0 10px;
   border: 1px solid var(--hairline-strong);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--surface-2);
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 .workbench-search-wrap:focus-within {
   border-color: var(--blue);
@@ -194,12 +119,12 @@ export const WORKBENCH_CSS = `
 .workbench-search {
   width: 100%;
   min-width: 0;
-  height: 38px;
+  height: 36px;
   border: 0;
   outline: none;
   background: transparent;
   color: var(--bright);
-  font-size: 13.5px;
+  font-size: 13px;
 }
 .workbench-search::placeholder { color: var(--faint); }
 .workbench-search-kbd {
@@ -231,16 +156,16 @@ export const WORKBENCH_CSS = `
 .workbench-group-title {
   padding: 4px 8px 3px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 550;
   color: var(--faint);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
 }
 .workbench-group-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 .workbench-command {
   display: flex;
@@ -257,7 +182,6 @@ export const WORKBENCH_CSS = `
   color: var(--bright);
   cursor: default;
   overflow-wrap: anywhere;
-  transition: background 0.1s ease, color 0.1s ease;
 }
 .workbench-command:hover,
 .workbench-command:focus-visible {
@@ -281,11 +205,10 @@ export const WORKBENCH_CSS = `
 .workbench-command-icon {
   flex: none;
   color: var(--muted);
-  transition: color 0.1s ease;
 }
 .workbench-command:hover .workbench-command-icon,
 .workbench-command:focus-visible .workbench-command-icon {
-  color: var(--blue);
+  color: var(--bright);
 }
 .workbench-hint {
   color: var(--faint);
@@ -299,7 +222,7 @@ export const WORKBENCH_CSS = `
   color: var(--muted);
 }
 
-/* --- Project Index cards and actions --- */
+/* --- Project Index items and actions --- */
 .workbench-actions {
   display: flex;
   flex-wrap: wrap;
@@ -310,7 +233,7 @@ export const WORKBENCH_CSS = `
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 30px;
+  min-height: 28px;
   padding: 4px 10px;
   border: 1px solid var(--hairline-strong);
   border-radius: 6px;
@@ -319,7 +242,6 @@ export const WORKBENCH_CSS = `
   font-size: 12px;
   font-weight: 500;
   cursor: default;
-  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .workbench-action:hover:not(:disabled) {
   background: var(--shade);
@@ -327,16 +249,15 @@ export const WORKBENCH_CSS = `
   color: var(--bright);
 }
 .workbench-action.primary {
-  border-color: var(--blue);
-  background: var(--blue);
-  color: #ffffff;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ink-label);
   font-weight: 550;
 }
 .workbench-action.primary:hover:not(:disabled) {
-  border-color: var(--blue);
-  background: var(--blue);
-  filter: brightness(0.92);
-  color: #ffffff;
+  border-color: var(--ink-hover);
+  background: var(--ink-hover);
+  color: var(--ink-label);
 }
 .workbench-action:disabled { opacity: 0.45; }
 
@@ -369,15 +290,15 @@ export const WORKBENCH_CSS = `
 
 .workbench-project-list {
   list-style: none;
-  margin: 14px 0 0;
+  margin: 12px 0 0;
   padding: 0;
   display: grid;
   gap: 8px;
 }
 .workbench-project {
   display: grid;
-  gap: 9px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 11px 13px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--surface-2);
@@ -393,13 +314,13 @@ export const WORKBENCH_CSS = `
 }
 .workbench-project-title {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--bright);
   overflow-wrap: anywhere;
 }
 .workbench-project-channel {
-  padding: 2px 7px;
+  padding: 1px 7px;
   border: 1px solid var(--hairline);
   border-radius: 999px;
   background: var(--surface);
@@ -408,68 +329,61 @@ export const WORKBENCH_CSS = `
   font-size: 11px;
 }
 
-/* --- ThreadPane project context strip --- */
+/* --- Flat inline project context strip in detail view --- */
 .workbench-project-context {
   flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
-  padding: 9px 16px;
+  gap: 6px 14px;
+  padding: 7px 18px;
   border-bottom: 1px solid var(--hairline);
-  background: var(--blue-soft);
+  background: transparent;
   font-size: 12px;
-  color: var(--dim);
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 .workbench-project-context-name {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   color: var(--bright);
-  font-weight: 600;
+  font-weight: 550;
 }
-.workbench-project-context-name svg { color: var(--blue); flex: none; }
+.workbench-project-context-name svg { color: var(--muted); flex: none; }
 .workbench-project-context-links {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   margin-left: auto;
 }
 .workbench-project-context a {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 26px;
-  padding: 3px 9px;
-  border: 1px solid var(--hairline);
-  border-radius: 6px;
-  background: var(--surface);
+  gap: 4px;
   color: var(--blue);
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
-  transition: background 0.12s ease, border-color 0.12s ease;
 }
 .workbench-project-context a:hover {
-  background: var(--shade);
-  border-color: var(--blue);
-  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 @media (pointer: coarse) {
   .workbench-search { font-size: 16px; }
   .workbench-command { min-height: 40px; }
-  .workbench-project-context a { min-height: 32px; padding: 4px 10px; }
+  .workbench-project-context a { min-height: 30px; }
 }
 @media (max-width: 500px) {
   .workbench-dialog { top: 12px; width: calc(100vw - 16px); max-height: calc(100dvh - 24px); }
-  .workbench-dialog-header { padding: 13px 13px 10px; }
+  .workbench-dialog-header { padding: 12px 13px 10px; }
   .workbench-dialog-body { padding: 12px 13px; }
   .workbench-dialog-foot { padding: 8px 13px; }
-  .workbench-project-context { padding: 9px 12px; gap: 8px 10px; }
+  .workbench-project-context { padding: 7px 12px; gap: 6px 10px; }
   .workbench-project-context-links { margin-left: 0; }
 }
 `

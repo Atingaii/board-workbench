@@ -28,7 +28,7 @@ ${WORKBENCH_CSS}</style>
 </head>
 <body>
 <div id="root"></div>
-<script type="module" src="${attribute(base)}/app.js?v=${attribute(VERSION)}&amp;edition=workbench-neutral"></script>
+<script type="module" src="${attribute(base)}/app.js?v=${attribute(VERSION)}&amp;edition=workbench-focus"></script>
 </body>
 </html>`
 
