@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import { Braces } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { BlockView, SchemaView } from '../../api/routes.ts'
@@ -39,13 +40,13 @@ export function BlockCard({ block, schema, registry }: { block: BlockView; schem
   return (
     <div className="block">
       <div className="block-head">
-        <Link to={`/settings/schemas/${id}`} className="block-schema" title={schema?.description ?? `schema ${id}`}>
+        <Link to={`/settings/schemas/${id}`} className="block-schema" title={schema?.description ?? `数据结构 ${id}`}>
           {block.schema}
           <span className="faint">@{block.version}</span>
         </Link>
-        {registry && !schema && <span className="faint">unknown schema</span>}
+        {registry && !schema && <span className="faint">未知数据结构</span>}
         <span className="spacer" />
-        <button className={`tool${raw ? ' on' : ''}`} aria-pressed={raw} title={raw ? 'show its fields' : 'show its JSON'} onClick={() => setRaw(!raw)}>
+        <button className={`tool${raw ? ' on' : ''}`} aria-pressed={raw} title={raw ? '查看字段' : '查看 JSON'} onClick={() => setRaw(!raw)}>
           <Braces size={13} strokeWidth={1.75} />
         </button>
       </div>
@@ -54,7 +55,7 @@ export function BlockCard({ block, schema, registry }: { block: BlockView; schem
           {JSON.stringify(block.data, null, 2)}
         </pre>
       ) : fields.length === 0 ? (
-        <div className="block-fields faint">no fields</div>
+        <div className="block-fields faint">没有字段</div>
       ) : (
         <dl className="block-fields" {...nativeMenu}>
           {fields.map((field) => (

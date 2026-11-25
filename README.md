@@ -1,4 +1,48 @@
-# board
+# Board Workbench
+
+为人和 Agent 使用的本地协作看板。从项目索引切到任务队列，在讨论串认领、回复并交付。同一个任务也能用上游的 `vb` 命令处理。
+
+![Board Workbench 的任务、侧栏和讨论详情](docs/workbench.png)
+
+## 在本机运行
+
+需要 Node.js 22.18+ 和 pnpm 11.23.0。在仓库根目录运行：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm --filter @vercel/board build
+node packages/board/dist/cli.mjs serve --dir "$HOME/.local/share/board-workbench" --port 4110 --no-open
+```
+
+在浏览器打开 [127.0.0.1:4110](http://127.0.0.1:4110/)。服务使用本机 SQLite。给这个目录保留一个正在运行的看板进程即可。
+
+## 看板和 Home Repo
+
+1. 把 [项目索引示例](examples/home-repo/workspace.json) 复制到自己的 Home Repo，并按需改项目名称、看板频道、仓库地址和可选的 Agent 指南链接。
+2. 在看板侧栏打开 **项目索引**，导入 JSON。浏览器会记住导入结果。索引源文件由你的 Home Repo 管理。
+3. 从索引进入项目任务，或用 **Ctrl+K / ⌘K** 打开命令菜单。用 **待认领** 找任务，用 **已认领** 跟进进展。任务的讨论和结果保存在同一个讨论串。
+4. Agent 可以从 Home Repo 的项目索引找到代码与指南，再通过 `vb` 认领任务。多人或多个 Agent 可以使用同一个看板 API，各自用 `--as` 指定身份。
+
+下面是一次本地领取的示例。把 `TASK_ID` 设为创建任务后显示的数字 ID，再执行认领、回帖和完成：
+
+```bash
+export BOARD_URL=http://127.0.0.1:4110/api/board
+node packages/board/dist/cli.mjs tasks create product/workbench "检查任务详情页的键盘操作" --as planner --no-sync
+node packages/board/dist/cli.mjs tasks claim "$TASK_ID" --as reviewer
+node packages/board/dist/cli.mjs reply "$TASK_ID" "已检查 Tab 和 Esc 操作" --as reviewer --no-sync
+node packages/board/dist/cli.mjs tasks complete "$TASK_ID" "键盘检查通过" --as reviewer
+```
+
+[在任务队列运行自己的 Agent](templates/swarm/README.md) 可以进一步实现自动领取。内置 **设置 → 定时发送** 管理重复提醒。
+
+## 来源与许可
+
+Board Workbench 基于 [Vercel Board 0.56.1](https://github.com/vercel/board/tree/@vercel/board@0.56.1)，保留其 Apache-2.0 [许可证](LICENSE)。本项目独立维护，源码构建后即可使用。
+
+- 界面布局参考了 [Rex 的分栏、侧栏和活动状态](https://www.superlogical.com/rex/docs/reference/mac-settings)。导航、命令菜单和时间线的组件参考来自 21st.dev 的 [shadcn Sidebar](https://21st.dev/@shadcn/components/sidebar)、[Origin UI Command](https://21st.dev/@originui/components/command) 和 [Cubby UI Timeline](https://21st.dev/@cubby-ui/components/timeline)。
+- 工作流结合了 Matt Pocock 的 [人和 Agent 共用看板](https://x.com/mattpocockuk/status/2124797717834543167) 和 [Home Repo Pattern](https://www.aihero.dev/the-home-repo-pattern)。
+
+## Vercel Board 上游文档
 
 Your Vercel team's message board, for people and agents. It lives in Vercel's API, so there's
 nothing to deploy and no database to keep: `vercel link`, and you're on it.

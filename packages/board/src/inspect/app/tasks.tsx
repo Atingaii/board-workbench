@@ -1,4 +1,5 @@
-import { ListFilter, X } from 'lucide-react'
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
+import { ListFilter, ListTodo, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { MessageView } from '../../api/routes.ts'
 import * as board from './board.ts'
@@ -7,7 +8,7 @@ import { describe } from './filters.tsx'
 import { Pendings } from './message.tsx'
 import { Ago, here, Link, navigate, useTypeToFocus, type Where } from './nav.tsx'
 import { isTask, nameOf, placesUnder, stateNow, tasks, type State, type TaskFilter, type TaskRoot } from './store.ts'
-import { Lease, Needs, StateMark, useLapse } from './task.tsx'
+import { Lease, Needs, StateMark, TASK_STATE_LABELS, useLapse } from './task.tsx'
 import { Header, nativeMenu, Panel, Suggest, type KnownLabels } from './ui.tsx'
 import { firstLine } from './words.ts'
 
@@ -15,6 +16,12 @@ import { firstLine } from './words.ts'
 // its thread, which is where a task is read and worked.
 
 const STATES = ['open', 'waiting', 'ready', 'claimed', 'blocked', 'completed', 'failed', 'canceled', 'all'] as const
+
+const STATE_FILTER_LABELS: Record<(typeof STATES)[number], string> = {
+  ...TASK_STATE_LABELS,
+  open: '未结束',
+  all: '全部',
+}
 
 /** The view's filter, from its URL: `/tasks?state=ready&channel=work/&label=step=fix`. */
 function readFilter(params: URLSearchParams): TaskFilter {
@@ -69,41 +76,58 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
   const owners = [...new Set(Object.values(state.messages).flatMap((m) => (isTask(m) ? [m.task.owner] : [])))]
   const assignees = [...new Set(Object.values(state.messages).flatMap((m) => (isTask(m) && m.task.for ? [m.task.for] : [])))]
   const chips: { key: string; text: string; drop: Record<string, string | string[] | null> }[] = [
-    ...(filter.channel ? [{ key: 'channel', text: `in #${filter.channel}`, drop: { channel: null } }] : []),
+    ...(filter.channel ? [{ key: 'channel', text: `频道 #${filter.channel}`, drop: { channel: null } }] : []),
     ...filter.label.map((label) => ({ key: `label:${label}`, text: describe(label), drop: { label: filter.label.filter((l) => l !== label) } })),
-    ...(filter.owner ? [{ key: 'owner', text: `owner ${nameOf(state, filter.owner)}`, drop: { owner: null } }] : []),
-    ...(filter.for ? [{ key: 'for', text: `for ${nameOf(state, filter.for)}`, drop: { for: null } }] : []),
+    ...(filter.owner ? [{ key: 'owner', text: `所有者 ${nameOf(state, filter.owner)}`, drop: { owner: null } }] : []),
+    ...(filter.for ? [{ key: 'for', text: `指派给 ${nameOf(state, filter.for)}`, drop: { for: null } }] : []),
   ]
   const more = listed?.key === key && listed.more
   // Tasks on their way, and any the board refused, with why.
   const pending = state.pending.filter((post) => post.task !== undefined && post.re === null)
   return (
     <>
-      <Header title="tasks" meta="oldest first" live={state.live} lead={props.lead}>
+      <Header title="任务" meta="最早创建优先" live={state.live} lead={props.lead}>
         <TaskFilterButton filter={filter} channels={Object.keys(state.channels).sort()} owners={owners} assignees={assignees} state={state} known={props.known} count={chips.length} />
       </Header>
-      <nav className="tabs plain">
+      <nav className="tabs task-tabs" aria-label="任务状态筛选">
         {STATES.map((name) => (
           <Link key={name} to={here({ params: { state: name === 'open' ? null : name } })} className="tab" current={filter.state === name}>
-            {name}
+            {STATE_FILTER_LABELS[name]}
           </Link>
         ))}
-        {chips.map((chip) => (
-          <span key={chip.key} className="label">
-            {chip.text}
-            <button title="remove" onClick={() => setFilter(chip.drop)}>
-              <X size={11} />
-            </button>
-          </span>
-        ))}
       </nav>
+      {chips.length > 0 && (
+        <div className="filter-bar">
+          {chips.map((chip) => (
+            <span key={chip.key} className="label">
+              {chip.text}
+              <button title="移除筛选条件" onClick={() => setFilter(chip.drop)}>
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+          <button className="clear" onClick={() => setFilter({ channel: null, label: null, owner: null, for: null })}>
+            清除筛选
+          </button>
+        </div>
+      )}
       <div className="page">
         {refused?.tooWide ? (
           <Places channels={Object.keys(state.channels)} under={filter.channel} />
         ) : refused !== null ? (
           <p className="empty error">{refused.text}</p>
         ) : rows.length === 0 && pending.length === 0 ? (
-          <p className="empty">{loading ? 'loading…' : chips.length > 0 || filter.state !== 'open' ? 'no tasks match' : 'no open tasks'}</p>
+          <div className="empty empty-state">
+            <ListTodo size={18} strokeWidth={1.6} className="empty-icon" aria-hidden="true" />
+            <p className="empty-title">{loading ? '正在加载…' : chips.length > 0 || filter.state !== 'open' ? '没有符合条件的任务' : '没有未结束的任务'}</p>
+            {!loading && (
+              <p className="empty-hint">
+                {chips.length > 0 || filter.state !== 'open'
+                  ? '调整状态标签或筛选条件，即可查看其他任务。'
+                  : '在下方输入框发布新任务，或切换状态标签查看历史记录。'}
+              </p>
+            )}
+          </div>
         ) : (
           <div className="task-rows">
             {rows.map((row) => (
@@ -117,14 +141,14 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
             className="clear more"
             onClick={() => void board.loadTasks(filter, listed.cursor).then((page) => 'cursor' in page && setListed({ key, ...page }))}
           >
-            load more
+            加载更多
           </button>
         )}
       </div>
       <Composer
         scope="tasks"
         role="main"
-        placeholder="start a task…"
+        placeholder="创建任务…"
         known={props.known}
         channels={Object.keys(state.channels).sort()}
         {...(filter.channel && !filter.channel.endsWith('/') ? { channel: filter.channel } : {})}
@@ -144,13 +168,13 @@ function Places({ channels, under }: { channels: string[]; under: string | undef
   return (
     <>
       <p className="empty">
-        {under ? `#${under} has` : 'this board has'} too many channels to list tasks from at once, since you don't read every channel here. pick where to look:
+        {under ? `#${under} 下` : '此看板中'}的频道较多。你只有部分频道的读取权限。请选择要查看任务的位置。
       </p>
       <div className="task-places">
         {places.map(({ place, channels: count }) => (
           <Link key={place} to={here({ params: { channel: place } })} className="task-place">
             <span className="name">#{place}</span>
-            {place.endsWith('/') && <span className="count">{count === 1 ? '1 channel' : `${count} channels`}</span>}
+            {place.endsWith('/') && <span className="count">{count} 个频道</span>}
           </Link>
         ))}
       </div>
@@ -181,7 +205,8 @@ function TaskRow({ root, state, open }: { root: TaskRoot; state: State; open: bo
       <StateMark state={current} />
       <span className="task-title" {...nativeMenu}>
         {/* A task can be its files alone. */}
-        <span className="faint">#{root.id}</span> {firstLine(root.text) || (root.attachments ?? []).map((file) => file.name).join(', ') || 'message removed'}
+        <span className="task-subject">{firstLine(root.text) || (root.attachments ?? []).map((file) => file.name).join(', ') || '消息已移除'}</span>
+        <span className="task-id">#{root.id}</span>
         {labels.map(([key, value]) => (
           <span key={key} className="label">
             {key}={value}
@@ -194,10 +219,10 @@ function TaskRow({ root, state, open }: { root: TaskRoot; state: State; open: bo
             {nameOf(state, task.claim.actor)} · <Lease until={task.claim.until} />
           </>
         )}
-        {current === 'ready' && (task.state === 'claimed' ? 'lease ran out' : task.for ? `for ${nameOf(state, task.for)}` : '')}
+        {current === 'ready' && (task.state === 'claimed' ? '认领已过期' : task.for ? `指派给 ${nameOf(state, task.for)}` : '')}
         {current === 'waiting' && (
           <>
-            needs <Needs ids={task.needs} state={state} />
+            依赖 <Needs ids={task.needs} state={state} />
           </>
         )}
         {current === 'blocked' && (task.blocked?.kind ?? task.blocked?.reason)}
@@ -232,14 +257,14 @@ function TaskFilterButton(props: { filter: TaskFilter; channels: string[]; owner
     <div className="segments">
       {['', ...ids].map((id) => (
         <button key={id || 'any'} className={`segment${(filter[name] ?? '') === id ? ' on' : ''}`} title={id} onClick={() => setFilter({ [name]: id || null })}>
-          {id ? nameOf(state, id) : 'anyone'}
+          {id ? nameOf(state, id) : '不限'}
         </button>
       ))}
     </div>
   )
   return (
     <Panel
-      title="filter tasks"
+      title="筛选任务"
       trigger={
         <>
           <ListFilter size={15} strokeWidth={1.75} />
@@ -251,7 +276,7 @@ function TaskFilterButton(props: { filter: TaskFilter; channels: string[]; owner
     >
       <div className="filter-form">
         <div className="filter-row">
-          <span className="filter-name">channel</span>
+          <span className="filter-name">频道</span>
           <Suggest
             prefix="#"
             value={channel}
@@ -261,29 +286,29 @@ function TaskFilterButton(props: { filter: TaskFilter; channels: string[]; owner
               if (places.includes(next) || next === '') setFilter({ channel: next || null })
             }}
             items={places}
-            placeholder="any (work/ for all under it)"
+            placeholder="不限（输入 work/ 查看其下全部频道）"
             onEnter={() => setFilter({ channel: channel.trim().replace(/^#/, '') || null })}
           />
         </div>
         <div className="filter-row">
-          <span className="filter-name">labels</span>
+          <span className="filter-name">标签</span>
           <div className="label-add">
-            <Suggest value={key} onChange={setKey} items={[...props.known.keys()].filter((k) => !k.startsWith('board.'))} placeholder="key" onEnter={() => (value ? addLabel() : valueRef.current?.querySelector('input')?.focus())} />
+            <Suggest value={key} onChange={setKey} items={[...props.known.keys()].filter((k) => !k.startsWith('board.'))} placeholder="键" onEnter={() => (value ? addLabel() : valueRef.current?.querySelector('input')?.focus())} />
             <span className="faint">=</span>
             <div ref={valueRef} className="grow">
-              <Suggest value={value} onChange={setValue} items={[...(props.known.get(key.trim()) ?? [])]} placeholder="any (or a|b)" onEnter={addLabel} />
+              <Suggest value={value} onChange={setValue} items={[...(props.known.get(key.trim()) ?? [])]} placeholder="不限（或输入 a|b）" onEnter={addLabel} />
             </div>
             <button className="send small" disabled={!key.trim()} onClick={addLabel}>
-              add
+              添加
             </button>
           </div>
         </div>
         <div className="filter-row">
-          <span className="filter-name">owner</span>
+          <span className="filter-name">所有者</span>
           {who('owner', props.owners)}
         </div>
         <div className="filter-row">
-          <span className="filter-name">for</span>
+          <span className="filter-name">指派给</span>
           {who('for', props.assignees)}
         </div>
       </div>

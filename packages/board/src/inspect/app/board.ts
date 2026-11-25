@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import { useSyncExternalStore } from 'react'
 import type { BoardEventView, Explanation, GrantInput, GrantWriteOptions, InboxEntry, Me, MessageView, SchemaInput, SyncedView, TaskView } from '../../api/routes.ts'
 // `@vercel/board/access`, in an app of yours.
@@ -98,7 +99,7 @@ export async function setProfile(next: Profile | null | undefined): Promise<bool
     profile = next
     set((s) => ({ ...s, me }))
   } catch (error) {
-    toast(`couldn't switch: ${said(error)}`)
+    toast(`无法切换身份：${said(error)}`)
     return false
   }
   if (next) {
@@ -198,7 +199,7 @@ export async function boot() {
       if (queue.push(event) === 1) requestAnimationFrame(flush)
     },
     (feed) => set((s) => ({ ...s, live: feed === 'live' ? 'live' : 'reconnecting' })),
-  ).catch((error) => toast(`live updates stopped: ${said(error)}`))
+  ).catch((error) => toast(`实时更新已停止：${said(error)}`))
   // Who's who, for the names of a task's owner and holder; and the open tasks, for their count.
   void team.actors().then((actors) => set((s) => ({ ...s, actors: { ...Object.fromEntries(actors.map((actor) => [actor.id, actor])), ...s.actors } })), () => {})
   void loadSchemas()
@@ -348,7 +349,7 @@ export async function send(
       const scheduled = await team.schedule(post.re === null ? post.channel : { re: post.re }, { ...content, ...post.later })
       outgoing.delete(key)
       set((s) => ({ ...s, pending: s.pending.filter((p) => p.key !== key) }))
-      toast(`scheduled for ${new Date(scheduled.next ?? scheduled.first).toLocaleString()}`)
+      toast(`已定于 ${new Date(scheduled.next ?? scheduled.first).toLocaleString('zh-CN')} 发送`)
       void loadSchedules()
       return
     }
@@ -421,7 +422,7 @@ export async function saveAttachment(attachment: Attachment) {
     link.download = attachment.name
     link.click()
   } catch (error) {
-    toast(`couldn't download ${attachment.name}: ${said(error)}`)
+    toast(`无法下载 ${attachment.name}：${said(error)}`)
   }
 }
 
@@ -599,7 +600,7 @@ async function askingFirst<T>(write: (options: GrantWriteOptions) => Promise<T>)
   try {
     return await write({})
   } catch (error) {
-    if (!lockout(error) || !confirm(`${said(error)}: only someone who still manages grants there could change it then. Go ahead?`)) throw error
+    if (!lockout(error) || !confirm(`${said(error)}。继续后，只有仍有管理权限的人才能修改这条授权。要继续吗？`)) throw error
     return write({ lockMeOut: true })
   }
 }
@@ -622,7 +623,7 @@ export async function revokeGrant(id: string) {
     await askingFirst((options) => team.revokeGrant(id, options))
   } catch (error) {
     // A lockout they said no to is no failure: nothing was asked of the board again.
-    if (!lockout(error)) toast(`couldn't revoke ${id}: ${said(error)}`)
+    if (!lockout(error)) toast(`无法撤销 ${id}：${said(error)}`)
   }
   await loadGrants()
 }
@@ -648,7 +649,7 @@ export async function cancelSchedule(id: string) {
   try {
     await team.cancelSchedule(id)
   } catch (error) {
-    toast(`couldn't cancel ${id}: ${said(error)}`)
+    toast(`无法取消 ${id}：${said(error)}`)
   }
   await loadSchedules()
 }
@@ -681,10 +682,10 @@ export async function createChannel(path: string, options: { private?: boolean }
   try {
     const { channel, created } = await team.createChannel(path, options)
     set((s) => (s.channels[channel.path] ? s : { ...s, channels: { ...s.channels, [channel.path]: channel } }))
-    if (!created) toast(`#${path} is there already`)
+    if (!created) toast(`频道 #${path} 已存在`)
     return true
   } catch (error) {
-    toast(`couldn't make #${path}: ${said(error)}`)
+    toast(`无法创建频道 #${path}：${said(error)}`)
     return false
   }
 }

@@ -1,6 +1,8 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import type { ProfileOption } from '../client/client.ts'
 import { VERSION } from '../version.ts'
 import { CSS } from './style.ts'
+import { WORKBENCH_CSS } from './workbench-style.ts'
 
 // What every inspector serves alike, on this machine (`server.ts`) or in your app (`handler.ts`):
 // the page's HTML, its policy, and which proxied paths it refuses.
@@ -13,19 +15,20 @@ const attribute = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${ch
  * are under too.
  */
 export const shell = ({ token, profile, base, named = false }: { token: string; profile: ProfileOption; base: string; named?: boolean }) => `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="inspect-token" content="${attribute(token)}">
 <meta name="inspect-profile" content="${attribute(JSON.stringify(profile))}">
 <meta name="inspect-base" content="${attribute(base)}">
-${named ? '<meta name="inspect-named" content="1">\n' : ''}<title>board</title>
-<style>${CSS}</style>
+${named ? '<meta name="inspect-named" content="1">\n' : ''}<title>Board Workbench</title>
+<style>${CSS}
+${WORKBENCH_CSS}</style>
 </head>
 <body>
 <div id="root"></div>
-<script type="module" src="${attribute(base)}/app.js?v=${attribute(VERSION)}"></script>
+<script type="module" src="${attribute(base)}/app.js?v=${attribute(VERSION)}&amp;edition=workbench"></script>
 </body>
 </html>`
 

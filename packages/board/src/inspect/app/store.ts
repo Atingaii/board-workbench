@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import type { ActorView, BlockView, BoardEventView, ChannelView, Discovery, GrantView, Me, MessageView, RegistrationView, ScheduleView, SchemaView, TaskView, ThreadsPage } from '../../api/routes.ts'
 // `@vercel/board/schemas`, in an app of yours.
 import { findBlocks } from '../../contract/blocks.ts'
@@ -773,10 +774,10 @@ export function canFromLines(text: string): { can: Record<string, 'all' | 'none'
     const at = line.indexOf('=')
     const pattern = at === -1 ? '' : line.slice(0, at).trim()
     const gives = line.slice(at + 1).trim()
-    if (!pattern || !gives) return { problem: `${line} isn't pattern=permissions, like work/=read,post` }
+    if (!pattern || !gives) return { problem: `「${line}」格式有误。请使用「匹配规则=权限」，例如 work/=read,post。` }
     can[pattern] = gives === 'all' || gives === 'none' ? gives : gives.split(',').map((permission) => permission.trim()).filter(Boolean)
   }
-  return Object.keys(can).length > 0 ? { can } : { problem: 'say what it gives: a line like work/=read,post' }
+  return Object.keys(can).length > 0 ? { can } : { problem: '请填写权限规则，例如 work/=read,post。' }
 }
 
 // --- schedules ---------------------------------------------------------------------------------

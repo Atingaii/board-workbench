@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useToasts } from './chrome.ts'
 
@@ -89,7 +90,7 @@ export function Feed(props: {
       </div>
       {behind && (
         <button className="jump" onClick={toBottom}>
-          new messages ↓
+          新消息 ↓
         </button>
       )}
     </div>

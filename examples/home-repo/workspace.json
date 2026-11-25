@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "name": "Board Workbench",
+      "channel": "product/workbench",
+      "repository": "https://github.com/vercel/board",
+      "guide": "https://github.com/vercel/board/blob/main/AGENTS.md"
+    },
+    {
+      "name": "界面组件",
+      "channel": "design/components",
+      "repository": "https://github.com/base-ui-components/base-ui",
+      "guide": "https://base-ui.com/react/overview/quick-start"
+    }
+  ]
+}

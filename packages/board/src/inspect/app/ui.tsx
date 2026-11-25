@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import { Autocomplete } from '@base-ui/react/autocomplete'
 import { ContextMenu } from '@base-ui/react/context-menu'
 import { Menu as BaseMenu } from '@base-ui/react/menu'
@@ -120,7 +121,7 @@ export function EmojiPicker(props: { trigger: ReactNode; onPick: (name: string) 
   }
   return (
     <Popover.Root open={open} onOpenChange={change}>
-      <Popover.Trigger className="tool" aria-label="add a reaction" title="add a reaction">
+      <Popover.Trigger className="tool" aria-label="添加表情回应" title="添加表情回应">
         {props.trigger}
       </Popover.Trigger>
       <Popover.Portal>
@@ -181,7 +182,7 @@ export function Suggest(props: {
         <Autocomplete.Positioner className="positioner" align="start" sideOffset={4}>
           <Frame>
             <Autocomplete.Popup className="menu list">
-              <Autocomplete.Empty className="empty-item">nothing yet: type a new one</Autocomplete.Empty>
+              <Autocomplete.Empty className="empty-item">暂无选项，可以输入新值</Autocomplete.Empty>
               <Autocomplete.List>
                 {(item: string) => (
                   <Autocomplete.Item key={item} value={item} className="item">
@@ -224,14 +225,14 @@ export function LabelEditor(props: {
   return (
     <div className="labels-editor">
       {entries.length === 0 ? (
-        <p className="hint">no labels</p>
+        <p className="hint">暂无标签</p>
       ) : (
         <div className="label-rows">
           {entries.map(([k, v]) => (
             <div key={k} className="label-row">
               <span className="label-key">{k}</span>
               <span className="label-value">{v || '—'}</span>
-              <button className="tool" title={`remove ${k}`} onClick={() => props.onUnset(k)}>
+              <button className="tool" title={`移除 ${k}`} onClick={() => props.onUnset(k)}>
                 <X size={13} />
               </button>
             </div>
@@ -243,13 +244,13 @@ export function LabelEditor(props: {
           value={key}
           onChange={setKey}
           items={[...props.known.keys()].filter((k) => !(k in props.labels) && !k.startsWith('board.'))}
-          placeholder="key"
+          placeholder="标签名"
           autoFocus
           onEnter={() => valueRef.current?.querySelector('input')?.focus()}
         />
         <span className="faint">=</span>
         <div ref={valueRef} className="grow">
-          <Suggest value={value} onChange={setValue} items={[...(props.known.get(key.trim()) ?? [])]} placeholder="value" onEnter={add} />
+          <Suggest value={value} onChange={setValue} items={[...(props.known.get(key.trim()) ?? [])]} placeholder="标签值" onEnter={add} />
         </div>
         <button className="send small" disabled={!key.trim()} onClick={add}>
           set
@@ -335,18 +336,18 @@ export function ResizeHandle(props: {
 }
 
 /** A view's header: its title, a quiet line beside it, its controls, and whether the feed is live. */
-export function Header(props: { title: string; meta?: string | undefined; live?: 'connecting' | 'live' | 'reconnecting'; lead?: ReactNode; flat?: boolean; children?: ReactNode }) {
+export function Header(props: { title: string; meta?: string | undefined; live?: 'connecting' | 'live' | 'reconnecting'; lead?: ReactNode; flat?: boolean; mono?: boolean; children?: ReactNode }) {
   return (
     <header className={`header${props.flat ? ' flat' : ''}`}>
       {props.lead}
-      <span className="title">{props.title}</span>
+      <span className={`title${props.mono ? ' mono' : ''}`}>{props.title}</span>
       {props.meta && <span className="meta">{props.meta}</span>}
       <span className="spacer" />
       {props.children}
       {props.live && (
-        <span className={`live ${props.live}`} title={props.live === 'live' ? 'receiving board events' : 'the feed reconnects on its own'}>
+        <span className={`live ${props.live}`} title={props.live === 'live' ? '正在接收看板动态' : '看板会自动重连'}>
           <i />
-          {props.live === 'live' ? 'live' : props.live}
+          {{ live: '实时', connecting: '正在连接', reconnecting: '正在重连' }[props.live]}
         </span>
       )}
     </header>
@@ -428,5 +429,5 @@ export function Ask(props: AskProps & { label: ReactNode; title: string; trigger
 export function Unlisted({ listed }: { listed: Listed<unknown> }) {
   if (listed.is === 'here') return null
   if (listed.is === 'failed') return <p className="empty error">{listed.why}</p>
-  return <p className="empty">loading…</p>
+  return <p className="empty">正在加载…</p>
 }

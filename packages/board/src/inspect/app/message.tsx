@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import { Clock, Ellipsis, FileText, MessageSquare, SmilePlus, Tag } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
@@ -87,7 +88,7 @@ export const Text = memo(function Text({ text, edited = false, names = NO_NAMES 
       <Markdown remarkPlugins={plugins} components={COMPONENTS} skipHtml>
         {text}
       </Markdown>
-      {edited && <span className="edited"> (edited)</span>}
+      {edited && <span className="edited">（已编辑）</span>}
     </div>
   )
 })
@@ -111,10 +112,22 @@ function Body({ m, schemas, names }: { m: MessageView; schemas: SchemaView[] | n
           />
         ),
       )}
-      {edited && lastText === -1 && <span className="edited">(edited)</span>}
+      {edited && lastText === -1 && <span className="edited">（已编辑）</span>}
     </>
   )
 }
+
+const UNAVAILABLE_REASONS = new Map([
+  ['channel_not_found', '找不到频道'],
+  ['message_not_found', '找不到消息'],
+  ['not_in_channel', '看板未加入该频道'],
+  ['not_readable', '没有读取权限'],
+  ['no Slack client to read it with', '没有可用的 Slack 连接'],
+  ['poster_cannot_read', '发帖人没有读取权限'],
+  ['private_channel', '这是私密频道'],
+  ['shared_channel', '这是共享频道'],
+  ['unknown', '原因未知'],
+])
 
 /**
  * The platform messages a message links to (Slack permalinks), quoted under it:
@@ -129,8 +142,10 @@ export function Links({ items }: { items: MessageView['links'] }) {
           <div className="link-meta" {...nativeMenu}>
             {link.snapshot && <span className="author">{link.snapshot.author}</span>}
             {link.message !== null && <span className="faint">#{link.message}</span>}
-            <a href={link.url} target="_blank" rel="noreferrer">{link.snapshot ? 'open' : link.url}</a>
-            {!link.snapshot && <span className="faint">couldn't read it: {link.unavailable ?? 'unknown'}</span>}
+            <a href={link.url} target="_blank" rel="noreferrer">{link.snapshot ? '打开' : link.url}</a>
+            {!link.snapshot && (
+              <span className="faint">无法读取：{UNAVAILABLE_REASONS.get(link.unavailable ?? 'unknown') ?? link.unavailable}</span>
+            )}
           </div>
           {link.snapshot?.text && <Text text={link.snapshot.text} />}
           {link.snapshot?.files.map((file, i) => (
@@ -180,14 +195,14 @@ function AttachmentView({ attachment }: { attachment: Attachment }) {
   const title = `${attachment.name} · ${fileSize(attachment.size)}`
   if (media === 'image')
     return (
-      <button className="attachment-media" title={`${title} · click to open`} onClick={() => url && window.open(url, '_blank', 'noopener')}>
+      <button className="attachment-media" title={`${title} · 点击打开`} onClick={() => url && window.open(url, '_blank', 'noopener')}>
         {url && <img src={url} alt={attachment.name} />}
       </button>
     )
   if (media === 'video')
     return <span className="attachment-media" title={title}>{url && <video src={url} controls preload="metadata" />}</span>
   return (
-    <button className="file" title={`download ${attachment.name}`} onClick={() => void board.saveAttachment(attachment)}>
+    <button className="file" title={`下载 ${attachment.name}`} onClick={() => void board.saveAttachment(attachment)}>
       <FileText size={14} strokeWidth={1.75} />
       <span className="file-name">{attachment.name}</span>
       <span className="faint">{fileSize(attachment.size)}</span>
@@ -211,7 +226,7 @@ export function SourceLogo({ platform }: { platform: string }) {
   const source = SOURCES[platform]
   if (!source) return <span className="source text">{platform.slice(0, 1)}</span>
   return (
-    <span className="source" title={`from ${source.name}`}>
+    <span className="source" title={`来自 ${source.name}`}>
       <svg viewBox="0 0 24 24" aria-label={source.name}>
         {source.paths.map((path, i) => (
           <path key={i} d={path.d} fill={path.fill} />
@@ -235,9 +250,9 @@ const day = (iso: string) => new Date(iso).toDateString()
 function dayLabel(iso: string, now: number): string {
   const date = new Date(iso)
   const today = new Date(now)
-  if (date.toDateString() === today.toDateString()) return 'today'
-  if (date.toDateString() === new Date(now - 86_400_000).toDateString()) return 'yesterday'
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  if (date.toDateString() === today.toDateString()) return '今天'
+  if (date.toDateString() === new Date(now - 86_400_000).toDateString()) return '昨天'
+  return date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', year: 'numeric' })
 }
 
 export function DayDivider({ iso, now }: { iso: string; now: number }) {
@@ -296,15 +311,15 @@ function Editor({ m }: { m: MessageView }) {
           }
         }}
       />
-      <span className="hint">enter to save · esc to cancel</span>
+      <span className="hint">Enter 保存 · Esc 取消</span>
     </div>
   )
 }
 
 const copy = (text: string, what: string) =>
   navigator.clipboard.writeText(text).then(
-    () => toast(`copied ${what}`),
-    () => toast(`couldn't copy ${what}`),
+    () => toast(`已复制${what}`),
+    () => toast(`无法复制${what}`),
   )
 
 export function MessageRow({ m, options, continued = false }: { m: MessageView; options: RowOptions; continued?: boolean }) {
@@ -326,18 +341,18 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
     <>
       <MenuEmojiRow emojis={MENU_EMOJI} onPick={toggle} />
       <MenuSeparator />
-      {options.openThread && <MenuItem onClick={() => options.openThread!(thread)}>{m.re === null ? 'reply in thread' : 'open thread'}</MenuItem>}
-      <MenuItem onClick={() => setLabelsOpen(true)}>labels…</MenuItem>
-      {m.text && <MenuItem onClick={() => void copy(m.text, 'text')}>copy text</MenuItem>}
-      <MenuItem onClick={() => void copy(String(m.id), `#${m.id}`)} hint={`#${m.id}`}>
-        copy id
+      {options.openThread && <MenuItem onClick={() => options.openThread!(thread)}>{m.re === null ? '在讨论串中回复' : '打开讨论串'}</MenuItem>}
+      <MenuItem onClick={() => setLabelsOpen(true)}>标签…</MenuItem>
+      {m.text && <MenuItem onClick={() => void copy(m.text, '文本')}>复制文本</MenuItem>}
+      <MenuItem onClick={() => void copy(String(m.id), `消息 ID #${m.id}`)} hint={`#${m.id}`}>
+        复制消息 ID
       </MenuItem>
       {mine && (
         <>
           <MenuSeparator />
-          <MenuItem onClick={() => setEditing(m.id)}>edit message</MenuItem>
-          <MenuItem danger onClick={() => confirm(`Delete #${m.id}? It's removed on Slack and GitHub too.`) && void board.remove(m.id)}>
-            delete message
+          <MenuItem onClick={() => setEditing(m.id)}>编辑消息</MenuItem>
+          <MenuItem danger onClick={() => confirm(`删除消息 #${m.id}？Slack 和 GitHub 上的对应消息也会被删除。`) && void board.remove(m.id)}>
+            删除消息
           </MenuItem>
         </>
       )}
@@ -356,7 +371,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
         <div className="gutter">
           {continued ? (
             <span className="gutter-time" {...nativeMenu}>
-              {new Date(m.createdAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, '')}
+              {new Date(m.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}
             </span>
           ) : (
             <span className="avatar-wrap">
@@ -373,17 +388,17 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
               </span>
               {options.context?.(m)}
               <Ago iso={m.createdAt} />
-              {m.noSync && <span className="badge">board only</span>}
+              {m.noSync && <span className="badge">仅看板</span>}
               {m.schedule && (
-                <span className="badge" title={`sent by schedule ${m.schedule.id}: send ${m.schedule.n + 1}`}>
-                  <Clock size={10} /> scheduled
+                <span className="badge" title={`由计划 ${m.schedule.id} 第 ${m.schedule.n + 1} 次发送`}>
+                  <Clock size={10} /> 定时发送
                 </span>
               )}
             </div>
           )}
           {m.deleted ? (
             <div className="removed" {...nativeMenu}>
-              message removed
+              消息已删除
             </div>
           ) : editing ? (
             <Editor m={m} />
@@ -398,7 +413,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
           {(labels.length > 0 || Object.keys(m.reactions).length > 0) && (
             <div className="chips">
               {labels.map(([key, value]) => (
-                <button key={key} className="label" title="edit labels" onClick={() => setLabelsOpen(true)}>
+                <button key={key} className="label" title="编辑标签" onClick={() => setLabelsOpen(true)}>
                   {key}={value}
                 </button>
               ))}
@@ -411,7 +426,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
           )}
           {Object.entries(m.undelivered ?? {}).map(([target, error]) => (
             <div key={target} className="undelivered">
-              ✗ didn't reach {target}: {error}
+              ✗ 未能同步到 {target}：{error}
             </div>
           ))}
           {replies && replies.count > 0 && options.openThread && (
@@ -421,31 +436,31 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
                   <Avatar key={r.by.actor} name={authorName(r)} url={r.author?.avatar} size={16} />
                 ))}
               </span>
-              {replies.count} {replies.count === 1 ? 'reply' : 'replies'}
-              {replies.last && <Ago iso={replies.last.createdAt} prefix=" · last " />}
+              {replies.count} 条回复
+              {replies.last && <Ago iso={replies.last.createdAt} prefix=" · 最近回复：" />}
             </button>
           )}
         </div>
         {active && !m.deleted && (
           <div className="actions">
-            <button className="tool" title={`${reacted('thumbs_up') ? 'remove' : 'react'} 👍`} onClick={() => toggle('thumbs_up')}>
+            <button className="tool" title={reacted('thumbs_up') ? '取消 👍' : '添加 👍'} onClick={() => toggle('thumbs_up')}>
               👍
             </button>
             <EmojiPicker trigger={<SmilePlus size={15} strokeWidth={1.75} />} onPick={toggle} onOpenChange={setMenuOpen} />
             {options.openThread && (
-              <button className="tool" title={m.re === null ? 'reply in thread' : 'open thread'} onClick={() => options.openThread!(thread)}>
+              <button className="tool" title={m.re === null ? '在讨论串中回复' : '打开讨论串'} onClick={() => options.openThread!(thread)}>
                 <MessageSquare size={15} strokeWidth={1.75} />
               </button>
             )}
-            <button className="tool" title="labels" onClick={() => setLabelsOpen(true)}>
+            <button className="tool" title="标签" onClick={() => setLabelsOpen(true)}>
               <Tag size={15} strokeWidth={1.75} />
             </button>
-            <Menu trigger={<Ellipsis size={15} strokeWidth={1.75} />} title="more" onOpenChange={setMenuOpen}>
+            <Menu trigger={<Ellipsis size={15} strokeWidth={1.75} />} title="更多操作" onOpenChange={setMenuOpen}>
               {items}
             </Menu>
           </div>
         )}
-        <Panel title="labels" open={labelsOpen} onOpenChange={setLabelsOpen} anchor={row}>
+        <Panel title="标签" open={labelsOpen} onOpenChange={setLabelsOpen} anchor={row}>
           <LabelEditor
             labels={m.labels}
             known={options.known}
@@ -485,7 +500,7 @@ export function Pendings(props: { posts: Pending[]; me: Me; after?: MessageView;
 
 /** A post on its way, or one that didn't make it. */
 export function PendingRow({ post, me, continued = false }: { post: Pending; me: Me; continued?: boolean }) {
-  const status = post.later ? (post.error ? "didn't schedule" : 'scheduling…') : post.error ? "didn't send" : 'sending…'
+  const status = post.later ? (post.error ? '定时发送设置失败' : '正在设置定时发送…') : post.error ? '发送失败' : '正在发送…'
   return (
     <div className={`message pending${continued ? ' continued' : ''}${post.error ? ' failed' : ''}`}>
       <div className="gutter">
@@ -523,7 +538,7 @@ export function PendingRow({ post, me, continued = false }: { post: Pending; me:
         )}
         {post.error && (
           <div className="undelivered">
-            ✗ {post.error} · <button onClick={() => void board.retry(post)}>retry</button> · <button onClick={() => board.discard(post.key)}>discard</button>
+            ✗ {post.error} · <button onClick={() => void board.retry(post)}>重试</button> · <button onClick={() => board.discard(post.key)}>丢弃</button>
           </div>
         )}
       </div>

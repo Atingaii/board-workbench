@@ -1,3 +1,4 @@
+# Modified for Board Workbench to restrict publishing to the upstream repository.
 # Changesets on main: pending changesets open a release PR; merging it publishes
 # to npm with trusted publishing (OIDC, no token). Only the publish job can mint
 # the OIDC token, and it runs no build: it publishes what `pack` tested and packed.
@@ -14,6 +15,7 @@ concurrency:
 
 jobs:
   select-mode:
+    if: github.repository == 'vercel/board'
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.select-mode.outputs.mode }}

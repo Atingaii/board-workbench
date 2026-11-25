@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import { RefreshCw } from 'lucide-react'
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -13,6 +14,23 @@ import { cadence, firstLine, shownName, until } from './words.ts'
 // The board's configuration, apart from what's said on it: who gets in, what blocks can hold,
 // what posts later, what watches, and what syncs. One view, a tab per section.
 
+export const SECTION_LABELS: Record<Section, string> = {
+  access: '访问权限',
+  schemas: '数据结构',
+  schedules: '定时发送',
+  watchers: '监听器',
+  sync: '同步',
+}
+
+const SCHEDULE_STATE_LABELS = { pending: '待发送', done: '已发送', canceled: '已取消' } as const
+const SYNC_EVENT_LABELS = new Map([
+  ['message', '消息'],
+  ['edited', '消息编辑'],
+  ['deleted', '消息删除'],
+  ['reaction', '表情回应'],
+  ['lifecycle', '状态变更'],
+])
+
 const ActionsSlot = createContext<HTMLElement | null>(null)
 
 /** A section's own actions, at the end of the tabs' row. */
@@ -26,11 +44,11 @@ export function Settings(props: { state: State; viewer: Viewer; now: number; lea
   const [slot, setSlot] = useState<HTMLElement | null>(null)
   return (
     <>
-      <Header title="settings" lead={props.lead} flat />
+      <Header title="设置" lead={props.lead} flat />
       <nav className="tabs">
         {SECTIONS.map((name) => (
           <Link key={name} to={`/settings/${name}`} className="tab" current={name === section}>
-            {name}
+            {SECTION_LABELS[name]}
           </Link>
         ))}
         <span className="tab-actions" ref={setSlot} />
@@ -59,35 +77,35 @@ function Schedules({ state, viewer, now, all }: { state: State; viewer: Viewer; 
     <>
       {listed.is === 'here' && <Actions>
         <Link to="/settings/schedules" className="tab" current={!all}>
-          pending
+          待发送
         </Link>
         <Link to="/settings/schedules?show=all" className="tab" current={all}>
-          all
+          全部
         </Link>
       </Actions>}
       <Unlisted listed={listed} />
-      {listed.is === 'here' && listed.items.length === 0 && <p className="empty">nothing scheduled</p>}
+      {listed.is === 'here' && listed.items.length === 0 && <p className="empty">没有定时发送的消息</p>}
       {listed.is === 'here' &&
         listed.items.map((schedule) => (
           <div key={schedule.id} className="sched-row" {...nativeMenu}>
-            <span className={schedule.state === 'pending' ? 'sched-when' : 'sched-when faint'} title={schedule.next ? new Date(schedule.next).toLocaleString() : undefined}>
-              {schedule.state === 'pending' && schedule.next ? until(schedule.next, now) : schedule.state}
+            <span className={schedule.state === 'pending' ? 'sched-when' : 'sched-when faint'} title={schedule.next ? new Date(schedule.next).toLocaleString('zh-CN') : undefined}>
+              {schedule.state === 'pending' && schedule.next ? until(schedule.next, now) : SCHEDULE_STATE_LABELS[schedule.state]}
             </span>
             <span className="faint">{cadence(schedule)}</span>
-            <span className="sched-text">{firstLine(schedule.text) || 'files only'}</span>
+            <span className="sched-text">{firstLine(schedule.text) || '仅含文件'}</span>
             {schedule.re === null ? (
               <Link to={`/c/${schedule.channel}`} className="text-link">
                 #{schedule.channel}
               </Link>
             ) : (
               <Link to={here({ thread: schedule.re })} className="text-link">
-                reply in #{schedule.channel}
+                在 #{schedule.channel} 中回复
               </Link>
             )}
             <span className="faint small">{shownName(schedule.author)}</span>
             {schedule.state === 'pending' && (schedule.by.principal === viewer.principal || viewer.may('manage', schedule.channel)) ? (
               <button className="act quiet" onClick={() => void board.cancelSchedule(schedule.id)}>
-                cancel
+                取消发送
               </button>
             ) : (
               <span />
@@ -109,13 +127,13 @@ function Watchers({ state }: { state: State }) {
   return (
     <>
       <Unlisted listed={listed} />
-      {listed.is === 'here' && listed.items.length === 0 && <p className="empty">no watchers registered</p>}
+      {listed.is === 'here' && listed.items.length === 0 && <p className="empty">尚未注册监听器</p>}
       {listed.is === 'here' &&
         listed.items.map((registration) => (
           <section key={registration.owner} className="registration" {...nativeMenu}>
             <h3>
               <b>{nameOf(state, registration.owner)}</b>
-              {registration.path ? ` · woken at ${registration.path}${registration.branch ? ` (${registration.branch})` : ''}` : registration.url ? ` · woken at ${registration.url}` : ' · pulls on its own'}
+              {registration.path ? ` · 唤醒位置 ${registration.path}${registration.branch ? ` (${registration.branch})` : ''}` : registration.url ? ` · 唤醒地址 ${registration.url}` : ' · 主动拉取'}
             </h3>
             {Object.entries(registration.watch).map(([id, watcher]) => (
               <div key={id} className="watch-row">
@@ -126,7 +144,7 @@ function Watchers({ state }: { state: State }) {
             {registration.sync.map((entry) => (
               <div key={entry.key} className="watch-row">
                 <span className="watch-id">{entry.key}</span>
-                <span className="faint">syncs {entry.platform}</span>
+                <span className="faint">同步 {entry.platform}</span>
               </div>
             ))}
           </section>
@@ -152,11 +170,11 @@ function Sync({ state, entry }: { state: State; entry: string | null }) {
     setEvents(null)
     load()
   }, [key])
-  if (entries.length === 0 || key === null) return <p className="empty">this board syncs nothing</p>
+  if (entries.length === 0 || key === null) return <p className="empty">此看板尚未配置同步</p>
   return (
     <>
       <Actions>
-        <button className="tool" title="refresh" onClick={load}>
+        <button className="tool" title="刷新" onClick={load}>
           <RefreshCw size={14} strokeWidth={1.75} />
         </button>
       </Actions>
@@ -168,16 +186,16 @@ function Sync({ state, entry }: { state: State; entry: string | null }) {
           </Link>
         ))}
       </nav>
-      {error && <p className="empty error">{error}</p>}
-      {!error && events === null && <p className="empty">loading…</p>}
-      {events?.length === 0 && <p className="empty">no events yet</p>}
+      {error && <p className="empty error">加载同步事件失败。{error}</p>}
+      {!error && events === null && <p className="empty">正在加载…</p>}
+      {events?.length === 0 && <p className="empty">暂无事件</p>}
       {events?.map((row) => {
         const event = row.event as { kind: string; text?: string; type?: string; emoji?: string; author?: { handle?: string } }
         return (
           <div key={row.id} className="inbox-row">
             <Ago iso={row.createdAt} />
             <span>
-              <span className="badge">{event.kind}</span>
+              <span className="badge">{SYNC_EVENT_LABELS.get(event.kind) ?? event.kind}</span>
             </span>
             <div>
               <div>

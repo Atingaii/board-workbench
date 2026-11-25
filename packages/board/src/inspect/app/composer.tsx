@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import { Clock, CloudOff, FileText, ListTodo, Paperclip, Tag, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX } from '../../contract/schemas.ts'
@@ -88,12 +89,12 @@ export function Composer(props: {
   const attach = (added: File[]) => {
     const fitting = added.filter((file) => {
       if (file.size <= ATTACHMENT_BYTES_MAX) return true
-      toast(`${file.name} is over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
+      toast(`文件 ${file.name} 超过 ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
       return false
     })
     setFiles((current) => {
       const next = [...current, ...fitting]
-      if (next.length > ATTACHMENTS_PER_MESSAGE_MAX) toast(`a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX} files`)
+      if (next.length > ATTACHMENTS_PER_MESSAGE_MAX) toast(`每条消息最多可添加 ${ATTACHMENTS_PER_MESSAGE_MAX} 个文件`)
       return next.slice(0, ATTACHMENTS_PER_MESSAGE_MAX)
     })
     area.current?.focus()
@@ -120,7 +121,7 @@ export function Composer(props: {
 
   const send = () => {
     if (!text.trim() && files.length === 0) return
-    if (props.channels && !target) return toast('pick a channel to post in')
+    if (props.channels && !target) return toast('请选择要发布到的频道')
     const me = tasking?.state.me
     props.onSend({
       text: text.trim(),
@@ -200,7 +201,7 @@ export function Composer(props: {
             value={channel}
             onChange={setChannel}
             items={props.channels}
-            placeholder="channel"
+            placeholder="频道"
             label={(item) => (
               <>
                 <span className="faint">#</span>
@@ -212,11 +213,11 @@ export function Composer(props: {
         )}
         {asTask && (detail || needs.trim() !== '' || assignee.trim() !== '') && (
           <div className="composer-task">
-            <label className="suggest grow" title="the tasks this one waits for, by their IDs">
-              <span className="prefix">needs</span>
-              <input value={needs} onChange={(event) => setNeeds(event.target.value)} placeholder="task IDs it waits for" spellCheck={false} />
+            <label className="suggest grow" title="输入此任务依赖的任务 ID">
+              <span className="prefix">依赖</span>
+              <input value={needs} onChange={(event) => setNeeds(event.target.value)} placeholder="依赖的任务 ID" spellCheck={false} />
             </label>
-            <Suggest className="grow" prefix="for" value={assignee} onChange={setAssignee} items={profilesOf(tasking.state, tasking.state.me?.principal ?? '')} placeholder="anyone, or one of your profiles" onEnter={() => area.current?.focus()} />
+            <Suggest className="grow" prefix="指派给" value={assignee} onChange={setAssignee} items={profilesOf(tasking.state, tasking.state.me?.principal ?? '')} placeholder="任何人，或选择你的一个身份" onEnter={() => area.current?.focus()} />
           </div>
         )}
         {labelEntries.length > 0 && (
@@ -225,7 +226,7 @@ export function Composer(props: {
               <span key={key} className="label">
                 {key}={value}
                 <button
-                  title={`remove ${key}`}
+                  title={`移除标签 ${key}`}
                   onClick={() =>
                     setLabels((current) => {
                       const next = { ...current }
@@ -263,7 +264,7 @@ export function Composer(props: {
                 <FileText size={14} strokeWidth={1.75} />
                 <span className="file-name">{file.name}</span>
                 <span className="faint">{fileSize(file.size)}</span>
-                <button title={`remove ${file.name}`} onClick={() => setFiles((current) => current.filter((_, j) => j !== i))}>
+                <button title={`移除附件 ${file.name}`} onClick={() => setFiles((current) => current.filter((_, j) => j !== i))}>
                   <X size={11} />
                 </button>
               </span>
@@ -271,7 +272,7 @@ export function Composer(props: {
           </div>
         )}
         <div className="composer-footer">
-          <button className="tool" title="attach files (or paste them)" onClick={() => picker.current?.click()}>
+          <button className="tool" title="添加附件（也可粘贴文件）" onClick={() => picker.current?.click()}>
             <Paperclip size={14} />
           </button>
           <input
@@ -285,14 +286,14 @@ export function Composer(props: {
             }}
           />
           <Panel
-            title="labels"
+            title="标签"
             trigger={
               <>
                 <Tag size={14} />
                 {labelEntries.length > 0 && <span className="count">{labelEntries.length}</span>}
               </>
             }
-            triggerTitle="labels for this message"
+            triggerTitle="为此消息设置标签"
             align="start"
             open={labelsOpen}
             onOpenChange={setLabelsOpen}
@@ -313,33 +314,33 @@ export function Composer(props: {
           <button
             className={`tool${noSync ? ' on' : ''}`}
             aria-pressed={noSync}
-            title={noSync ? 'board only: this message stays off Slack and GitHub' : 'syncs to Slack and GitHub (click to keep it on the board)'}
+            title={noSync ? '此消息不会同步到 Slack 或 GitHub' : '同步到 Slack 和 GitHub（点击后仅在看板显示）'}
             onClick={() => setNoSync(!noSync)}
           >
             <CloudOff size={14} />
-            {noSync && <span className="tool-label">board only</span>}
+            {noSync && <span className="tool-label">仅看板</span>}
           </button>
           {tasking && !tasking.always && (
             <button
               className={`tool${task ? ' on' : ''}`}
               aria-pressed={task}
-              title={task ? 'starts as a task: a thread with a state, for agents to claim (click for a plain thread)' : 'start it as a task'}
+              title={task ? '发布为可供智能体认领的任务（点击切换为普通讨论串）' : '发布为任务'}
               onClick={() => {
                 setTask(!task)
               }}
             >
               <ListTodo size={14} />
-              {task && <span className="tool-label">task</span>}
+              {task && <span className="tool-label">任务</span>}
             </button>
           )}
           {asTask && (
-            <button className={`tool${detail ? ' on' : ''}`} aria-pressed={detail} title="what it waits for, and who it's for" onClick={() => setDetail(!detail)}>
-              <span className="tool-label">needs, for</span>
+            <button className={`tool${detail ? ' on' : ''}`} aria-pressed={detail} title="设置依赖任务和负责人" onClick={() => setDetail(!detail)}>
+              <span className="tool-label">依赖与指派</span>
             </button>
           )}
           {!asTask && (
             <Panel
-              title="send later"
+              title="定时发送"
               trigger={
                 <>
                   <Clock size={14} />
@@ -361,9 +362,9 @@ export function Composer(props: {
               />
             </Panel>
           )}
-          <span className="hint">enter to send · shift+enter for a new line</span>
+          <span className="hint">Enter 发送 · Shift+Enter 换行</span>
           <button className="send" disabled={!canSend} onMouseDown={(event) => event.preventDefault()} onClick={send}>
-            {asTask ? 'start task' : later ? 'schedule' : 'send'}
+            {asTask ? '发布任务' : later ? '定时发送' : '发送'}
           </button>
         </div>
       </div>
@@ -395,27 +396,27 @@ function Later({ value, onSet }: { value: ScheduleTiming | null; onSet: (timing:
       {...fieldMenu}
     >
       <div className="label-add">
-        <Suggest className="grow" prefix="in" value={after} onChange={setAfter} items={['10m', '1h', '3h', '1d']} placeholder="2h" autoFocus onEnter={() => ready && set()} />
-        <span className="faint">or at</span>
+        <Suggest className="grow" prefix="延时" value={after} onChange={setAfter} items={['10m', '1h', '3h', '1d']} placeholder="2h" autoFocus onEnter={() => ready && set()} />
+        <span className="faint">或指定时间</span>
         <label className="suggest grow">
           <input type="datetime-local" value={at} disabled={after.trim() !== ''} onChange={(event) => setAt(event.target.value)} />
         </label>
       </div>
       <div className="label-add">
-        <Suggest className="grow" prefix="every" value={every} onChange={setEvery} items={['1h', '1d', '7d']} placeholder="never" onEnter={() => ready && set()} />
-        <label className="suggest grow" title="stop after this many sends">
-          <span className="prefix">times</span>
-          <input value={times} disabled={!every.trim()} onChange={(event) => setTimes(event.target.value.replace(/\D/g, ''))} placeholder="no limit" inputMode="numeric" />
+        <Suggest className="grow" prefix="间隔" value={every} onChange={setEvery} items={['1h', '1d', '7d']} placeholder="不重复" onEnter={() => ready && set()} />
+        <label className="suggest grow" title="达到设定的发送次数后停止">
+          <span className="prefix">次数</span>
+          <input value={times} disabled={!every.trim()} onChange={(event) => setTimes(event.target.value.replace(/\D/g, ''))} placeholder="不限" inputMode="numeric" />
         </label>
       </div>
       <div className="label-add end">
         {value && (
           <button type="button" className="clear" onClick={() => onSet(null)}>
-            send now instead
+            改为立即发送
           </button>
         )}
         <button type="submit" className="send small" disabled={!ready}>
-          set
+          确定
         </button>
       </div>
     </form>

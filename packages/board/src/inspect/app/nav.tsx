@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import { ago } from './words.ts'
 
@@ -148,9 +149,9 @@ export function Ago({ iso, prefix = '' }: { iso: string; prefix?: string }) {
   }, [iso])
   const age = Date.now() - Date.parse(iso)
   return (
-    <span className="time" title={new Date(iso).toLocaleString()}>
+    <span className="time" title={new Date(iso).toLocaleString('zh-CN')}>
       {prefix}
-      {age < 5_000 ? 'now' : ago(iso)}
+      {age < 5_000 ? '刚刚' : ago(iso)}
     </span>
   )
 }

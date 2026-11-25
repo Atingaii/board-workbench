@@ -1,3 +1,4 @@
+// Modified for Board Workbench. Upstream license and attribution are in LICENSE and README.md.
 import type { Discovery, MessageView, PrincipalView, ScheduleView } from '../../api/routes.ts'
 import type { ScheduleTiming } from '../../server/index.default.ts'
 
@@ -10,7 +11,7 @@ type Named = { name: string; via?: { name: string; environment: string | null } 
 export function shownName(actor: Named): string {
   if (!actor.via) return actor.name
   const { name, environment } = actor.via
-  return `${actor.name} via ${name}${environment !== null && environment !== 'production' ? ` (${environment})` : ''}`
+  return `${actor.name} 经由 ${name}${environment !== null && environment !== 'production' ? `（${environment}）` : ''}`
 }
 
 /** A message's author as people see them, or their ID when the board says nothing more. */
@@ -19,10 +20,10 @@ export const authorName = (message: Pick<MessageView, 'author' | 'by'>): string 
 /** `12s`, `4m`, `3h`, `2d`: how long ago. */
 export function ago(iso: string, now = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - Date.parse(iso)) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`
-  return `${Math.floor(seconds / 86_400)}d`
+  if (seconds < 60) return `${seconds} 秒前`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)} 小时前`
+  return `${Math.floor(seconds / 86_400)} 天前`
 }
 
 /** `120 KB`, `3.4 MB`: a file's size the way people read it. */
@@ -44,20 +45,20 @@ export function clock(ms: number): string {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   const two = (n: number) => String(n).padStart(2, '0')
-  return hours > 0 ? `${hours}h ${two(minutes)}m` : `${minutes}:${two(seconds % 60)}`
+  return hours > 0 ? `${hours} 小时 ${two(minutes)} 分钟` : `${minutes}:${two(seconds % 60)}`
 }
 
 const REFUSALS: Record<string, string> = {
-  claim_lost: "this tab's claim is over: it was released, taken over, or its lease ran out. Claim the task again to go on.",
-  task_claimed: 'someone holds this task now, until their lease ends',
-  task_assigned: "it's assigned to someone else, and only they claim it",
-  task_waiting: 'it still waits for the tasks it needs',
-  task_blocked: "it's held for a person: unblock it first",
-  task_finished: "it's finished already",
-  task_not_owned: "this is someone else's task: its owner changes it, or anyone with manage in its channel",
-  already_a_task: 'this thread is a task already',
-  not_a_task: "this thread isn't a task",
-  reserved_label: "labels under board. are the board's own: a task's actions change them",
+  claim_lost: '此标签页对任务的认领已结束，可能已释放、被接手或已到期。请重新认领后继续。',
+  task_claimed: '此任务已被认领，可以在认领到期后接手。',
+  task_assigned: '此任务已指派给其他人，只有对方可以认领。',
+  task_waiting: '此任务仍在等待前置任务。',
+  task_blocked: '此任务正在等待人工处理，请先解除阻塞。',
+  task_finished: '此任务已经结束。',
+  task_not_owned: '请由任务所有者或具有频道管理权限的人修改。',
+  already_a_task: '这个讨论串已经是任务。',
+  not_a_task: '这个讨论串还未转为任务。',
+  reserved_label: '以 board. 开头的标签由看板管理，任务操作会更新它们。',
 }
 
 /** What a refusal means, in the page's words, or the board's own where the page has none. */
@@ -80,43 +81,43 @@ export function principalName(principal: PrincipalView): string {
     case 'app':
       return principal.name ?? principal.clientId
     case 'all-users':
-      return 'every user'
+      return '所有用户'
     case 'all-projects':
-      return `every project (${principal.environments.join(', ')})`
+      return `所有项目（${principal.environments.join('、')}）`
     case 'all-apps':
-      return 'every app'
+      return '所有应用'
     case 'everyone':
-      return 'everyone'
+      return '所有人'
   }
 }
 
 const SPANS: [string, number][] = [
-  ['d', 86_400_000],
-  ['h', 3_600_000],
-  ['m', 60_000],
-  ['s', 1000],
+  ['天', 86_400_000],
+  ['小时', 3_600_000],
+  ['分钟', 60_000],
+  ['秒', 1000],
 ]
 
 /** `in 21h`, `in 5m`, `now`: how long until a time, by its largest whole unit. */
 export function until(iso: string, now = Date.now()): string {
   const left = Date.parse(iso) - now
-  if (left < 1000) return 'now'
+  if (left < 1000) return '现在'
   const [unit, size] = SPANS.find(([, size]) => left >= size)!
-  return `in ${Math.floor(left / size)}${unit}`
+  return `${Math.floor(left / size)} ${unit}后`
 }
 
 /** `1d`, `90m`, `36h`: a span of milliseconds in the largest unit that divides it. */
 export function span(ms: number): string {
-  const [unit, size] = SPANS.find(([, size]) => ms >= size && ms % size === 0) ?? ['s', 1000]
-  return `${Math.round(ms / size)}${unit}`
+  const [unit, size] = SPANS.find(([, size]) => ms >= size && ms % size === 0) ?? ['秒', 1000]
+  return `${Math.round(ms / size)} ${unit}`
 }
 
 /** How often a schedule sends, and how far along it is: `every 1d · 2 of 4 sent`. */
 export function cadence(schedule: Pick<ScheduleView, 'every' | 'times' | 'sent' | 'until'>): string {
-  const parts = [schedule.every === null ? 'once' : `every ${span(schedule.every)}`]
-  if (schedule.times !== null) parts.push(`${schedule.sent} of ${schedule.times} sent`)
-  else if (schedule.sent > 0) parts.push(`${schedule.sent} sent`)
-  if (schedule.until !== null) parts.push(`until ${new Date(schedule.until).toLocaleDateString()}`)
+  const parts = [schedule.every === null ? '仅一次' : `每 ${span(schedule.every)}`]
+  if (schedule.times !== null) parts.push(`已发送 ${schedule.sent}/${schedule.times} 次`)
+  else if (schedule.sent > 0) parts.push(`已发送 ${schedule.sent} 次`)
+  if (schedule.until !== null) parts.push(`截至 ${new Date(schedule.until).toLocaleDateString('zh-CN')}`)
   return parts.join(' · ')
 }
 
@@ -140,7 +141,7 @@ export function laterFields(timing: ScheduleTiming | null): { after: string; at:
 
 /** A timing in a few words: `in 2h`, `at Nov 12, 9:00 AM, every 1d`. */
 export const timingWords = (later: ScheduleTiming): string =>
-  [later.in ? `in ${later.in}` : later.at ? `at ${new Date(later.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '', later.every ? `every ${later.every}` : '']
+  [later.in ? `${later.in} 后` : later.at ? `于 ${new Date(later.at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '', later.every ? `每 ${later.every}` : '']
     .filter(Boolean)
     .join(', ')
 
@@ -149,7 +150,7 @@ export const timingWords = (later: ScheduleTiming): string =>
  * board in Vercel's API), else its host and where on it. Before its discovery answers, just `board`.
  */
 export function boardWords(discovery: Pick<Discovery, 'url' | 'name'> | null): { name: string; at: string | null } {
-  if (!discovery) return { name: 'board', at: null }
+  if (!discovery) return { name: '看板', at: null }
   let url: URL
   try {
     url = new URL(discovery.url)
