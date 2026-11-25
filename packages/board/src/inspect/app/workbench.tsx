@@ -96,14 +96,14 @@ function WorkbenchDialog({
 }
 
 type CommandKind = 'activity' | 'tasks' | 'schedules' | 'project' | 'channel'
-type Command = { id: string; label: string; kind: CommandKind; keywords?: string; hint?: string; route: string | null }
+type Command = { id: string; label: string; group: string; kind: CommandKind; keywords?: string; hint?: string; route: string | null }
 
 const SHORTCUTS: readonly Command[] = [
-  { id: 'activity', label: '查看动态', kind: 'activity', keywords: 'activity feed', hint: '视图', route: '/' },
-  { id: 'ready', label: '待认领任务', kind: 'tasks', keywords: 'tasks ready queue', hint: '任务队列', route: '/tasks?state=ready' },
-  { id: 'claimed', label: '已认领任务', kind: 'tasks', keywords: 'tasks claimed queue', hint: '任务队列', route: '/tasks?state=claimed' },
-  { id: 'schedules', label: '定时发送', kind: 'schedules', keywords: 'settings schedules', hint: '设置', route: '/settings/schedules' },
-  { id: 'projects', label: '项目索引', kind: 'project', keywords: 'home repo projects workspace', hint: '工作区', route: null },
+  { id: 'activity', label: '查看动态', group: '快捷导航', kind: 'activity', keywords: 'activity feed', hint: '视图', route: '/' },
+  { id: 'ready', label: '待认领任务', group: '快捷导航', kind: 'tasks', keywords: 'tasks ready queue', hint: '任务队列', route: '/tasks?state=ready' },
+  { id: 'claimed', label: '已认领任务', group: '快捷导航', kind: 'tasks', keywords: 'tasks claimed queue', hint: '任务队列', route: '/tasks?state=claimed' },
+  { id: 'schedules', label: '定时发送', group: '快捷导航', kind: 'schedules', keywords: 'settings schedules', hint: '设置', route: '/settings/schedules' },
+  { id: 'projects', label: '项目索引', group: '快捷导航', kind: 'project', keywords: 'home repo projects workspace', hint: '工作区', route: null },
 ]
 const COMMAND_LIMIT = 50
 
@@ -130,21 +130,23 @@ function Commands({
 }) {
   const [query, setQuery] = useState('')
   const input = useRef<HTMLInputElement>(null)
-  const results = useRef<HTMLUListElement>(null)
+  const results = useRef<HTMLDivElement>(null)
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
   const commands: Command[] = [
     ...SHORTCUTS,
     ...projects.map((project): Command => ({
       id: `project:${project.channel}`,
       label: project.name,
+      group: '项目',
       kind: 'project',
-      hint: `项目 · #${project.channel}`,
+      hint: `#${project.channel}`,
       keywords: project.repository,
       route: projectQueue(project.channel),
     })),
     ...[...new Set(channels)].sort().map((channel): Command => ({
       id: `channel:${channel}`,
       label: `#${channel}`,
+      group: '频道',
       kind: 'channel',
       hint: '频道',
       route: `/c/${channel}`,
@@ -154,6 +156,15 @@ function Commands({
     const text = [command.label, command.keywords, command.hint].filter(Boolean).join(' ').toLowerCase()
     return terms.every((term) => text.includes(term))
   })
+  const groups: { name: string; items: Command[] }[] = []
+  for (const command of matched.slice(0, COMMAND_LIMIT)) {
+    let group = groups.find((g) => g.name === command.group)
+    if (!group) {
+      group = { name: command.group, items: [] }
+      groups.push(group)
+    }
+    group.items.push(command)
+  }
 
   const run = (command: Command) => {
     if (command.route === null) openProjects()
@@ -211,19 +222,26 @@ function Commands({
         <kbd className="workbench-search-kbd">Esc</kbd>
       </div>
       {matched.length ? (
-        <ul className="workbench-results" ref={results} onKeyDown={move}>
-          {matched.slice(0, COMMAND_LIMIT).map((command) => (
-            <li key={command.id}>
-              <button type="button" data-workbench-command="" className="workbench-command" onClick={() => run(command)}>
-                <span className="workbench-command-main">
-                  <CommandIcon kind={command.kind} />
-                  <span>{command.label}</span>
-                </span>
-                {command.hint && <span className="workbench-hint">{command.hint}</span>}
-              </button>
-            </li>
+        <div className="workbench-results" ref={results} onKeyDown={move}>
+          {groups.map((group) => (
+            <div key={group.name} className="workbench-group" role="group" aria-label={group.name}>
+              <div className="workbench-group-title">{group.name}</div>
+              <ul className="workbench-group-list">
+                {group.items.map((command) => (
+                  <li key={command.id}>
+                    <button type="button" data-workbench-command="" className="workbench-command" onClick={() => run(command)}>
+                      <span className="workbench-command-main">
+                        <CommandIcon kind={command.kind} />
+                        <span className="workbench-command-label">{command.label}</span>
+                      </span>
+                      {command.hint && <span className="workbench-hint">{command.hint}</span>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
-        </ul>
+        </div>
       ) : (
         <p className="workbench-empty">没有匹配的命令。</p>
       )}

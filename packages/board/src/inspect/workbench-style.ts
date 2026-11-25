@@ -13,33 +13,39 @@ export const WORKBENCH_CSS = `
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 33px;
+  min-height: 32px;
   padding: 6px 9px;
   border: 1px solid var(--side-hairline);
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--side-surface);
   color: var(--side-text);
   text-align: left;
   font-size: 12px;
   font-weight: 500;
   cursor: default;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .workbench-side-tools button:hover,
 .workbench-side-btn:hover {
   background: var(--side-hover);
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: var(--side-active);
   color: var(--side-bright);
 }
 .workbench-side-tools button:focus-visible,
 .workbench-side-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
 }
 .workbench-side-tools button svg,
 .workbench-side-btn svg {
   flex: none;
-  color: var(--accent);
-  opacity: 0.92;
+  color: var(--blue);
+  opacity: 0.95;
+  transition: color 0.12s ease;
+}
+.workbench-side-tools button:hover svg,
+.workbench-side-btn:hover svg {
+  color: var(--side-bright);
 }
 .workbench-side-label {
   flex: 1;
@@ -73,7 +79,7 @@ export const WORKBENCH_CSS = `
   position: fixed;
   z-index: 70;
   inset: 0;
-  background: rgba(15, 14, 13, 0.56);
+  background: rgba(0, 0, 0, 0.48);
 }
 .workbench-dialog {
   position: fixed;
@@ -86,7 +92,7 @@ export const WORKBENCH_CSS = `
   width: min(580px, calc(100vw - 24px));
   max-height: min(680px, 82dvh);
   border: 1px solid var(--hairline-strong);
-  border-radius: 14px;
+  border-radius: 12px;
   overflow: hidden;
   background: var(--surface);
   color: var(--bright);
@@ -97,15 +103,15 @@ export const WORKBENCH_CSS = `
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 16px 12px;
+  padding: 14px 16px 12px;
   border-bottom: 1px solid var(--hairline);
-  background: var(--bg);
+  background: var(--surface);
 }
 .workbench-dialog-title {
   margin: 0;
-  font-size: 15px;
-  line-height: 1.3;
-  font-weight: 650;
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 600;
   color: var(--bright);
 }
 .workbench-description {
@@ -116,12 +122,13 @@ export const WORKBENCH_CSS = `
 .workbench-close {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   flex: none;
-  border-radius: 7px;
+  border-radius: 6px;
   color: var(--muted);
   cursor: default;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .workbench-close:hover { background: var(--shade); color: var(--bright); }
 
@@ -140,7 +147,7 @@ export const WORKBENCH_CSS = `
   gap: 8px 14px;
   padding: 9px 16px;
   border-top: 1px solid var(--hairline);
-  background: var(--bg);
+  background: var(--surface-2);
   color: var(--faint);
   font-size: 11px;
 }
@@ -164,7 +171,7 @@ export const WORKBENCH_CSS = `
   font: 10px/1.55 var(--mono);
 }
 
-/* --- Command search bar and result rows --- */
+/* --- Command search bar and Proper UI Command Menu list --- */
 .workbench-search-wrap {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
@@ -172,12 +179,13 @@ export const WORKBENCH_CSS = `
   gap: 8px;
   padding: 0 10px 0 12px;
   border: 1px solid var(--hairline-strong);
-  border-radius: 9px;
-  background: var(--bg);
+  border-radius: 8px;
+  background: var(--surface-2);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 .workbench-search-wrap:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px var(--blue-soft);
 }
 .workbench-search-icon {
   justify-self: center;
@@ -186,7 +194,7 @@ export const WORKBENCH_CSS = `
 .workbench-search {
   width: 100%;
   min-width: 0;
-  height: 40px;
+  height: 38px;
   border: 0;
   outline: none;
   background: transparent;
@@ -205,53 +213,90 @@ export const WORKBENCH_CSS = `
 }
 
 .workbench-results {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 6px 0 0;
+  margin: 10px 0 0;
+  padding: 4px 0 0;
   border-top: 1px solid var(--hairline);
   min-height: 0;
-  max-height: min(370px, 46dvh);
+  max-height: min(380px, 48dvh);
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.workbench-group {
+  margin-top: 8px;
+}
+.workbench-group:first-child {
+  margin-top: 2px;
+}
+.workbench-group-title {
+  padding: 4px 8px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--faint);
+  letter-spacing: 0.02em;
+}
+.workbench-group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: grid;
-  gap: 3px;
+  gap: 2px;
 }
 .workbench-command {
   display: flex;
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  min-height: 38px;
-  padding: 7px 10px;
-  gap: 12px;
-  border-radius: 8px;
+  min-height: 32px;
+  padding: 5px 8px;
+  gap: 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   text-align: left;
   color: var(--bright);
   cursor: default;
   overflow-wrap: anywhere;
+  transition: background 0.1s ease, color 0.1s ease;
 }
 .workbench-command:hover,
 .workbench-command:focus-visible {
   background: var(--shade);
+  color: var(--bright);
   outline: none;
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 .workbench-command-main {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
 }
-.workbench-command-icon { flex: none; color: var(--muted); }
+.workbench-command-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-command-icon {
+  flex: none;
+  color: var(--muted);
+  transition: color 0.1s ease;
+}
 .workbench-command:hover .workbench-command-icon,
-.workbench-command:focus-visible .workbench-command-icon { color: var(--accent); }
+.workbench-command:focus-visible .workbench-command-icon {
+  color: var(--blue);
+}
 .workbench-hint {
   color: var(--faint);
   text-align: right;
   font-family: var(--mono);
   font-size: 11px;
   flex-shrink: 0;
+}
+.workbench-command:hover .workbench-hint,
+.workbench-command:focus-visible .workbench-hint {
+  color: var(--muted);
 }
 
 /* --- Project Index cards and actions --- */
@@ -265,38 +310,40 @@ export const WORKBENCH_CSS = `
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 31px;
-  padding: 5px 11px;
+  min-height: 30px;
+  padding: 4px 10px;
   border: 1px solid var(--hairline-strong);
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--dim);
   font-size: 12px;
   font-weight: 500;
   cursor: default;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .workbench-action:hover:not(:disabled) {
   background: var(--shade);
-  border-color: var(--accent);
+  border-color: var(--hairline-strong);
   color: var(--bright);
 }
 .workbench-action.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--label);
-  font-weight: 600;
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #ffffff;
+  font-weight: 550;
 }
 .workbench-action.primary:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
-  color: var(--label);
+  border-color: var(--blue);
+  background: var(--blue);
+  filter: brightness(0.92);
+  color: #ffffff;
 }
 .workbench-action:disabled { opacity: 0.45; }
 
 .workbench-error {
   margin: 10px 0 0;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--red-soft);
   color: var(--red);
   font-size: 12px;
@@ -304,7 +351,7 @@ export const WORKBENCH_CSS = `
 .workbench-status {
   margin: 10px 0 0;
   padding: 7px 10px;
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--green-soft);
   color: var(--green);
   font-size: 12px;
@@ -312,10 +359,10 @@ export const WORKBENCH_CSS = `
 .workbench-status:empty { display: none; }
 .workbench-empty {
   margin: 12px 0 2px;
-  padding: 18px 14px;
+  padding: 16px 14px;
   border: 1px dashed var(--hairline-strong);
-  border-radius: 9px;
-  background: var(--bg);
+  border-radius: 8px;
+  background: var(--surface-2);
   color: var(--muted);
   font-size: 12.5px;
 }
@@ -325,15 +372,15 @@ export const WORKBENCH_CSS = `
   margin: 14px 0 0;
   padding: 0;
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 .workbench-project {
   display: grid;
-  gap: 10px;
-  padding: 13px 14px;
+  gap: 9px;
+  padding: 12px 14px;
   border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--bg);
+  border-radius: 8px;
+  background: var(--surface-2);
   min-width: 0;
 }
 .workbench-project-head {
@@ -346,13 +393,13 @@ export const WORKBENCH_CSS = `
 }
 .workbench-project-title {
   margin: 0;
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 13.5px;
+  font-weight: 600;
   color: var(--bright);
   overflow-wrap: anywhere;
 }
 .workbench-project-channel {
-  padding: 2px 8px;
+  padding: 2px 7px;
   border: 1px solid var(--hairline);
   border-radius: 999px;
   background: var(--surface);
@@ -368,9 +415,9 @@ export const WORKBENCH_CSS = `
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 14px;
-  padding: 10px 16px;
+  padding: 9px 16px;
   border-bottom: 1px solid var(--hairline);
-  background: var(--accent-soft);
+  background: var(--blue-soft);
   font-size: 12px;
   color: var(--dim);
   overflow-wrap: anywhere;
@@ -380,9 +427,9 @@ export const WORKBENCH_CSS = `
   align-items: center;
   gap: 7px;
   color: var(--bright);
-  font-weight: 650;
+  font-weight: 600;
 }
-.workbench-project-context-name svg { color: var(--accent); flex: none; }
+.workbench-project-context-name svg { color: var(--blue); flex: none; }
 .workbench-project-context-links {
   display: inline-flex;
   flex-wrap: wrap;
@@ -396,24 +443,25 @@ export const WORKBENCH_CSS = `
   gap: 5px;
   min-height: 26px;
   padding: 3px 9px;
-  border: 1px solid var(--accent-transparent);
+  border: 1px solid var(--hairline);
   border-radius: 6px;
   background: var(--surface);
-  color: var(--accent);
+  color: var(--blue);
   font-size: 12px;
   font-weight: 550;
   text-decoration: none;
   white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 .workbench-project-context a:hover {
   background: var(--shade);
-  border-color: var(--accent);
-  color: var(--bright);
+  border-color: var(--blue);
+  color: var(--blue);
 }
 
 @media (pointer: coarse) {
   .workbench-search { font-size: 16px; }
-  .workbench-command { min-height: 44px; }
+  .workbench-command { min-height: 40px; }
   .workbench-project-context a { min-height: 32px; padding: 4px 10px; }
 }
 @media (max-width: 500px) {

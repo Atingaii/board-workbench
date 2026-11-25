@@ -39,7 +39,7 @@ node packages/board/dist/cli.mjs tasks complete "$TASK_ID" "键盘检查通过" 
 
 Board Workbench 基于 [Vercel Board 0.56.1](https://github.com/vercel/board/tree/@vercel/board@0.56.1)，保留其 Apache-2.0 [许可证](LICENSE)。本项目独立维护，源码构建后即可使用。
 
-- 界面布局参考了 [Rex 的分栏、侧栏和活动状态](https://www.superlogical.com/rex/docs/reference/mac-settings)。导航、命令菜单和时间线的组件参考来自 21st.dev 的 [shadcn Sidebar](https://21st.dev/@shadcn/components/sidebar)、[Origin UI Command](https://21st.dev/@originui/components/command) 和 [Cubby UI Timeline](https://21st.dev/@cubby-ui/components/timeline)。
+- 界面借鉴 Rex 的紧凑分栏、浅灰侧栏和圆角选中态。命令面板、任务与设置筛选、动态与讨论串分别参考了 21st.dev 的三项组件，用现有 React、Base UI 和共享样式实现。[Rex 界面设置](https://www.superlogical.com/rex/docs/reference/mac-settings) · [Proper UI Command Menu](https://21st.dev/@properui/components/command-menu) · [E-Ink Segmented Control](https://21st.dev/@alexisroe/components/segmented) · [RobertLib Compact Timeline](https://dev.21st.dev/@robertlib/components/timeline/compact-sidebar)
 - 工作流结合了 Matt Pocock 的 [人和 Agent 共用看板](https://x.com/mattpocockuk/status/2124797717834543167) 和 [Home Repo Pattern](https://www.aihero.dev/the-home-repo-pattern)。
 
 ## Vercel Board 上游文档
